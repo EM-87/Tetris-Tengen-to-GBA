@@ -48,7 +48,8 @@ Hay una ROM de GBA que arranca, se juega y corre las reglas reales de Tengen.
   bocanada de humo que cruza la fila y deja escrito SINGLE / DOUBLE /
   TRIPLE / TETRIS donde estaban los bloques), la pausa con su placa original,
   los tres códigos de trucos de Tengen (subir de nivel, barra larga y deshacer
-  la última pieza) y los bailarines cosacos entre niveles.
+  la última pieza), los bailarines cosacos entre niveles, y **la música y los
+  efectos del cartucho** (ver abajo).
 - `tools/extract_assets.py` — saca del cartucho original los tiles, las
   paletas, el layout de pantalla y las poses de los bailarines. **Todo el
   arte del port sale de ahí; no hay nada dibujado a mano.**
@@ -57,13 +58,20 @@ Hay una ROM de GBA que arranca, se juega y corre las reglas reales de Tengen.
   incluye ver la animación de línea completa sprite por sprite, comprobar
   que deja escrita la palabra correcta, y pausar y teclear los códigos de
   trucos.
+- `gba/nes6502.c` + `gba/nes_audio.c` — el sonido. **El port no reimplementa
+  el motor de audio de Tengen: lo ejecuta.** Es un intérprete de 6502 chico
+  corriendo el propio código del cartucho, y una capa que traduce lo que ese
+  motor le escribe al APU de la NES a los registros de sonido del GBA. Así
+  suenan las cuatro músicas originales (Loginska, Bradinsky, Karinka,
+  Troika), la del título, la de game over, la de los bailarines y todos los
+  efectos — con la misma mezcla y las mismas prioridades que en la NES,
+  porque las decide el mismo código.
 - `reference/disasm/` — el disassembly completo que sirve de fuente de
   verdad, y `reference/NOTES.md` con el resumen curado de qué está
   verificado y contra qué línea de la ROM.
 
 ### Lo que falta
 
-- **Audio**: nada todavía.
 - **Modos 2P y coop**: el core ya los modela (incluido el campo de 12
   columnas del coop), pero la capa GBA es solo de un jugador por ahora. Del
   menú original solo está la selección de nivel; faltan tipo de partida,
@@ -79,6 +87,10 @@ Los del NES, uno a uno: la cruceta mueve y hace soft drop (solo Abajo a
 secas: Abajo+lateral no acelera, igual que en el original), **A** y **B**
 rotan — y si los dejás apretados 15 frames la pieza empieza a girar sola,
 que es una rareza real de Tengen, no un bug del port —, y **START** pausa.
+
+En la pantalla de selección, **arriba/abajo** elige entre las cuatro músicas
+del juego (Loginska, Bradinsky, Karinka, Troika), que es la selección de
+música que el menú original también ofrece.
 
 Con el juego en pausa entran los tres códigos originales, un botón por
 frame:

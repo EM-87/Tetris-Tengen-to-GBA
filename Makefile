@@ -79,9 +79,9 @@ ARMLDFLAGS := -T gba/gba.ld -nostartfiles -Wl,--gc-sections
 # Graphics headers built from a cartridge dump by `make assets`. They are not
 # in version control (the artwork is the original game's), so the ROM target
 # checks for them and says what to do rather than failing in the compiler.
-GBA_ASSETS := gba/tiles_game.h gba/screen_1p.h gba/palettes_rom.h
+GBA_ASSETS := gba/tiles_game.h gba/screen_1p.h gba/palettes_rom.h gba/audio_prg.h
 
-GBA_SRC  := gba/main.c $(CORE_SRC)
+GBA_SRC  := gba/main.c gba/nes_audio.c gba/nes6502.c $(CORE_SRC)
 GBA_ELF  := $(BUILD)/tengen.elf
 GBA_ROM  := $(BUILD)/tengen.gba
 
@@ -134,3 +134,4 @@ gba-check: $(GBA_ROM)
 	python3 tools/run_rom.py $(GBA_ROM) --selftest
 	python3 tools/run_rom.py $(GBA_ROM) --lineclear
 	python3 tools/run_rom.py $(GBA_ROM) --pause
+	python3 tools/run_rom.py $(GBA_ROM) --audio

@@ -4,7 +4,14 @@
  * header + crt0) must come first. Code and read-only data stay in ROM;
  * writable data is copied to, and .bss lives in, the 32KB of fast internal
  * WRAM at 0x03000000. The 256KB of external WRAM at 0x02000000 is left for
- * anything large enough to be worth the slower bus. */
+ * anything large enough to be worth the slower bus.
+ *
+ * .iwram is the exception: code marked with IWRAM_CODE is copied into that
+ * internal WRAM at startup and runs from there. Only one thing needs it —
+ * the 6502 interpreter that runs the cartridge's own sound engine — but that
+ * thing runs a few thousand instructions every frame, and internal WRAM is
+ * 32 bits wide with no wait states while the cartridge bus is 16 bits with
+ * several. */
 
 OUTPUT_FORMAT("elf32-littlearm")
 OUTPUT_ARCH(arm)
@@ -35,14 +42,28 @@ SECTIONS
         . = ALIGN(4);
     } > rom
 
-    __data_lma = .;
+    .iwram : {
+        __iwram_start = .;
+        *(.iwram .iwram.*)
+        . = ALIGN(4);
+        __iwram_end = .;
+    } > iwram AT> rom
+    __iwram_lma = LOADADDR(.iwram);
 
-    .data : AT (__data_lma) {
+    .data : {
         __data_start = .;
         *(.data .data.*)
         . = ALIGN(4);
         __data_end = .;
-    } > iwram
+    } > iwram AT> rom
+    __data_lma = LOADADDR(.data);
+
+    /* Uninitialised buffers too big for internal WRAM. Nothing is copied
+     * here at startup; whatever lands in it is filled in by code. */
+    .ewram (NOLOAD) : {
+        *(.ewram .ewram.*)
+        . = ALIGN(4);
+    } > ewram
 
     .bss (NOLOAD) : {
         __bss_start = .;

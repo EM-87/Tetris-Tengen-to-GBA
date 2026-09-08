@@ -10,3 +10,5 @@ gba/tiles_*.h
 gba/screen_1p.h
 gba/palettes_rom.h
 __pycache__/
+gba/audio_prg.h
+gba/audio_golden.bin

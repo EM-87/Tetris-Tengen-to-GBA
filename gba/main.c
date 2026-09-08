@@ -31,6 +31,7 @@
  */
 #include "gba_hw.h"
 #include "palette.h"
+#include "nes_audio.h"
 #include "../src/tengen_core.h"
 
 /* Generated from a cartridge dump by tools/extract_assets.py. */
@@ -500,6 +501,18 @@ static void draw_pause_box(void) {
  * limit per menu row, and menuPlayer1StartLevel's is 10. */
 #define START_LEVEL_COUNT 10
 
+/* The four in-game tunes, in the order the ROM's own music-select menu lists
+ * them (constants.asm.txt:39-42). Chosen on the level-select screen with
+ * up/down, which is the ROM's GAMESTATE_MUSIC_SELECT folded into the one
+ * selection screen this port has. */
+#define MUSIC_COUNT 4
+static const uint8_t kMusicTracks[MUSIC_COUNT] = {
+    NES_MUSIC_LOGINSKA, NES_MUSIC_BRADINSKY, NES_MUSIC_KARINKA, NES_MUSIC_TROIKA
+};
+static const char *const kMusicNames[MUSIC_COUNT] = {
+    "LOGINSKA", "BRADINSKY", "KARINKA", "TROIKA"
+};
+
 /* The ROM has a title screen and then separate selection screens, drawn in
  * its own menu frame; this follows the same shape with the one selection the
  * port currently offers. */
@@ -524,7 +537,13 @@ static void draw_title(void) {
 /* The level selector, inside the ROM's own menu frame. The wording matches
  * the cartridge's ("LEVEL SELECT" is one of the strings it writes into this
  * same empty middle), and the digits are its font. */
-static void draw_level_select(uint8_t start_level) {
+static unsigned music_name_len(uint8_t music) {
+    unsigned n = 0;
+    while (kMusicNames[music][n]) n++;
+    return n;
+}
+
+static void draw_level_select(uint8_t start_level, uint8_t music) {
     for (int ty = 0; ty < SCREEN_MENU_H_TILES; ty++) {
         for (int tx = 0; tx < SCREEN_MENU_W; tx++) {
             int i = ty * SCREEN_MENU_W + tx;
@@ -539,8 +558,13 @@ static void draw_level_select(uint8_t start_level) {
         draw_number(6 + level * 2, 9, (uint32_t)level, 1,
                      level == start_level ? BANK_LABEL : BANK_VALUE);
     }
-    draw_text(6, 15, "LEFT RIGHT TO SET", BANK_VALUE);
-    draw_text(8, 17, "START TO PLAY", BANK_VALUE);
+    draw_text(6, 12, "LEFT RIGHT TO SET", BANK_VALUE);
+
+    draw_text(10, 15, "MUSIC", BANK_LABEL);
+    clear_region(6, 16, 18, 1);
+    draw_text(10 - (int)(music_name_len(music) / 2) + 2, 16,
+               kMusicNames[music], BANK_VALUE);
+    draw_text(8, 17, "UP DOWN TO PICK", BANK_VALUE);
 }
 
 int main(void) {
@@ -552,6 +576,7 @@ int main(void) {
     upload_title_tiles();
     upload_sprite_tiles();
     oam_hide_all();
+    nes_audio_init();
 
     REG_BG0CNT = BG_4BPP | BG_SIZE_32x32 | BG_CHARBLOCK(CHARBLOCK) |
                   BG_SCREENBLOCK(SCREENBLOCK);
@@ -564,6 +589,8 @@ int main(void) {
     uint8_t held_last = 0;
     int dancer_frames = 0;   /* > 0 while the level-up interlude is running */
     bool sweeping = false;   /* true while the line-clear sweep owns the OAM */
+    uint8_t music = 0;       /* which of the four in-game tunes */
+    bool title_music = false;
 
     /* The ROM steps its RNG once per frame from the main loop
      * (main.asm.txt:49-50), and whatever state it is in when Start is pressed
@@ -579,13 +606,21 @@ int main(void) {
         tengen_rng_step(&seed_source);
 
         if (screen == SCREEN_TITLE) {
+            if (!title_music) {
+                /* initializeTitleScreen ends with this (main.asm.txt:4489). */
+                nes_audio_play(NES_MUSIC_TITLESCREEN);
+                title_music = true;
+            }
             if (pressed & TENGEN_BTN_START) {
                 screen = SCREEN_LEVEL_SELECT;
+                nes_audio_play(NES_SOUND_SCREEN_SWITCH);
                 vsync();
+                nes_audio_frame();
                 clear_screen();
                 continue;
             }
             vsync();
+            nes_audio_frame();
             draw_title();
             continue;
         }
@@ -597,6 +632,14 @@ int main(void) {
                 start_level = (uint8_t)((start_level + START_LEVEL_COUNT - 1) % START_LEVEL_COUNT);
             if (pressed & TENGEN_BTN_RIGHT)
                 start_level = (uint8_t)((start_level + 1) % START_LEVEL_COUNT);
+            if (pressed & TENGEN_BTN_UP)
+                music = (uint8_t)((music + MUSIC_COUNT - 1) % MUSIC_COUNT);
+            if (pressed & TENGEN_BTN_DOWN)
+                music = (uint8_t)((music + 1) % MUSIC_COUNT);
+            /* processMenuInput plays this on every move (main.asm.txt:4655). */
+            if (pressed & (TENGEN_BTN_LEFT | TENGEN_BTN_RIGHT |
+                            TENGEN_BTN_UP | TENGEN_BTN_DOWN))
+                nes_audio_play(NES_SOUND_MENU_SELECT);
             if (pressed & TENGEN_BTN_START) {
                 uint16_t seed = (uint16_t)(seed_source.lo | (seed_source.hi << 8));
                 tengen_new_game(&g_game, seed, start_level, false, false);
@@ -604,13 +647,17 @@ int main(void) {
                 shown_piece = TT_NONE;
                 set_piece_palette(g_game.player[0].piece.current);
                 screen = SCREEN_PLAYING;
+                title_music = false;
+                nes_audio_play(kMusicTracks[music]);
                 vsync();
+                nes_audio_frame();
                 clear_screen();
                 draw_static_screen();
                 continue;
             }
             vsync();
-            draw_level_select(start_level);
+            nes_audio_frame();
+            draw_level_select(start_level, music);
             continue;
         }
 
@@ -624,12 +671,14 @@ int main(void) {
             if (dancer_frames == 0) {
                 oam_hide_all();
                 draw_static_screen();
+                nes_audio_play(kMusicTracks[music]);
             } else {
                 clear_region(DANCER_STAGE_TX, DANCER_STAGE_TY,
                               DANCER_STAGE_TW, DANCER_STAGE_TH);
                 draw_dancers(DANCER_SHOW_FRAMES - dancer_frames);
             }
             vsync();
+            nes_audio_frame();
             continue;
         }
 
@@ -640,18 +689,46 @@ int main(void) {
          * below, a long bar or an undo through the current-piece check. */
         if (g_game.player[0].game_active) {
             uint8_t presses[2] = { pressed, 0 };
+            TengenCheat cheat[2];
             bool was_paused = g_game.paused;
-            tengen_pause_input(&g_game, presses, 0);
-            if (was_paused && !g_game.paused) draw_static_screen();
+            tengen_pause_input(&g_game, presses, cheat);
+            if (was_paused != g_game.paused) {
+                /* pauseOrUnpause suspends and resumes the music
+                 * (main.asm.txt:7204-7211). */
+                nes_audio_play(g_game.paused ? NES_MUSIC_SUSPEND : NES_MUSIC_RESUME);
+                if (was_paused) draw_static_screen();
+            }
+            /* Every applied code plays this (main.asm.txt:7089, 7127). */
+            if (cheat[0] != TENGEN_CHEAT_NONE)
+                nes_audio_play(NES_SOUND_SCREEN_SWITCH);
         }
 
         TengenStepResult step = tengen_step(&g_game, TENGEN_PLAYER_1, buttons);
-        if (step.leveled_up) dancer_frames = DANCER_SHOW_FRAMES;
+
+        /* The ROM's own cues, each at the moment it plays them:
+         *  - a piece coming to rest, L8417 (main.asm.txt:637)
+         *  - rows coming down, L95C1 (:3212) — unless that clear also raised
+         *    the level, in which case the intro takes its place (:3207)
+         *  - the level-up interlude itself, L8D6B (:2038)
+         *  - topping out, silence and then the game-over tune (:608, :620) */
+        if (step.piece_locked) nes_audio_play(NES_SOUND_DROP);
+        if (step.lines_collapsed)
+            nes_audio_play(step.leveled_up ? NES_MUSIC_LEVELUP : NES_SOUND_LINECLEAR);
+        if (step.leveled_up) {
+            dancer_frames = DANCER_SHOW_FRAMES;
+            nes_audio_play(NES_MUSIC_LEVELUP);
+        }
+        if (step.topped_out) {
+            nes_audio_play(NES_MUSIC_SILENCE);
+            nes_audio_play(NES_MUSIC_GAMEOVER);
+        }
 
         if (!g_game.player[0].game_active && (pressed & TENGEN_BTN_START)) {
             screen = SCREEN_TITLE;
             oam_hide_all();
+            nes_audio_play(NES_MUSIC_SILENCE);
             vsync();
+            nes_audio_frame();
             continue;
         }
 
@@ -665,6 +742,7 @@ int main(void) {
         }
 
         vsync();
+        nes_audio_frame();
         draw_field();
         draw_panel();
 

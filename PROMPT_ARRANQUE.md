@@ -24,6 +24,14 @@ Antes de tocar código, leé en este orden:
    geometría del campo, el puntaje y las paletas.
 3. `tengen_gba_port/README.md` — estado general y cómo compilar.
 
+Una cosa que sorprende y conviene saber de entrada: **el sonido no está
+reimplementado, está emulado**. `gba/nes6502.c` es un intérprete de 6502 chico
+que ejecuta el propio motor de audio del cartucho (`gba/audio_prg.h`), y
+`gba/nes_audio.c` traduce lo que ese motor le escribe al APU de la NES a los
+registros de sonido del GBA. Es la única forma que había de tener la música,
+los efectos y su mezcla por prioridades sin adivinar un formato que nadie
+documentó.
+
 El núcleo vive en `src/tengen_core.{h,c}` (C99 puro, sin dependencias de GBA)
 con tests nativos en `tests/test_tengen.c` (`make test`). La capa de GBA está
 en `gba/` y compila con un `arm-none-eabi-gcc` común, sin devkitARM. El

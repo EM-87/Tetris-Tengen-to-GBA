@@ -12,6 +12,7 @@ Usage:
     python3 tools/run_rom.py build/tengen.gba --selftest
     python3 tools/run_rom.py build/tengen.gba --lineclear
     python3 tools/run_rom.py build/tengen.gba --pause
+    python3 tools/run_rom.py build/tengen.gba --audio
 
 --selftest checks the things a broken port would get wrong: that the screen
 isn't blank, that the playfield frame is where the resolution mapping says it
@@ -59,6 +60,14 @@ WALL_R_X = (COL_FIELD[1] - 1) * TILE      # right wall column
 
 
 def load(rom_path):
+    """Returns (core, screen).
+
+    KEEP THE SCREEN. mGBA renders into that buffer and its bindings do not
+    hold a Python reference to it, so dropping the returned Image — binding it
+    to `_`, say — lets the garbage collector free memory the emulator is still
+    writing to, and the next run_frame() segfaults. Every caller here names it
+    and keeps it alive for as long as it runs frames.
+    """
     mgba.log.silence()
     core = mgba.core.load_path(rom_path)
     if core is None:
@@ -239,8 +248,8 @@ CLEAR_WORDS = {1: "SINGLE", 2: "DOUBLE", 3: "TRIPLE", 4: "TETRIS"}
 KEY_DOWN = 7
 
 
-def game_state_address(rom_path):
-    """Address of `g_game`, whose first member is player 1's playfield."""
+def game_state_address(rom_path, name="g_game"):
+    """Address of a symbol in the built ROM, read out of the ELF beside it."""
     elf = os.path.splitext(rom_path)[0] + ".elf"
     if not os.path.exists(elf):
         return None, f"no encuentro {elf} (hace falta para localizar el estado)"
@@ -250,9 +259,9 @@ def game_state_address(rom_path):
     except (OSError, subprocess.CalledProcessError) as exc:
         return None, f"no pude ejecutar {nm}: {exc}"
     for line in out.splitlines():
-        if line.endswith(" g_game"):
+        if line.endswith(" " + name):
             return int(line.split()[0], 16), None
-    return None, "el ELF no exporta g_game"
+    return None, f"el ELF no exporta {name}"
 
 
 def fill_rows(core, base, rows):
@@ -406,7 +415,7 @@ def pause_check(rom_path):
         print(f"SALTADO: {why}")
         return 0
 
-    core, _ = load(rom_path)
+    core, screen = load(rom_path)   # `screen` must stay alive; see load()
     start_game(core)
     m = core.memory
     failures = []
@@ -466,6 +475,110 @@ def pause_check(rom_path):
     return 0
 
 
+# ---------------------------------------------------------------------------
+# The sound engine
+#
+# The port plays the cartridge's own music by running the cartridge's own 6502
+# sound engine (see gba/nes_audio.h). The risky part of that is the hand-written
+# interpreter, so this check does not listen to the output — it reads the
+# emulated APU register file straight out of the running ROM and compares it,
+# frame by frame and byte for byte, with a golden recording that
+# tools/extract_assets.py made with the reference interpreter in nes_cpu.py.
+# A wrong flag or addressing mode shows up as a mismatched frame here instead
+# of as music that is subtly wrong in a way nobody notices.
+# ---------------------------------------------------------------------------
+APU_REGS = 0x18
+APU_OFFSET = 16      # Nes6502.bus.apu; see the struct in gba/nes6502.h
+FAULT_OFFSET = 52    # Nes6502.faulted, at the end of the same struct
+GOLDEN_PATH = "gba/audio_golden.bin"
+AUDIO_ALIGN_SEARCH = 30   # frames of ROM start-up to look through for the match
+
+# GBA sound registers, read back to confirm the translation reached them.
+REG_SOUNDCNT_X = 0x04000084
+REG_SOUND1CNT_H = 0x04000062
+
+
+def audio_check(rom_path):
+    base, why = game_state_address(rom_path, "g_cpu")
+    if base is None:
+        print(f"SALTADO: {why}")
+        return 0
+    if not os.path.exists(GOLDEN_PATH):
+        print(f"SALTADO: falta {GOLDEN_PATH} (lo genera `make assets ROM=...`)")
+        return 0
+
+    raw = open(GOLDEN_PATH, "rb").read()
+    golden = [raw[i:i + APU_REGS] for i in range(0, len(raw), APU_REGS)]
+
+    core, screen = load(rom_path)   # `screen` must stay alive; see load()
+    iwram = core.memory.iwram
+    apu_off = base + APU_OFFSET - 0x03000000
+    fault_off = base + FAULT_OFFSET - 0x03000000
+
+    seen = []
+    for _ in range(len(golden) + AUDIO_ALIGN_SEARCH):
+        core.run_frame()
+        seen.append(bytes(iwram[apu_off:apu_off + APU_REGS]))
+
+    failures = []
+    if iwram[fault_off]:
+        failures.append("el interprete 6502 se detuvo por un opcode que no conoce")
+
+    # The ROM sets up for a few frames before the first updateAudio, so find
+    # where the two line up rather than assuming they start together.
+    start, matched = 0, 0
+    for offset in range(AUDIO_ALIGN_SEARCH):
+        n = 0
+        while n < len(golden) and offset + n < len(seen) and seen[offset + n] == golden[n]:
+            n += 1
+        if n > matched:
+            matched, start = n, offset
+
+    print(f"  motor de sonido alineado en el frame {start}; "
+          f"{matched} de {len(golden)} frames identicos al de referencia")
+    if matched < len(golden):
+        failures.append(f"el APU emulado se desvia en el frame {matched}: "
+                        f"ROM {seen[start + matched].hex(' ')} "
+                        f"vs referencia {golden[matched].hex(' ')}")
+
+    if not (core.memory.u16[REG_SOUNDCNT_X] & 0x0080):
+        failures.append("el sonido del GBA nunca se encendio")
+    if core.memory.u16[REG_SOUND1CNT_H] == 0:
+        failures.append("el canal de pulso 1 quedo sin configurar")
+
+    # And it has to fit in a frame. Emulating a few thousand 6502 instructions
+    # every frame is the one thing in this port that could plausibly overrun
+    # its budget, and the symptom would be a missed vsync — which shows up as
+    # gravity running slow. Level 0 drops the piece exactly every 33 frames
+    # (possibleFallTimerTable entry 0), so any other interval means a frame was
+    # lost to the sound engine.
+    game_base, why = game_state_address(rom_path)
+    if game_base is None:
+        print(f"  (sin comprobar el presupuesto de CPU: {why})")
+    else:
+        core.reset()
+        start_game(core)
+        piece_y = game_base + 480 + 8 + 4      # player[0].piece.y
+        seen_y = []
+        for _ in range(400):
+            core.run_frame()
+            seen_y.append(core.memory.u8[piece_y])
+        drops = [i for i in range(1, len(seen_y)) if seen_y[i] != seen_y[i - 1]]
+        gaps = sorted({drops[i] - drops[i - 1] for i in range(1, len(drops))})
+        if gaps != [33]:
+            failures.append(f"la gravedad cayo cada {gaps} frames en vez de 33: "
+                            "el bucle esta perdiendo vsyncs")
+        else:
+            print(f"  presupuesto de CPU: {len(drops)} caidas, todas a 33 frames exactos")
+
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: la ROM ejecuta el motor de sonido del cartucho, nota por nota.")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("rom")
@@ -476,6 +589,8 @@ def main():
                      help="watch the line-clear animation, for 1 row and for 4")
     ap.add_argument("--pause", action="store_true",
                      help="check Start pauses and the cheat codes respond")
+    ap.add_argument("--audio", action="store_true",
+                     help="check the emulated sound engine against its golden recording")
     args = ap.parse_args()
 
     if args.selftest:
@@ -484,6 +599,8 @@ def main():
         sys.exit(lineclear_check(args.rom, 1) or lineclear_check(args.rom, 4))
     if args.pause:
         sys.exit(pause_check(args.rom))
+    if args.audio:
+        sys.exit(audio_check(args.rom))
 
     core, screen = load(args.rom)
     start_game(core)

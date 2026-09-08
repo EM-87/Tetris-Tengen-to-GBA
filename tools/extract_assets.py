@@ -16,6 +16,12 @@ What comes out, and why each piece is needed:
                   the braided border and the lettering look like the original
                   instead of like programmer art.
   tiles_dancers.h The Cossack dancers that perform between levels.
+  audio_prg.h     The slice of the cartridge's PROGRAM code that contains its
+                  sound engine and all of its music. The port does not
+                  reimplement the engine — it runs this, on a small 6502
+                  interpreter, and translates what it writes to the NES APU
+                  into GBA sound registers. See gba/nes_audio.c and the
+                  AUDIO section below.
   screen_1p.h     The 1P screen layout, lifted from the ROM's own nametable
                   and attribute table, reflowed from the NES's 32 columns to
                   the GBA's 30 (see BOARD LAYOUT below).
@@ -35,7 +41,10 @@ BOARD LAYOUT — how 32 columns become 30 without touching the game:
   panel keeps its full 10. Nothing is scaled and nothing is cropped.
 """
 import argparse
+import os
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 NES_HEADER = 16
 NES_TILE_BYTES = 16
@@ -84,6 +93,33 @@ MENU_COL_BLOCKS = ((0, 15), (17, 32))
 # 20 rows: the top and bottom borders plus 16 rows of the empty middle. The
 # ROM's SCORE/LINES/LEVEL header (rows 2-7) is skipped — this is a menu.
 MENU_ROW_BLOCKS = ((0, 2), (8, 24), (28, 30))
+
+# THE SOUND ENGINE
+#
+# Tengen's audio is a dense piece of 6502 with vibrato, portamento, per-channel
+# envelopes and a sound-effect priority system, working almost entirely through
+# unlabelled RAM. Transcribing it by hand would mean guessing, so the port
+# doesn't: it runs the cartridge's own code.
+#
+# Two entry points are all that is needed, and they take everything else with
+# them: setMusicOrSoundEffect queues a track or effect, updateAudio runs one
+# frame of playback. The engine touches nothing but RAM and $4000-$4017 — no
+# PPU, no mapper — which is what makes a 12KB emulator enough. That claim is
+# not assumed: the extraction below runs every music track and sound effect the
+# game has and records exactly which addresses were touched.
+AUDIO_SET_TRACK_ADDR = 0xCFB1   # setMusicOrSoundEffect
+AUDIO_UPDATE_ADDR = 0xCFCA      # updateAudio, once per frame
+AUDIO_TRACK_IDS = tuple(range(0x01, 0x1A))  # MUSIC_* and SOUND_* in constants.asm.txt
+AUDIO_PROBE_FRAMES = 1200       # ~20s of each, enough to reach every branch taken
+AUDIO_SLICE_ALIGN = 0x100
+
+# A golden recording of the engine's APU output, so `make gba-check` can prove
+# the hand-written 6502 interpreter in gba/nes6502.c behaves exactly like the
+# reference one here. Any divergence — a mis-set flag, a wrong addressing mode
+# — shows up as a mismatched frame instead of as music that is subtly wrong in
+# a way nobody notices.
+AUDIO_GOLDEN_TRACK = 0x09       # MUSIC_TITLESCREEN, the first thing that plays
+AUDIO_GOLDEN_FRAMES = 400
 
 # Screen regions, in NES nametable columns.
 COL_BORDER_L = (0, 2)
@@ -206,6 +242,106 @@ def reflow_screen(nametable: bytes, attributes: bytes):
 def playfield_origin(keep_cols) -> tuple:
     """Where the playfield's top-left tile ends up after the reflow."""
     return keep_cols.index(COL_PLAYFIELD[0]), ROW_PLAYFIELD[0]
+
+
+def extract_audio_prg(rom: "Rom"):
+    """The PRG slice the sound engine needs, with its own bounds measured.
+
+    Runs every track through the 6502 interpreter in tools/nes_cpu.py, watching
+    which PRG addresses get read and asserting that nothing outside RAM and the
+    APU is touched. The slice is then cut to fit what was actually used, with a
+    page of margin at each end, rather than to an address guessed in advance.
+    """
+    from nes_cpu import Bus, CPU
+
+    prg_banks = rom.prg_banks
+    prg = rom.data[rom.prg_off:rom.prg_off + prg_banks * 16384]
+    if prg_banks == 1:
+        prg = prg + prg
+
+    low, high = 0xFFFF, 0x0000
+
+    class Watching(Bus):
+        def read(self, addr):
+            nonlocal low, high
+            a = addr & 0xFFFF
+            if a >= 0x8000:
+                low = min(low, a)
+                high = max(high, a)
+            return super().read(addr)
+
+    for track in AUDIO_TRACK_IDS:
+        bus = Watching(prg)
+        cpu = CPU(bus)
+        cpu.call(AUDIO_SET_TRACK_ADDR, a=track)
+        for _ in range(AUDIO_PROBE_FRAMES):
+            cpu.call(AUDIO_UPDATE_ADDR)
+        if bus.stray:
+            raise ValueError(
+                f"track ${track:02X} touched something outside RAM and the APU: "
+                f"{bus.stray[:5]} — the port's audio emulator only implements those")
+
+    if low > high:
+        raise ValueError("the sound engine read no PRG at all; wrong addresses?")
+
+    base = max(0x8000, (low - AUDIO_SLICE_ALIGN) & ~(AUDIO_SLICE_ALIGN - 1))
+    end = min(0x10000, (high + AUDIO_SLICE_ALIGN + 1) & ~(AUDIO_SLICE_ALIGN - 1))
+    return base, prg[base - 0x8000:end - 0x8000], (low, high)
+
+
+def record_audio_golden(rom: "Rom", track, frames):
+    """`frames` frames of the APU register file, as the engine leaves it."""
+    from nes_cpu import Bus, CPU
+
+    prg_banks = rom.prg_banks
+    prg = rom.data[rom.prg_off:rom.prg_off + prg_banks * 16384]
+    if prg_banks == 1:
+        prg = prg + prg
+
+    bus = Bus(prg)
+    cpu = CPU(bus)
+    cpu.call(AUDIO_SET_TRACK_ADDR, a=track)
+    out = bytearray()
+    for _ in range(frames):
+        cpu.call(AUDIO_UPDATE_ADDR)
+        out += bytes(bus.apu)
+    return bytes(out)
+
+
+def emit_audio_header(base, data, span, source):
+    lines = [
+        "/*",
+        " * audio_prg.h — the cartridge's sound engine and music, as 6502 code.",
+        " *",
+        " * GENERATED by tools/extract_assets.py — do not edit by hand.",
+        f" * Source: {source}",
+        " *",
+        " * This is not a conversion of anything: it is the original program",
+        " * bytes. gba/nes_audio.c runs them on a small 6502 interpreter and",
+        " * turns the NES APU writes they produce into GBA sound registers, so",
+        " * the music and every sound effect are the cartridge's own, mixed and",
+        " * prioritised by its own code.",
+        " *",
+        f" * The slice is ${base:04X}..${base + len(data) - 1:04X}. It was measured, not",
+        f" * guessed: running every track for {AUDIO_PROBE_FRAMES} frames reads",
+        f" * ${span[0]:04X}..${span[1]:04X} and touches nothing outside RAM and $4000-$4017.",
+        " */",
+        "#ifndef AUDIO_PRG_H",
+        "#define AUDIO_PRG_H",
+        "",
+        "#include <stdint.h>",
+        "",
+        f"#define AUDIO_PRG_BASE 0x{base:04X}",
+        f"#define AUDIO_PRG_SIZE {len(data)}",
+        f"#define AUDIO_SET_TRACK_ADDR 0x{AUDIO_SET_TRACK_ADDR:04X}",
+        f"#define AUDIO_UPDATE_ADDR 0x{AUDIO_UPDATE_ADDR:04X}",
+        "",
+        f"static const uint8_t kAudioPrg[{len(data)}] = {{",
+    ]
+    for i in range(0, len(data), 16):
+        lines.append("    " + ", ".join(f"0x{b:02X}" for b in data[i:i + 16]) + ",")
+    lines += ["};", "", "#endif /* AUDIO_PRG_H */", ""]
+    return "\n".join(lines)
 
 
 def emit_tiles_header(name, guard, tiles, source):
@@ -535,7 +671,11 @@ def main() -> int:
     menu_attr = rom.at(MENU_NAMETABLE_ADDR + NAMETABLE_BYTES, ATTRIBUTE_BYTES)
     menu_tiles, menu_palettes = compose_menu(menu_nt, menu_attr)
 
+    audio_base, audio_bytes, audio_span = extract_audio_prg(rom)
+    audio_golden = record_audio_golden(rom, AUDIO_GOLDEN_TRACK, AUDIO_GOLDEN_FRAMES)
+
     outputs = {
+        "audio_prg.h": emit_audio_header(audio_base, audio_bytes, audio_span, src),
         "screen_menu.h": emit_menu_header(menu_tiles, menu_palettes, src),
         "screen_title.h": emit_title_header(compose_title(title_nt), title_palette, src),
         "tiles_title.h": emit_tiles_header(
@@ -549,13 +689,19 @@ def main() -> int:
         "palettes_rom.h": emit_palette_header(bg_palette, piece_palettes, src),
     }
 
-    import os
     for filename, content in outputs.items():
         path = os.path.join(args.outdir, filename)
         with open(path, "w") as fh:
             fh.write(content)
         print(f"escrito {path}")
 
+    golden_path = os.path.join(args.outdir, "audio_golden.bin")
+    with open(golden_path, "wb") as fh:
+        fh.write(audio_golden)
+    print(f"escrito {golden_path} ({AUDIO_GOLDEN_FRAMES} frames del tema de titulo)")
+
+    print(f"motor de sonido: PRG ${audio_base:04X}..${audio_base + len(audio_bytes) - 1:04X} "
+          f"({len(audio_bytes)} bytes); accesos medidos ${audio_span[0]:04X}..${audio_span[1]:04X}")
     ox, oy = playfield_origin(keep_cols)
     print(f"playfield en la pantalla reflowed: columna {ox}, fila {oy} (12x20 tiles)")
     return 0

@@ -34,15 +34,16 @@ running ROM; only the side panels need reflowing).
 3. **Core stays platform-independent.** `src/tengen_core.{h,c}` must keep
    compiling with plain `gcc -std=c99`, no GBA headers, no `#ifdef GBA`
    branches. All hardware-specific code (tile/palette upload, REG_KEYINPUT
-   reads, audio) belongs in a `gba/` layer that calls into this API — that's
+   reads, sound) belongs in a `gba/` layer that calls into this API — that's
    what keeps `make test` fast and keeps the rules honestly testable. If a
    rule seems to require touching hardware state directly, that's a sign the
    API needs a new return value or callback, not a leak.
 
 4. **Every new rule gets a native test before it gets GBA integration.**
    `tests/test_tengen.c` runs in milliseconds with `make test`. Adding a rule
-   (say, the 2P/coop front end from the roadmap below) without a test for its documented behavior is how a subtle 6502-carry-flag
-   misreading turns into a silent gameplay bug — see how `tengen_try_rotate`
+   (say, the 2P/coop front end from the roadmap below) without a test for
+   its documented behavior is how a subtle 6502-carry-flag misreading turns
+   into a silent gameplay bug — see how `tengen_try_rotate`
    was only trusted once `test_wall_kick_only_ever_shifts_left` demonstrated
    the actual kick happening, not just "a plausible-looking function."
 
@@ -94,10 +95,20 @@ running ROM; only the side panels need reflowing).
    where their odd behaviours come from (a broken sequence swallows the press
    that broke it; a completed code re-fires on its last button); all of it is
    reproduced and tested rather than tidied up.
-12. The 2P and coop modes. The core already models coop (including its
+12. ~~Audio~~ — done, and not the way the roadmap assumed. The port doesn't
+   reimplement the sound engine, it RUNS it: `gba/nes6502.c` is a small 6502
+   interpreter and `gba/audio_prg.h` is the slice of the cartridge holding
+   the engine and its music. That was the only way to get the music, the
+   effects and their priority mixing without guessing at a format nobody has
+   documented. `make gba-check` compares the emulated APU against a golden
+   recording made by the reference interpreter in `tools/nes_cpu.py`, frame
+   by frame and byte for byte, and checks the whole thing still fits in a
+   GBA frame.
+13. The 2P and coop modes. The core already models coop (including its
    12-column field) and two players; only the GBA front end is single-player.
-13. Audio (`setMusicOrSoundEffect` plus the `MUSIC_*`/`SOUND_*` constants in
-   `constants.asm.txt`) — lowest priority, gameplay fidelity comes first.
+   Note the ROM also has a COMPUTER player (`computerMove`, the VS and WITH
+   game modes), which unlike two-human 2P needs no second controller and so
+   is the one that actually fits a single GBA.
 
 ## Build
 
@@ -108,10 +119,13 @@ running ROM; only the side panels need reflowing).
 - `make assets-check` — verifies the asset conversion without needing a ROM.
 - `make gba-check` — boots the ROM headlessly in mGBA and asserts it draws
   the field where the resolution mapping says it should, that a piece
-  actually falls, and that the line-clear sweep crosses the row and writes
-  the right word. The last one plants completed rows straight into the
-  game's playfield through the emulator, so it doesn't need a bot that can
-  stack; that's a fixture in the harness, never anything the ROM knows about.
+  actually falls, that the line-clear sweep crosses the row and writes the
+  right word, that Start pauses and the cheat codes respond, and that the
+  emulated sound engine matches a golden recording of the reference
+  interpreter frame for frame while still leaving the game running at full
+  speed. The line-clear check plants completed rows straight into the game's
+  playfield through the emulator, so it doesn't need a bot that can stack;
+  that's a fixture in the harness, never anything the ROM knows about.
 
 Run `make test` and `make gba-check` before considering a change done. The
 first catches rule regressions; the second catches the ones that only appear

@@ -42,6 +42,25 @@ rom_header_end:
     msr     cpsr_c, r0
     ldr     sp, =__sp_usr
 
+    @ Cartridge wait states: 3/1 for the ROM bus plus the prefetch buffer.
+    @ The default (4/2, no prefetch) is the conservative power-on setting;
+    @ every commercial cartridge sets this, and code fetched from ROM runs
+    @ noticeably faster for it.
+    ldr     r0, =0x04000204
+    ldr     r1, =0x4317
+    strh    r1, [r0]
+
+    @ Copy .iwram (code that must run from internal WRAM) into place.
+    ldr     r0, =__iwram_lma
+    ldr     r1, =__iwram_start
+    ldr     r2, =__iwram_end
+6:  cmp     r1, r2
+    bcs     7f
+    ldr     r3, [r0], #4
+    str     r3, [r1], #4
+    b       6b
+7:
+
     @ Copy .data from its ROM load address into RAM.
     ldr     r0, =__data_lma
     ldr     r1, =__data_start
