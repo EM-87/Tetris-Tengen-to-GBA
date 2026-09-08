@@ -87,7 +87,11 @@ GBA_ROM  := $(BUILD)/tengen.gba
 
 gba: $(GBA_ROM)
 
-$(GBA_ELF): $(GBA_SRC) $(CORE_HDR) gba/gba_hw.h gba/crt0.s gba/gba.ld | $(BUILD)
+# The generated headers are prerequisites through $(wildcard) rather than
+# directly: that way regenerating assets rebuilds the ROM, while a missing one
+# still reaches the helpful message below instead of "no rule to make target".
+$(GBA_ELF): $(GBA_SRC) $(CORE_HDR) gba/gba_hw.h gba/crt0.s gba/gba.ld \
+             $(wildcard $(GBA_ASSETS)) | $(BUILD)
 	@command -v $(ARMCC) >/dev/null 2>&1 || { \
 	    echo "error: $(ARMCC) not found."; \
 	    echo "Install an arm-none-eabi toolchain (see the Makefile header),"; \

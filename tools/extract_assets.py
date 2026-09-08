@@ -29,16 +29,25 @@ What comes out, and why each piece is needed:
 
 BOARD LAYOUT — how 32 columns become 30 without touching the game:
 
-    cols  0-1   left border
-    cols  2-13  playfield: 12 columns (10 playable + 2 walls) x 20 rows
-    cols 14-19  vertical decorative divider (the TETRIS banner)
-    cols 20-29  score / stats panel
-    cols 30-31  right border
+    cols  0-1   braided frame: the playfield's left wall
+    cols  2-11  playfield: the ten playable columns x 20 rows
+    cols 12-13  braided frame: the right wall
+    cols 14-17  vertical decorative divider (the TETRIS banner)
+    cols 18-19  braided frame again — the left wall of a SECOND playfield
+                area, which 2P uses and 1P covers with its score panel
+    cols 20-29  that second area: the score / stats panel in 1P
+    cols 30-31  right frame
 
-  The GBA is two tiles narrower. Those two come out of the decorative
-  divider, which is the only element that is pure ornament: the playfield
-  keeps all 12 columns at their original size, both borders survive, and the
-  panel keeps its full 10. Nothing is scaled and nothing is cropped.
+  The walls are frame ART, not blocks drawn from the playfield buffer. Three
+  things say so: exactly ten blank columns sit between the frames, the ROM's
+  line-clear sweep runs from x $10 to $58 (columns 2 to 11 and no further),
+  and the pause plaque is blitted at column 12, right where the frame starts.
+
+  The GBA is two tiles narrower. Those two come out of columns 18-19, the
+  frame around the second playfield area — the one element the 1P screen has
+  no use for, since it draws its panel over that area anyway. The playfield,
+  its frames, the banner and the full 10-column panel all survive at original
+  size. Nothing is scaled and nothing is cropped.
 """
 import argparse
 import os
@@ -121,13 +130,13 @@ AUDIO_SLICE_ALIGN = 0x100
 AUDIO_GOLDEN_TRACK = 0x09       # MUSIC_TITLESCREEN, the first thing that plays
 AUDIO_GOLDEN_FRAMES = 400
 
-# Screen regions, in NES nametable columns.
-COL_BORDER_L = (0, 2)
-COL_PLAYFIELD = (2, 14)
-COL_DIVIDER = (14, 20)
+# Screen regions, in NES nametable columns. See BOARD LAYOUT above.
+COL_FRAME_L = (0, 2)            # braid; the playfield's left wall
+COL_PLAYFIELD = (2, 14)         # ten playable columns plus the right frame
+COL_DIVIDER = (14, 20)          # TETRIS banner (14-17) + the second area's frame
 COL_PANEL = (20, 30)
 COL_BORDER_R = (30, 32)
-DIVIDER_TRIM = 2                # columns dropped from the divider for the GBA
+DIVIDER_TRIM = 2                # drops cols 18-19: the second field's left frame
 
 ROW_PLAYFIELD = (8, 28)         # 20 rows
 
@@ -221,10 +230,12 @@ def reflow_screen(nametable: bytes, attributes: bytes):
     only the first 20 rows are visible on a GBA, but the full height is kept
     so the caller can choose the vertical window.
 
-    The two columns the GBA lacks are taken from the decorative divider. Every
-    other region keeps its exact width and its exact tiles.
+    The two columns the GBA lacks are taken from the far end of the divider
+    block — columns 18-19, the braided frame around the second playfield area
+    that the 1P screen covers with its panel anyway. Every other region keeps
+    its exact width and its exact tiles.
     """
-    keep_cols = (list(range(*COL_BORDER_L)) +
+    keep_cols = (list(range(*COL_FRAME_L)) +
                  list(range(*COL_PLAYFIELD)) +
                  list(range(COL_DIVIDER[0], COL_DIVIDER[1] - DIVIDER_TRIM)) +
                  list(range(*COL_PANEL)) +
@@ -381,10 +392,11 @@ def emit_screen_header(tiles, palettes, keep_cols, source):
         f" * Source: {source}",
         " *",
         " * The NES screen is 32 tiles wide and the GBA is 30, so two columns are",
-        " * dropped from the decorative divider between the playfield and the score",
-        " * panel — the one element that is pure ornament. The playfield keeps all",
-        " * 12 of its columns at original size, both borders survive, and the panel",
-        " * keeps its full 10. Nothing is scaled and nothing is cropped.",
+        " * dropped from between the TETRIS banner and the score panel: the braided",
+        " * frame around the second playfield area, which the 1P screen covers with",
+        " * its panel anyway. The playfield, its frames, the banner and the full",
+        " * 10-column panel all survive at original size. Nothing is scaled and",
+        " * nothing is cropped.",
         " *",
         " * Tiles marked 0 are blank in the ROM because the game draws over them at",
         " * runtime; the port does the same.",
@@ -703,7 +715,8 @@ def main() -> int:
     print(f"motor de sonido: PRG ${audio_base:04X}..${audio_base + len(audio_bytes) - 1:04X} "
           f"({len(audio_bytes)} bytes); accesos medidos ${audio_span[0]:04X}..${audio_span[1]:04X}")
     ox, oy = playfield_origin(keep_cols)
-    print(f"playfield en la pantalla reflowed: columna {ox}, fila {oy} (12x20 tiles)")
+    print(f"playfield en la pantalla reflowed: columna {ox}, fila {oy} "
+          f"(10x20 jugables, con el marco del cartucho a los lados)")
     return 0
 
 

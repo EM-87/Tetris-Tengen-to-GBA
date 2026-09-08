@@ -46,17 +46,20 @@ TILE = 8
 # done by tools/extract_assets.py; if they drift apart, the checks below stop
 # meaning anything, so they are asserted against the running ROM rather than
 # assumed.
-COL_BORDER_L = (0, 2)     # braided border
-COL_FIELD = (2, 14)       # 12 columns: wall, 10 playable, wall
+COL_FRAME_L = (0, 2)      # braided frame, and the playfield's left wall
+COL_FIELD = (2, 12)       # the ten playable columns
+COL_FRAME_R = (12, 14)    # braided frame, and the right wall
 COL_BANNER = (14, 18)     # vertical TETRIS banner
 COL_PANEL = (18, 28)      # score / lines / level / next / stats
 COL_BORDER_R = (28, 30)
 
+# The walls are the cartridge's own frame art, drawn once with the screen, not
+# blocks painted from the playfield buffer — see the note in gba/main.c.
 FIELD_TILES_W = COL_FIELD[1] - COL_FIELD[0]
 FIELD_X0 = COL_FIELD[0] * TILE
 FIELD_X1 = COL_FIELD[1] * TILE
-WALL_L_X = COL_FIELD[0] * TILE            # left wall column
-WALL_R_X = (COL_FIELD[1] - 1) * TILE      # right wall column
+WALL_L_X = COL_FRAME_L[0] * TILE
+WALL_R_X = (COL_FRAME_R[1] - 1) * TILE
 
 
 def load(rom_path):
@@ -121,9 +124,9 @@ def describe(rows):
         return cols
 
     print(f"columnas con contenido: {min(lit)}..{max(lit)}")
-    for name, bounds in (("borde izq", COL_BORDER_L), ("campo", COL_FIELD),
-                         ("banner", COL_BANNER), ("panel", COL_PANEL),
-                         ("borde der", COL_BORDER_R)):
+    for name, bounds in (("marco izq", COL_FRAME_L), ("campo", COL_FIELD),
+                         ("marco der", COL_FRAME_R), ("banner", COL_BANNER),
+                         ("panel", COL_PANEL), ("borde der", COL_BORDER_R)):
         x0, x1 = bounds[0] * TILE, bounds[1] * TILE
         print(f"  {name:10s} x={x0:3d}..{x1 - 1:3d}")
     return cols
@@ -182,7 +185,8 @@ def selftest(rom_path):
 
     # Each region must actually have been drawn. A blank one means a tile
     # upload, a palette or a layout index went wrong.
-    for name, bounds in (("borde izquierdo", COL_BORDER_L),
+    for name, bounds in (("marco izquierdo", COL_FRAME_L),
+                         ("marco derecho", COL_FRAME_R),
                          ("banner TETRIS", COL_BANNER),
                          ("panel del HUD", COL_PANEL),
                          ("borde derecho", COL_BORDER_R)):
@@ -194,10 +198,9 @@ def selftest(rom_path):
 
     # The field runs the FULL height of the screen — that is the whole point
     # of the 160px vertical fit, and the first thing a bad window offset
-    # breaks. Checked per tile ROW rather than per pixel: the ROM draws its
-    # walls with a block graphic that has transparent corners, so the
-    # invariant is that no row of the wall column is missing, not that every
-    # pixel of it is lit.
+    # breaks. Checked on the frame columns, which are the walls, per tile ROW
+    # rather than per pixel: the braid has transparent corners, so the
+    # invariant is that no row of it is missing, not that every pixel is lit.
     for name, x in (("muro izquierdo", WALL_L_X), ("muro derecho", WALL_R_X)):
         empty_rows = [ty for ty in range(SCREEN_H // TILE)
                       if not any(rows[ty * TILE + dy][x + dx] != (0, 0, 0)
@@ -238,6 +241,7 @@ def selftest(rom_path):
 # the harness, the same way a unit test constructs a board.
 # ---------------------------------------------------------------------------
 PF_W, PF_H = 12, 20            # must match TENGEN_PF_WIDTH / _HEIGHT
+PF_PLAYABLE = PF_W - 2         # what is actually drawn; the walls are frame art
 CELL_WALL, CELL_BLOCK = 15, 1
 SCREENBLOCK_ADDR = 0x0600E000  # screenblock 28, as gba/main.c sets BG0CNT
 OAM_ADDR = 0x07000000
@@ -280,7 +284,7 @@ def map_row_text(core, row):
     for a block and '.' for the empty tile, which is id 0.
     """
     out = []
-    for col in range(PF_W):
+    for col in range(PF_PLAYABLE):
         tile = core.memory.u16[SCREENBLOCK_ADDR + (row * 32 + COL_FIELD[0] + col) * 2] & 0x3FF
         out.append("." if tile == 0 else (chr(tile) if 0x20 <= tile < 0x7F else "#"))
     return "".join(out)
@@ -357,7 +361,7 @@ def lineclear_check(rom_path, row_count):
                         f"esperaba {[hex(t) for t in SWEEP_TILES]}")
     if heads != sorted(heads):
         failures.append("la escoba retrocede en algun momento")
-    if not heads or max(heads) < PF_W - 1:
+    if not heads or max(heads) < PF_PLAYABLE - 1:
         failures.append(f"la escoba solo llego a la columna {max(heads, default=-1)}")
     if final_text is None or word not in final_text:
         failures.append(f"la fila decia |{final_text}|, esperaba que dijera {word}")

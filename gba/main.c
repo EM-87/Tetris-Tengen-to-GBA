@@ -11,16 +11,17 @@
  *
  * SCREEN LAYOUT — the whole project rests on this fitting:
  *
- *   The NES screen is 32x30 tiles; the GBA is 30x20. The playfield is 12
- *   tiles wide (10 playable + 2 walls) by 20 tall, which is 96x160 px —
- *   exactly the GBA's full height. So the field maps tile-for-tile with no
- *   scaling and no cropping, and the adaptation is entirely in what surrounds
- *   it:
+ *   The NES screen is 32x30 tiles; the GBA is 30x20. The playfield is 10
+ *   tiles wide by 20 tall and the cartridge's braided frame adds one 2-tile
+ *   column on each side, so the framed board is 112x160 px — exactly the
+ *   GBA's full height. It maps tile-for-tile with no scaling, no cropping and
+ *   no change of column, and the adaptation is entirely in what surrounds it:
  *
- *     horizontally: 32 columns -> 30. The two that go are taken from the
- *       decorative divider beside the playfield, the one element that is pure
- *       ornament. Both borders, the whole field and the full-width panel
- *       survive at original size. Done in extract_assets.py.
+ *     horizontally: 32 columns -> 30. The NES screen is really TWO framed
+ *       board areas side by side (2P uses both; 1P covers the second with its
+ *       score panel), and the two columns that go are that second area's own
+ *       frame at columns 18-19 — the one thing the 1P screen has no use for.
+ *       Everything else survives at original size. Done in extract_assets.py.
  *
  *     vertically: 30 rows -> 20, and the field needs all 20. So the NES's
  *       header strip — the SCORE / LINES / LEVEL / NEXT labels that sit above
@@ -55,8 +56,25 @@
  * Everything the NES drew above and below them is what got relocated. */
 #define WINDOW_TOP SCREEN_1P_FIELD_TY
 
-#define FIELD_TX SCREEN_1P_FIELD_TX
+/* WHERE THE FIELD GOES, and why it is 10 columns and not 12.
+ *
+ * The cartridge's own screen frames the playfield with two columns of braid
+ * on each side — tiles $6A $6B at columns 0-1 and $73 $74 at 12-13 — and the
+ * ten columns between them are what the game plays in. Those frames are part
+ * of the screen art, drawn once; the ROM never paints its playfield buffer's
+ * wall cells over them. Three things confirm the columns: the nametable has
+ * exactly ten blank columns there, the line-clear sweep runs from x $10 to
+ * $58 (columns 2 to 11 and no further), and the pause plaque is blitted at
+ * nametable column 12, right where the frame starts.
+ *
+ * So this draws the ten PLAYABLE cells — storage columns 1..10 of the core's
+ * 12 — and leaves the frame alone. Drawing the core's wall sentinels as block
+ * tiles instead would both cover the cartridge's art and shift the field a
+ * column, which is exactly what an earlier pass here did. */
+#define FIELD_TX SCREEN_1P_FIELD_TX  /* port column of the first playable one */
 #define FIELD_TY 0   /* the field starts at the top of the visible window */
+#define FIELD_COL0 1              /* storage column of the first playable one */
+#define FIELD_PLAYABLE (TENGEN_PF_WIDTH - 2)
 
 /* The panel the reflow leaves free, in GBA tile columns. */
 #define PANEL_TX 18
@@ -325,7 +343,7 @@ static void draw_line_clear_sweep(void) {
         if (!(p->clearing_rows & (1u << row))) continue;
         for (int s = 0; s < TENGEN_CLEAR_SPARKS; s++) {
             int col = (int)step - TENGEN_CLEAR_TRAIL + s;
-            if (col < 0 || col >= TENGEN_PF_WIDTH) continue;
+            if (col < 0 || col >= FIELD_PLAYABLE) continue;
             oam_set(used++, (FIELD_TX + col) * 8, (FIELD_TY + row) * 8,
                      (uint16_t)(CLEAR_HEAD_TILE + s), false, PAL_OBJ_CLEAR);
         }
@@ -450,17 +468,15 @@ static void draw_field(void) {
 
     for (int row = 0; row < TENGEN_PF_HEIGHT; row++) {
         bool clearing = (p->clearing_rows & (1u << row)) != 0;
-        for (int col = 0; col < TENGEN_PF_WIDTH; col++) {
+        for (int col = 0; col < FIELD_PLAYABLE; col++) {
             /* A cell's value IS its tile index — that is the whole point of
-             * the ROM's nibble encoding (notes.txt.txt:35), and it means the
-             * wall needs no special case: its sentinel 15 is tile $0F, the
-             * frame graphic. Empty is 0, which is the blank tile. All of it
-             * draws in the level's palette. */
-            uint16_t entry = WITH_BANK(field->cell[row][col], 0);
+             * the ROM's nibble encoding (notes.txt.txt:35). Empty is 0, which
+             * is the blank tile. All of it draws in the level's palette. */
+            uint16_t entry = WITH_BANK(field->cell[row][FIELD_COL0 + col], 0);
 
             /* Behind the sweep the row is gone and the word is in its place,
-             * one character per column, walls included — the ROM writes
-             * straight over them (L89E9, main.asm.txt:1508-1530). */
+             * one character per playable column (L89E9,
+             * main.asm.txt:1508-1530). */
             if (clearing && col <= written)
                 entry = WITH_BANK(ascii_tile(word[col]), 0);
 
@@ -480,8 +496,10 @@ static void draw_field(void) {
     TengenTetromino current = g_game.player[0].piece.current;
     for (int i = 0; i < count; i++) {
         if (cells[i].row < 0) continue;
+        int col = cells[i].col - FIELD_COL0;
+        if (col < 0 || col >= FIELD_PLAYABLE) continue;
         uint8_t tile = tengen_tile_id_for_cell(current, g_game.player[0].piece.orientation, i);
-        set_map_tile(FIELD_TX + cells[i].col, FIELD_TY + cells[i].row,
+        set_map_tile(FIELD_TX + col, FIELD_TY + cells[i].row,
                       WITH_BANK(tile, PAL_PIECE_BANK));
     }
 }

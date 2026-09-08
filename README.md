@@ -9,19 +9,23 @@ adaptando solo lo que la propia pantalla del GBA obliga a adaptar.
 
 La pantalla de GBA (240×160 px) no es del mismo tamaño que la de NES
 (256×240 px), pero el **campo de juego** de Tengen Tetris — 10 columnas × 20
-filas de tiles de 8×8, más las dos columnas de marco: 96×160 px — tiene
-*exactamente* los 160 px de alto de la pantalla del GBA. El playfield entra
-sin recortar ni escalar, tile por tile. Lo que no entra 1:1 es el HUD
-alrededor (al NES le sobran 160 px de ancho para repartir a los costados; al
-GBA 144), así que el plan es: **playfield y jugabilidad idénticos, HUD
-rediseñado** para los paneles más angostos.
+filas de tiles de 8×8, con el marco trenzado del cartucho a cada lado:
+112×160 px en total — tiene *exactamente* los 160 px de alto de la pantalla
+del GBA. El playfield entra sin recortar ni escalar, tile por tile, y en las
+mismas columnas que en la NES. Lo que no entra 1:1 es el HUD alrededor (al
+NES le sobran 160 px de ancho para repartir a los costados; al GBA 144), así
+que el plan es: **playfield y jugabilidad idénticos, HUD rediseñado** para
+los paneles más angostos.
 
-En horizontal sobran exactamente 2 de las 32 columnas del NES, y salen del
-divisor decorativo que separa el campo del panel — el único elemento que es
-puro adorno. En vertical el NES tiene 30 filas y el GBA 20, y el campo se
-lleva las 20 exactas: por eso la franja de etiquetas que el NES pone *arriba*
-del campo baja al panel lateral, que el NES dejaba casi vacío. Mismos tiles,
-misma tipografía, apilados en vez de repartidos.
+Un detalle que conviene saber: la pantalla del NES son en realidad **dos**
+campos enmarcados iguales, uno a cada lado del banner vertical de TETRIS. El
+modo 2P pone un jugador en cada uno; el modo 1P dibuja el panel de puntaje
+encima del segundo. De ahí salen las 2 columnas que sobran de las 32: el
+marco de ese segundo campo (columnas 18-19), lo único que la pantalla de 1P
+no usa. En vertical el NES tiene 30 filas y el GBA 20, y el campo se lleva
+las 20 exactas: por eso la franja de etiquetas que el NES pone *arriba* del
+campo baja al panel lateral. Mismos tiles, misma tipografía, apilados en vez
+de repartidos.
 
 Eso no es teoría: `make gba-check` arranca la ROM en un emulador y verifica
 que el campo caiga en sus columnas, que las dos columnas de marco lleguen a
