@@ -96,6 +96,19 @@ $(GBA_ROM): $(GBA_ELF)
 	    echo "note: python3 unavailable, header checksum left unpatched"
 	@echo "Built $@ ($$(wc -c < $@) bytes)"
 
+# Converts the original cartridge's tile graphics into a header the GBA build
+# can compile in. Needs a dump you supply; nothing here ships game artwork.
+#   make tiles ROM=/path/to/clean.nes
+.PHONY: tiles
+tiles:
+	@test -n "$(ROM)" || { echo "usage: make tiles ROM=/path/to/clean.nes"; exit 1; }
+	python3 tools/chr_to_gba.py "$(ROM)" -o gba/tiles_game.h
+
+# Verifies the CHR converter's format handling without needing a ROM.
+.PHONY: tiles-check
+tiles-check:
+	python3 tools/chr_to_gba.py --self-test
+
 # Boots the ROM in mGBA headlessly and checks it actually renders and plays,
 # rather than merely linking. Needs: pip install pygba (plus the mGBA shared
 # library, e.g. apt-get install libmgba0.10).

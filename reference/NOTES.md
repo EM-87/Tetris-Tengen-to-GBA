@@ -24,15 +24,20 @@ the level-up rule were all initially plausible-looking and wrong — so treat
 - 160 px is exactly the GBA's full screen height. The playfield needs **zero**
   vertical scaling or cropping on GBA — every row is visible, pixel-for-pixel,
   same as NES.
-- Width: NES has 256-80=176px around the field for HUD (split across both
-  sides — see `disasm/gameModeNametable1P.asm.txt` for the exact 1P layout:
-  left column block ~8 tiles, playfield, right column block with stats/score/
-  next-piece/level). GBA only has 240-80=160px to work with, 16px less.
-- **Decision**: keep the playfield tile graphics and 80×160 footprint
-  byte-for-byte identical to NES (same tile ids from `kTileIds` in
-  `tengen_core.c`, same 8×8 CHR art once ported); redesign the surrounding
-  HUD to fit 160px instead of 176px. This is exactly the "1:1 en jugabilidad
-  y gráficos del campo, marco adaptado" split the project started from.
+- With the frame's two wall columns included, the drawn field is 12 tiles
+  wide: **96×160 px**. That is what the GBA build actually places, centred at
+  tile column 9 (x = 72..167) — `make gba-check` asserts exactly those
+  bounds, so this mapping is verified by running the ROM, not just on paper.
+- Width: NES has 256-96=160px around the framed field for HUD (see
+  `disasm/gameModeNametable1P.asm.txt` for the 1P layout: statistics down the
+  left, score/level/next-piece to the right). GBA has 240-96=144px, i.e. 72px
+  per side against the NES's 80.
+- **Decision**: keep the playfield's footprint and tile graphics identical to
+  the NES (same 8×8 art once real CHR is available, same tile-id tables in
+  `tengen_core.c`); redesign only the surrounding HUD for the narrower
+  panels. This is exactly the "1:1 en jugabilidad y gráficos del campo, marco
+  adaptado" split the project started from — and it costs nothing on the axis
+  that matters, because the vertical fit is exact.
 
 ## VERIFIED
 
@@ -61,6 +66,9 @@ the level-up rule were all initially plausible-looking and wrong — so treat
 | **Soft-drop acceleration** | `main.asm.txt:189-216` | Every time the soft drop fires it tightens its own threshold by one (floored at 1), so a held Down accelerates: first step after 20 frames, then 19, 18… Releasing Down (or pressing a direction) resets the threshold to **5**, not back to 20 — so a second soft drop on the same piece bites much faster than the first. `L9AEE` additionally clamps the threshold to the level's gravity value, so soft dropping is never slower than plain gravity (`main.asm.txt:4008-4011`). |
 | **Fresh direction press swallowed after Down** | `main.asm.txt:98-107` | A new Left/Right press is discarded outright if Down was held on the *previous* frame — you cannot start a horizontal move on the frame you stop soft-dropping. |
 | **Scoring** | `L9A47` at `main.asm.txt:3874-3893`, multiply `L98D7` at `:3632-3685`, doubling `L9A17` at `:3843-3871`, digit accumulate `L9A6A` at `:3894-3948` | Points are awarded **per piece locked, not per line cleared** — clearing lines pays nothing directly. The award is `(level+1) × ((level+1) + rows_above_floor)`, where `rows_above_floor` is `$2D` = 26 − (row of the lowest cell the piece collided with), so **resting higher pays more**: it rewards building tall, not dropping far. It doubles when `dropRatePossible < 2`, i.e. when a soft drop has fully accelerated. The level term reads oddly in the ROM (ones digit + 1, plus a flat +10 when the tens digit is set) but works out to exactly `level + 1` across the whole 0-17 range, precisely because the level caps at 17. The running total is six ASCII digits, and its hundred-thousands digit is replaced by `'1'` rather than carrying when it would pass `'9'` (`:3942-3946`), so the score wraps to 100000 rather than saturating. |
+| **Palettes** | `piecePaletteIndex0..B` at `main.asm.txt:5364-5399`; `setPiecePalette` at `:5338`; `setPlayfieldPaletteFromLevel` at `:5328` | One table of twelve three-colour entries serves double duty: indexed by PIECE ID it colours a piece (entry 1 = I, 2 = T, ... 7 = Z), and indexed by the LEVEL'S ONES DIGIT it colours the playfield — which is why the field recolours each level and repeats every ten. Entry 10 is the line-clear flash, 11 the bonus animation. Transcribed into `gba/palette.h`. The NES colour indices are in the ROM; what they *look like* is in the PPU hardware and is only ever approximated. |
+| **Settled blocks are not coloured per piece** | `main.asm.txt:3723-3728` vs `:3205`, palette addresses at `:5334-5342` | `setPiecePalette` writes to `$3F11+`, a SPRITE palette, and is called once per piece dealt; `setPlayfieldPaletteFromLevel` writes to `$3F01+`, a BACKGROUND palette, and is called on level-up. So the falling piece and the next-piece preview are sprites carrying their own colour, while everything already locked is background drawn in one level-wide scheme. A renderer that tints settled blocks by the piece they came from looks wrong — this port did exactly that until the palette code was traced. |
+| **The playfield stores tile ids, not piece ids** | `notes.txt.txt:35` ("nibble aligns with tile index"), planting code at `main.asm.txt:928-935` | Each playfield nibble holds the sub-tile index (1-14) taken from `orientationTiles`, not the piece id. This core stores piece ids instead, which is behaviourally identical (both just mean "occupied") and lets it keep per-piece information the ROM discards — but it means the joined-block artwork can't be reproduced exactly until the field also carries tile ids. That's the one remaining structural gap for pixel-perfect settled blocks; it only matters once real CHR art is available. |
 | Cheat-code state exists (long bar / undo) | `tetris-ram.asm.txt:121-134` | `codeInputYPlayer1/2`, `longBarCodeUsedP1/2`, `undoCodeUsedP1/2`, `lastCurrentBlockP1/2` etc. Tengen's famous in-game level-up entry codes and the "undo" cheat have dedicated RAM; **not yet implemented in the core** — worth a dedicated pass since these are a well-known, requested-by-fans Tengen feature. |
 
 ## PLACEHOLDER (implemented, but not yet checked against this ROM)

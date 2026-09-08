@@ -1,3 +1,7 @@
 build/
 *.gba
 *.sav
+
+# Tile data converted from a cartridge dump by tools/chr_to_gba.py. Generated
+# locally from artwork that isn't ours to redistribute.
+gba/tiles_*.h

@@ -27,6 +27,7 @@
  */
 #include "gba_hw.h"
 #include "font.h"
+#include "palette.h"
 #include "../src/tengen_core.h"
 
 #define CHARBLOCK   0
@@ -48,9 +49,21 @@
 /* Tile indices in VRAM. Tile 0 must stay blank: it's what the rest of the
  * map is filled with. */
 #define TILE_BLANK 0
-#define TILE_BLOCK_BASE 1   /* one tile per piece id, 1..7 */
-#define TILE_WALL  9
+#define TILE_BLOCK 1        /* one shape, recoloured per piece by palette bank */
+#define TILE_WALL  2
 #define TILE_FONT_BASE 16   /* 10 digits then 26 letters */
+
+/* Palette banks. Each NES palette is three colours plus a shared backdrop,
+ * and seven pieces' worth doesn't fit the 16 entries of a single 4bpp
+ * palette — so each piece gets its own bank and the tilemap entry selects
+ * between them (bits 12-15). That's what lets one block tile shape serve
+ * every piece: the colours are chosen at draw time, not baked into pixels. */
+#define PAL_BANK_FOR_PIECE(piece) ((piece) - 1)  /* pieces 1..7 -> banks 0..6 */
+#define PAL_UI_BANK 7
+#define PAL_FIELD_BANK 8   /* settled blocks: one level-driven scheme for all */
+
+/* Builds a tilemap entry: tile index in bits 0-9, palette bank in 12-15. */
+#define WITH_BANK(tile, bank) ((uint16_t)((tile) | ((bank) << 12)))
 
 static TengenGame g_game;
 
@@ -91,28 +104,27 @@ static void write_tile_4bpp(int tile_index, const uint8_t pixels[64]) {
 static void build_placeholder_tiles(void) {
     uint8_t pixels[64];
 
-    /* Tile 0: blank. */
+    /* Tile 0: blank. Colour 0 is the shared backdrop in every bank, so this
+     * one tile works regardless of which palette bank it's drawn with. */
     for (int i = 0; i < 64; i++) pixels[i] = 0;
     write_tile_4bpp(TILE_BLANK, pixels);
 
-    /* Tiles 1..7: one solid block per piece id, with a one-pixel highlight
-     * on the top/left edge so adjacent blocks stay distinguishable. The real
-     * art has fifteen variants per the core's kTileIds table; this is
-     * standing in for all of them. */
-    for (int piece = 1; piece <= 7; piece++) {
-        for (int y = 0; y < 8; y++) {
-            for (int x = 0; x < 8; x++) {
-                uint8_t colour = (uint8_t)piece;
-                if (x == 0 || y == 0) colour = 8;       /* highlight */
-                else if (x == 7 || y == 7) colour = 9;  /* shadow */
-                pixels[y * 8 + x] = colour;
-            }
+    /* A single block tile serves all seven pieces: the palette bank in the
+     * tilemap entry picks the colours, so the shape is shared. Colours 1-3
+     * are that piece's three real Tengen colours, arranged as the bevel the
+     * NES art uses — light top-left, mid body, dark bottom-right. */
+    for (int y = 0; y < 8; y++) {
+        for (int x = 0; x < 8; x++) {
+            uint8_t colour = 2;
+            if (x == 0 || y == 0) colour = 1;
+            else if (x == 7 || y == 7) colour = 3;
+            pixels[y * 8 + x] = colour;
         }
-        write_tile_4bpp(TILE_BLOCK_BASE + piece - 1, pixels);
     }
+    write_tile_4bpp(TILE_BLOCK, pixels);
 
-    /* Wall tile: a flat frame colour. */
-    for (int i = 0; i < 64; i++) pixels[i] = 10;
+    /* Wall tile, drawn in the UI bank whose colour 1 tracks the level. */
+    for (int i = 0; i < 64; i++) pixels[i] = 1;
     write_tile_4bpp(TILE_WALL, pixels);
 
     /* Font tiles: digits then letters, one glyph per tile, so drawing text
@@ -125,7 +137,7 @@ static void build_placeholder_tiles(void) {
         for (int y = 0; y < FONT_ROWS; y++) {
             for (int x = 0; x < FONT_COLS; x++) {
                 if (rows[y] & (1 << (FONT_COLS - 1 - x))) {
-                    pixels[(y + 1) * 8 + (x + 1)] = 8; /* white, inset one pixel */
+                    pixels[(y + 1) * 8 + (x + 1)] = 3; /* UI bank's text colour */
                 }
             }
         }
@@ -134,24 +146,46 @@ static void build_placeholder_tiles(void) {
 }
 
 static uint16_t font_tile(char c) {
-    if (c >= '0' && c <= '9') return (uint16_t)(TILE_FONT_BASE + (c - '0'));
-    if (c >= 'A' && c <= 'Z') return (uint16_t)(TILE_FONT_BASE + 10 + (c - 'A'));
+    if (c >= '0' && c <= '9') return WITH_BANK(TILE_FONT_BASE + (c - '0'), PAL_UI_BANK);
+    if (c >= 'A' && c <= 'Z') return WITH_BANK(TILE_FONT_BASE + 10 + (c - 'A'), PAL_UI_BANK);
     return TILE_BLANK;
 }
 
 static void build_palette(void) {
     vu16 *pal = MEM_PALETTE;
-    pal[0]  = rgb15(0, 0, 0);      /* backdrop */
-    pal[1]  = rgb15(0, 28, 28);    /* I - cyan */
-    pal[2]  = rgb15(24, 0, 28);    /* T - purple */
-    pal[3]  = rgb15(28, 28, 0);    /* O - yellow */
-    pal[4]  = rgb15(0, 8, 28);     /* J - blue */
-    pal[5]  = rgb15(28, 14, 0);    /* L - orange */
-    pal[6]  = rgb15(0, 28, 6);     /* S - green */
-    pal[7]  = rgb15(28, 0, 4);     /* Z - red */
-    pal[8]  = rgb15(31, 31, 31);   /* block highlight */
-    pal[9]  = rgb15(8, 8, 10);     /* block shadow */
-    pal[10] = rgb15(14, 14, 18);   /* wall */
+
+    /* One bank per piece, carrying that piece's three real Tengen colours
+     * (palette.h explains the indexing) plus the shared black backdrop. */
+    for (int piece = TT_I; piece <= TT_Z; piece++) {
+        vu16 *bank = pal + PAL_BANK_FOR_PIECE(piece) * 16;
+        bank[0] = nes_colour_to_gba(TENGEN_BACKDROP_INDEX);
+        for (int i = 0; i < 3; i++) {
+            bank[1 + i] = nes_colour_to_gba(kTengenPaletteIndices[piece][i]);
+        }
+    }
+
+    vu16 *ui = pal + PAL_UI_BANK * 16;
+    ui[0] = nes_colour_to_gba(TENGEN_BACKDROP_INDEX);
+    ui[3] = rgb15(31, 31, 31); /* text */
+    /* ui[1] (the frame) is set by set_field_palette_for_level below. */
+}
+
+/* setPlayfieldPaletteFromLevel (main.asm.txt:5328-5333) recolours the field
+ * using the LEVEL'S ONES DIGIT as the palette index — which is why the
+ * colours cycle every ten levels rather than running out at level 9. */
+static void set_field_palette_for_level(uint8_t level) {
+    const uint8_t *entry = kTengenPaletteIndices[level % 10];
+
+    /* The settled blocks. */
+    vu16 *field = MEM_PALETTE + PAL_FIELD_BANK * 16;
+    field[0] = nes_colour_to_gba(TENGEN_BACKDROP_INDEX);
+    for (int i = 0; i < 3; i++) field[1 + i] = nes_colour_to_gba(entry[i]);
+
+    /* The frame, in the same level scheme but the darkest tone so it reads
+     * as a border rather than as more stack. */
+    vu16 *ui = MEM_PALETTE + PAL_UI_BANK * 16;
+    ui[1] = nes_colour_to_gba(entry[2]);
+    ui[2] = nes_colour_to_gba(entry[1]);
 }
 
 static void set_map_tile(int tx, int ty, uint16_t tile) {
@@ -159,10 +193,23 @@ static void set_map_tile(int tx, int ty, uint16_t tile) {
     MEM_SCREENBLOCK(SCREENBLOCK)[ty * MAP_W + tx] = tile;
 }
 
+/* Settled blocks all share the field palette, which tracks the level.
+ *
+ * That's not a simplification, it's what the ROM does: locked blocks are
+ * background tiles coloured by setPlayfieldPaletteFromLevel (a $3F0x
+ * background palette), while the falling piece and the next-piece preview
+ * are SPRITES coloured by setPiecePalette (a $3F1x sprite palette, set once
+ * per piece dealt). So the stack is monochrome-per-level and only the
+ * active piece carries its own colour. See reference/NOTES.md. */
 static uint16_t tile_for_cell(uint8_t cell) {
     if (cell == TT_NONE) return TILE_BLANK;
-    if (cell == TT_WALL) return TILE_WALL;
-    return (uint16_t)(TILE_BLOCK_BASE + cell - 1);
+    if (cell == TT_WALL) return WITH_BANK(TILE_WALL, PAL_UI_BANK);
+    return WITH_BANK(TILE_BLOCK, PAL_FIELD_BANK);
+}
+
+/* The active piece and the preview, which do get their own colours. */
+static uint16_t tile_for_active_piece(uint8_t piece) {
+    return WITH_BANK(TILE_BLOCK, PAL_BANK_FOR_PIECE(piece));
 }
 
 static void draw_text(int tx, int ty, const char *text) {
@@ -193,7 +240,7 @@ static void draw_next_piece(int tx, int ty) {
     for (int r = 0; r < 4; r++) {
         for (int c = 0; c < 4; c++) {
             if (tengen_piece_occupies(next, 0, r, c)) {
-                set_map_tile(tx + c, ty + r, tile_for_cell((uint8_t)next));
+                set_map_tile(tx + c, ty + r, tile_for_active_piece((uint8_t)next));
             }
         }
     }
@@ -222,7 +269,7 @@ static void draw_hud(void) {
     draw_text(PANEL_L_TX + 1, 1, "STATS");
     for (int piece = TT_I; piece <= TT_Z; piece++) {
         int ty = 3 + (piece - TT_I) * 2;
-        set_map_tile(PANEL_L_TX + 1, ty, tile_for_cell((uint8_t)piece));
+        set_map_tile(PANEL_L_TX + 1, ty, tile_for_active_piece((uint8_t)piece));
         draw_number(PANEL_L_TX + 3, ty, p->piece_stats[piece], 3);
     }
 
@@ -254,7 +301,7 @@ static void draw_frame(void) {
         if (cells[i].row < 0) continue;
         set_map_tile(FIELD_ORIGIN_TX + cells[i].col,
                       FIELD_ORIGIN_TY + cells[i].row,
-                      tile_for_cell((uint8_t)g_game.player[0].piece.current));
+                      tile_for_active_piece((uint8_t)g_game.player[0].piece.current));
     }
 
     draw_hud();
@@ -280,12 +327,19 @@ int main(void) {
      * title screen to press Start on. */
     tengen_new_game(&g_game, 0xACE1, 0, false, false);
 
+    uint8_t shown_level = 0xFF; /* forces the first palette upload */
+
     for (;;) {
         uint8_t buttons = read_buttons();
         tengen_step(&g_game, TENGEN_PLAYER_1, buttons);
 
         if (!g_game.player[0].game_active && (buttons & TENGEN_BTN_START)) {
             tengen_new_game(&g_game, 0xACE1, 0, false, false);
+        }
+
+        if (g_game.player[0].level != shown_level) {
+            shown_level = g_game.player[0].level;
+            set_field_palette_for_level(shown_level);
         }
 
         vsync();
