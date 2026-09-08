@@ -337,6 +337,109 @@ static void clear_lines_until(TengenGame *game, uint32_t target_lines) {
     }
 }
 
+static void test_completed_rows_wait_before_they_collapse(void) {
+    /* The ROM holds the game for lineClearTimerP1 frames after finding
+     * completed rows, animates them, and only then collapses
+     * (main.asm.txt:1192-1197). A core that clears instantly gives a renderer
+     * nothing to animate, so this pins the two phases apart. */
+    TengenGame game;
+    tengen_new_game(&game, 91, 0, false, false);
+
+    /* Stage a bottom row that is full except where a centred O will land. */
+    for (int row = 0; row < TENGEN_PF_HEIGHT; row++)
+        for (int col = 1; col < TENGEN_PF_WIDTH - 1; col++)
+            game.field[0].cell[row][col] =
+                (row == TENGEN_PF_HEIGHT - 1 && col != 5 && col != 6) ? TT_I : TT_NONE;
+
+    game.player[0].piece.current = TT_O;
+    game.player[0].piece.orientation = 0;
+    game.player[0].piece.x = 7;
+    game.player[0].piece.y = TENGEN_SPAWN_Y;
+
+    /* Run until the rows are found. */
+    int found_at = -1;
+    for (int frame = 0; frame < 4000 && found_at < 0; frame++) {
+        if (tengen_step(&game, TENGEN_PLAYER_1, TENGEN_BTN_DOWN).lines_cleared)
+            found_at = frame;
+    }
+    CHECK(found_at >= 0);
+
+    /* At that moment the row is named, the timer is armed, and — the point —
+     * the row is still standing. */
+    CHECK(game.player[0].line_clear_timer == TENGEN_LINE_CLEAR_FRAMES);
+    CHECK(game.player[0].clearing_rows == (1u << (TENGEN_PF_HEIGHT - 1)));
+    CHECK(game.player[0].lines == 0);
+    for (int col = 1; col < TENGEN_PF_WIDTH - 1; col++)
+        CHECK(game.field[0].cell[TENGEN_PF_HEIGHT - 1][col] != TENGEN_CELL_EMPTY);
+
+    /* It collapses exactly when the timer runs out, not before. */
+    bool collapsed = false;
+    int frames = 0;
+    for (; frames < 200 && !collapsed; frames++)
+        collapsed = tengen_step(&game, TENGEN_PLAYER_1, 0).lines_collapsed;
+
+    CHECK(collapsed);
+    CHECK(frames == TENGEN_LINE_CLEAR_FRAMES);
+    CHECK(game.player[0].lines == 1);
+    CHECK(game.player[0].line_clear_timer == 0);
+    CHECK(game.player[0].clearing_rows == 0);
+}
+
+static void test_line_clear_sweep_advances_every_other_frame(void) {
+    /* stageLineClearAnimation decrements the timer every frame but only moves
+     * the sweep when what's left is odd (main.asm.txt:1279-1283), so the puff
+     * of smoke crosses one column per two frames. Getting this wrong is the
+     * difference between an animation that fits the hold and one that either
+     * races off the field or never finishes crossing it. */
+    TengenGame game;
+    tengen_new_game(&game, 91, 0, false, false);
+
+    /* No clear running: no sweep. */
+    CHECK(tengen_line_clear_step(&game, TENGEN_PLAYER_1) == 0);
+
+    for (int row = 0; row < TENGEN_PF_HEIGHT; row++)
+        for (int col = 1; col < TENGEN_PF_WIDTH - 1; col++)
+            game.field[0].cell[row][col] =
+                (row == TENGEN_PF_HEIGHT - 1 && col != 5 && col != 6) ? TT_I : TT_NONE;
+
+    game.player[0].piece.current = TT_O;
+    game.player[0].piece.orientation = 0;
+    game.player[0].piece.x = 7;
+    game.player[0].piece.y = TENGEN_SPAWN_Y;
+
+    bool found = false;
+    for (int frame = 0; frame < 4000 && !found; frame++)
+        found = tengen_step(&game, TENGEN_PLAYER_1, TENGEN_BTN_DOWN).lines_cleared;
+    CHECK(found);
+
+    /* The head is staged at the row's first column on the frame the row is
+     * found, and has not moved yet. */
+    CHECK(tengen_line_clear_step(&game, TENGEN_PLAYER_1) == 0);
+
+    /* Then one column per two frames, all the way to the collapse. */
+    uint8_t last = 0;
+    int advances = 0;
+    for (int frame = 0; frame < TENGEN_LINE_CLEAR_FRAMES; frame++) {
+        bool collapsed = tengen_step(&game, TENGEN_PLAYER_1, 0).lines_collapsed;
+        uint8_t step = tengen_line_clear_step(&game, TENGEN_PLAYER_1);
+        if (collapsed) {
+            CHECK(frame == TENGEN_LINE_CLEAR_FRAMES - 1);
+            CHECK(step == 0);   /* nothing left to animate */
+            break;
+        }
+        CHECK(step == last || step == last + 1);
+        if (step != last) advances++;
+        last = step;
+    }
+    /* 29 frames of hold, one advance per two of them. */
+    CHECK(advances == TENGEN_LINE_CLEAR_FRAMES / 2);
+
+    /* And that is far enough for the head to have crossed the whole field,
+     * which is what makes the sweep look like it clears the row rather than
+     * stalling halfway. */
+    CHECK(advances >= TENGEN_PF_WIDTH);
+}
+
 static void test_level_starts_at_the_chosen_start_level(void) {
     TengenGame game;
     tengen_new_game(&game, 31, 9, false, false);
@@ -732,6 +835,8 @@ int main(void) {
     test_walls_block_movement_in_1p_but_not_coop();
     test_top_out_when_piece_rests_above_the_field();
     test_score_is_awarded_per_piece_and_rewards_height();
+    test_completed_rows_wait_before_they_collapse();
+    test_line_clear_sweep_advances_every_other_frame();
     test_level_starts_at_the_chosen_start_level();
     test_level_is_recomputed_from_the_line_total();
     test_level_never_passes_the_rom_cap();

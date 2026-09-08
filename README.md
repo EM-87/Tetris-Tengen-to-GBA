@@ -44,12 +44,17 @@ Hay una ROM de GBA que arranca, se juega y corre las reglas reales de Tengen.
   renderer. No depende de devkitARM ni de libgba: compila con un
   `arm-none-eabi-gcc` estándar. Tiene la pantalla de título original (la
   catedral de San Basilio), el selector de nivel dentro del marco de menú de
-  la ROM, HUD completo, game over, y los bailarines cosacos entre niveles.
+  la ROM, HUD completo, game over, la animación de línea completa (la
+  bocanada de humo que cruza la fila y deja escrito SINGLE / DOUBLE /
+  TRIPLE / TETRIS donde estaban los bloques) y los bailarines cosacos entre
+  niveles.
 - `tools/extract_assets.py` — saca del cartucho original los tiles, las
   paletas, el layout de pantalla y las poses de los bailarines. **Todo el
   arte del port sale de ahí; no hay nada dibujado a mano.**
 - `tools/run_rom.py` — arranca la ROM en mGBA headless y verifica que
-  realmente dibuje y se juegue (`make gba-check`), no solo que linkee.
+  realmente dibuje y se juegue (`make gba-check`), no solo que linkee:
+  incluye ver la animación de línea completa sprite por sprite y comprobar
+  que deja escrita la palabra correcta.
 - `reference/disasm/` — el disassembly completo que sirve de fuente de
   verdad, y `reference/NOTES.md` con el resumen curado de qué está
   verificado y contra qué línea de la ROM.
@@ -61,8 +66,6 @@ Hay una ROM de GBA que arranca, se juega y corre las reglas reales de Tengen.
   columnas del coop), pero la capa GBA es solo de un jugador por ahora. Del
   menú original solo está la selección de nivel; faltan tipo de partida,
   handicap y selección de música.
-- **Animación de línea completa**: el core borra las filas al instante; la
-  ROM primero reproduce una animación.
 - **Coreografía exacta de los bailarines**: los bailarines están, con su arte
   y sus poses reales, en su sitio y a la cadencia de la ROM; lo que no está
   trazado es el script individual de cada uno (tienen saltos y selección

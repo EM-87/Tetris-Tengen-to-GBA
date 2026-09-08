@@ -132,3 +132,4 @@ assets-check:
 gba-check: $(GBA_ROM)
 	python3 tools/check_header.py $(GBA_ROM)
 	python3 tools/run_rom.py $(GBA_ROM) --selftest
+	python3 tools/run_rom.py $(GBA_ROM) --lineclear

@@ -85,13 +85,16 @@ running ROM; only the side panels need reflowing).
    menu frame. The title composes 32x30 down to 30x20 by dropping the thick
    top/bottom border and one spire-tip row; the menu drops two columns from
    its empty middle. Neither scales anything.
-10. Long-bar/undo cheat codes (`reference/NOTES.md` → "Cheat-code state
+10. ~~The line-clear animation~~ — done, and it turned out to be one of the
+   game's signatures rather than a pause: a black puff of smoke crosses each
+   completed row and leaves SINGLE / DOUBLE / TRIPLE / TETRIS written where
+   the blocks were. Timing (one column every other frame) lives in the core
+   with a test; the drawing is in `gba/main.c`.
+11. Long-bar/undo cheat codes (`reference/NOTES.md` → "Cheat-code state
    exists") — a well-known, well-loved Tengen feature; the RAM layout is
    mapped, the behavior isn't traced yet.
-11. The 2P and coop modes. The core already models coop (including its
+12. The 2P and coop modes. The core already models coop (including its
    12-column field) and two players; only the GBA front end is single-player.
-12. The line-clear animation — the core clears rows instantly, the ROM plays
-   an animation first (`stageLineClearAnimation`, `lineClearTimerP1/2`).
 13. Audio (`setMusicOrSoundEffect` plus the `MUSIC_*`/`SOUND_*` constants in
    `constants.asm.txt`) — lowest priority, gameplay fidelity comes first.
 
@@ -103,8 +106,11 @@ running ROM; only the side panels need reflowing).
   from a cartridge dump. Required once before `make gba` on a fresh clone.
 - `make assets-check` — verifies the asset conversion without needing a ROM.
 - `make gba-check` — boots the ROM headlessly in mGBA and asserts it draws
-  the field where the resolution mapping says it should and that a piece
-  actually falls.
+  the field where the resolution mapping says it should, that a piece
+  actually falls, and that the line-clear sweep crosses the row and writes
+  the right word. The last one plants completed rows straight into the
+  game's playfield through the emulator, so it doesn't need a bot that can
+  stack; that's a fixture in the harness, never anything the ROM knows about.
 
 Run `make test` and `make gba-check` before considering a change done. The
 first catches rule regressions; the second catches the ones that only appear

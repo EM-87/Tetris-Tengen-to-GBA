@@ -199,7 +199,7 @@ bool tengen_try_rotate(TengenGame *game, TengenPlayerSlot slot, bool clockwise) 
     return false;
 }
 
-uint32_t tengen_clear_full_rows(TengenPlayfield *field) {
+uint32_t tengen_find_full_rows(const TengenPlayfield *field) {
     uint32_t mask = 0;
     for (int row = 0; row < TENGEN_PF_HEIGHT; row++) {
         bool full = true;
@@ -212,6 +212,10 @@ uint32_t tengen_clear_full_rows(TengenPlayfield *field) {
         }
         if (full) mask |= (1u << row);
     }
+    return mask;
+}
+
+uint32_t tengen_collapse_rows(TengenPlayfield *field, uint32_t mask) {
     if (mask == 0) return 0;
 
     /* Collapse: build a fresh field skipping cleared rows, matching the
@@ -238,6 +242,22 @@ uint32_t tengen_clear_full_rows(TengenPlayfield *field) {
     }
     *field = collapsed;
     return mask;
+}
+
+uint32_t tengen_clear_full_rows(TengenPlayfield *field) {
+    return tengen_collapse_rows(field, tengen_find_full_rows(field));
+}
+
+uint8_t tengen_line_clear_step(const TengenGame *game, TengenPlayerSlot slot) {
+    const TengenPlayerState *p = &game->player[slot];
+    if (p->line_clear_timer == 0) return 0;
+    /* main.asm.txt:1279-1283: the timer is decremented every frame but the
+     * sweep only moves when what's left is odd, so it advances once per two
+     * frames. Counting from the full timer gives the same column the ROM's
+     * sprite would be on. */
+    uint8_t total = game->coop ? TENGEN_LINE_CLEAR_FRAMES_COOP
+                                : TENGEN_LINE_CLEAR_FRAMES;
+    return (uint8_t)((total - p->line_clear_timer) / 2);
 }
 
 int tengen_active_piece_cells(const TengenGame *game, TengenPlayerSlot slot,
@@ -525,6 +545,43 @@ TengenStepResult tengen_step(TengenGame *game, TengenPlayerSlot slot, uint8_t he
     TengenPlayerState *p = &game->player[slot];
     if (!p->game_active) return result;
 
+    /* While the line-clear animation runs the game is held still and the
+     * completed rows are still standing, so a renderer can animate them. When
+     * the timer expires they collapse, the counters catch up, and the next
+     * piece is dealt. */
+    if (p->line_clear_timer > 0) {
+        p->line_clear_timer--;
+        if (p->line_clear_timer == 0) {
+            TengenPlayfield *field = &game->field[game->coop ? 0 : slot];
+            uint32_t cleared = p->clearing_rows;
+            p->clearing_rows = 0;
+
+            tengen_collapse_rows(field, cleared);
+
+            int count = 0;
+            for (int i = 0; i < TENGEN_PF_HEIGHT; i++) if (cleared & (1u << i)) count++;
+            p->lines += (uint32_t)count;
+            result.lines_collapsed = true;
+            result.rows_cleared_mask = cleared;
+
+            /* No score is awarded here on purpose: this game pays per piece
+             * locked, not per line cleared (see add_lock_score). */
+            uint8_t new_level = level_for_lines(p->lines, p->start_level);
+            if (new_level > p->level) {
+                p->level = new_level;
+                result.leveled_up = true;
+            }
+
+            spawn_piece(game, slot);
+            if (!tengen_position_valid(game, slot)) {
+                p->game_active = false;
+                result.topped_out = true;
+            }
+        }
+        p->held_last_frame = held_buttons;
+        return result;
+    }
+
     uint8_t new_presses = (uint8_t)(held_buttons & ~p->held_last_frame);
 
     /* Down is never edge-triggered — it only ever acts through the soft-drop
@@ -622,22 +679,20 @@ TengenStepResult tengen_step(TengenGame *game, TengenPlayerSlot slot, uint8_t he
             lock_piece(game, slot);
             result.piece_locked = true;
 
+            /* Completed rows are found now but do NOT vanish yet: the ROM
+             * holds the game for lineClearTimerP1 frames while they animate
+             * (main.asm.txt:1192-1197, 1274-1335), and only then collapses
+             * them and deals the next piece. */
             TengenPlayfield *field = &game->field[game->coop ? 0 : slot];
-            uint32_t cleared = tengen_clear_full_rows(field);
+            uint32_t cleared = tengen_find_full_rows(field);
             if (cleared) {
-                int count = 0;
-                for (int i = 0; i < TENGEN_PF_HEIGHT; i++) if (cleared & (1u << i)) count++;
-                p->lines += (uint32_t)count;
+                p->clearing_rows = cleared;
+                p->line_clear_timer = game->coop ? TENGEN_LINE_CLEAR_FRAMES_COOP
+                                                  : TENGEN_LINE_CLEAR_FRAMES;
                 result.lines_cleared = true;
                 result.rows_cleared_mask = cleared;
-
-                /* No score is awarded here on purpose: this game pays per
-                 * piece locked, not per line cleared (see add_lock_score). */
-                uint8_t new_level = level_for_lines(p->lines, p->start_level);
-                if (new_level > p->level) {
-                    p->level = new_level;
-                    result.leveled_up = true;
-                }
+                p->held_last_frame = held_buttons;
+                return result;
             }
 
             spawn_piece(game, slot);

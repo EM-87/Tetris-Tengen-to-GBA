@@ -188,7 +188,41 @@ typedef struct {
      * ($0053-$0059) and drives the 1P screen's bar chart from them. Counted
      * on spawn, capped, and only tracked in 1P — see tengen_core.c. */
     uint8_t piece_stats[TENGEN_TETROMINO_COUNT];
+
+    /* Line-clear animation state, mirroring lineClearTimerP1/2 ($01CE/$01CF).
+     * While the timer runs the game is held still and the completed rows are
+     * still standing in the field, so a renderer can animate them; the rows
+     * collapse when it reaches zero. */
+    uint8_t line_clear_timer;
+    uint32_t clearing_rows;   /* bit i set => row i is completed and waiting */
 } TengenPlayerState;
+
+/* main.asm.txt:1192-1197: the timer starts at $1D in 1P/2P and $21 in coop. */
+#define TENGEN_LINE_CLEAR_FRAMES      29
+#define TENGEN_LINE_CLEAR_FRAMES_COOP 33
+
+/* THE SWEEP
+ *
+ * What the ROM does while that timer runs is not a placeholder pause: a puff
+ * of smoke crosses each completed row from left to right, erasing it, and
+ * leaves the word SINGLE / DOUBLE / TRIPLE / TETRIS written where the blocks
+ * were. Drawing it is the renderer's job, but its timing is a rule, so it is
+ * defined and tested here.
+ *
+ * stageLineClearAnimation (main.asm.txt:1274-1338) decrements the timer every
+ * frame and then acts only on ODD values (`lsr a / bcc`), so the sweep
+ * advances one column every OTHER frame — 14 steps for the 29-frame timer,
+ * 16 for coop's 33.
+ *
+ * The puff is five 8x8 sprites (tiles $5B..$5F, drawn in piecePaletteIndexA,
+ * which is flat black — main.asm.txt:5394-5396). L87FB (main.asm.txt:1230-1273)
+ * stages the head at the row's leftmost column on the frame the row completes,
+ * and each step the sprite still sitting at that column clones itself one
+ * slot back with the next tile down, so the five build into a trail behind
+ * the head. The trailing sprite is the one that writes a character into the
+ * row it is passing over (L89E9, main.asm.txt:1508-1546). */
+#define TENGEN_CLEAR_SPARKS 5  /* sprites in the trail, head included */
+#define TENGEN_CLEAR_TRAIL  4  /* columns the writing tail lags the head by */
 
 /* The ROM stops counting a piece at 144 (main.asm.txt:3755), which is where
  * its eight-tall bar chart runs out of room. */
@@ -203,8 +237,12 @@ typedef struct {
 
 typedef struct {
     bool piece_locked;
+    /* Set on the frame the completed rows are FOUND, which is when the
+     * animation starts — not when they collapse. `rows_cleared_mask` names
+     * them, and they stay in the field until `lines_collapsed`. */
     bool lines_cleared;
-    uint32_t rows_cleared_mask; /* bit i set => row i was cleared this step (needs >16 bits: TENGEN_PF_HEIGHT is 20) */
+    uint32_t rows_cleared_mask; /* bit i set => row i is/was completed (needs >16 bits: TENGEN_PF_HEIGHT is 20) */
+    bool lines_collapsed;       /* set on the frame the rows actually vanish */
     bool leveled_up;
     bool topped_out;
 } TengenStepResult;
@@ -308,10 +346,22 @@ bool tengen_try_move(TengenGame *game, TengenPlayerSlot slot, int dx);
  * try it shifted one column left; on failure revert entirely. */
 bool tengen_try_rotate(TengenGame *game, TengenPlayerSlot slot, bool clockwise);
 
-/* Scans the field for full rows, clears+collapses them, and returns a
- * bitmask of which rows (pre-collapse indices) were cleared. Does not by
- * itself update score/lines/level — tengen_step does that. */
+/* Returns a bitmask of the field's completed rows without touching it. The
+ * animation phase needs them named while they are still standing. */
+uint32_t tengen_find_full_rows(const TengenPlayfield *field);
+
+/* Removes the named rows and drops everything above them down, returning the
+ * mask it acted on. Vacated rows at the top keep the frame's wall columns. */
+uint32_t tengen_collapse_rows(TengenPlayfield *field, uint32_t mask);
+
+/* Find and collapse in one step. Kept for callers that don't care about the
+ * animation phase; tengen_step uses the two halves separately. */
 uint32_t tengen_clear_full_rows(TengenPlayfield *field);
+
+/* How many columns the line-clear sweep has advanced, 0 on the frame the rows
+ * are found. See the SWEEP note above for what a renderer does with it. Zero
+ * when no clear is running. */
+uint8_t tengen_line_clear_step(const TengenGame *game, TengenPlayerSlot slot);
 
 /* One cell of the active piece, already translated out of the ROM's
  * coordinate space into field storage indices. `row` is a visible row and

@@ -74,6 +74,7 @@ the level-up rule were all initially plausible-looking and wrong — so treat
 | **The playfield's tiles come from the nibble itself** | `L8544` at `main.asm.txt:829-842` | The routine that fills the screen buffer stores the playfield nibble **directly** as the nametable tile id — no lookup, no offset. So cell value 1-14 is a block tile and the wall's `$F` is tile `$0F`, which is why walls need no special case in the renderer. `$0F` is a block graphic with transparent corners, not a solid bar; a renderer that assumes a solid wall column will look wrong. |
 | **The dancers** | poses at `$C8BC-$C9FF`; driver at `main.asm.txt:6392-6499`; stage from `levelUpAnimationColsRows1` at `$B7FF` | The between-levels Cossack dancers are sprites: eight of them, each four 8x8 tiles in a 2x2 forming one 16x16 figure. A pose is just four tile ids; a per-dancer script advances one pose every 8 frames, the figure's X advances every 4 (they walk), and `eor #$40` on the OAM attribute flips them so they turn around. Their stage is the vertical TETRIS banner: the level-up blit is 4 columns x 18 rows at nametable (14,10), which clears exactly that banner to make room. **Not traced:** each dancer's individual choreography script — those have branch and random-selection entries — so the port walks the pose table from staggered starts at the ROM's cadence instead. |
 | **Title and menu screens** | `titleScreenNametable` at `$CA00`; `menuNametable` at `$B8A8` | The title is 32x30 with a 4-tile-thick border; its nametable carries **no** attribute table (the next thing in the ROM is `fireworksData00`), because the whole screen is drawn in one palette — bgPalette0's blues. The menu is the same decorative frame with an empty middle the game writes its wording into at runtime, which is why its selection screens all look alike. |
+| **The line-clear animation** | timer set at `main.asm.txt:1192-1197`; sprite staged by `L87FB` at `:1230-1273`; driver `stageLineClearAnimation` at `:1274-1338`; the write-back `L89E9` at `:1508-1546`; strings `lineClearSingle..lineClearTetris` at `:1548-1561`; palette `piecePaletteIndexA` at `:5394-5396` | Completing rows does **not** collapse them: the ROM marks each completed row with `$FE`, holds the game for `lineClearTimerP1` frames (`$1D` = 29 in 1P/2P, `$21` = 33 in coop) and animates them, collapsing only when the timer expires. The animation is a puff of smoke crossing each completed row left to right — five 8x8 sprites, tiles `$5B..$5F`, drawn in `piecePaletteIndexA`, which is `$0F,$0F,$0F`: **flat black**, a silhouette. Only the head is staged when the row completes; each step the sprite still sitting at the field's first column clones itself one OAM slot back with the next tile down, so the trail builds itself up to five. It advances one column **every other frame** — the driver decrements the timer every frame but acts only on odd values (`lsr a / bcc`, `:1280-1283`) — giving 14 steps for the 29-frame hold. The trailing sprite writes one character per column into the row it passes over, spelling `" SINGLE     "` / `" DOUBLE     "` / `" TRIPLE     "` / `" TETRIS     "` (12 characters, one per playfield column, walls included) chosen by `12 × rows_cleared` bytes past `lineClearTable`. Because the tail starts four columns behind the head and there are only 14 steps, it reaches the tenth column and no further, so the last two columns of the row keep their blocks until the collapse — reproduced as-is rather than tidied up. |
 | Cheat-code state exists (long bar / undo) | `tetris-ram.asm.txt:121-134` | `codeInputYPlayer1/2`, `longBarCodeUsedP1/2`, `undoCodeUsedP1/2`, `lastCurrentBlockP1/2` etc. Tengen's famous in-game level-up entry codes and the "undo" cheat have dedicated RAM; **not yet implemented in the core** — worth a dedicated pass since these are a well-known, requested-by-fans Tengen feature. |
 
 ## PLACEHOLDER (implemented, but not yet checked against this ROM)
@@ -83,10 +84,9 @@ disassembly and cited both here and at its point of use in
 `src/tengen_core.c`, and the graphics all come from the cartridge rather
 than being redrawn.
 
-Three things are deliberately *not* implemented rather than guessed at: the
-long-bar/undo cheat codes, the line-clear animation's timing (the core
-clears rows instantly; the ROM plays an animation first), and each dancer's
-individual choreography script. None affects the rules the core models.
+Two things are deliberately *not* implemented rather than guessed at: the
+long-bar/undo cheat codes, and each dancer's individual choreography script.
+Neither affects the rules the core models.
 
 One known deviation, documented rather than reproduced: the ROM keeps score
 and line counts as ASCII digits and does its arithmetic digit by digit. The
@@ -101,9 +101,11 @@ preserve bug-for-bug.
 1. `codeInputYPlayer1/2` handling (search `tetris-ram.asm.txt:121` outward)
    — the long-bar/undo cheat codes, a well-known Tengen feature fans will
    expect in a faithful port.
-2. The line-clear animation/timing path (`stageLineClearAnimation`,
-   `main.asm.txt:1274`, and `lineClearTimerP1/2`) — needed for the GBA
-   renderer to reproduce the clear animation's cadence, not just its result.
+2. Each dancer's choreography script (the pointer tables the driver at
+   `main.asm.txt:6392-6499` walks) — the only part of the level-up
+   interlude still approximated.
+3. The 2P and coop front end: the menu rows for game type, handicap and
+   music (`main.asm.txt:4742-4830`), and the second player's screen half.
 
 ## A note on frame rate
 

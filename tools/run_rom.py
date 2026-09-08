@@ -10,15 +10,22 @@ works in CI or over a terminal with no display.
 Usage:
     python3 tools/run_rom.py build/tengen.gba [--frames N] [--png OUT.png]
     python3 tools/run_rom.py build/tengen.gba --selftest
+    python3 tools/run_rom.py build/tengen.gba --lineclear
 
 --selftest checks the things a broken port would get wrong: that the screen
 isn't blank, that the playfield frame is where the resolution mapping says it
 should be, and that a piece actually falls.
 
+--lineclear watches the line-clear animation happen, sprite by sprite and
+tile by tile. It needs `build/tengen.elf` next to the ROM (for the address of
+the game state) and an `arm-none-eabi-nm` to read it with.
+
 Requires: pip install pygba  (pulls in the mGBA bindings)
           plus the mGBA shared library, e.g. apt-get install libmgba0.10
 """
 import argparse
+import os
+import subprocess
 import sys
 
 try:
@@ -203,16 +210,178 @@ def selftest(rom_path):
     return 0
 
 
+# ---------------------------------------------------------------------------
+# The line-clear animation
+#
+# The ROM does not simply delete completed rows: a puff of smoke crosses each
+# one and leaves SINGLE / DOUBLE / TRIPLE / TETRIS written where the blocks
+# were (see reference/NOTES.md). That is five sprites and twelve tile writes
+# per row per step, all of it easy to get subtly wrong and impossible to see
+# in a host test, so it is checked here against the running ROM.
+#
+# Reaching a line clear by PLAYING would need a bot that stacks well, and the
+# piece sequence depends on when Start was pressed. Instead the check writes
+# completed rows straight into the game's playfield — the first member of
+# `g_game`, whose address comes out of the ELF — and lets the next piece to
+# land trigger the clear. Nothing in the ROM is modified; this is a fixture in
+# the harness, the same way a unit test constructs a board.
+# ---------------------------------------------------------------------------
+PF_W, PF_H = 12, 20            # must match TENGEN_PF_WIDTH / _HEIGHT
+CELL_WALL, CELL_BLOCK = 15, 1
+SCREENBLOCK_ADDR = 0x0600E000  # screenblock 28, as gba/main.c sets BG0CNT
+OAM_ADDR = 0x07000000
+SWEEP_TILES = (0x5B, 0x5C, 0x5D, 0x5E, 0x5F)  # main.asm.txt:1274-1338
+SWEEP_PAL_BANK = 1
+CLEAR_WORDS = {1: "SINGLE", 2: "DOUBLE", 3: "TRIPLE", 4: "TETRIS"}
+
+KEY_DOWN = 7
+
+
+def game_state_address(rom_path):
+    """Address of `g_game`, whose first member is player 1's playfield."""
+    elf = os.path.splitext(rom_path)[0] + ".elf"
+    if not os.path.exists(elf):
+        return None, f"no encuentro {elf} (hace falta para localizar el estado)"
+    nm = os.environ.get("NM", "arm-none-eabi-nm")
+    try:
+        out = subprocess.check_output([nm, elf]).decode()
+    except (OSError, subprocess.CalledProcessError) as exc:
+        return None, f"no pude ejecutar {nm}: {exc}"
+    for line in out.splitlines():
+        if line.endswith(" g_game"):
+            return int(line.split()[0], 16), None
+    return None, "el ELF no exporta g_game"
+
+
+def fill_rows(core, base, rows):
+    """Plant complete rows straight into the playfield."""
+    for row in rows:
+        for col in range(PF_W):
+            value = CELL_WALL if col in (0, PF_W - 1) else CELL_BLOCK
+            core.memory.u8[base + row * PF_W + col] = value
+
+
+def map_row_text(core, row):
+    """The playfield row as it is actually on screen, read back from VRAM.
+
+    Tile ids in this game's set are ASCII for letters and digits, so a row
+    the sweep has written reads as text. Everything else comes back as '#'
+    for a block and '.' for the empty tile, which is id 0.
+    """
+    out = []
+    for col in range(PF_W):
+        tile = core.memory.u16[SCREENBLOCK_ADDR + (row * 32 + COL_FIELD[0] + col) * 2] & 0x3FF
+        out.append("." if tile == 0 else (chr(tile) if 0x20 <= tile < 0x7F else "#"))
+    return "".join(out)
+
+
+def sweep_sprites(core):
+    """Visible sweep sprites as {row: [(column, tile), ...]}."""
+    rows = {}
+    for i in range(128):
+        attr0 = core.memory.u16[OAM_ADDR + i * 8]
+        if attr0 & 0x0200:
+            continue
+        attr1 = core.memory.u16[OAM_ADDR + i * 8 + 2]
+        attr2 = core.memory.u16[OAM_ADDR + i * 8 + 4]
+        if (attr2 >> 12) != SWEEP_PAL_BANK:
+            continue
+        row = (attr0 & 0xFF) // TILE
+        col = (attr1 & 0x1FF) // TILE - COL_FIELD[0]
+        rows.setdefault(row, []).append((col, attr2 & 0x3FF))
+    for cols in rows.values():
+        cols.sort()
+    return rows
+
+
+def lineclear_check(rom_path, row_count):
+    base, why = game_state_address(rom_path)
+    if base is None:
+        print(f"SALTADO: {why}")
+        return 0
+
+    core, screen = load(rom_path)
+    start_game(core)
+
+    rows = list(range(PF_H - row_count, PF_H))
+    fill_rows(core, base, rows)
+    word = CLEAR_WORDS[row_count]
+    print(f"filas {rows[0]}..{rows[-1]} completas -> deberia decir {word}")
+
+    # Soft drop until the next piece lands on them and the sweep starts.
+    core.set_keys(KEY_DOWN)
+    for _ in range(240):
+        core.run_frame()
+        if sweep_sprites(core):
+            break
+    else:
+        print("FALLA: la animacion nunca arranco")
+        return 1
+    core.set_keys()
+
+    failures = []
+    heads, tails_seen, final_text = [], set(), None
+    watched = rows[0]
+    for _ in range(60):
+        seen = sweep_sprites(core)
+        if not seen:
+            break
+        if sorted(seen) != rows:
+            failures.append(f"escobas en las filas {sorted(seen)}, esperaba {rows}")
+        for row, cols in seen.items():
+            # Adjacent columns carrying consecutive tiles, head ($5F) on the
+            # right: the trail the ROM builds up and then lets run off the
+            # field, so it is shorter than five at both ends of the sweep.
+            expected = [(cols[0][0] + i, cols[0][1] + i) for i in range(len(cols))]
+            if cols != expected or not set(t for _, t in cols) <= set(SWEEP_TILES):
+                failures.append(f"la escoba de la fila {row} esta rota: {cols}")
+            tails_seen.update(t for _, t in cols)
+        heads.append(max(c for c, _ in seen[watched]))
+        final_text = map_row_text(core, watched)
+        print(f"  columna {heads[-1]:2d}  |{final_text}|")
+        core.run_frame()
+
+    if tails_seen != set(SWEEP_TILES):
+        failures.append(f"tiles usados {sorted(hex(t) for t in tails_seen)}, "
+                        f"esperaba {[hex(t) for t in SWEEP_TILES]}")
+    if heads != sorted(heads):
+        failures.append("la escoba retrocede en algun momento")
+    if not heads or max(heads) < PF_W - 1:
+        failures.append(f"la escoba solo llego a la columna {max(heads, default=-1)}")
+    if final_text is None or word not in final_text:
+        failures.append(f"la fila decia |{final_text}|, esperaba que dijera {word}")
+
+    # And then the rows really do come down.
+    for _ in range(10):
+        core.run_frame()
+    after = map_row_text(core, watched)
+    if "." not in after:
+        failures.append(f"la fila |{after}| sigue completa despues de la animacion")
+    if sweep_sprites(core):
+        failures.append("quedaron sprites de la escoba en pantalla")
+
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print(f"OK: la escoba cruza {row_count} fila(s), escribe {word} y la fila colapsa.")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("rom")
     ap.add_argument("--frames", type=int, default=60)
     ap.add_argument("--png")
     ap.add_argument("--selftest", action="store_true")
+    ap.add_argument("--lineclear", action="store_true",
+                     help="watch the line-clear animation, for 1 row and for 4")
     args = ap.parse_args()
 
     if args.selftest:
         sys.exit(selftest(args.rom))
+    if args.lineclear:
+        sys.exit(lineclear_check(args.rom, 1) or lineclear_check(args.rom, 4))
 
     core, screen = load(args.rom)
     start_game(core)

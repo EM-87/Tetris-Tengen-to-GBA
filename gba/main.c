@@ -105,6 +105,34 @@
 #define DANCER_STAGE_X (DANCER_STAGE_TX * 8)
 #define DANCER_STAGE_Y (DANCER_STAGE_TY * 8)
 
+/* ----------------------------------------------------------------------- *
+ * The line-clear sweep
+ *
+ * A puff of smoke crosses each completed row and leaves the size of the
+ * clear spelled out behind it. Five sprite tiles trail one another
+ * (main.asm.txt:1274-1338); the timing lives in the core, see
+ * tengen_line_clear_step.
+ *
+ * The tiles are $5B..$5F of the cartridge's SPRITE bank — the same bank the
+ * dancers come from, which is already uploaded whole, so their ids here are
+ * the ROM's own. They are drawn in piecePaletteIndexA, labelled "Line
+ * clears" in the disassembly and flat black in all three entries
+ * (main.asm.txt:5394-5396), so the puff is a silhouette.
+ * ----------------------------------------------------------------------- */
+#define CLEAR_HEAD_TILE 0x5B  /* $5B is the tail; $5B+4 = $5F is the head */
+#define PAL_OBJ_CLEAR 1
+
+/* lineClearSingle..lineClearTetris (main.asm.txt:1548-1561), one character
+ * per playfield column including the walls, exactly as the ROM stores them.
+ * Indexed by how many rows are coming down. */
+static const char *const kClearWord[5] = {
+    "",
+    " SINGLE     ",
+    " DOUBLE     ",
+    " TRIPLE     ",
+    " TETRIS     ",
+};
+
 #define WITH_BANK(tile, bank) ((uint16_t)((tile) | ((bank) << 12)))
 
 /* Tile ids in the cartridge's own tileset, taken from the nametable it ships
@@ -196,7 +224,10 @@ static void upload_title_tiles(void) {
     for (int i = 0; i < 4; i++) pal[i] = nes_colour_to_gba(kTitlePalette[i]);
 }
 
-static void upload_dancer_tiles(void) {
+/* The cartridge's whole sprite bank, uploaded once. Both the dancers and the
+ * line-clear puff live in it, so every sprite tile id in this file is the
+ * ROM's own index. */
+static void upload_sprite_tiles(void) {
     vu16 *dst = MEM_OBJ_TILES;
     for (unsigned i = 0; i < sizeof(kDancerTiles); i += 2) {
         dst[i / 2] = (uint16_t)(kDancerTiles[i] | (kDancerTiles[i + 1] << 8));
@@ -207,13 +238,19 @@ static void upload_dancer_tiles(void) {
     vu16 *pal = MEM_PALETTE_OBJ + PAL_OBJ_DANCER * 16;
     pal[0] = nes_colour_to_gba(TENGEN_BACKDROP_INDEX);
     for (int i = 0; i < 3; i++) pal[1 + i] = nes_colour_to_gba(entry[i]);
+
+    /* piecePaletteIndexA, "Line clears" (main.asm.txt:5394-5396). */
+    const uint8_t *clear = kRomPiecePalettes[10];
+    vu16 *cpal = MEM_PALETTE_OBJ + PAL_OBJ_CLEAR * 16;
+    cpal[0] = nes_colour_to_gba(TENGEN_BACKDROP_INDEX);
+    for (int i = 0; i < 3; i++) cpal[1 + i] = nes_colour_to_gba(clear[i]);
 }
 
-static void oam_set(int index, int x, int y, uint16_t tile, bool hflip) {
+static void oam_set(int index, int x, int y, uint16_t tile, bool hflip, int bank) {
     vu16 *entry = MEM_OAM + index * 4;
     entry[0] = (uint16_t)OBJ_ATTR0_Y(y);
     entry[1] = (uint16_t)(OBJ_ATTR1_X(x) | (hflip ? OBJ_ATTR1_HFLIP : 0));
-    entry[2] = (uint16_t)(tile | OBJ_ATTR2_PAL(PAL_OBJ_DANCER));
+    entry[2] = (uint16_t)(tile | OBJ_ATTR2_PAL(bank));
 }
 
 static void oam_hide_all(void) {
@@ -245,9 +282,30 @@ static void draw_dancers(int elapsed) {
         for (int s = 0; s < DANCER_SPRITES; s++) {
             int sx = x + ((s & 1) ? 8 : 0);
             int sy = y + ((s & 2) ? 8 : 0);
-            oam_set(d * DANCER_SPRITES + s, sx, sy, tiles[s], facing_left);
+            oam_set(d * DANCER_SPRITES + s, sx, sy, tiles[s], facing_left,
+                     PAL_OBJ_DANCER);
         }
     }
+}
+
+/* The puff of smoke crossing each completed row: five sprites in a row, the
+ * head at the column the sweep has reached and the rest trailing one column
+ * apart behind it, each retiring as it leaves the field. */
+static void draw_line_clear_sweep(void) {
+    const TengenPlayerState *p = &g_game.player[0];
+    uint8_t step = tengen_line_clear_step(&g_game, TENGEN_PLAYER_1);
+    int used = 0;
+
+    for (int row = 0; row < TENGEN_PF_HEIGHT; row++) {
+        if (!(p->clearing_rows & (1u << row))) continue;
+        for (int s = 0; s < TENGEN_CLEAR_SPARKS; s++) {
+            int col = (int)step - TENGEN_CLEAR_TRAIL + s;
+            if (col < 0 || col >= TENGEN_PF_WIDTH) continue;
+            oam_set(used++, (FIELD_TX + col) * 8, (FIELD_TY + row) * 8,
+                     (uint16_t)(CLEAR_HEAD_TILE + s), false, PAL_OBJ_CLEAR);
+        }
+    }
+    for (int i = used; i < 128; i++) MEM_OAM[i * 4] = OBJ_ATTR0_HIDDEN;
 }
 
 static void set_map_tile(int tx, int ty, uint16_t entry) {
@@ -352,17 +410,41 @@ static void draw_panel(void) {
 
 static void draw_field(void) {
     const TengenPlayfield *field = &g_game.field[0];
+    const TengenPlayerState *p = &g_game.player[0];
+
+    /* How far the line-clear sweep has crossed the completed rows, and what
+     * it is writing into them as it goes. `written` is the last column the
+     * trailing sprite has passed over; everything to its right still shows
+     * the blocks that are about to come down. */
+    uint8_t step = tengen_line_clear_step(&g_game, TENGEN_PLAYER_1);
+    int written = (int)step - TENGEN_CLEAR_TRAIL - 1;
+    int rows_going = 0;
+    for (int row = 0; row < TENGEN_PF_HEIGHT; row++)
+        if (p->clearing_rows & (1u << row)) rows_going++;
+    const char *word = kClearWord[rows_going > 4 ? 4 : rows_going];
+
     for (int row = 0; row < TENGEN_PF_HEIGHT; row++) {
+        bool clearing = (p->clearing_rows & (1u << row)) != 0;
         for (int col = 0; col < TENGEN_PF_WIDTH; col++) {
             /* A cell's value IS its tile index — that is the whole point of
              * the ROM's nibble encoding (notes.txt.txt:35), and it means the
              * wall needs no special case: its sentinel 15 is tile $0F, the
              * frame graphic. Empty is 0, which is the blank tile. All of it
              * draws in the level's palette. */
-            set_map_tile(FIELD_TX + col, FIELD_TY + row,
-                          WITH_BANK(field->cell[row][col], 0));
+            uint16_t entry = WITH_BANK(field->cell[row][col], 0);
+
+            /* Behind the sweep the row is gone and the word is in its place,
+             * one character per column, walls included — the ROM writes
+             * straight over them (L89E9, main.asm.txt:1508-1530). */
+            if (clearing && col <= written)
+                entry = WITH_BANK(ascii_tile(word[col]), 0);
+
+            set_map_tile(FIELD_TX + col, FIELD_TY + row, entry);
         }
     }
+
+    /* No falling piece exists while the completed rows animate. */
+    if (p->line_clear_timer > 0) return;
 
     /* The falling piece is drawn over the settled field rather than into it,
      * and in its own palette — the ROM draws it as sprites for exactly that
@@ -397,16 +479,15 @@ static void clear_screen(void) {
         for (int tx = 0; tx < MAP_W; tx++) set_map_tile(tx, ty, T_BLANK);
 }
 
-/* The cartridge's own title art. The level selector is drawn over the
- * cathedral's lower half, where the ROM's copyright lines used to sit. */
-static void draw_title(uint8_t start_level) {
+/* The cartridge's own title art, whole: the level selector has its own
+ * screen after this one, the way the ROM's menus work. */
+static void draw_title(void) {
     for (int ty = 0; ty < SCREEN_TITLE_H_TILES; ty++) {
         for (int tx = 0; tx < SCREEN_TITLE_W; tx++) {
             uint16_t tile = TITLE_TILE_BASE + kScreenTitleTiles[ty * SCREEN_TITLE_W + tx];
             set_map_tile(tx, ty, WITH_BANK(tile, PAL_TITLE_BANK));
         }
     }
-
 }
 
 /* The level selector, inside the ROM's own menu frame. The wording matches
@@ -438,7 +519,7 @@ int main(void) {
     clear_screen();
 
     upload_title_tiles();
-    upload_dancer_tiles();
+    upload_sprite_tiles();
     oam_hide_all();
 
     REG_BG0CNT = BG_4BPP | BG_SIZE_32x32 | BG_CHARBLOCK(CHARBLOCK) |
@@ -451,6 +532,7 @@ int main(void) {
     TengenTetromino shown_piece = TT_NONE;
     uint8_t held_last = 0;
     int dancer_frames = 0;   /* > 0 while the level-up interlude is running */
+    bool sweeping = false;   /* true while the line-clear sweep owns the OAM */
 
     /* The ROM steps its RNG once per frame from the main loop
      * (main.asm.txt:49-50), and whatever state it is in when Start is pressed
@@ -473,7 +555,7 @@ int main(void) {
                 continue;
             }
             vsync();
-            draw_title(start_level);
+            draw_title();
             continue;
         }
 
@@ -542,5 +624,14 @@ int main(void) {
         vsync();
         draw_field();
         draw_panel();
+
+        /* The sweep's sprites, and the one tidy-up when it finishes. */
+        if (g_game.player[0].line_clear_timer > 0) {
+            draw_line_clear_sweep();
+            sweeping = true;
+        } else if (sweeping) {
+            oam_hide_all();
+            sweeping = false;
+        }
     }
 }
