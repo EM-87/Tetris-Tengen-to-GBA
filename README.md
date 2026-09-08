@@ -42,8 +42,9 @@ Hay una ROM de GBA que arranca, se juega y corre las reglas reales de Tengen.
 - `tests/test_tengen.c` — tests nativos de esas reglas (`make test`).
 - `gba/` — capa de GBA: registros de hardware, `crt0.s`, linker script y el
   renderer. No depende de devkitARM ni de libgba: compila con un
-  `arm-none-eabi-gcc` estándar. Tiene título con selección de nivel (0-9),
-  HUD completo, game over, y los bailarines cosacos entre niveles.
+  `arm-none-eabi-gcc` estándar. Tiene la pantalla de título original (la
+  catedral de San Basilio), el selector de nivel dentro del marco de menú de
+  la ROM, HUD completo, game over, y los bailarines cosacos entre niveles.
 - `tools/extract_assets.py` — saca del cartucho original los tiles, las
   paletas, el layout de pantalla y las poses de los bailarines. **Todo el
   arte del port sale de ahí; no hay nada dibujado a mano.**
@@ -58,7 +59,7 @@ Hay una ROM de GBA que arranca, se juega y corre las reglas reales de Tengen.
 - **Audio**: nada todavía.
 - **Modos 2P y coop**: el core ya los modela (incluido el campo de 12
   columnas del coop), pero la capa GBA es solo de un jugador por ahora. Del
-  menú original solo está la selección de nivel; falta tipo de partida,
+  menú original solo está la selección de nivel; faltan tipo de partida,
   handicap y selección de música.
 - **Animación de línea completa**: el core borra las filas al instante; la
   ROM primero reproduce una animación.

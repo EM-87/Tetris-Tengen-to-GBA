@@ -114,12 +114,22 @@ def describe(rows):
 KEY_START = 3  # set_keys takes bit indices, not a mask
 
 
-def start_game(core):
-    """Gets past the title screen into a game."""
-    run(core, 8)
+def press_start(core):
     core.set_keys(KEY_START)
     run(core, 4)
     core.set_keys()
+    run(core, 6)
+
+
+def start_game(core):
+    """Gets past the title and the level-select screen into a game.
+
+    Two presses, matching the ROM's own shape: a title screen, then a
+    selection screen, then play.
+    """
+    run(core, 8)
+    press_start(core)   # title -> level select
+    press_start(core)   # level select -> play
     run(core, 8)
 
 
@@ -132,6 +142,13 @@ def selftest(rom_path):
     title = pixels(screen)
     if all(p == (0, 0, 0) for row in title for p in row):
         failures.append("la pantalla de titulo quedo en negro")
+
+    # And START must take it to the level-select screen, not straight to play.
+    press_start(core)
+    menu = pixels(screen)
+    if menu == title:
+        failures.append("START no llevo del titulo al menu")
+    core.reset()
 
     start_game(core)
     rows = pixels(screen)

@@ -81,14 +81,18 @@ running ROM; only the side panels need reflowing).
 8. ~~The between-levels dancers~~ — done, with the ROM's own poses and
    cadence, on the banner column the level-up blit clears for them. Their
    individual choreography scripts are still untraced (noted in NOTES.md).
-9. Long-bar/undo cheat codes (`reference/NOTES.md` → "Cheat-code state
+9. ~~Title and menu screens~~ — done, from the cartridge's own title art and
+   menu frame. The title composes 32x30 down to 30x20 by dropping the thick
+   top/bottom border and one spire-tip row; the menu drops two columns from
+   its empty middle. Neither scales anything.
+10. Long-bar/undo cheat codes (`reference/NOTES.md` → "Cheat-code state
    exists") — a well-known, well-loved Tengen feature; the RAM layout is
    mapped, the behavior isn't traced yet.
-10. The 2P and coop modes. The core already models coop (including its
+11. The 2P and coop modes. The core already models coop (including its
    12-column field) and two players; only the GBA front end is single-player.
-11. The line-clear animation — the core clears rows instantly, the ROM plays
+12. The line-clear animation — the core clears rows instantly, the ROM plays
    an animation first (`stageLineClearAnimation`, `lineClearTimerP1/2`).
-12. Audio (`setMusicOrSoundEffect` plus the `MUSIC_*`/`SOUND_*` constants in
+13. Audio (`setMusicOrSoundEffect` plus the `MUSIC_*`/`SOUND_*` constants in
    `constants.asm.txt`) — lowest priority, gameplay fidelity comes first.
 
 ## Build

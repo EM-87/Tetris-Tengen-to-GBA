@@ -36,7 +36,10 @@
 /* Generated from a cartridge dump by tools/extract_assets.py. */
 #include "tiles_game.h"
 #include "tiles_dancers.h"
+#include "tiles_title.h"
 #include "screen_1p.h"
+#include "screen_title.h"
+#include "screen_menu.h"
 #include "palettes_rom.h"
 #include "dancer_poses.h"
 
@@ -63,6 +66,11 @@
  * does on the NES (main.asm.txt:5328). Bank 4 carries the falling piece's own
  * colours, mirroring setPiecePalette's separate sprite palette. */
 #define PAL_PIECE_BANK 4
+#define PAL_TITLE_BANK 5
+
+/* The title screen has its own 256-tile set, uploaded above the game's so
+ * both live in one charblock (512 tiles is exactly its 16KB). */
+#define TITLE_TILE_BASE 256
 
 /* ----------------------------------------------------------------------- *
  * The between-levels dancers
@@ -177,6 +185,15 @@ static void set_piece_palette(TengenTetromino piece) {
     const uint8_t *entry = kRomPiecePalettes[piece];
     vu16 *bank = MEM_PALETTE + PAL_PIECE_BANK * 16;
     for (int i = 0; i < 3; i++) bank[1 + i] = nes_colour_to_gba(entry[i]);
+}
+
+static void upload_title_tiles(void) {
+    vu16 *dst = MEM_CHARBLOCK(CHARBLOCK) + TITLE_TILE_BASE * 16;
+    for (unsigned i = 0; i < sizeof(kTitleTiles); i += 2) {
+        dst[i / 2] = (uint16_t)(kTitleTiles[i] | (kTitleTiles[i + 1] << 8));
+    }
+    vu16 *pal = MEM_PALETTE + PAL_TITLE_BANK * 16;
+    for (int i = 0; i < 4; i++) pal[i] = nes_colour_to_gba(kTitlePalette[i]);
 }
 
 static void upload_dancer_tiles(void) {
@@ -370,33 +387,48 @@ static void draw_field(void) {
  * limit per menu row, and menuPlayer1StartLevel's is 10. */
 #define START_LEVEL_COUNT 10
 
-typedef enum { SCREEN_TITLE, SCREEN_PLAYING } Screen;
+/* The ROM has a title screen and then separate selection screens, drawn in
+ * its own menu frame; this follows the same shape with the one selection the
+ * port currently offers. */
+typedef enum { SCREEN_TITLE, SCREEN_LEVEL_SELECT, SCREEN_PLAYING } Screen;
 
 static void clear_screen(void) {
     for (int ty = 0; ty < 32; ty++)
         for (int tx = 0; tx < MAP_W; tx++) set_map_tile(tx, ty, T_BLANK);
 }
 
+/* The cartridge's own title art. The level selector is drawn over the
+ * cathedral's lower half, where the ROM's copyright lines used to sit. */
 static void draw_title(uint8_t start_level) {
-    clear_screen();
-
-    /* Keep the border columns from the real layout so the title sits in the
-     * same frame the game does. */
-    for (int ty = 0; ty < SCREEN_TH; ty++) {
-        int layout_row = ty + WINDOW_TOP;
-        for (int tx = 0; tx < SCREEN_TW; tx++) {
-            if (tx > 1 && tx < SCREEN_TW - 2) continue;
-            int i = layout_row * SCREEN_1P_W + tx;
-            set_map_tile(tx, ty, WITH_BANK(kScreen1pTiles[i], kScreen1pPalettes[i]));
+    for (int ty = 0; ty < SCREEN_TITLE_H_TILES; ty++) {
+        for (int tx = 0; tx < SCREEN_TITLE_W; tx++) {
+            uint16_t tile = TITLE_TILE_BASE + kScreenTitleTiles[ty * SCREEN_TITLE_W + tx];
+            set_map_tile(tx, ty, WITH_BANK(tile, PAL_TITLE_BANK));
         }
     }
 
-    draw_text(11, 4, "TENGEN", BANK_LABEL);
-    draw_text(11, 6, "TETRIS", BANK_LABEL);
-    draw_tiles(9, 10, kLabelLevel, 6, BANK_LABEL);
-    draw_number(17, 10, start_level, 1, BANK_VALUE);
-    draw_text(7, 13, "UP DOWN TO SET", BANK_VALUE);
-    draw_text(8, 15, "START TO PLAY", BANK_VALUE);
+}
+
+/* The level selector, inside the ROM's own menu frame. The wording matches
+ * the cartridge's ("LEVEL SELECT" is one of the strings it writes into this
+ * same empty middle), and the digits are its font. */
+static void draw_level_select(uint8_t start_level) {
+    for (int ty = 0; ty < SCREEN_MENU_H_TILES; ty++) {
+        for (int tx = 0; tx < SCREEN_MENU_W; tx++) {
+            int i = ty * SCREEN_MENU_W + tx;
+            set_map_tile(tx, ty, WITH_BANK(kScreenMenuTiles[i], kScreenMenuPalettes[i]));
+        }
+    }
+
+    draw_text(9, 4, "LEVEL SELECT", BANK_LABEL);
+    for (int level = 0; level < START_LEVEL_COUNT; level++) {
+        /* The chosen level is picked out in the label colour, the way the
+         * ROM highlights a menu selection. */
+        draw_number(6 + level * 2, 9, (uint32_t)level, 1,
+                     level == start_level ? BANK_LABEL : BANK_VALUE);
+    }
+    draw_text(6, 15, "LEFT RIGHT TO SET", BANK_VALUE);
+    draw_text(8, 17, "START TO PLAY", BANK_VALUE);
 }
 
 int main(void) {
@@ -405,6 +437,7 @@ int main(void) {
     set_field_palette_for_level(0);
     clear_screen();
 
+    upload_title_tiles();
     upload_dancer_tiles();
     oam_hide_all();
 
@@ -433,15 +466,30 @@ int main(void) {
         tengen_rng_step(&seed_source);
 
         if (screen == SCREEN_TITLE) {
-            if (pressed & TENGEN_BTN_UP)
+            if (pressed & TENGEN_BTN_START) {
+                screen = SCREEN_LEVEL_SELECT;
+                vsync();
+                clear_screen();
+                continue;
+            }
+            vsync();
+            draw_title(start_level);
+            continue;
+        }
+
+        if (screen == SCREEN_LEVEL_SELECT) {
+            /* Left/right wrap at both ends, the range and the wrapping the
+             * ROM's own menu uses (main.asm.txt:4742-4763, 4819). */
+            if (pressed & TENGEN_BTN_LEFT)
                 start_level = (uint8_t)((start_level + START_LEVEL_COUNT - 1) % START_LEVEL_COUNT);
-            if (pressed & TENGEN_BTN_DOWN)
+            if (pressed & TENGEN_BTN_RIGHT)
                 start_level = (uint8_t)((start_level + 1) % START_LEVEL_COUNT);
             if (pressed & TENGEN_BTN_START) {
                 uint16_t seed = (uint16_t)(seed_source.lo | (seed_source.hi << 8));
                 tengen_new_game(&g_game, seed, start_level, false, false);
                 shown_level = 0xFF;
                 shown_piece = TT_NONE;
+                set_piece_palette(g_game.player[0].piece.current);
                 screen = SCREEN_PLAYING;
                 vsync();
                 clear_screen();
@@ -449,7 +497,7 @@ int main(void) {
                 continue;
             }
             vsync();
-            draw_title(start_level);
+            draw_level_select(start_level);
             continue;
         }
 
