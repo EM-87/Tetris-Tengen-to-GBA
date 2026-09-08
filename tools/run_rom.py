@@ -13,6 +13,7 @@ Usage:
     python3 tools/run_rom.py build/tengen.gba --lineclear
     python3 tools/run_rom.py build/tengen.gba --pause
     python3 tools/run_rom.py build/tengen.gba --audio
+    python3 tools/run_rom.py build/tengen.gba --link
 
 --selftest checks the things a broken port would get wrong: that the screen
 isn't blank, that the playfield frame is where the resolution mapping says it
@@ -22,6 +23,10 @@ should be, and that a piece actually falls.
 tile by tile. --pause pauses the game and types in the cheat codes. Both need
 `build/tengen.elf` next to the ROM (for the address of the game state) and an
 `arm-none-eabi-nm` to read it with.
+
+--link walks the two-player mode as far as one console alone can go: to the
+link screen, with nothing plugged in. A linked MATCH needs two consoles, and
+that is tools/run_link.py, which puts a simulated cable between two cores.
 
 Requires: pip install pygba  (pulls in the mGBA bindings)
           plus the mGBA shared library, e.g. apt-get install libmgba0.10
@@ -147,13 +152,15 @@ def press_start(core):
 
 
 def start_game(core):
-    """Gets past the title and the level-select screen into a game.
+    """Gets past the title and the selection screens into a solo game.
 
-    Two presses, matching the ROM's own shape: a title screen, then a
-    selection screen, then play.
+    Three presses, matching the ROM's own shape: a title screen, then GAME
+    SELECT (whose first entry is 1 PLAYER, so START takes it), then the
+    level/music screen, then play.
     """
     run(core, 8)
-    press_start(core)   # title -> level select
+    press_start(core)   # title -> game select
+    press_start(core)   # game select (1 PLAYER) -> level select
     press_start(core)   # level select -> play
     run(core, 8)
 
@@ -168,7 +175,7 @@ def selftest(rom_path):
     if all(p == (0, 0, 0) for row in title for p in row):
         failures.append("la pantalla de titulo quedo en negro")
 
-    # And START must take it to the level-select screen, not straight to play.
+    # And START must take it to GAME SELECT, not straight to play.
     press_start(core)
     menu = pixels(screen)
     if menu == title:
@@ -248,9 +255,14 @@ def selftest(rom_path):
 # Reaching a line clear by PLAYING would need a bot that stacks well, and the
 # piece sequence depends on when Start was pressed. Instead the check writes
 # completed rows straight into the game's playfield — the first member of
-# `g_game`, whose address comes out of the ELF — and lets the next piece to
+# `g_session`, whose address comes out of the ELF — and lets the next piece to
 # land trigger the clear. Nothing in the ROM is modified; this is a fixture in
 # the harness, the same way a unit test constructs a board.
+#
+# `g_session` is a TengenLink, whose first member is the TengenGame, which in
+# turn starts with the playfields. So the symbol's own address IS the board's:
+# a solo game and a linked one are the same struct at the same place, which is
+# what lets one fixture serve both.
 # ---------------------------------------------------------------------------
 PF_W, PF_H = 12, 20            # must match TENGEN_PF_WIDTH / _HEIGHT
 PF_PLAYABLE = PF_W - 2         # what is actually drawn; the walls are frame art
@@ -264,7 +276,7 @@ CLEAR_WORDS = {1: "SINGLE", 2: "DOUBLE", 3: "TRIPLE", 4: "TETRIS"}
 KEY_DOWN = 7
 
 
-def game_state_address(rom_path, name="g_game"):
+def game_state_address(rom_path, name="g_session"):
     """Address of a symbol in the built ROM, read out of the ELF beside it."""
     elf = os.path.splitext(rom_path)[0] + ".elf"
     if not os.path.exists(elf):
@@ -411,7 +423,7 @@ KEYS = {"A": 0, "B": 1, "SELECT": 2, "START": 3,
 CODE_LEVEL_UP = "UP DOWN UP DOWN LEFT RIGHT B B A".split()
 CODE_LONG_BAR = "DOWN DOWN LEFT RIGHT LEFT RIGHT B A".split()
 
-# Offsets into g_game, from the structs in src/tengen_core.h. The compiler is
+# Offsets into g_session.game, from the structs in src/tengen_core.h. The compiler is
 # arm-none-eabi with the EABI's default -fshort-enums, so a TengenTetromino is
 # one byte; a mismatch would show up immediately as nonsense readings, which
 # the checks below would catch.
@@ -658,6 +670,86 @@ def audio_check(rom_path):
     return 0
 
 
+# ---------------------------------------------------------------------------
+# The two-player front end, with no cable attached.
+#
+# A real linked match needs two consoles and a cable, which no headless
+# emulator here can supply. What CAN be checked, and is worth checking, is the
+# half of it that a single GBA reaches on its own: that GAME SELECT offers 2
+# PLAYER, that choosing it reaches the link screen, that the ROM keeps running
+# at full speed while the lobby finds nothing on the other end — a serial wait
+# without a timeout would hang here and nowhere else — that it eventually says
+# so instead of waiting forever, and that B gets back out.
+#
+# The handshake's own logic is tested on the host, two lobbies against each
+# other (tests/test_tengen.c); this is the wiring around it.
+# ---------------------------------------------------------------------------
+LINK_MSG_ROW = 11
+LINK_TIMEOUT_FRAMES = 600   # TENGEN_LOBBY_TIMEOUT in src/tengen_link.h
+
+
+def tilemap_text(core, row, first=0, last=30):
+    """The row of the tilemap as text. The tileset's letters sit at their
+    ASCII codes (see ascii_tile in gba/main.c), so a tile id IS a character."""
+    out = []
+    for x in range(first, last):
+        tile = core.memory.u16[SCREENBLOCK_ADDR + (row * 32 + x) * 2] & 0x3FF
+        out.append(chr(tile) if 32 <= tile < 127 else " ")
+    return "".join(out).strip()
+
+
+def link_check(rom_path):
+    core, screen = load(rom_path)   # `screen` must stay alive; see load()
+    failures = []
+
+    def tap(name, settle=6):
+        core.set_keys(KEYS[name])
+        run(core, 4)
+        core.set_keys()
+        run(core, settle)
+
+    run(core, 8)
+    tap("START")                      # title -> game select
+    if "GAME SELECT" not in tilemap_text(core, 8):
+        failures.append("no aparece GAME SELECT tras el titulo")
+    if "2 PLAYER" not in tilemap_text(core, 13):
+        failures.append("GAME SELECT no ofrece 2 PLAYER")
+
+    tap("DOWN")                       # 1 PLAYER -> 2 PLAYER
+    tap("START")                      # game select -> level select
+    tap("START")                      # level select -> link screen
+
+    if "LINK CABLE" not in tilemap_text(core, 8):
+        failures.append("2 PLAYER no lleva a la pantalla de cable link")
+
+    # Nothing is plugged in, so the lobby must be spinning without a partner.
+    # If any serial wait lacked a timeout the emulator would stop advancing
+    # here; comparing two frames a hundred apart is how that shows up.
+    before = pixels(screen)
+    run(core, 100)
+    if pixels(screen) != before:
+        failures.append("la pantalla de espera no es estable")
+
+    # And it gives up rather than waiting forever.
+    run(core, LINK_TIMEOUT_FRAMES + 60)
+    msg = tilemap_text(core, LINK_MSG_ROW)
+    if "NO CABLE" not in msg:
+        failures.append(f"el lobby no se rinde sin cable (fila {LINK_MSG_ROW}: {msg!r})")
+    else:
+        print(f"  sin cable: '{msg}' tras {LINK_TIMEOUT_FRAMES} frames")
+
+    tap("B")                          # back out of the link screen
+    if "LEVEL SELECT" not in tilemap_text(core, 8):
+        failures.append("B no vuelve del cable link al menu")
+
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: el modo 2 jugadores llega al cable, no se cuelga sin el, y se sale.")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("rom")
@@ -670,6 +762,8 @@ def main():
                      help="check Start pauses and the cheat codes respond")
     ap.add_argument("--audio", action="store_true",
                      help="check the emulated sound engine against its golden recording")
+    ap.add_argument("--link", action="store_true",
+                     help="check the 2-player front end with no cable attached")
     args = ap.parse_args()
 
     if args.selftest:
@@ -680,6 +774,8 @@ def main():
         sys.exit(pause_check(args.rom))
     if args.audio:
         sys.exit(audio_check(args.rom))
+    if args.link:
+        sys.exit(link_check(args.rom))
 
     core, screen = load(args.rom)
     start_game(core)

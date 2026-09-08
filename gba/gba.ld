@@ -73,8 +73,12 @@ SECTIONS
         __bss_end = .;
     } > iwram
 
-    /* Stacks grow down from the top of IWRAM. The IRQ stack is small because
-     * nothing here takes interrupts; the rest is the system stack. */
+    /* Stacks grow down from the top of IWRAM. The IRQ stack is 256 bytes,
+     * which is all the serial handler in gba/link.c needs on top of the six
+     * registers the BIOS pushes before calling it; the rest is the system
+     * stack. It stops at $03007F00 deliberately: the BIOS keeps its own
+     * variables in the 256 bytes above that, including the interrupt vector
+     * the handler is installed through. */
     __sp_irq = ORIGIN(iwram) + LENGTH(iwram) - 0x100;
     __sp_usr = __sp_irq - 0x100;
 

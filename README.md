@@ -61,11 +61,26 @@ Hay una ROM de GBA que arranca, se juega y corre las reglas reales de Tengen.
 - `tools/extract_assets.py` — saca del cartucho original los tiles, las
   paletas, el layout de pantalla y las poses de los bailarines. **Todo el
   arte del port sale de ahí; no hay nada dibujado a mano.**
+- `src/tengen_link.c` + `gba/link.c` — **dos jugadores por cable link**. El
+  2P del cartucho es una carrera: dos campos independientes, sin basura
+  cruzada entre ellos, así que el port lo hace en *lockstep* — las dos
+  consolas simulan a los dos jugadores desde la misma semilla y solo se
+  mandan sus botones. Las reglas y el handshake son independientes de
+  plataforma y se testean en el host (`make test` corre dos partidas
+  enlazadas y las compara byte a byte); el cable vive en `gba/link.c` y va
+  por interrupción, para que ninguna consola pueda perderse una
+  transferencia ni mandar botones viejos.
 - `tools/run_rom.py` — arranca la ROM en mGBA headless y verifica que
   realmente dibuje y se juegue (`make gba-check`), no solo que linkee:
   incluye ver la animación de línea completa sprite por sprite, comprobar
   que deja escrita la palabra correcta, y pausar y teclear los códigos de
   trucos.
+- `tools/run_link.py` — arranca **dos** mGBA y les pone un cable link
+  simulado en medio: modela el modo multiplayer del GBA (quién es maestro,
+  qué lee cada consola, el `$FFFF` del hueco vacío, la interrupción) y
+  comprueba que, dándole botones distintos a cada una, el estado de la
+  partida queda idéntico en las dos byte a byte. También tira del cable a
+  mitad de partida para ver que las dos se enteran y ninguna se cuelga.
 - `gba/nes6502.c` + `gba/nes_audio.c` — el sonido. **El port no reimplementa
   el motor de audio de Tengen: lo ejecuta.** Es un intérprete de 6502 chico
   corriendo el propio código del cartucho, y una capa que traduce lo que ese
@@ -80,10 +95,13 @@ Hay una ROM de GBA que arranca, se juega y corre las reglas reales de Tengen.
 
 ### Lo que falta
 
-- **Modos 2P y coop**: el core ya los modela (incluido el campo de 12
-  columnas del coop), pero la capa GBA es solo de un jugador por ahora. Del
-  menú original solo está la selección de nivel; faltan tipo de partida,
-  handicap y selección de música.
+- **Coop y el jugador de la máquina**: el core ya modela el coop (incluido
+  su campo de 12 columnas), pero la capa GBA todavía no lo ofrece; el
+  GAME SELECT lista solo los dos modos que sí están, con las palabras del
+  cartucho. Falta también el handicap inicial del 2P
+  (`initHandicapGarbage`) y el jugador de la máquina de la ROM
+  (`computerMove`), que es el único modo de dos jugadores que no necesita
+  ni segunda consola ni cable.
 - **Coreografía exacta de los bailarines**: están los seis, con su arte, sus
   poses, sus posiciones y su escenario reales — el blit de subida de nivel no
   solo despeja el banner, además dibuja las repisas sobre las que se paran, y
@@ -103,6 +121,21 @@ que es una rareza real de Tengen, no un bug del port —, y **START** pausa.
 En la pantalla de selección, **arriba/abajo** elige entre las cuatro músicas
 del juego (Loginska, Bradinsky, Karinka, Troika), que es la selección de
 música que el menú original también ofrece.
+
+## Dos jugadores
+
+**GAME SELECT → 2 PLAYER**, con un cable link entre las dos consolas y el
+mismo cartucho en las dos. Quién es jugador 1 lo decide el cable, no el
+software: la consola enchufada en el extremo de maestro juega de jugador 1 y
+es la que manda su nivel y su música: las dos pasan por la pantalla de
+selección, pero la del maestro es la que cuenta, y en la pantalla de cable se
+ve cuál quedó. Cada consola muestra su propio campo, centrado igual que en un
+jugador, con la puntuación del rival en el panel de la izquierda.
+
+Es una carrera, como en el cartucho: no se manda basura de un lado al otro.
+Cualquiera de los dos puede pausar (la ROM original hace el OR de los dos
+mandos, y eso vale también por cable). Si el cable se va, las dos consolas lo
+detectan y terminan la partida en vez de quedarse esperando.
 
 Con el juego en pausa entran los tres códigos originales, un botón por
 frame:
@@ -156,7 +189,8 @@ Para `make gba-check`, además: `pip install pygba` y la librería de mGBA
 tengen_gba_port/
 ├── src/                  núcleo del juego (C99, sin dependencias de GBA)
 ├── tests/                tests nativos del núcleo
-├── gba/                  capa de GBA: hardware, crt0, linker script, renderer
+├── gba/                  capa de GBA: hardware, crt0, linker script, renderer,
+│                         y el cable link (link.c)
 ├── tools/                extracción de assets, verificación de ROM, gbafix
 ├── reference/
 │   ├── disasm/           disassembly completo de Tetris (NES, Tengen)

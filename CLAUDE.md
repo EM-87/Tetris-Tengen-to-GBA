@@ -104,11 +104,18 @@ running ROM; only the side panels need reflowing).
    recording made by the reference interpreter in `tools/nes_cpu.py`, frame
    by frame and byte for byte, and checks the whole thing still fits in a
    GBA frame.
-13. The 2P and coop modes. The core already models coop (including its
-   12-column field) and two players; only the GBA front end is single-player.
-   Note the ROM also has a COMPUTER player (`computerMove`, the VS and WITH
-   game modes), which unlike two-human 2P needs no second controller and so
-   is the one that actually fits a single GBA.
+13. ~~2P~~ — done, over a LINK CABLE, which is what the cartridge's 2P wants:
+   it is a race on two independent boards with nothing crossing between them,
+   so the port runs lockstep (both consoles simulate both players from one
+   seed and exchange only buttons). The rules and the handshake are in
+   `src/tengen_link.c` and tested on the host; the cable is `gba/link.c`,
+   interrupt-driven so neither console can miss a transfer or send a stale
+   word. `make gba-check` runs two mGBA cores with a cable between them and
+   asserts their game state matches byte for byte. See reference/NOTES.md.
+14. Still to do: coop (the core already models its 12-column field), the 2P
+   starting handicap (`initHandicapGarbage`), and the ROM's COMPUTER player
+   (`computerMove`, the VS and WITH modes) — which unlike two-human 2P needs
+   neither a second console nor a cable.
 
 ## Build
 

@@ -18,8 +18,8 @@ CC      ?= gcc
 CFLAGS  ?= -std=c99 -Wall -Wextra -Wpedantic -g -O1
 BUILD   := build
 
-CORE_SRC := src/tengen_core.c
-CORE_HDR := src/tengen_core.h
+CORE_SRC := src/tengen_core.c src/tengen_link.c
+CORE_HDR := src/tengen_core.h src/tengen_link.h
 TEST_SRC := tests/test_tengen.c
 TEST_BIN := $(BUILD)/test_tengen
 
@@ -81,7 +81,7 @@ ARMLDFLAGS := -T gba/gba.ld -nostartfiles -Wl,--gc-sections
 # checks for them and says what to do rather than failing in the compiler.
 GBA_ASSETS := gba/tiles_game.h gba/screen_1p.h gba/palettes_rom.h gba/audio_prg.h
 
-GBA_SRC  := gba/main.c gba/nes_audio.c gba/nes6502.c $(CORE_SRC)
+GBA_SRC  := gba/main.c gba/nes_audio.c gba/nes6502.c gba/link.c $(CORE_SRC)
 GBA_ELF  := $(BUILD)/tengen.elf
 GBA_ROM  := $(BUILD)/tengen.gba
 
@@ -90,7 +90,7 @@ gba: $(GBA_ROM)
 # The generated headers are prerequisites through $(wildcard) rather than
 # directly: that way regenerating assets rebuilds the ROM, while a missing one
 # still reaches the helpful message below instead of "no rule to make target".
-$(GBA_ELF): $(GBA_SRC) $(CORE_HDR) gba/gba_hw.h gba/crt0.s gba/gba.ld \
+$(GBA_ELF): $(GBA_SRC) $(CORE_HDR) gba/gba_hw.h gba/link.h gba/crt0.s gba/gba.ld \
              $(wildcard $(GBA_ASSETS)) | $(BUILD)
 	@command -v $(ARMCC) >/dev/null 2>&1 || { \
 	    echo "error: $(ARMCC) not found."; \
@@ -130,8 +130,11 @@ assets-check:
 	python3 tools/extract_assets.py --self-test
 
 # Boots the ROM in mGBA headlessly and checks it actually renders and plays,
-# rather than merely linking. Needs: pip install pygba (plus the mGBA shared
-# library, e.g. apt-get install libmgba0.10).
+# rather than merely linking. The last two are the two-player mode: one console
+# on its own reaching the link screen and giving up gracefully, then TWO cores
+# with a simulated cable between them playing the same match byte for byte.
+# Needs: pip install pygba (plus the mGBA shared library, e.g. apt-get install
+# libmgba0.10).
 .PHONY: gba-check
 gba-check: $(GBA_ROM)
 	python3 tools/check_header.py $(GBA_ROM)
@@ -139,3 +142,5 @@ gba-check: $(GBA_ROM)
 	python3 tools/run_rom.py $(GBA_ROM) --lineclear
 	python3 tools/run_rom.py $(GBA_ROM) --pause
 	python3 tools/run_rom.py $(GBA_ROM) --audio
+	python3 tools/run_rom.py $(GBA_ROM) --link
+	python3 tools/run_link.py $(GBA_ROM)

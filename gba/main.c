@@ -36,7 +36,9 @@
 #include "gba_hw.h"
 #include "palette.h"
 #include "nes_audio.h"
+#include "link.h"
 #include "../src/tengen_core.h"
+#include "../src/tengen_link.h"
 
 /* Generated from a cartridge dump by tools/extract_assets.py. */
 #include "tiles_game.h"
@@ -225,7 +227,11 @@ static const uint8_t kLabelNext[4]  = {0x91, 0x92, 0x93, 0x94};
  * ROM's own nametable spells "HIGH SCORE" and "STATS". */
 static uint16_t ascii_tile(char c) { return (uint16_t)(unsigned char)c; }
 
-static TengenGame g_game;
+static TengenLink g_session;
+/* Which player this console shows and plays. Always 0 in a solo game; in a
+ * linked match it is the cable master that is player 1, so the two consoles
+ * differ here and nowhere else. */
+static uint8_t g_view;
 
 static void vsync(void) {
     while (REG_VCOUNT >= 160) { }
@@ -247,6 +253,10 @@ static uint8_t read_buttons(void) {
     if (keys & KEY_RIGHT)  out |= TENGEN_BTN_RIGHT;
     return out;
 }
+
+/* The same read, for the serial interrupt to call at the instant of a
+ * transfer (see link.h). Nothing else may go in here. */
+uint8_t link_read_buttons(void) { return read_buttons(); }
 
 static void upload_tiles(void) {
     vu16 *dst = MEM_CHARBLOCK(CHARBLOCK);
@@ -364,8 +374,8 @@ static void draw_dancers(int elapsed) {
  * head at the column the sweep has reached and the rest trailing one column
  * apart behind it, each retiring as it leaves the field. */
 static void draw_line_clear_sweep(void) {
-    const TengenPlayerState *p = &g_game.player[0];
-    uint8_t step = tengen_line_clear_step(&g_game, TENGEN_PLAYER_1);
+    const TengenPlayerState *p = &g_session.game.player[g_view];
+    uint8_t step = tengen_line_clear_step(&g_session.game, (TengenPlayerSlot)g_view);
     int used = 0;
 
     for (int row = 0; row < TENGEN_PF_HEIGHT; row++) {
@@ -447,7 +457,7 @@ static void clear_region(int tx, int ty, int w, int h) {
 
 static void draw_next_piece(int tx, int ty) {
     clear_region(tx, ty, 4, 3);
-    TengenTetromino next = g_game.player[0].piece.next;
+    TengenTetromino next = g_session.game.player[g_view].piece.next;
     if (next <= TT_NONE || next >= TENGEN_TETROMINO_COUNT) return;
     /* Drawn from the same orientation bitmap and tile table the game logic
      * uses, so the preview cannot drift out of sync with what spawns. */
@@ -463,7 +473,7 @@ static void draw_next_piece(int tx, int ty) {
 }
 
 static void draw_panel(void) {
-    const TengenPlayerState *p = &g_game.player[0];
+    const TengenPlayerState *p = &g_session.game.player[g_view];
     static const char kPieceLetter[TENGEN_TETROMINO_COUNT] = {0,'I','T','O','J','L','S','Z'};
 
     /* Left: the counters, in the cartridge's own multi-tile lettering, and
@@ -478,12 +488,28 @@ static void draw_panel(void) {
     draw_number(HUD_L_TX + 2, 7, p->level, 2, BANK_VALUE);
 
     draw_rule(HUD_L_TX, 9, HUD_L_W, BANK_VALUE);
-    draw_text(HUD_L_TX, 10, "STATS", BANK_LABEL);
-    for (int piece = TT_I; piece <= TT_Z; piece++) {
-        int ty = 11 + (piece - TT_I);
-        char letter[2] = { kPieceLetter[piece], 0 };
-        draw_text(HUD_L_TX, ty, letter, BANK_LABEL);
-        draw_number(HUD_L_TX + 2, ty, p->piece_stats[piece], 3, BANK_VALUE);
+
+    if (g_session.game.two_player) {
+        /* A race needs the other board's numbers far more than it needs the
+         * piece histogram — which the ROM does not keep in 2P anyway
+         * (`updatePieceStatistics` is 1P only), so the space is free. */
+        const TengenPlayerState *o = &g_session.game.player[g_view ^ 1];
+        draw_text(HUD_L_TX, 10, "RIVAL", BANK_LABEL);
+        draw_number(HUD_L_TX, 12, o->score, 6, BANK_VALUE);
+        draw_text(HUD_L_TX, 14, "LN", BANK_LABEL);
+        draw_number(HUD_L_TX + 2, 14, o->lines, 4, BANK_VALUE);
+        draw_text(HUD_L_TX, 15, "LV", BANK_LABEL);
+        draw_number(HUD_L_TX + 3, 15, o->level, 2, BANK_VALUE);
+        if (!o->game_active) draw_text(HUD_L_TX + 1, 17, "OUT", BANK_LABEL);
+        else clear_region(HUD_L_TX + 1, 17, 4, 1);
+    } else {
+        draw_text(HUD_L_TX, 10, "STATS", BANK_LABEL);
+        for (int piece = TT_I; piece <= TT_Z; piece++) {
+            int ty = 11 + (piece - TT_I);
+            char letter[2] = { kPieceLetter[piece], 0 };
+            draw_text(HUD_L_TX, ty, letter, BANK_LABEL);
+            draw_number(HUD_L_TX + 2, ty, p->piece_stats[piece], 3, BANK_VALUE);
+        }
     }
 
     if (!p->game_active) {
@@ -500,14 +526,14 @@ static void draw_panel(void) {
 }
 
 static void draw_field(void) {
-    const TengenPlayfield *field = &g_game.field[0];
-    const TengenPlayerState *p = &g_game.player[0];
+    const TengenPlayfield *field = &g_session.game.field[g_view];
+    const TengenPlayerState *p = &g_session.game.player[g_view];
 
     /* How far the line-clear sweep has crossed the completed rows, and what
      * it is writing into them as it goes. `written` is the last column the
      * trailing sprite has passed over; everything to its right still shows
      * the blocks that are about to come down. */
-    uint8_t step = tengen_line_clear_step(&g_game, TENGEN_PLAYER_1);
+    uint8_t step = tengen_line_clear_step(&g_session.game, (TengenPlayerSlot)g_view);
     int written = (int)step - TENGEN_CLEAR_TRAIL - 1;
     int rows_going = 0;
     for (int row = 0; row < TENGEN_PF_HEIGHT; row++)
@@ -540,13 +566,13 @@ static void draw_field(void) {
      * reason. Cells above the field are skipped, which is what makes a piece
      * visibly slide in from off-screen the way the original does. */
     TengenCell cells[4];
-    int count = tengen_active_piece_cells(&g_game, TENGEN_PLAYER_1, cells);
-    TengenTetromino current = g_game.player[0].piece.current;
+    int count = tengen_active_piece_cells(&g_session.game, (TengenPlayerSlot)g_view, cells);
+    TengenTetromino current = g_session.game.player[g_view].piece.current;
     for (int i = 0; i < count; i++) {
         if (cells[i].row < 0) continue;
         int col = cells[i].col - FIELD_COL0;
         if (col < 0 || col >= FIELD_PLAYABLE) continue;
-        uint8_t tile = tengen_tile_id_for_cell(current, g_game.player[0].piece.orientation, i);
+        uint8_t tile = tengen_tile_id_for_cell(current, g_session.game.player[g_view].piece.orientation, i);
         set_map_tile(FIELD_TX + col, FIELD_TY + cells[i].row,
                       WITH_BANK(tile, PAL_PIECE_BANK));
     }
@@ -580,9 +606,26 @@ static const char *const kMusicNames[MUSIC_COUNT] = {
 };
 
 /* The ROM has a title screen and then separate selection screens, drawn in
- * its own menu frame; this follows the same shape with the one selection the
- * port currently offers. */
-typedef enum { SCREEN_TITLE, SCREEN_LEVEL_SELECT, SCREEN_PLAYING } Screen;
+ * its own menu frame; this follows the same shape.
+ *
+ * GAME SELECT is the cartridge's own first menu, and its own wording: the
+ * nametable at rows 14-20 spells 1 PLAYER / 2 PLAYER / COOPERATIVE / VERSUS
+ * COMPUTER / WITH COMPUTER. Two of those five are implemented, so two are
+ * listed — an entry that does nothing would be worse than an entry that is
+ * not there. The three that are missing all want the ROM's `computerMove`
+ * AI or the coop front end; see CLAUDE.md's roadmap. */
+typedef enum {
+    SCREEN_TITLE,
+    SCREEN_GAME_SELECT,
+    SCREEN_LEVEL_SELECT,
+    SCREEN_LINK_WAIT,
+    SCREEN_PLAYING
+} Screen;
+
+#define GAME_1P   0
+#define GAME_2P   1
+#define GAME_COUNT 2
+static const char *const kGameNames[GAME_COUNT] = { "1 PLAYER", "2 PLAYER" };
 
 static void clear_screen(void) {
     for (int ty = 0; ty < 32; ty++)
@@ -610,7 +653,8 @@ static unsigned music_name_len(uint8_t music) {
     return n;
 }
 
-static void draw_level_select(uint8_t start_level, uint8_t music) {
+/* The cartridge's menu frame, which every selection screen is drawn inside. */
+static void draw_menu_frame(void) {
     for (int ty = 0; ty < SCREEN_MENU_H_TILES; ty++) {
         for (int tx = 0; tx < SCREEN_MENU_W; tx++) {
             int i = ty * SCREEN_MENU_W + tx;
@@ -618,6 +662,49 @@ static void draw_level_select(uint8_t start_level, uint8_t music) {
                           WITH_BANK(kScreenMenuTiles[i], PAL_MENU_BASE + kScreenMenuPalettes[i]));
         }
     }
+}
+
+static void draw_game_select(uint8_t choice) {
+    draw_menu_frame();
+    draw_text(10, 8, "GAME SELECT", PAL_MENU_BASE + 3);
+    for (int i = 0; i < GAME_COUNT; i++)
+        draw_text(11, 11 + i * 2, kGameNames[i],
+                   i == choice ? BANK_HILITE : PAL_MENU_BASE + 3);
+    draw_text(6, 17, "2 PLAYER NEEDS A CABLE", PAL_MENU_BASE + 3);
+}
+
+/* What the lobby is doing, while it does it. Two consoles reach this screen
+ * independently, so it has to say which one this is and whether the other has
+ * turned up — otherwise a cable that is plugged in badly looks the same as a
+ * friend who has not pressed Start yet. */
+static void draw_link_wait(const TengenLobby *lobby) {
+    draw_menu_frame();
+    draw_text(11, 8, "LINK CABLE", PAL_MENU_BASE + 3);
+
+    clear_region(4, 11, 22, 5);
+    if (lobby->failed) {
+        draw_text(9, 11, "NO CABLE FOUND", BANK_HILITE);
+        draw_text(8, 14, "B TO GO BACK", PAL_MENU_BASE + 3);
+        return;
+    }
+    if (!link_connected()) {
+        draw_text(6, 11, "WAITING FOR PLAYER 2", PAL_MENU_BASE + 3);
+        draw_text(8, 14, "B TO GO BACK", PAL_MENU_BASE + 3);
+        return;
+    }
+    draw_text(9, 11, link_is_master() ? "YOU ARE PLAYER 1" : "YOU ARE PLAYER 2",
+               BANK_HILITE);
+    /* The master's level and music are the ones that count, and on the slave
+     * they change under its feet as the handshake delivers them — which is
+     * exactly what the player needs to see. */
+    draw_text(10, 14, "LEVEL", PAL_MENU_BASE + 3);
+    draw_number(16, 14, lobby->start_level, 2, PAL_MENU_BASE + 3);
+    draw_text(9, 16, kMusicNames[lobby->music < MUSIC_COUNT ? lobby->music : 0],
+               PAL_MENU_BASE + 3);
+}
+
+static void draw_level_select(uint8_t start_level, uint8_t music) {
+    draw_menu_frame();
 
     /* Rows 8-14 of this window are the space the cartridge's own selection
      * screens write into — its GAME SELECT list lives exactly there — so the
@@ -639,6 +726,170 @@ static void draw_level_select(uint8_t start_level, uint8_t music) {
     draw_text(7, 17, "UP DOWN TO PICK", PAL_MENU_BASE + 3);
 }
 
+
+/* ----------------------------------------------------------------------- *
+ * The match
+ *
+ * A solo game and a linked one share every line of the drawing and almost
+ * every line of the game logic. They differ in exactly three places, which is
+ * the point of keeping the lockstep in ../src/tengen_link.c:
+ *
+ *   - where the buttons come from: the keypad, or a completed transfer that
+ *     carries BOTH consoles' buttons for one frame;
+ *   - what advances the simulation: one call per frame, or one call per
+ *     transfer, which is usually the same thing and occasionally is not;
+ *   - whether the level-up interlude may stop the world. It may not over a
+ *     cable: the two consoles would have to stop and resume on the same
+ *     frame or the lockstep is over, and the cartridge does not send its
+ *     dancers out during a two-player race in any case.
+ * ----------------------------------------------------------------------- */
+
+static bool g_linked;            /* this match is running over the cable */
+static bool g_link_lost;         /* ...and the cable stopped answering */
+static uint8_t g_music;          /* which of the four in-game tunes */
+static int g_dancer_frames;      /* > 0 while the level-up interlude runs */
+static uint8_t g_shown_level = 0xFF;
+static TengenTetromino g_shown_piece = TT_NONE;
+
+/* Two seconds without a transfer. Long enough that nothing short of the
+ * cable actually coming out reaches it, short enough that the player is not
+ * left staring at a frozen board wondering. */
+#define LINK_LOST_FRAMES 120
+
+/* Never spend a frame doing nothing but catching up. Two is all the drift
+ * between two crystals can ever put in the queue at once. */
+#define LINK_MAX_CATCHUP 2
+
+/* The ROM's own cues, each at the moment it plays them:
+ *  - a piece coming to rest, L8417 (main.asm.txt:637)
+ *  - rows coming down, L95C1 (:3212) — unless that clear also raised the
+ *    level, in which case the intro takes its place (:3207)
+ *  - the level-up interlude itself, L8D6B (:2038)
+ *  - topping out, silence and then the game-over tune (:608, :620) */
+static void announce_step(TengenStepResult step) {
+    if (step.piece_locked) nes_audio_play(NES_SOUND_DROP);
+    if (step.lines_collapsed)
+        nes_audio_play(step.leveled_up ? NES_MUSIC_LEVELUP : NES_SOUND_LINECLEAR);
+    if (step.leveled_up) {
+        if (!g_linked) g_dancer_frames = DANCER_SHOW_FRAMES;
+        nes_audio_play(NES_MUSIC_LEVELUP);
+    }
+    if (step.topped_out) {
+        nes_audio_play(NES_MUSIC_SILENCE);
+        nes_audio_play(NES_MUSIC_GAMEOVER);
+    }
+}
+
+/* The level's colours and the falling piece's, each reinstalled the frame it
+ * changes — the two things the ROM rewrites its palettes for. */
+static void refresh_palettes(void) {
+    const TengenPlayerState *p = &g_session.game.player[g_view];
+    if (p->level != g_shown_level) {
+        g_shown_level = p->level;
+        set_field_palette_for_level(g_shown_level);
+    }
+    if (p->piece.current != g_shown_piece) {
+        g_shown_piece = p->piece.current;
+        set_piece_palette(g_shown_piece);
+    }
+}
+
+/* True once neither board is playing, which is how a race ends. */
+static bool match_over(void) {
+    if (!g_session.game.two_player) return !g_session.game.player[g_view].game_active;
+    return !g_session.game.player[0].game_active &&
+            !g_session.game.player[1].game_active;
+}
+
+/* One frame of a linked match: pace the cable, then take whatever it brought.
+ * Returns false when the match is finished — either both boards are done, or
+ * the link stopped and cannot be trusted to have kept the two simulations
+ * together. */
+static bool link_play_frame(void) {
+    /* The master starts one transfer per frame off its own vblank; the slave
+     * has nothing to start. Either way the interrupt does the collecting. */
+    link_pump();
+    link_tick();
+
+    LinkFrame f;
+    int stepped = 0;
+    while (stepped < LINK_MAX_CATCHUP && link_pop(&f)) {
+        uint16_t local  = link_is_master() ? f.master : f.slave;
+        uint16_t remote = link_is_master() ? f.slave  : f.master;
+
+        /* A multiplayer transfer hands back every console's word INCLUDING
+         * this one's, which is the only honest account of what we actually
+         * managed to send. If it is not the frame we thought we were on, the
+         * other console has been fed a lie and there is nothing to do but
+         * stop. */
+        if (tengen_link_frame(local) !=
+             (uint8_t)(g_session.frame & TENGEN_LINK_FRAME_MASK)) {
+            g_session.desynced = true;
+            break;
+        }
+
+        TengenStepResult out[2];
+        if (!tengen_link_step(&g_session, tengen_link_buttons(local), remote, out))
+            break;
+        announce_step(out[g_view]);
+        stepped++;
+    }
+
+    if (g_session.desynced || link_starved() > LINK_LOST_FRAMES) {
+        g_link_lost = true;
+        return false;
+    }
+    return !match_over();
+}
+
+/* One frame of a solo game: Start pauses, the cheat codes go in while paused
+ * — both are the core's job (tengen_pause_input mirrors the ROM's own
+ * pauseOrUnpause, which is where checkCodeInput lives). A code that fires
+ * shows up on its own: a level-up through the palette check, a long bar or an
+ * undo through the current-piece check. */
+static bool solo_play_frame(uint8_t buttons, uint8_t pressed) {
+    if (g_session.game.player[0].game_active) {
+        uint8_t presses[2] = { pressed, 0 };
+        TengenCheat cheat[2];
+        bool was_paused = g_session.game.paused;
+        tengen_pause_input(&g_session.game, presses, cheat);
+        if (was_paused != g_session.game.paused) {
+            /* pauseOrUnpause suspends and resumes the music
+             * (main.asm.txt:7204-7211). */
+            nes_audio_play(g_session.game.paused ? NES_MUSIC_SUSPEND : NES_MUSIC_RESUME);
+            if (was_paused) draw_static_screen();
+        }
+        /* Every applied code plays this (main.asm.txt:7089, 7127). */
+        if (cheat[0] != TENGEN_CHEAT_NONE)
+            nes_audio_play(NES_SOUND_SCREEN_SWITCH);
+    }
+
+    announce_step(tengen_step(&g_session.game, TENGEN_PLAYER_1, buttons));
+    return !match_over();
+}
+
+/* Everything the screen shows during a match, drawn on this console's own
+ * vblank whatever the cable is doing. */
+static void draw_match(bool *sweeping) {
+    vsync();
+    nes_audio_frame();
+    draw_field();
+    draw_panel();
+    if (g_link_lost) draw_text(HUD_R_TX, 6, "LINK", BANK_LABEL);
+
+    /* The sweep's sprites, and the one tidy-up when it finishes. */
+    if (g_session.game.player[g_view].line_clear_timer > 0) {
+        draw_line_clear_sweep();
+        *sweeping = true;
+    } else if (*sweeping) {
+        oam_hide_all();
+        *sweeping = false;
+    }
+
+    /* Last, so it sits over whatever was just drawn. */
+    if (g_session.game.paused) draw_pause_box();
+}
+
 int main(void) {
     upload_tiles();
     upload_palettes();
@@ -656,13 +907,12 @@ int main(void) {
 
     Screen screen = SCREEN_TITLE;
     uint8_t start_level = 0;
-    uint8_t shown_level = 0xFF;
-    TengenTetromino shown_piece = TT_NONE;
+    uint8_t game_mode = GAME_1P;
     uint8_t held_last = 0;
-    int dancer_frames = 0;   /* > 0 while the level-up interlude is running */
     bool sweeping = false;   /* true while the line-clear sweep owns the OAM */
-    uint8_t music = 0;       /* which of the four in-game tunes */
     bool title_music = false;
+    bool match_running = false;
+    TengenLobby lobby;
 
     /* The ROM steps its RNG once per frame from the main loop
      * (main.asm.txt:49-50), and whatever state it is in when Start is pressed
@@ -684,7 +934,7 @@ int main(void) {
                 title_music = true;
             }
             if (pressed & TENGEN_BTN_START) {
-                screen = SCREEN_LEVEL_SELECT;
+                screen = SCREEN_GAME_SELECT;
                 nes_audio_play(NES_SOUND_SCREEN_SWITCH);
                 vsync();
                 nes_audio_frame();
@@ -697,6 +947,36 @@ int main(void) {
             continue;
         }
 
+        if (screen == SCREEN_GAME_SELECT) {
+            if (pressed & TENGEN_BTN_UP)
+                game_mode = (uint8_t)((game_mode + GAME_COUNT - 1) % GAME_COUNT);
+            if (pressed & TENGEN_BTN_DOWN)
+                game_mode = (uint8_t)((game_mode + 1) % GAME_COUNT);
+            /* processMenuInput plays this on every move (main.asm.txt:4655). */
+            if (pressed & (TENGEN_BTN_UP | TENGEN_BTN_DOWN))
+                nes_audio_play(NES_SOUND_MENU_SELECT);
+            if (pressed & TENGEN_BTN_B) {
+                screen = SCREEN_TITLE;
+                nes_audio_play(NES_SOUND_SCREEN_SWITCH);
+                vsync();
+                nes_audio_frame();
+                clear_screen();
+                continue;
+            }
+            if (pressed & TENGEN_BTN_START) {
+                screen = SCREEN_LEVEL_SELECT;
+                nes_audio_play(NES_SOUND_SCREEN_SWITCH);
+                vsync();
+                nes_audio_frame();
+                clear_screen();
+                continue;
+            }
+            vsync();
+            nes_audio_frame();
+            draw_game_select(game_mode);
+            continue;
+        }
+
         if (screen == SCREEN_LEVEL_SELECT) {
             /* Left/right wrap at both ends, the range and the wrapping the
              * ROM's own menu uses (main.asm.txt:4742-4763, 4819). */
@@ -705,22 +985,48 @@ int main(void) {
             if (pressed & TENGEN_BTN_RIGHT)
                 start_level = (uint8_t)((start_level + 1) % START_LEVEL_COUNT);
             if (pressed & TENGEN_BTN_UP)
-                music = (uint8_t)((music + MUSIC_COUNT - 1) % MUSIC_COUNT);
+                g_music = (uint8_t)((g_music + MUSIC_COUNT - 1) % MUSIC_COUNT);
             if (pressed & TENGEN_BTN_DOWN)
-                music = (uint8_t)((music + 1) % MUSIC_COUNT);
-            /* processMenuInput plays this on every move (main.asm.txt:4655). */
+                g_music = (uint8_t)((g_music + 1) % MUSIC_COUNT);
             if (pressed & (TENGEN_BTN_LEFT | TENGEN_BTN_RIGHT |
                             TENGEN_BTN_UP | TENGEN_BTN_DOWN))
                 nes_audio_play(NES_SOUND_MENU_SELECT);
+            if (pressed & TENGEN_BTN_B) {
+                screen = SCREEN_GAME_SELECT;
+                nes_audio_play(NES_SOUND_SCREEN_SWITCH);
+                vsync();
+                nes_audio_frame();
+                clear_screen();
+                continue;
+            }
             if (pressed & TENGEN_BTN_START) {
                 uint16_t seed = (uint16_t)(seed_source.lo | (seed_source.hi << 8));
-                tengen_new_game(&g_game, seed, start_level, false, false);
-                shown_level = 0xFF;
-                shown_piece = TT_NONE;
-                set_piece_palette(g_game.player[0].piece.current);
+                nes_audio_play(NES_SOUND_SCREEN_SWITCH);
+
+                if (game_mode == GAME_2P) {
+                    /* Both consoles offer the seed they happen to hold; the
+                     * cable decides whose counts, because only the master's
+                     * survives the handshake. */
+                    link_init();
+                    link_lobby_start(&lobby, seed, start_level, g_music);
+                    screen = SCREEN_LINK_WAIT;
+                    vsync();
+                    nes_audio_frame();
+                    clear_screen();
+                    continue;
+                }
+
+                g_linked = false;
+                g_link_lost = false;
+                g_view = 0;
+                tengen_new_game(&g_session.game, seed, start_level, false, false);
+                g_shown_level = 0xFF;
+                g_shown_piece = TT_NONE;
+                set_piece_palette(g_session.game.player[0].piece.current);
                 screen = SCREEN_PLAYING;
+                match_running = true;
                 title_music = false;
-                nes_audio_play(kMusicTracks[music]);
+                nes_audio_play(kMusicTracks[g_music]);
                 vsync();
                 nes_audio_frame();
                 clear_screen();
@@ -729,104 +1035,108 @@ int main(void) {
             }
             vsync();
             nes_audio_frame();
-            draw_level_select(start_level, music);
+            draw_level_select(start_level, g_music);
+            continue;
+        }
+
+        if (screen == SCREEN_LINK_WAIT) {
+            /* One handshake transfer per frame until both consoles agree on a
+             * seed, a level and a tune — or until the cable gives up. */
+            link_lobby_step(&lobby);
+
+            if (pressed & TENGEN_BTN_B) {
+                screen = SCREEN_LEVEL_SELECT;
+                link_shutdown();
+                nes_audio_play(NES_SOUND_SCREEN_SWITCH);
+                vsync();
+                nes_audio_frame();
+                clear_screen();
+                continue;
+            }
+
+            if (lobby.ready) {
+                /* The cable master is player 1. That is not a convention this
+                 * port invented; it is the one fact both consoles can agree
+                 * on without asking, because the hardware sets it from which
+                 * end of the cable each is plugged into. */
+                g_linked = true;
+                g_link_lost = false;
+                g_view = link_is_master() ? 0 : 1;
+                g_music = lobby.music < MUSIC_COUNT ? lobby.music : 0;
+                tengen_link_start(&g_session, lobby.seed, lobby.start_level,
+                                   link_is_master() ? TENGEN_PLAYER_1 : TENGEN_PLAYER_2);
+                g_shown_level = 0xFF;
+                g_shown_piece = TT_NONE;
+                set_piece_palette(g_session.game.player[g_view].piece.current);
+                link_play_begin();
+                screen = SCREEN_PLAYING;
+                match_running = true;
+                title_music = false;
+                nes_audio_play(kMusicTracks[g_music]);
+                vsync();
+                nes_audio_frame();
+                clear_screen();
+                draw_static_screen();
+                continue;
+            }
+
+            vsync();
+            nes_audio_frame();
+            draw_link_wait(&lobby);
             continue;
         }
 
         /* The level-up interlude holds the game still while the dancers
          * perform, the way the ROM switches to its bonus state. Any button
          * cuts it short, which is what the original does too
-         * (main.asm.txt:9037-9045). */
-        if (dancer_frames > 0) {
-            if (pressed) dancer_frames = 1;
-            dancer_frames--;
-            if (dancer_frames == 0) {
+         * (main.asm.txt:9037-9045). It never runs in a linked match — see the
+         * note above announce_step. */
+        if (g_dancer_frames > 0) {
+            if (pressed) g_dancer_frames = 1;
+            g_dancer_frames--;
+            if (g_dancer_frames == 0) {
                 oam_hide_all();
                 draw_static_screen();
-                nes_audio_play(kMusicTracks[music]);
+                nes_audio_play(kMusicTracks[g_music]);
             } else {
                 draw_dancer_stage();
-                draw_dancers(DANCER_SHOW_FRAMES - dancer_frames);
+                draw_dancers(DANCER_SHOW_FRAMES - g_dancer_frames);
             }
             vsync();
             nes_audio_frame();
             continue;
         }
 
-        /* Start pauses, and the cheat codes go in while paused — both are
-         * the core's job (tengen_pause_input mirrors the ROM's own
-         * pauseOrUnpause, which is where checkCodeInput lives). A code that
-         * fires shows up on its own: a level-up through the palette check
-         * below, a long bar or an undo through the current-piece check. */
-        if (g_game.player[0].game_active) {
-            uint8_t presses[2] = { pressed, 0 };
-            TengenCheat cheat[2];
-            bool was_paused = g_game.paused;
-            tengen_pause_input(&g_game, presses, cheat);
-            if (was_paused != g_game.paused) {
-                /* pauseOrUnpause suspends and resumes the music
-                 * (main.asm.txt:7204-7211). */
-                nes_audio_play(g_game.paused ? NES_MUSIC_SUSPEND : NES_MUSIC_RESUME);
-                if (was_paused) draw_static_screen();
+        if (match_running) {
+            bool keep_going = g_linked ? link_play_frame()
+                                        : solo_play_frame(buttons, pressed);
+            if (!keep_going) {
+                match_running = false;
+                if (g_linked) {
+                    link_play_end();
+                    link_shutdown();
+                }
             }
-            /* Every applied code plays this (main.asm.txt:7089, 7127). */
-            if (cheat[0] != TENGEN_CHEAT_NONE)
-                nes_audio_play(NES_SOUND_SCREEN_SWITCH);
         }
 
-        TengenStepResult step = tengen_step(&g_game, TENGEN_PLAYER_1, buttons);
-
-        /* The ROM's own cues, each at the moment it plays them:
-         *  - a piece coming to rest, L8417 (main.asm.txt:637)
-         *  - rows coming down, L95C1 (:3212) — unless that clear also raised
-         *    the level, in which case the intro takes its place (:3207)
-         *  - the level-up interlude itself, L8D6B (:2038)
-         *  - topping out, silence and then the game-over tune (:608, :620) */
-        if (step.piece_locked) nes_audio_play(NES_SOUND_DROP);
-        if (step.lines_collapsed)
-            nes_audio_play(step.leveled_up ? NES_MUSIC_LEVELUP : NES_SOUND_LINECLEAR);
-        if (step.leveled_up) {
-            dancer_frames = DANCER_SHOW_FRAMES;
-            nes_audio_play(NES_MUSIC_LEVELUP);
-        }
-        if (step.topped_out) {
-            nes_audio_play(NES_MUSIC_SILENCE);
-            nes_audio_play(NES_MUSIC_GAMEOVER);
-        }
-
-        if (!g_game.player[0].game_active && (pressed & TENGEN_BTN_START)) {
+        /* Start goes back to the title once there is nothing left to play.
+         * In a linked match this is read straight off this console's keypad
+         * rather than over the cable — by now the cable is shut down, and
+         * neither player should have to wait for the other to agree. */
+        if (!match_running && (pressed & TENGEN_BTN_START)) {
             screen = SCREEN_TITLE;
-            oam_hide_all();
-            nes_audio_play(NES_MUSIC_SILENCE);
-            vsync();
-            nes_audio_frame();
-            continue;
-        }
-
-        if (g_game.player[0].level != shown_level) {
-            shown_level = g_game.player[0].level;
-            set_field_palette_for_level(shown_level);
-        }
-        if (g_game.player[0].piece.current != shown_piece) {
-            shown_piece = g_game.player[0].piece.current;
-            set_piece_palette(shown_piece);
-        }
-
-        vsync();
-        nes_audio_frame();
-        draw_field();
-        draw_panel();
-
-        /* The sweep's sprites, and the one tidy-up when it finishes. */
-        if (g_game.player[0].line_clear_timer > 0) {
-            draw_line_clear_sweep();
-            sweeping = true;
-        } else if (sweeping) {
+            g_linked = false;
+            g_link_lost = false;
+            g_view = 0;
             oam_hide_all();
             sweeping = false;
+            nes_audio_play(NES_MUSIC_SILENCE);
+            vsync();
+            nes_audio_frame();
+            continue;
         }
 
-        /* Last, so it sits over whatever was just drawn. */
-        if (g_game.paused) draw_pause_box();
+        refresh_palettes();
+        draw_match(&sweeping);
     }
 }

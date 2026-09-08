@@ -7,6 +7,7 @@
  * regression shows up here instead of by eyeballing an emulator.
  */
 #include "../src/tengen_core.h"
+#include "../src/tengen_link.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -678,6 +679,218 @@ static void test_codes_share_one_cursor_the_way_the_rom_does(void) {
     CHECK(game.player[0].code_input_y == 0x13 + 7);
 }
 
+/* ----------------------------------------------------------------------- *
+ * Linked two-player games
+ * ----------------------------------------------------------------------- */
+
+/* A scripted, deliberately messy button sequence, so the two machines are
+ * exercised on real divergent play rather than on both sitting still. */
+static uint8_t scripted_buttons(int player, int frame) {
+    static const uint8_t kMoves[8] = {
+        0, TENGEN_BTN_LEFT, TENGEN_BTN_RIGHT, TENGEN_BTN_A,
+        TENGEN_BTN_DOWN, TENGEN_BTN_B, TENGEN_BTN_LEFT | TENGEN_BTN_DOWN, 0
+    };
+    return kMoves[(frame * (player ? 5 : 3) + player * 2) & 7];
+}
+
+static void test_two_linked_machines_stay_identical(void) {
+    /* THE point of lockstep: both consoles simulate both players, so after
+     * any number of frames their game state must match byte for byte. If
+     * this ever fails, a linked game silently drifts into two different
+     * games — which is why it is tested here and not left to a cable. */
+    TengenLink master, slave;
+    tengen_link_start(&master, 0x1234, 3, TENGEN_PLAYER_1);
+    tengen_link_start(&slave, 0x1234, 3, TENGEN_PLAYER_2);
+
+    CHECK(master.game.two_player && !master.game.coop);
+    CHECK(memcmp(&master.game, &slave.game, sizeof(master.game)) == 0);
+
+    for (int frame = 0; frame < 3000; frame++) {
+        uint8_t p1 = scripted_buttons(0, frame);
+        uint8_t p2 = scripted_buttons(1, frame);
+
+        /* Each machine sends its own player's buttons and receives the
+         * other's; neither ever sees the other's game state. */
+        uint16_t from_master = tengen_link_send_word(&master, p1);
+        uint16_t from_slave = tengen_link_send_word(&slave, p2);
+
+        CHECK(tengen_link_step(&master, p1, from_slave, 0));
+        CHECK(tengen_link_step(&slave, p2, from_master, 0));
+
+        if (memcmp(&master.game, &slave.game, sizeof(master.game)) != 0) {
+            printf("FAIL %s:%d: las dos maquinas divergieron en el frame %d\n",
+                    __FILE__, __LINE__, frame);
+            g_failures++;
+            return;
+        }
+    }
+
+    /* And the scripted play must have actually done something, or the
+     * comparison above proved nothing. */
+    CHECK(master.game.player[0].piece_stats[TT_I] == 0); /* stats are 1P only */
+    CHECK(master.game.player[0].score > 0);
+    CHECK(master.game.player[1].score > 0);
+    CHECK(master.game.player[0].score != master.game.player[1].score);
+}
+
+static void test_a_lost_transfer_stops_the_link_rather_than_drifting(void) {
+    TengenLink master;
+    tengen_link_start(&master, 7, 0, TENGEN_PLAYER_1);
+
+    /* A word from the right frame is accepted... */
+    CHECK(tengen_link_step(&master, 0, tengen_link_pack(0, 0), 0));
+    CHECK(!master.desynced);
+
+    /* ...one from the wrong frame is not, and ends the session. */
+    CHECK(!tengen_link_step(&master, 0, tengen_link_pack(0, 47), 0));
+    CHECK(master.desynced);
+    /* And it stays ended, even if the next word looks fine. */
+    CHECK(!tengen_link_step(&master, 0, tengen_link_pack(0, 1), 0));
+}
+
+static void test_the_wire_word_survives_a_round_trip(void) {
+    for (int buttons = 0; buttons < 256; buttons++) {
+        for (int frame = 0; frame < 256; frame++) {
+            uint16_t word = tengen_link_pack((uint8_t)buttons, (uint8_t)frame);
+            CHECK(tengen_link_buttons(word) == (uint8_t)buttons);
+            CHECK(tengen_link_frame(word) == (frame & TENGEN_LINK_FRAME_MASK));
+            /* $FFFF is what a GBA reads for a console that is not on the
+             * cable, so no real word may ever look like one. */
+            CHECK(word != 0xFFFF);
+        }
+    }
+}
+
+/* Runs one transfer between two lobbies, the way the cable does: each side
+ * puts a word up, the hardware hands both words to both sides. `carries` is
+ * false for a transfer that did not happen at all. Returns after both have
+ * seen it. */
+static void lobby_transfer(TengenLobby *master, TengenLobby *slave,
+                            bool carries) {
+    uint16_t mw = tengen_lobby_word(master, true);
+    uint16_t sw = tengen_lobby_word(slave, false);
+    tengen_lobby_apply(master, true, carries, mw, sw);
+    tengen_lobby_apply(slave, false, carries, mw, sw);
+}
+
+static void test_the_lobby_agrees_on_a_game_and_both_leave_together(void) {
+    TengenLobby master, slave;
+    /* The two consoles arrive with different ideas of everything — which is
+     * the point: the slave's own choices must lose. */
+    tengen_lobby_start(&master, 0xBEEF, 7, 2);
+    tengen_lobby_start(&slave, 0x1111, 1, 0);
+
+    int transfers = 0;
+    int left_apart = 0;
+    while (!master.ready && !master.failed && transfers < 100) {
+        lobby_transfer(&master, &slave, true);
+        transfers++;
+        /* NEITHER may enter the match a transfer before the other: one
+         * console still in the lobby would send a tagged word that the other,
+         * already playing, would read as a frame of buttons. */
+        if (master.ready != slave.ready) left_apart++;
+    }
+
+    CHECK(master.ready && slave.ready);
+    CHECK(left_apart == 0);
+    CHECK(slave.seed == 0xBEEF);
+    CHECK(slave.start_level == 7);
+    CHECK(slave.music == 2);
+    /* Five stages, two transfers each, and no more: a handshake that quietly
+     * took twice as long as it should would still pass every check above. */
+    CHECK(transfers == 10);
+}
+
+static void test_the_lobby_survives_transfers_that_do_not_arrive(void) {
+    TengenLobby master, slave;
+    tengen_lobby_start(&master, 0xC0DE, 4, 3);
+    tengen_lobby_start(&slave, 0, 0, 0);
+
+    /* Every third attempt is lost. Stop-and-wait means a lost transfer costs
+     * a repeat, never a skipped stage — so the two still agree at the end. */
+    for (int i = 0; i < 100 && !master.ready; i++)
+        lobby_transfer(&master, &slave, (i % 3) != 0);
+
+    CHECK(master.ready && slave.ready);
+    CHECK(slave.seed == 0xC0DE);
+    CHECK(slave.start_level == 4);
+    CHECK(slave.music == 3);
+}
+
+static void test_a_lobby_with_nothing_on_the_other_end_gives_up(void) {
+    TengenLobby master;
+    tengen_lobby_start(&master, 1, 0, 0);
+    for (int i = 0; i < TENGEN_LOBBY_TIMEOUT - 1; i++)
+        tengen_lobby_apply(&master, true, false, 0, 0);
+    CHECK(!master.failed);        /* ten seconds is ten seconds */
+    tengen_lobby_apply(&master, true, false, 0, 0);
+    CHECK(master.failed);
+    CHECK(!master.ready);
+}
+
+static void test_no_lobby_word_can_look_like_an_absent_console(void) {
+    /* $FFFF is what a GBA reads from the slot of a console that is not there,
+     * so the handshake's words have to stay clear of it too. */
+    TengenLobby lobby;
+    tengen_lobby_start(&lobby, 0xFFFF, 0x0F, 0x0F);
+    for (int stage = TENGEN_LOBBY_NONE; stage <= TENGEN_LOBBY_GO; stage++) {
+        lobby.stage = (uint8_t)stage;
+        lobby.echo = (uint8_t)stage;
+        CHECK(tengen_lobby_word(&lobby, true) != 0xFFFF);
+        CHECK(tengen_lobby_word(&lobby, false) != 0xFFFF);
+    }
+}
+
+/* The handshake and the match are one continuous conversation over one cable,
+ * so the seam between them is where a design that reads well can still fall
+ * over. This plays both halves end to end. */
+static void test_a_lobby_hands_straight_over_to_a_matching_pair_of_games(void) {
+    TengenLobby lobby_m, lobby_s;
+    tengen_lobby_start(&lobby_m, 0x51A7, 5, 1);
+    tengen_lobby_start(&lobby_s, 0, 0, 0);
+    for (int i = 0; i < 100 && !lobby_m.ready; i++)
+        lobby_transfer(&lobby_m, &lobby_s, true);
+    CHECK(lobby_m.ready && lobby_s.ready);
+
+    TengenLink master, slave;
+    tengen_link_start(&master, lobby_m.seed, lobby_m.start_level, TENGEN_PLAYER_1);
+    tengen_link_start(&slave, lobby_s.seed, lobby_s.start_level, TENGEN_PLAYER_2);
+    CHECK(memcmp(&master.game, &slave.game, sizeof(master.game)) == 0);
+
+    for (int frame = 0; frame < 500; frame++) {
+        uint8_t p1 = scripted_buttons(0, frame);
+        uint8_t p2 = scripted_buttons(1, frame);
+        uint16_t from_master = tengen_link_send_word(&master, p1);
+        uint16_t from_slave = tengen_link_send_word(&slave, p2);
+        CHECK(tengen_link_step(&master, p1, from_slave, 0));
+        CHECK(tengen_link_step(&slave, p2, from_master, 0));
+    }
+    CHECK(memcmp(&master.game, &slave.game, sizeof(master.game)) == 0);
+    /* And the game they are both playing is the MASTER's: its seed and its
+     * start level, not the zeroes the slave walked in with. */
+    CHECK(lobby_s.seed == 0x51A7 && lobby_s.start_level == 5);
+    CHECK(master.game.player[0].level == 5);
+    CHECK(master.game.player[0].piece.current != TT_NONE);
+    CHECK(master.game.player[1].piece.current != TT_NONE);
+}
+
+static void test_either_player_can_pause_a_linked_game(void) {
+    /* pauseOrUnpause ORs both controllers (main.asm.txt:7196-7198), so this
+     * has to hold over the cable too. */
+    TengenLink link;
+    tengen_link_start(&link, 11, 0, TENGEN_PLAYER_1);
+    CHECK(!link.game.paused);
+
+    /* Player 2, the remote one, presses Start. */
+    CHECK(tengen_link_step(&link, 0, tengen_link_pack(TENGEN_BTN_START, 0), 0));
+    CHECK(link.game.paused);
+
+    int8_t y_before = link.game.player[0].piece.y;
+    for (int i = 0; i < 200; i++)
+        tengen_link_step(&link, 0, tengen_link_pack(0, link.frame), 0);
+    CHECK(link.game.player[0].piece.y == y_before);
+}
+
 static void test_level_starts_at_the_chosen_start_level(void) {
     TengenGame game;
     tengen_new_game(&game, 31, 9, false, false);
@@ -1084,6 +1297,15 @@ int main(void) {
     test_undo_is_disarmed_by_a_line_clear();
     test_a_wrong_button_restarts_the_code();
     test_codes_share_one_cursor_the_way_the_rom_does();
+    test_two_linked_machines_stay_identical();
+    test_a_lost_transfer_stops_the_link_rather_than_drifting();
+    test_the_lobby_agrees_on_a_game_and_both_leave_together();
+    test_the_lobby_survives_transfers_that_do_not_arrive();
+    test_a_lobby_with_nothing_on_the_other_end_gives_up();
+    test_no_lobby_word_can_look_like_an_absent_console();
+    test_a_lobby_hands_straight_over_to_a_matching_pair_of_games();
+    test_the_wire_word_survives_a_round_trip();
+    test_either_player_can_pause_a_linked_game();
     test_level_starts_at_the_chosen_start_level();
     test_level_is_recomputed_from_the_line_total();
     test_level_never_passes_the_rom_cap();

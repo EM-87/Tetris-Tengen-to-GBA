@@ -123,8 +123,48 @@ preserve bug-for-bug.
 1. Each dancer's choreography script (the pointer tables the driver at
    `main.asm.txt:6392-6499` walks) — the only part of the level-up
    interlude still approximated.
-2. The 2P and coop front end: the menu rows for game type, handicap and
-   music (`main.asm.txt:4742-4830`), and the second player's screen half.
+2. The 2P starting handicap: `initHandicapGarbage` (`main.asm.txt:3545-3598`)
+   and its `garbageHeightData` at `$98A7` = `$B8,$A0,$88,$70`. The port's
+   linked two-player game is a straight race with no handicap yet.
+3. The coop front end and the second player's screen half, and the menu rows
+   for game type and handicap (`main.asm.txt:4742-4830`). The port's GAME
+   SELECT lists only the two modes it implements, in the cartridge's own
+   wording; the ROM's five are 1 PLAYER / 2 PLAYER / COOPERATIVE / VERSUS
+   COMPUTER / WITH COMPUTER at nametable rows 14-20.
+4. `computerMove`, the AI behind VERSUS COMPUTER and WITH COMPUTER — the one
+   two-player mode that needs no second console.
+
+## Two players over a link cable
+
+The cartridge's 2P is a RACE: two independent 10-wide playfields, and nothing
+crosses between them during play (`main.asm.txt:3545-3598` deals one player a
+pile of garbage before the first piece and that is the whole of the
+interaction). That is what makes a link cable simple — there is no game state
+to reconcile, only inputs — and it is why the port does 2P as LOCKSTEP: both
+consoles run the same core over the same seed and simulate BOTH players,
+each sending only its own buttons.
+
+Where each piece lives, and why:
+
+| Piece | Where | Why there |
+| --- | --- | --- |
+| The lockstep itself and the handshake that sets up a match | `src/tengen_link.c` | Platform-independent, so `make test` can run two of them against each other and compare byte for byte. Lockstep and stop-and-wait handshakes are exactly the kind of thing that looks right and silently diverges. |
+| The cable | `gba/link.c` | GBA serial multiplayer mode, driven by the serial interrupt: the handler queues each transfer and immediately loads the next word, so the send register is never stale and no transfer is ever missed. Nothing in it blocks. |
+| The screens | `gba/main.c` | GAME SELECT, the link screen, and a match loop that differs from a solo game in three places only. |
+
+Two things worth knowing before touching any of it:
+
+- **The wire word's top bit is always zero.** A GBA reads `$FFFF` from the
+  slot of a console that is not there, so no real word may look like one. The
+  frame counter is therefore seven bits, not eight.
+- **The SD bit is not "a cable is attached".** A GBA with nothing plugged in
+  reads SD set and SI set — indistinguishable from a slave waiting for its
+  parent. The only proof of a cable is a transfer that came back with a real
+  word in both slots, which is what `link_connected()` reports.
+
+`make gba-check` runs two mGBA cores with a simulated cable between them
+(`tools/run_link.py`) and asserts their whole game state stays identical byte
+for byte while the two players are fed opposite buttons.
 
 ## A note on frame rate
 
