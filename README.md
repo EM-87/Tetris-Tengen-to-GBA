@@ -20,12 +20,16 @@ los paneles más angostos.
 Un detalle que conviene saber: la pantalla del NES son en realidad **dos**
 campos enmarcados iguales, uno a cada lado del banner vertical de TETRIS. El
 modo 2P pone un jugador en cada uno; el modo 1P dibuja el panel de puntaje
-encima del segundo. De ahí salen las 2 columnas que sobran de las 32: el
-marco de ese segundo campo (columnas 18-19), lo único que la pantalla de 1P
-no usa. En vertical el NES tiene 30 filas y el GBA 20, y el campo se lleva
-las 20 exactas: por eso la franja de etiquetas que el NES pone *arriba* del
-campo baja al panel lateral. Mismos tiles, misma tipografía, apilados en vez
-de repartidos.
+encima del segundo. Por eso en la NES el campo de 1P queda bien corrido a la
+izquierda — que en una pantalla de GBA con un solo jugador se ve raro. Así
+que las columnas del cartucho no solo se recortan: se **reordenan**, cada
+tramo entero, para dejar el campo justo en el centro (80 px de pantalla a
+cada lado) con el HUD repartido: puntaje, líneas, nivel y estadísticas a la
+izquierda, próxima pieza a la derecha. Nada se escala ni se recorta; las 2
+columnas que sobran son el marco de ese segundo campo, que ya no enmarca
+nada. En vertical el NES tiene 30 filas y el GBA 20, y el campo se lleva las
+20 exactas: por eso la franja de etiquetas que el NES pone *arriba* del campo
+se reparte a los costados. Mismos tiles, misma tipografía.
 
 Eso no es teoría: `make gba-check` arranca la ROM en un emulador y verifica
 que el campo caiga en sus columnas, que las dos columnas de marco lleguen a

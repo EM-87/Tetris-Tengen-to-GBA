@@ -46,12 +46,15 @@ TILE = 8
 # done by tools/extract_assets.py; if they drift apart, the checks below stop
 # meaning anything, so they are asserted against the running ROM rather than
 # assumed.
-COL_FRAME_L = (0, 2)      # braided frame, and the playfield's left wall
-COL_FIELD = (2, 12)       # the ten playable columns
-COL_FRAME_R = (12, 14)    # braided frame, and the right wall
-COL_BANNER = (14, 18)     # vertical TETRIS banner
-COL_PANEL = (18, 28)      # score / lines / level / next / stats
-COL_BORDER_R = (28, 30)
+# The cartridge's columns are resequenced to put the playfield in the middle
+# with the HUD split either side; see SCREEN_SEGMENTS in extract_assets.py.
+COL_EDGE_L = (0, 2)       # the screen's left edge, braid borrowed from the ROM
+COL_HUD_L = (2, 8)        # score / lines / level / stats
+COL_FRAME_L = (8, 10)     # the board's left frame, which is its left wall
+COL_FIELD = (10, 20)      # the ten playable columns — dead centre
+COL_FRAME_R = (20, 22)    # the board's right frame
+COL_BANNER = (22, 26)     # vertical TETRIS banner, and the dancers' stage
+COL_HUD_R = (26, 30)      # next piece
 
 # The walls are the cartridge's own frame art, drawn once with the screen, not
 # blocks painted from the playfield buffer — see the note in gba/main.c.
@@ -124,9 +127,10 @@ def describe(rows):
         return cols
 
     print(f"columnas con contenido: {min(lit)}..{max(lit)}")
-    for name, bounds in (("marco izq", COL_FRAME_L), ("campo", COL_FIELD),
+    for name, bounds in (("borde izq", COL_EDGE_L), ("HUD izq", COL_HUD_L),
+                         ("marco izq", COL_FRAME_L), ("campo", COL_FIELD),
                          ("marco der", COL_FRAME_R), ("banner", COL_BANNER),
-                         ("panel", COL_PANEL), ("borde der", COL_BORDER_R)):
+                         ("HUD der", COL_HUD_R)):
         x0, x1 = bounds[0] * TILE, bounds[1] * TILE
         print(f"  {name:10s} x={x0:3d}..{x1 - 1:3d}")
     return cols
@@ -185,11 +189,12 @@ def selftest(rom_path):
 
     # Each region must actually have been drawn. A blank one means a tile
     # upload, a palette or a layout index went wrong.
-    for name, bounds in (("marco izquierdo", COL_FRAME_L),
+    for name, bounds in (("borde izquierdo", COL_EDGE_L),
+                         ("HUD izquierdo", COL_HUD_L),
+                         ("marco izquierdo", COL_FRAME_L),
                          ("marco derecho", COL_FRAME_R),
                          ("banner TETRIS", COL_BANNER),
-                         ("panel del HUD", COL_PANEL),
-                         ("borde derecho", COL_BORDER_R)):
+                         ("HUD derecho", COL_HUD_R)):
         painted = region(bounds)
         if painted == 0:
             failures.append(f"{name} quedo vacio")
@@ -207,6 +212,13 @@ def selftest(rom_path):
                                  for dy in range(TILE) for dx in range(TILE))]
         if empty_rows:
             failures.append(f"al {name} le faltan filas de tiles: {empty_rows}")
+
+    # The playfield must be centred: that is the whole point of resequencing
+    # the cartridge's columns, and an off-by-one in SCREEN_SEGMENTS would show
+    # up here and nowhere else.
+    centre = (FIELD_X0 + FIELD_X1) // 2
+    if centre != SCREEN_W // 2:
+        failures.append(f"el campo esta centrado en {centre}px, esperado {SCREEN_W // 2}")
 
     # A piece must actually fall: the screen has to change over time without
     # any input at all.
@@ -246,7 +258,7 @@ CELL_WALL, CELL_BLOCK = 15, 1
 SCREENBLOCK_ADDR = 0x0600E000  # screenblock 28, as gba/main.c sets BG0CNT
 OAM_ADDR = 0x07000000
 SWEEP_TILES = (0x5B, 0x5C, 0x5D, 0x5E, 0x5F)  # main.asm.txt:1274-1338
-SWEEP_PAL_BANK = 1
+SWEEP_PAL_BANK = 4   # gba/main.c PAL_OBJ_CLEAR; banks 0-3 are the dancers
 CLEAR_WORDS = {1: "SINGLE", 2: "DOUBLE", 3: "TRIPLE", 4: "TETRIS"}
 
 KEY_DOWN = 7
@@ -390,7 +402,7 @@ def lineclear_check(rom_path, row_count):
 # (tests/test_tengen.c); what is checked here is that the GBA layer wires them
 # up at all and draws the ROM's own PAUSE plaque where it should.
 # ---------------------------------------------------------------------------
-PAUSE_TX, PAUSE_TY, PAUSE_W = 10, 0, 8
+PAUSE_TX, PAUSE_TY, PAUSE_W = 20, 0, 8
 PAUSE_ROW0 = [0x10, 0x11, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0x12]  # main.asm.txt:8061
 PAUSE_ROW1 = [0x13, 0x14, 0xD7, 0xD8, 0xD9, 0xDA, 0xDB, 0x15]
 
@@ -493,13 +505,63 @@ def pause_check(rom_path):
 # ---------------------------------------------------------------------------
 APU_REGS = 0x18
 APU_OFFSET = 16      # Nes6502.bus.apu; see the struct in gba/nes6502.h
-FAULT_OFFSET = 52    # Nes6502.faulted, at the end of the same struct
+FAULT_OFFSET = 48    # Nes6502.faulted, at the end of the same struct
 GOLDEN_PATH = "gba/audio_golden.bin"
 AUDIO_ALIGN_SEARCH = 30   # frames of ROM start-up to look through for the match
 
 # GBA sound registers, read back to confirm the translation reached them.
 REG_SOUNDCNT_X = 0x04000084
 REG_SOUND1CNT_H = 0x04000062
+
+
+# Restarting a GBA sound channel resets its phase and reloads its volume, so
+# doing it every frame chops every held note into 60Hz slices — which is what
+# it sounds like, and what this measures. It looks at the AMPLITUDE ENVELOPE,
+# not the signal: the signal's own 60Hz band is just bass notes. Measured at
+# 41% when the port applied channels on every register WRITE, and 10% once it
+# only applied them on a register CHANGE, so the limit sits between.
+BUZZ_LIMIT = 0.25
+AUDIO_RATE = 32768
+
+
+def frame_rate_buzz(core):
+    """How much of the envelope's movement happens at exactly the frame rate."""
+    try:
+        import numpy as np
+    except ImportError:
+        return None
+
+    buf = core.get_audio_channels()
+    buf.set_rate(AUDIO_RATE)
+    buf.clear()
+    chunks = []
+    for _ in range(420):
+        core.run_frame()
+        available = buf.available
+        if available:
+            chunks.append(np.array(list(buf.read(available)), dtype=np.int16))
+    if not chunks:
+        return None
+    mono = np.concatenate(chunks).reshape(-1, 2).mean(axis=1)
+    if mono.size < AUDIO_RATE:
+        return None
+
+    envelope = np.abs(mono[AUDIO_RATE // 2:])          # skip the set-up
+    smooth = np.convolve(envelope, np.ones(64) / 64, mode="valid")
+    width = min(len(smooth), 32768)
+    if width < 8192:
+        return None
+    window = (smooth[:width] - smooth[:width].mean()) * np.hanning(width)
+    spectrum = np.abs(np.fft.rfft(window))
+    freqs = np.fft.rfftfreq(width, 1.0 / AUDIO_RATE)
+    total = spectrum[(freqs > 5) & (freqs < 400)].sum()
+    if total <= 0:
+        return None
+    frame_hz = 59.7275
+    at_frame_rate = sum(
+        spectrum[(freqs > frame_hz * k - 1.5) & (freqs < frame_hz * k + 1.5)].sum()
+        for k in (1, 2, 3))
+    return float(at_frame_rate / total)
 
 
 def audio_check(rom_path):
@@ -574,6 +636,19 @@ def audio_check(rom_path):
                             "el bucle esta perdiendo vsyncs")
         else:
             print(f"  presupuesto de CPU: {len(drops)} caidas, todas a 33 frames exactos")
+
+    modulation = frame_rate_buzz(core)
+    if modulation is None:
+        print("  (sin comprobar el troceado: numpy no disponible)")
+    else:
+        print(f"  troceado a la frecuencia de frame: {100 * modulation:.1f}% "
+              "de la modulacion de la envolvente")
+        if modulation > BUZZ_LIMIT:
+            failures.append(
+                f"el sonido se trocea: {100 * modulation:.1f}% de la envolvente "
+                f"modula a 59.7Hz (limite {100 * BUZZ_LIMIT:.0f}%). Casi siempre "
+                "significa que se estan re-disparando canales cada frame en vez "
+                "de solo cuando cambian.")
 
     for f in failures:
         print(f"FALLA: {f}")

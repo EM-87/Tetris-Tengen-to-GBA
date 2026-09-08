@@ -83,6 +83,10 @@ static Nes6502 g_cpu;
 static uint8_t g_nes_ram[0x800];
 static bool g_ready;
 
+/* The APU as it was after the previous frame. Channels are only touched when
+ * one of their registers actually CHANGES VALUE — see nes_audio_frame. */
+static uint8_t g_prev[0x18];
+
 /* The engine's program bytes, copied out of cartridge ROM into external WRAM
  * at startup. Every 6502 instruction fetch reads from here, so it is worth
  * the copy: external WRAM answers in fewer cycles than the cartridge bus, and
@@ -193,6 +197,7 @@ void nes_audio_init(void) {
 
     for (unsigned i = 0; i < AUDIO_PRG_SIZE; i++) g_prg[i] = kAudioPrg[i];
     nes6502_init(&g_cpu, g_nes_ram, g_prg, AUDIO_PRG_BASE, AUDIO_PRG_SIZE);
+    for (int i = 0; i < 0x18; i++) g_prev[i] = 0;
     g_ready = true;
 }
 
@@ -201,31 +206,36 @@ void nes_audio_play(uint8_t track_id) {
     nes6502_call(&g_cpu, AUDIO_SET_TRACK_ADDR, track_id, 20000);
 }
 
+/* True if any of a channel's registers hold a different value than they did
+ * last frame. */
+static bool changed(const uint8_t *apu, int first, int last, uint8_t enable_bit) {
+    for (int i = first; i <= last; i++)
+        if (apu[i] != g_prev[i]) return true;
+    return ((apu[R_SND_CHN] ^ g_prev[R_SND_CHN]) & enable_bit) != 0;
+}
+
 void nes_audio_frame(void) {
     if (!g_ready || nes6502_faulted(&g_cpu)) return;
 
-    g_cpu.bus.apu_dirty = 0;
     /* The step limit is a hang guard: the engine's worst frame is around 2300
      * instructions, so this is an order of magnitude of headroom. */
     if (!nes6502_call(&g_cpu, AUDIO_UPDATE_ADDR, 0, 60000)) return;
 
     const uint8_t *apu = g_cpu.bus.apu;
     uint8_t enables = apu[R_SND_CHN];
-    uint32_t dirty = g_cpu.bus.apu_dirty;
 
-    /* Only touch a channel the engine actually wrote to this frame. Rewriting
-     * a frequency register that has not changed is not free on the GBA: it can
-     * restart the waveform and produce a buzz on a held note. */
-    if (dirty & 0x0000000Fu) apply_pulse(0, apu, enables & 0x01);
-    if (dirty & 0x000000F0u) apply_pulse(1, apu, enables & 0x02);
-    if (dirty & 0x00000F00u) apply_triangle(apu, enables & 0x04);
-    if (dirty & 0x0000F000u) apply_noise(apu, enables & 0x08);
-    if (dirty & (1u << R_SND_CHN)) {
-        /* A change to the enable register alone still has to be applied, or a
-         * channel the engine has just silenced would keep playing. */
-        apply_pulse(0, apu, enables & 0x01);
-        apply_pulse(1, apu, enables & 0x02);
-        apply_triangle(apu, enables & 0x04);
-        apply_noise(apu, enables & 0x08);
-    }
+    /* CHANGED VALUES, not writes. The engine rewrites $4015 every single
+     * frame with the same contents, and applying a channel means restarting
+     * it — that is unavoidable, because a GBA sound channel only picks up a
+     * new envelope volume on a restart. Acting on the write rather than on
+     * the change therefore retriggered all four channels sixty times a
+     * second, which is audible as a buzz chopping up every held note. The
+     * engine only changes a channel's registers when its note or volume
+     * actually changes, so diffing costs nothing and fixes it. */
+    if (changed(apu, R_SQ1_VOL, R_SQ1_HI, 0x01)) apply_pulse(0, apu, enables & 0x01);
+    if (changed(apu, R_SQ2_VOL, R_SQ2_HI, 0x02)) apply_pulse(1, apu, enables & 0x02);
+    if (changed(apu, R_TRI_LIN, R_TRI_HI, 0x04)) apply_triangle(apu, enables & 0x04);
+    if (changed(apu, R_NOISE_VOL, 0x0F, 0x08)) apply_noise(apu, enables & 0x08);
+
+    for (int i = 0; i < 0x18; i++) g_prev[i] = apu[i];
 }

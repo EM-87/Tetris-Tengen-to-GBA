@@ -27,7 +27,9 @@ What comes out, and why each piece is needed:
                   the GBA's 30 (see BOARD LAYOUT below).
   palettes.h      The NES palette entries the game actually uses.
 
-BOARD LAYOUT — how 32 columns become 30 without touching the game:
+BOARD LAYOUT — the NES screen, and how its pieces are rearranged for the GBA.
+
+  The cartridge's 32 columns:
 
     cols  0-1   braided frame: the playfield's left wall
     cols  2-11  playfield: the ten playable columns x 20 rows
@@ -43,11 +45,12 @@ BOARD LAYOUT — how 32 columns become 30 without touching the game:
   line-clear sweep runs from x $10 to $58 (columns 2 to 11 and no further),
   and the pause plaque is blitted at column 12, right where the frame starts.
 
-  The GBA is two tiles narrower. Those two come out of columns 18-19, the
-  frame around the second playfield area — the one element the 1P screen has
-  no use for, since it draws its panel over that area anyway. The playfield,
-  its frames, the banner and the full 10-column panel all survive at original
-  size. Nothing is scaled and nothing is cropped.
+  On the NES the playfield sits well left of centre, because the screen is
+  really two board areas side by side and 1P only plays in one. On a GBA
+  showing one player that reads as lopsided, so the pieces are RESEQUENCED
+  (never scaled, never cropped) to put the playfield dead centre with the HUD
+  split around it — see SCREEN_SEGMENTS. Each segment is a run of the
+  cartridge's own columns, moved whole.
 """
 import argparse
 import os
@@ -62,10 +65,56 @@ CHR_BANK = 4096
 
 # Where things live in the PRG, verified against the disassembly in
 # reference/disasm/ (see reference/NOTES.md).
-NAMETABLE_1P_ADDR = 0xC028      # gameModeNametable1P
 NAMETABLE_BYTES = 960           # 32 x 30 tiles
 ATTRIBUTE_BYTES = 64
-BG_PALETTE_ADDR = 0xA706        # bgPalette2, the in-game background palette
+
+# HOW THE SCREENS ARE READ, and why not simply by slicing the ROM.
+#
+# A screen is a nametable (960 tile ids) plus an ATTRIBUTE table (64 bytes
+# saying which of four palettes each 2x2 block of tiles uses). The obvious
+# assumption — that the 64 bytes sit right after the 960 — is WRONG here, and
+# quietly so: the screens are packed 960 bytes apart, so slicing that way
+# hands you the next screen's first two rows and calls them palettes. The
+# result looks almost right and is subtly broken everywhere: this port had the
+# playfield frame changing colour down its length, and a monochrome title.
+#
+# So the screens are not sliced, they are RUN. sendNametableToPPU is the
+# cartridge's own routine for putting one on screen, it writes 1024 bytes
+# straight to the PPU, and it needs nothing but RAM and PRG — so the 6502
+# interpreter in tools/nes_cpu.py can execute it and the video memory read
+# back afterwards is exactly what the console would display.
+SCREEN_UPLOAD_ADDR = 0xB3E9     # sendNametableToPPU
+SCREEN_TITLE = 0
+SCREEN_MENU = 1
+SCREEN_COOP = 5
+SCREEN_1P = 6
+SCREEN_2P = 7
+
+# The menu screen ships with its GAME SELECT wording baked into the nametable
+# (rows 14-20: the heading and 1 PLAYER / 2 PLAYER / COOPERATIVE / VERSUS
+# COMPUTER / WITH COMPUTER); the ROM's other selection screens overwrite those
+# rows at runtime. This port fills that space with its own selection, so those
+# rows come across blank — the frame, the big TETRIS logo above it and the
+# borders are all kept.
+MENU_TEXT_ROWS = (14, 21)
+MENU_TEXT_COLS = (2, 30)
+
+# updatePalette(n) (main.asm.txt:5268-5287) writes 16 bytes — four palettes —
+# from bgPalette0 + n*16, to the background palettes for n<3 and the sprite
+# palettes for n>=3. Which screen calls it with what is traced:
+#   title  (:4492-4494) -> bgPalette0 + spritePalette1
+#   menu   (:4547-4549) -> bgPalette1 + spritePalette0
+#   game   (:3308-3310) -> bgPalette2 + spritePalette0
+#   level-up interlude (:2044) -> spritePalette2, which is what the dancers
+#                                 are drawn in.
+PALETTE_TABLE_ADDR = 0xA6E6     # bgPalette0; the sets follow every 16 bytes
+PALETTE_SET_BYTES = 16
+PALETTE_BG_TITLE = 0            # bgPalette0
+PALETTE_BG_MENU = 1             # bgPalette1
+PALETTE_BG_GAME = 2             # bgPalette2
+PALETTE_OBJ_GAME = 3            # spritePalette0
+PALETTE_OBJ_TITLE = 4           # spritePalette1
+PALETTE_OBJ_DANCERS = 5         # spritePalette2
 PIECE_PALETTE_ADDR = 0xA788     # piecePaletteIndex0..B
 
 # The between-levels dancers. Each pose is four sprite tile ids forming a
@@ -96,12 +145,7 @@ DANCER_POS_COUNT = 14
 DANCER_SOLO_COUNT = 6
 
 # The title screen: "TENGEN PRESENTS / THE SOVIET MIND GAME / TETRIS" over
-# St Basil's Cathedral. Its nametable carries no attribute table (the next
-# thing in the ROM is fireworksData00), because the whole screen uses one
-# palette — bgPalette0's first entry, the blues the artwork is drawn in.
-TITLE_NAMETABLE_ADDR = 0xCA00
-TITLE_BG_PALETTE_ADDR = 0xA6E6  # bgPalette0
-
+# St Basil's Cathedral, drawn in all four of bgPalette0's palettes.
 # How the 32x30 title is composed down to the GBA's 30x20. The border is four
 # tiles thick on every side; dropping the top and bottom of it (and the very
 # tip of the tallest spire) is enough to fit everything that matters, while
@@ -115,7 +159,6 @@ TITLE_ROW_BLOCKS = (
 # The menu screen the ROM uses for its selection screens: a decorative frame
 # on all four sides with an empty middle it writes text into at runtime. Its
 # borders are what the level selector is framed with here.
-MENU_NAMETABLE_ADDR = 0xB8A8
 # 30 columns: both side borders intact, the two the GBA lacks taken from the
 # empty middle where they cost nothing.
 MENU_COL_BLOCKS = ((0, 15), (17, 32))
@@ -152,11 +195,33 @@ AUDIO_GOLDEN_FRAMES = 400
 
 # Screen regions, in NES nametable columns. See BOARD LAYOUT above.
 COL_FRAME_L = (0, 2)            # braid; the playfield's left wall
-COL_PLAYFIELD = (2, 14)         # ten playable columns plus the right frame
-COL_DIVIDER = (14, 20)          # TETRIS banner (14-17) + the second area's frame
-COL_PANEL = (20, 30)
-COL_BORDER_R = (30, 32)
-DIVIDER_TRIM = 2                # drops cols 18-19: the second field's left frame
+COL_PLAYFIELD_PLAY = (2, 12)    # the ten playable columns
+COL_FRAME_R = (12, 14)          # braid; the right wall
+COL_BANNER = (14, 18)           # the vertical TETRIS banner
+COL_PANEL = (20, 30)            # the second board area: blank canvas in 1P
+
+# How the GBA's 30 columns are built from the cartridge's 32, as
+# (first NES column, how many). Read down, this IS the screen:
+#
+#   port  0-1   the second area's left frame, reused as the screen's edge
+#   port  2-7   blank panel canvas -> the left half of the HUD
+#   port  8-9   the board's left frame
+#   port 10-19  the ten playable columns — dead centre, 80px either side
+#   port 20-21  the board's right frame
+#   port 22-25  the TETRIS banner, which is also the dancers' stage
+#   port 26-29  blank panel canvas -> the right half of the HUD
+#
+# The two columns that do not fit are the second area's right frame (NES
+# 30-31), which on a one-player screen has nothing left to frame.
+SCREEN_SEGMENTS = (
+    (18, 2),
+    (20, 6),
+    (0, 2),
+    (2, 10),
+    (12, 2),
+    (14, 4),
+    (26, 4),
+)
 
 ROW_PLAYFIELD = (8, 28)         # 20 rows
 
@@ -199,6 +264,36 @@ class Rom:
     def chr_bank(self, index: int) -> bytes:
         off = self.chr_off + index * CHR_BANK
         return self.data[off:off + CHR_BANK]
+
+
+def read_screen(rom: "Rom", index: int):
+    """(nametable, attributes) for one screen, as the console would show it.
+
+    Runs the cartridge's own sendNametableToPPU on the 6502 interpreter and
+    reads the video memory back. See the note beside SCREEN_UPLOAD_ADDR for
+    why this is not a slice of the ROM.
+
+    """
+    from nes_cpu import Bus, CPU
+
+    prg = rom.data[rom.prg_off:rom.prg_off + rom.prg_banks * 16384]
+    if rom.prg_banks == 1:
+        prg = prg + prg
+
+    bus = Bus(prg, ppu=True)
+    cpu = CPU(bus)
+    cpu.call(SCREEN_UPLOAD_ADDR, a=index)
+    nametable = bytes(bus.vram[0:NAMETABLE_BYTES])
+    attributes = bytes(bus.vram[NAMETABLE_BYTES:NAMETABLE_BYTES + ATTRIBUTE_BYTES])
+    if not any(nametable):
+        raise ValueError(f"screen {index} came back blank; wrong entry point?")
+    return nametable, attributes
+
+
+def read_palette_set(rom: "Rom", index: int):
+    """One updatePalette set: four palettes of four NES colour indices."""
+    raw = rom.at(PALETTE_TABLE_ADDR + index * PALETTE_SET_BYTES, PALETTE_SET_BYTES)
+    return [raw[i * 4:(i + 1) * 4] for i in range(4)]
 
 
 def tile_2bpp_to_pixels(tile: bytes) -> list:
@@ -246,21 +341,17 @@ def attribute_palette(attributes: bytes, col: int, row: int) -> int:
 def reflow_screen(nametable: bytes, attributes: bytes):
     """NES 32-column screen -> GBA 30-column screen.
 
-    Returns (tiles, palettes) as 30x20-per-row lists covering 30x30 tiles;
-    only the first 20 rows are visible on a GBA, but the full height is kept
-    so the caller can choose the vertical window.
+    Returns (tiles, palettes) as 30-per-row lists covering 30 rows; only the
+    first 20 are visible on a GBA, but the full height is kept so the caller
+    can choose the vertical window.
 
-    The two columns the GBA lacks are taken from the far end of the divider
-    block — columns 18-19, the braided frame around the second playfield area
-    that the 1P screen covers with its panel anyway. Every other region keeps
-    its exact width and its exact tiles.
+    Columns are RESEQUENCED, not scaled or cropped: SCREEN_SEGMENTS lists runs
+    of the cartridge's own columns in the order the GBA shows them, which is
+    what puts the playfield in the middle with the HUD split around it.
     """
-    keep_cols = (list(range(*COL_FRAME_L)) +
-                 list(range(*COL_PLAYFIELD)) +
-                 list(range(COL_DIVIDER[0], COL_DIVIDER[1] - DIVIDER_TRIM)) +
-                 list(range(*COL_PANEL)) +
-                 list(range(*COL_BORDER_R)))
-    assert len(keep_cols) == 30, f"expected 30 columns after trimming, got {len(keep_cols)}"
+    keep_cols = [c for start, count in SCREEN_SEGMENTS
+                 for c in range(start, start + count)]
+    assert len(keep_cols) == 30, f"expected 30 columns, got {len(keep_cols)}"
 
     tiles, palettes = [], []
     for row in range(30):
@@ -271,8 +362,8 @@ def reflow_screen(nametable: bytes, attributes: bytes):
 
 
 def playfield_origin(keep_cols) -> tuple:
-    """Where the playfield's top-left tile ends up after the reflow."""
-    return keep_cols.index(COL_PLAYFIELD[0]), ROW_PLAYFIELD[0]
+    """Where the playfield's first playable column ends up after the reflow."""
+    return keep_cols.index(COL_PLAYFIELD_PLAY[0]), ROW_PLAYFIELD[0]
 
 
 def extract_audio_prg(rom: "Rom"):
@@ -411,12 +502,10 @@ def emit_screen_header(tiles, palettes, keep_cols, source):
         " * GENERATED by tools/extract_assets.py — do not edit by hand.",
         f" * Source: {source}",
         " *",
-        " * The NES screen is 32 tiles wide and the GBA is 30, so two columns are",
-        " * dropped from between the TETRIS banner and the score panel: the braided",
-        " * frame around the second playfield area, which the 1P screen covers with",
-        " * its panel anyway. The playfield, its frames, the banner and the full",
-        " * 10-column panel all survive at original size. Nothing is scaled and",
-        " * nothing is cropped.",
+        " * The cartridge's columns, resequenced so the ten playable ones land in",
+        " * the middle of the GBA's screen with the HUD split either side. Every",
+        " * run of columns moves whole; nothing is scaled and nothing is cropped.",
+        " * See SCREEN_SEGMENTS in tools/extract_assets.py for the order.",
         " *",
         " * Tiles marked 0 are blank in the ROM because the game draws over them at",
         " * runtime; the port does the same.",
@@ -448,12 +537,12 @@ def emit_screen_header(tiles, palettes, keep_cols, source):
     return "\n".join(lines)
 
 
-def compose_title(nametable):
+def compose_title(nametable, attributes):
     """32x30 title screen -> a 30x20 layout that keeps every element.
 
-    Returns a flat list of 600 tile ids. The vertical fit comes from dropping
-    the thick top and bottom borders rather than from scaling or from cutting
-    artwork: see TITLE_ROW_BLOCKS.
+    Returns (tiles, palette banks), both flat lists of 600. The vertical fit
+    comes from dropping the thick top and bottom borders rather than from
+    scaling or from cutting artwork: see TITLE_ROW_BLOCKS.
     """
     cols = list(range(*TITLE_KEEP_COLS))
     assert len(cols) == 30, f"title needs 30 columns, got {len(cols)}"
@@ -463,7 +552,9 @@ def compose_title(nametable):
         rows.extend(range(start, end))
     assert len(rows) == 20, f"title needs 20 rows, got {len(rows)}"
 
-    return [nametable[r * 32 + c] for r in rows for c in cols]
+    tiles = [nametable[r * 32 + c] for r in rows for c in cols]
+    banks = [attribute_palette(attributes, c, r) for r in rows for c in cols]
+    return tiles, banks
 
 
 def compose_menu(nametable, attributes):
@@ -509,7 +600,7 @@ def emit_menu_header(tiles, palettes, source):
     return "\n".join(lines)
 
 
-def emit_title_header(tiles, palette, source):
+def emit_title_header(tiles, banks, source):
     lines = [
         "/*",
         " * screen_title.h — the title screen, composed from the ROM's own.",
@@ -523,8 +614,10 @@ def emit_title_header(tiles, palette, source):
         " * and the whole cathedral survive at original size, and three of the four",
         " * border columns stay on each side. Nothing is scaled.",
         " *",
-        " * One palette covers the screen: the ROM's own nametable has no attribute",
-        " * table here, because the artwork is drawn entirely in bgPalette0's blues.",
+        " * The screen uses ALL FOUR of bgPalette0's palettes, chosen per 2x2",
+        " * block by its attribute table — that is where the cathedral's reds and",
+        " * greens come from. An earlier pass here assumed one palette covered it",
+        " * and produced a monochrome title.",
         " */",
         "#ifndef SCREEN_TITLE_H",
         "#define SCREEN_TITLE_H",
@@ -539,14 +632,15 @@ def emit_title_header(tiles, palette, source):
     for i in range(0, len(tiles), 30):
         lines.append("    " + ", ".join(f"0x{t:02X}" for t in tiles[i:i + 30]) + ",")
     lines += ["};", "",
-              "/* bgPalette0's first palette: the blues the title art uses. */",
-              "static const uint8_t kTitlePalette[4] = {",
-              "    " + ", ".join(f"0x{b:02X}" for b in palette),
-              "};", "", "#endif /* SCREEN_TITLE_H */", ""]
+              "/* Which of bgPalette0's four palettes each tile uses. */",
+              "static const uint8_t kScreenTitlePalettes[600] = {"]
+    for i in range(0, len(banks), 30):
+        lines.append("    " + ", ".join(str(b) for b in banks[i:i + 30]) + ",")
+    lines += ["};", "", "#endif /* SCREEN_TITLE_H */", ""]
     return "\n".join(lines)
 
 
-def emit_dancer_poses_header(poses, stage_rows, pos_x, pos_y, source):
+def emit_dancer_poses_header(poses, stage_rows, pos_x, pos_y, attrs, source):
     lines = [
         "/*",
         " * dancer_poses.h — the between-levels dancers' animation poses.",
@@ -593,13 +687,19 @@ def emit_dancer_poses_header(poses, stage_rows, pos_x, pos_y, source):
         f"static const uint8_t kDancerStartY[DANCER_SOLO_COUNT] = {{ "
         + ", ".join(f"0x{b:02X}" for b in pos_y[:DANCER_SOLO_COUNT]) + " };",
         "",
+        "/* The OAM attribute byte each one is given: its low two bits pick one",
+        " * of spritePalette2's four palettes, which is why the six are not all",
+        " * the same colour. */",
+        f"static const uint8_t kDancerAttr[DANCER_SOLO_COUNT] = {{ "
+        + ", ".join(f"0x{b:02X}" for b in attrs[:DANCER_SOLO_COUNT]) + " };",
+        "",
         "#endif /* DANCER_POSES_H */",
         "",
     ]
     return "\n".join(lines)
 
 
-def emit_palette_header(bg_palette, piece_palettes, source):
+def emit_palette_header(palette_sets, piece_palettes, source):
     lines = [
         "/*",
         " * palettes_rom.h — the palette entries the game actually uses.",
@@ -617,11 +717,21 @@ def emit_palette_header(bg_palette, piece_palettes, source):
         "",
         "#include <stdint.h>",
         "",
-        "/* bgPalette2: the four background palettes of the in-game screen, four",
-        " * entries each (the first of each is the shared backdrop). */",
-        "static const uint8_t kRomBgPalette[16] = {",
-        "    " + ", ".join(f"0x{b:02X}" for b in bg_palette),
-        "};",
+        "/* Each set is the four palettes one updatePalette call installs, four",
+        " * entries each (the first of each is the shared backdrop). Which screen",
+        " * uses which is traced in reference/NOTES.md:",
+        " *   title -> bg_title + obj_title, menu -> bg_menu + obj_game,",
+        " *   game  -> bg_game  + obj_game,  level-up interlude -> obj_dancers. */",
+    ]
+    for name, entries in palette_sets.items():
+        flat = [b for entry in entries for b in entry]
+        lines.append(f"static const uint8_t kRomPalette_{name}[16] = {{")
+        lines.append("    " + ", ".join(f"0x{b:02X}" for b in flat))
+        lines.append("};")
+    lines += [
+        "",
+        "/* The in-game background set, under the name the renderer already used. */",
+        "#define kRomBgPalette kRomPalette_bg_game",
         "",
         "/* piecePaletteIndex0..B: three colours each, indexed by piece id for a",
         " * falling piece and by the level's ones digit for the field. */",
@@ -666,17 +776,32 @@ def self_test() -> int:
     tiles, palettes, keep = reflow_screen(nt[:960], bytes(64))
     if len(tiles) != 900 or len(palettes) != 900:
         failures.append("el reflow deberia producir 30x30 tiles")
-    if keep[:14] != list(range(14)):
-        failures.append("el reflow movio el playfield o el borde izquierdo")
-    if keep[-12:] != list(range(20, 32)):
-        failures.append("el reflow movio el panel derecho o el borde derecho")
+    # The board must arrive whole and in order: left frame, ten playable
+    # columns, right frame, banner — 18 of the cartridge's columns unbroken.
+    board = list(range(0, 18))
+    if keep[8:26] != board:
+        failures.append(f"el tablero no llego entero: {keep[8:26]}")
     origin_x, _ = playfield_origin(keep)
-    if origin_x != COL_PLAYFIELD[0]:
-        failures.append("el playfield no quedo en su columna original")
+    # The whole point of the resequencing: the ten playable columns centred.
+    if origin_x * 8 + 40 != 120:
+        failures.append(f"el playfield quedo centrado en {origin_x * 8 + 40}px, "
+                        "esperado 120 (el centro de la pantalla)")
+    seen = sorted(keep)
+    if len(set(seen)) != len(seen):
+        failures.append("el reflow repite alguna columna")
+
+    # The attribute reader, against a byte worked out by hand: $1B is
+    # 00 01 10 11 -> top-left 3, top-right 2, bottom-left 1, bottom-right 0
+    # reading the pairs from the high bits down.
+    attr = bytes([0x1B] + [0] * 63)
+    got = (attribute_palette(attr, 0, 0), attribute_palette(attr, 2, 0),
+           attribute_palette(attr, 0, 2), attribute_palette(attr, 2, 2))
+    if got != (3, 2, 1, 0):
+        failures.append(f"lectura de atributos dio {got}, esperado (3, 2, 1, 0)")
 
     # The title composition must keep 30x20 and must not reorder columns.
-    title = compose_title(bytes(range(256)) * 4)
-    if len(title) != 600:
+    title, title_banks = compose_title(bytes(range(256)) * 4, bytes(64))
+    if len(title) != 600 or len(title_banks) != 600:
         failures.append(f"la composicion del titulo dio {len(title)} tiles, esperado 600")
     rows_kept = sum(end - start for start, end in TITLE_ROW_BLOCKS)
     if rows_kept != 20:
@@ -711,11 +836,18 @@ def main() -> int:
     rom = Rom(open(args.rom, "rb").read())
     src = args.rom
 
-    nametable = rom.at(NAMETABLE_1P_ADDR, NAMETABLE_BYTES)
-    attributes = rom.at(NAMETABLE_1P_ADDR + NAMETABLE_BYTES, ATTRIBUTE_BYTES)
+    nametable, attributes = read_screen(rom, SCREEN_1P)
     tiles, palettes, keep_cols = reflow_screen(nametable, attributes)
 
-    bg_palette = rom.at(BG_PALETTE_ADDR, 16)
+    bg_palette = rom.at(PALETTE_TABLE_ADDR + PALETTE_BG_GAME * PALETTE_SET_BYTES, 16)
+    palette_sets = {
+        "bg_game": read_palette_set(rom, PALETTE_BG_GAME),
+        "bg_title": read_palette_set(rom, PALETTE_BG_TITLE),
+        "bg_menu": read_palette_set(rom, PALETTE_BG_MENU),
+        "obj_game": read_palette_set(rom, PALETTE_OBJ_GAME),
+        "obj_title": read_palette_set(rom, PALETTE_OBJ_TITLE),
+        "obj_dancers": read_palette_set(rom, PALETTE_OBJ_DANCERS),
+    }
     piece_palettes = [rom.at(PIECE_PALETTE_ADDR + i * 3, 3) for i in range(12)]
 
     pose_bytes = rom.at(DANCER_POSE_ADDR, DANCER_POSE_END - DANCER_POSE_ADDR)
@@ -726,12 +858,16 @@ def main() -> int:
                   for r in range(DANCER_STAGE_ROWS)]
     dancer_x = rom.at(DANCER_POS_X_ADDR, DANCER_POS_COUNT)
     dancer_y = rom.at(DANCER_POS_Y_ADDR, DANCER_POS_COUNT)
+    dancer_attr = rom.at(DANCER_ATTR_ADDR, DANCER_POS_COUNT)
 
-    title_nt = rom.at(TITLE_NAMETABLE_ADDR, NAMETABLE_BYTES)
-    title_palette = rom.at(TITLE_BG_PALETTE_ADDR, 4)
+    title_nt, title_attr = read_screen(rom, SCREEN_TITLE)
+    title_tiles, title_banks = compose_title(title_nt, title_attr)
 
-    menu_nt = rom.at(MENU_NAMETABLE_ADDR, NAMETABLE_BYTES)
-    menu_attr = rom.at(MENU_NAMETABLE_ADDR + NAMETABLE_BYTES, ATTRIBUTE_BYTES)
+    menu_nt, menu_attr = read_screen(rom, SCREEN_MENU)
+    menu_nt = bytearray(menu_nt)
+    for r in range(*MENU_TEXT_ROWS):
+        for c in range(*MENU_TEXT_COLS):
+            menu_nt[r * 32 + c] = 0
     menu_tiles, menu_palettes = compose_menu(menu_nt, menu_attr)
 
     audio_base, audio_bytes, audio_span = extract_audio_prg(rom)
@@ -740,17 +876,17 @@ def main() -> int:
     outputs = {
         "audio_prg.h": emit_audio_header(audio_base, audio_bytes, audio_span, src),
         "screen_menu.h": emit_menu_header(menu_tiles, menu_palettes, src),
-        "screen_title.h": emit_title_header(compose_title(title_nt), title_palette, src),
+        "screen_title.h": emit_title_header(title_tiles, title_banks, src),
         "tiles_title.h": emit_tiles_header(
             "kTitleTiles", "TILES_TITLE", convert_tiles(rom.chr_bank(2)), f"{src} [title]"),
         "dancer_poses.h": emit_dancer_poses_header(
-            poses, stage_rows, dancer_x, dancer_y, f"{src} [dancers]"),
+            poses, stage_rows, dancer_x, dancer_y, dancer_attr, f"{src} [dancers]"),
         "tiles_game.h": emit_tiles_header(
             "kGameTiles", "TILES_GAME", convert_tiles(rom.chr_bank(0)), f"{src} [game]"),
         "tiles_dancers.h": emit_tiles_header(
             "kDancerTiles", "TILES_DANCERS", convert_tiles(rom.chr_bank(1)), f"{src} [dancers]"),
         "screen_1p.h": emit_screen_header(tiles, palettes, keep_cols, src),
-        "palettes_rom.h": emit_palette_header(bg_palette, piece_palettes, src),
+        "palettes_rom.h": emit_palette_header(palette_sets, piece_palettes, src),
     }
 
     for filename, content in outputs.items():

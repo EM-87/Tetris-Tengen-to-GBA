@@ -42,10 +42,7 @@ IWRAM_CODE static void bus_write(Nes6502 *cpu, uint16_t addr, uint8_t value) {
         cpu->bus.ram[addr & 0x7FF] = value;
         return;
     }
-    if (addr >= 0x4000 && addr <= 0x4017) {
-        cpu->bus.apu[addr - 0x4000] = value;
-        cpu->bus.apu_dirty |= 1u << (addr - 0x4000);
-    }
+    if (addr >= 0x4000 && addr <= 0x4017) cpu->bus.apu[addr - 0x4000] = value;
 }
 
 void nes6502_init(Nes6502 *cpu, uint8_t *ram, const uint8_t *prg,
@@ -56,7 +53,6 @@ void nes6502_init(Nes6502 *cpu, uint8_t *ram, const uint8_t *prg,
     cpu->bus.prg_base = prg_base;
     cpu->bus.prg_size = prg_size;
     for (int i = 0; i < 0x18; i++) cpu->bus.apu[i] = 0;
-    cpu->bus.apu_dirty = 0;
     cpu->a = cpu->x = cpu->y = 0;
     cpu->sp = 0xFD;
     cpu->p = F_U | F_I;

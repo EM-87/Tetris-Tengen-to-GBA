@@ -30,22 +30,46 @@ C, Z, I, D, B, U, V, N = 1, 2, 4, 8, 16, 32, 64, 128
 
 
 class Bus:
-    """RAM + PRG ROM + a log of APU writes. No PPU: the audio engine has no
-    business touching one, and --strict turns any attempt into an error."""
+    """RAM + PRG ROM + a log of APU writes, and optionally a PPU.
 
-    def __init__(self, prg: bytes, strict=True):
+    The sound engine has no business touching a PPU, and `strict` turns any
+    attempt into an error — that is how the audio extraction proves the engine
+    stays inside RAM and $4000-$4017.
+
+    The screen extraction needs the opposite: pass `ppu=True` and the video
+    memory writes are recorded, so the ROM's own screen-drawing routine can be
+    run and the result read back. That is the only way to get the ATTRIBUTE
+    table right — where each tile's palette comes from — because it is not
+    stored beside the nametable the way one would assume.
+    """
+
+    def __init__(self, prg: bytes, strict=True, ppu=False):
         assert len(prg) in (16384, 32768), f"unexpected PRG size {len(prg)}"
         self.prg = prg
         self.ram = bytearray(0x800)
         self.apu = bytearray(0x18)      # $4000-$4017, last value written
         self.writes = []                # (addr, value) since the last drain
-        self.strict = strict
+        self.strict = strict and not ppu
         self.stray = []
+        # Minimal PPU: 4KB of video memory ($2000-$2FFF as the ROM addresses
+        # it) plus 32 bytes of palette. Enough to catch a nametable upload.
+        self.has_ppu = ppu
+        self.vram = bytearray(0x1000)
+        self.pal = bytearray(0x20)
+        self._addr = 0
+        self._latch = 0
+        self._ctrl = 0
 
     def read(self, addr):
         addr &= 0xFFFF
         if addr < 0x2000:
             return self.ram[addr & 0x7FF]
+        if self.has_ppu and 0x2000 <= addr <= 0x3FFF:
+            reg = 0x2000 + ((addr - 0x2000) & 7)
+            if reg == 0x2002:
+                self._latch = 0     # reading PPUSTATUS resets the address latch
+                return 0x80         # vblank set, so waits fall through
+            return 0
         if 0x4000 <= addr <= 0x4017:
             return self.apu[addr - 0x4000]
         if addr >= 0x8000:
@@ -59,6 +83,25 @@ class Bus:
         value &= 0xFF
         if addr < 0x2000:
             self.ram[addr & 0x7FF] = value
+            return
+        if self.has_ppu and 0x2000 <= addr <= 0x3FFF:
+            reg = 0x2000 + ((addr - 0x2000) & 7)
+            if reg == 0x2000:
+                self._ctrl = value
+            elif reg == 0x2006:
+                if self._latch == 0:
+                    self._addr = (value << 8) | (self._addr & 0xFF)
+                    self._latch = 1
+                else:
+                    self._addr = (self._addr & 0xFF00) | value
+                    self._latch = 0
+            elif reg == 0x2007:
+                a = self._addr & 0x3FFF
+                if a >= 0x3F00:
+                    self.pal[a & 0x1F] = value
+                elif a >= 0x2000:
+                    self.vram[a - 0x2000] = value
+                self._addr = (self._addr + (32 if (self._ctrl & 0x04) else 1)) & 0x7FFF
             return
         if 0x4000 <= addr <= 0x4017:
             self.apu[addr - 0x4000] = value

@@ -24,9 +24,6 @@ typedef struct {
     uint16_t prg_base;     /* the 6502 address prg[0] sits at */
     uint32_t prg_size;
     uint8_t apu[0x18];     /* $4000-$4017, last value written (also read back) */
-    /* Set for each APU register written since the last frame, so the caller
-     * only has to look at what actually changed. */
-    uint32_t apu_dirty;
 } Nes6502Bus;
 
 typedef struct {

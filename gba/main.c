@@ -17,11 +17,14 @@
  *   GBA's full height. It maps tile-for-tile with no scaling, no cropping and
  *   no change of column, and the adaptation is entirely in what surrounds it:
  *
- *     horizontally: 32 columns -> 30. The NES screen is really TWO framed
- *       board areas side by side (2P uses both; 1P covers the second with its
- *       score panel), and the two columns that go are that second area's own
- *       frame at columns 18-19 — the one thing the 1P screen has no use for.
- *       Everything else survives at original size. Done in extract_assets.py.
+ *     horizontally: 32 columns -> 30, and the cartridge's columns are also
+ *       RESEQUENCED. The NES screen is really TWO framed board areas side by
+ *       side (2P uses both; 1P covers the second with its score panel), which
+ *       leaves the 1P playfield well left of centre — fine on a screen that
+ *       wide, lopsided on a GBA showing one player. So the runs of columns are
+ *       reordered to put the playfield dead centre with the HUD split either
+ *       side. Every run moves whole; nothing is scaled. Done in
+ *       extract_assets.py, which lists the order.
  *
  *     vertically: 30 rows -> 20, and the field needs all 20. So the NES's
  *       header strip — the SCORE / LINES / LEVEL / NEXT labels that sit above
@@ -76,16 +79,32 @@
 #define FIELD_COL0 1              /* storage column of the first playable one */
 #define FIELD_PLAYABLE (TENGEN_PF_WIDTH - 2)
 
-/* The panel the reflow leaves free, in GBA tile columns. */
-#define PANEL_TX 18
-#define PANEL_W  10
+/* The two halves of the HUD, in GBA tile columns, on the canvas the reflow
+ * leaves either side of the centred board. Splitting it is what stops the
+ * screen reading as lopsided now that the playfield is in the middle:
+ * the counters and the piece statistics go left, the next piece goes right. */
+#define HUD_L_TX 2
+#define HUD_L_W  6
+#define HUD_R_TX 26
+#define HUD_R_W  4
 
-/* Palette banks. Banks 0-3 are the ROM's four background palettes; bank 0 is
- * additionally rewritten per level, which is what setPlayfieldPaletteFromLevel
- * does on the NES (main.asm.txt:5328). Bank 4 carries the falling piece's own
- * colours, mirroring setPiecePalette's separate sprite palette. */
-#define PAL_PIECE_BANK 4
-#define PAL_TITLE_BANK 5
+/* PALETTE BANKS.
+ *
+ * The NES has four background palettes at a time and swaps the whole set per
+ * screen: updatePalette installs bgPalette0 for the title, bgPalette1 for the
+ * menu and bgPalette2 for the game (main.asm.txt:5268-5287, and see
+ * reference/NOTES.md for which screen calls which). The GBA has sixteen banks
+ * and no reason to swap, so all three sets live at once, four banks each, and
+ * a screen just uses its own four. Getting this wrong is what made the title
+ * monochrome for a while: it really does use all four of its palettes.
+ *
+ * Bank 0 is additionally rewritten per level, which is what
+ * setPlayfieldPaletteFromLevel does (main.asm.txt:5328) — and only the
+ * playfield's own tiles use bank 0, so nothing else changes colour with it. */
+#define PAL_GAME_BASE  0   /* banks 0-3: bgPalette2 */
+#define PAL_TITLE_BASE 4   /* banks 4-7: bgPalette0 */
+#define PAL_MENU_BASE  8   /* banks 8-11: bgPalette1 */
+#define PAL_PIECE_BANK 12  /* the falling piece's own colours */
 
 /* The title screen has its own 256-tile set, uploaded above the game's so
  * both live in one charblock (512 tiles is exactly its 16KB). */
@@ -102,10 +121,11 @@
  * ledges land exactly 24 pixels apart, under the dancers' feet, which is
  * what pins the two tables to each other.
  *
- * They start at x $61, just left of the banner, and walk right onto it one
- * pixel every four frames; the pose advances every eight
- * (main.asm.txt:6392-6499). Positions, stage and poses are all the ROM's,
- * from tools/extract_assets.py.
+ * They start 15 pixels left of the banner (x $61 against a banner at $70 on
+ * the cartridge) and walk right onto it one pixel every four frames; the pose
+ * advances every eight (main.asm.txt:6392-6499). Positions, stage and poses
+ * are all the ROM's, from tools/extract_assets.py — the start is expressed
+ * as that offset from the stage so it follows the banner to its new column.
  *
  * WHAT IS STILL NOT THE ROM'S: each dancer's individual choreography. The
  * ROM gives every dancer a pointer into a little program whose entries are
@@ -119,18 +139,20 @@
 #define DANCER_POSE_FRAMES 8          /* pose advance cadence, from the ROM */
 #define DANCER_WALK_FRAMES 4          /* X advance cadence, from the ROM */
 #define DANCER_SHOW_FRAMES 200        /* how long the interlude lasts */
-#define PAL_OBJ_DANCER 0
+#define PAL_OBJ_DANCER 0   /* banks 0-3: spritePalette2 */
 
 /* The blit's own tile coordinates: 4 columns x 18 rows at nametable (14,10),
  * which inside this port's window (which starts at nametable row 8) is
  * columns 14-17, rows 2-19. */
-#define DANCER_STAGE_TX 14
+#define DANCER_STAGE_TX 22
 #define DANCER_STAGE_TY 2
 #define DANCER_STAGE_TW DANCER_STAGE_COLS
 #define DANCER_STAGE_TH DANCER_STAGE_ROWS
 /* The ROM's sprite coordinates are NES screen pixels; this window starts at
  * nametable row 8, so a NES y of 64 is this screen's 0. */
 #define DANCER_Y_ORIGIN (SCREEN_1P_FIELD_TY * 8)
+/* $70 - $61 on the cartridge: how far left of its stage a dancer starts. */
+#define DANCER_START_OFFSET 15
 
 /* ----------------------------------------------------------------------- *
  * The line-clear sweep
@@ -147,7 +169,7 @@
  * (main.asm.txt:5394-5396), so the puff is a silhouette.
  * ----------------------------------------------------------------------- */
 #define CLEAR_HEAD_TILE 0x5B  /* $5B is the tail; $5B+4 = $5F is the head */
-#define PAL_OBJ_CLEAR 1
+#define PAL_OBJ_CLEAR 4
 
 /* lineClearSingle..lineClearTetris (main.asm.txt:1548-1561), one character
  * per playfield column including the walls, exactly as the ROM stores them.
@@ -169,11 +191,11 @@ static const char *const kClearWord[5] = {
  * and unpausePPUAddr1/2 put the same two rows back). pauseAttrs ($EF,$BF)
  * colours it with background palette 3.
  *
- * Here it sits two columns further left, which is the same shift the divider
- * itself took to fit 32 columns into 30, so it lands in the same place
- * relative to the art around it.
+ * It moves with the art it sat on: the resequenced screen puts the board's
+ * right frame at column 20, so the plaque starts there and runs across the
+ * banner, the same relationship it has on the cartridge.
  * ----------------------------------------------------------------------- */
-#define PAUSE_TX 10
+#define PAUSE_TX 20
 #define PAUSE_TY 0
 #define PAUSE_W 8
 #define PAUSE_H 2
@@ -234,15 +256,19 @@ static void upload_tiles(void) {
     }
 }
 
-/* The four background palettes exactly as the cartridge stores them. Entry 0
- * of each is the shared backdrop. */
-static void upload_palettes(void) {
+/* One updatePalette set — four palettes of four entries — into four GBA
+ * banks, exactly as the cartridge stores them. */
+static void upload_palette_set(int base, const uint8_t *set, vu16 *memory) {
     for (int bank = 0; bank < 4; bank++) {
-        vu16 *dst = MEM_PALETTE + bank * 16;
-        for (int i = 0; i < 4; i++) {
-            dst[i] = nes_colour_to_gba(kRomBgPalette[bank * 4 + i]);
-        }
+        vu16 *dst = memory + (base + bank) * 16;
+        for (int i = 0; i < 4; i++) dst[i] = nes_colour_to_gba(set[bank * 4 + i]);
     }
+}
+
+static void upload_palettes(void) {
+    upload_palette_set(PAL_GAME_BASE, kRomPalette_bg_game, MEM_PALETTE);
+    upload_palette_set(PAL_TITLE_BASE, kRomPalette_bg_title, MEM_PALETTE);
+    upload_palette_set(PAL_MENU_BASE, kRomPalette_bg_menu, MEM_PALETTE);
     vu16 *piece = MEM_PALETTE + PAL_PIECE_BANK * 16;
     piece[0] = nes_colour_to_gba(TENGEN_BACKDROP_INDEX);
 }
@@ -252,7 +278,7 @@ static void upload_palettes(void) {
  * cycle every ten levels. It writes background palette 0, entries 1-3. */
 static void set_field_palette_for_level(uint8_t level) {
     const uint8_t *entry = kRomPiecePalettes[level % 10];
-    vu16 *bank0 = MEM_PALETTE;
+    vu16 *bank0 = MEM_PALETTE + PAL_GAME_BASE * 16;
     for (int i = 0; i < 3; i++) bank0[1 + i] = nes_colour_to_gba(entry[i]);
 }
 
@@ -271,8 +297,6 @@ static void upload_title_tiles(void) {
     for (unsigned i = 0; i < sizeof(kTitleTiles); i += 2) {
         dst[i / 2] = (uint16_t)(kTitleTiles[i] | (kTitleTiles[i + 1] << 8));
     }
-    vu16 *pal = MEM_PALETTE + PAL_TITLE_BANK * 16;
-    for (int i = 0; i < 4; i++) pal[i] = nes_colour_to_gba(kTitlePalette[i]);
 }
 
 /* The cartridge's whole sprite bank, uploaded once. Both the dancers and the
@@ -283,12 +307,10 @@ static void upload_sprite_tiles(void) {
     for (unsigned i = 0; i < sizeof(kDancerTiles); i += 2) {
         dst[i / 2] = (uint16_t)(kDancerTiles[i] | (kDancerTiles[i + 1] << 8));
     }
-    /* piecePaletteIndexB is labelled "bonus animation" in the disassembly
-     * (main.asm.txt:5397-5399) — the level-up interlude's own colours. */
-    const uint8_t *entry = kRomPiecePalettes[11];
-    vu16 *pal = MEM_PALETTE_OBJ + PAL_OBJ_DANCER * 16;
-    pal[0] = nes_colour_to_gba(TENGEN_BACKDROP_INDEX);
-    for (int i = 0; i < 3; i++) pal[1 + i] = nes_colour_to_gba(entry[i]);
+    /* The level-up interlude installs spritePalette2 (main.asm.txt:2044), and
+     * the dancers pick among its four palettes with their own attribute bytes
+     * — which is why the six are not all the same colour. */
+    upload_palette_set(PAL_OBJ_DANCER, kRomPalette_obj_dancers, MEM_PALETTE_OBJ);
 
     /* piecePaletteIndexA, "Line clears" (main.asm.txt:5394-5396). */
     const uint8_t *clear = kRomPiecePalettes[10];
@@ -321,7 +343,7 @@ static void draw_dancers(int elapsed) {
         int pose = (pose_step + d * 7) % DANCER_POSE_COUNT;
         const uint8_t *tiles = kDancerPoses[pose];
 
-        int x = kDancerStartX[d] + walk;
+        int x = DANCER_STAGE_TX * 8 - DANCER_START_OFFSET + walk;
         int y = (int)kDancerStartY[d] - DANCER_Y_ORIGIN;
         /* Once a dancer walks off the far side of the stage it stops there
          * rather than wandering into the score panel. */
@@ -332,7 +354,7 @@ static void draw_dancers(int elapsed) {
             int sx = x + ((s & 1) ? 8 : 0);
             int sy = y + ((s & 2) ? 8 : 0);
             oam_set(d * DANCER_SPRITES + s, sx, sy, tiles[s], false,
-                     PAL_OBJ_DANCER);
+                     PAL_OBJ_DANCER + (kDancerAttr[d] & 3));
         }
     }
 }
@@ -412,10 +434,16 @@ static void clear_region(int tx, int ty, int w, int h) {
         for (int x = 0; x < w; x++) set_map_tile(tx + x, ty + y, T_BLANK);
 }
 
-/* Palette banks for panel content, chosen to match how the NES colours the
- * same lettering in its header strip. */
-#define BANK_LABEL 1   /* gold, as the ROM draws SCORE/LEVEL */
-#define BANK_VALUE 2   /* blue/white, as it draws the counters */
+/* The cartridge draws its whole header strip — SCORE, LINES, LEVEL, NEXT,
+ * STATS, the rules under them and the counters themselves — in background
+ * palette 3, which is read straight off its attribute table (rows 2-7 of the
+ * 1P screen are solidly bank 3). Same lettering, same colours. */
+#define BANK_LABEL 3
+#define BANK_VALUE 3
+/* The menu runs on bgPalette1, whose banks are not the game's: 3 there is the
+ * white lettering and 1 is an orange that reads clearly against it, which is
+ * what marks the chosen entry. */
+#define BANK_HILITE (PAL_MENU_BASE + 1)
 
 static void draw_next_piece(int tx, int ty) {
     clear_region(tx, ty, 4, 3);
@@ -438,32 +466,37 @@ static void draw_panel(void) {
     const TengenPlayerState *p = &g_game.player[0];
     static const char kPieceLetter[TENGEN_TETROMINO_COUNT] = {0,'I','T','O','J','L','S','Z'};
 
-    draw_tiles(PANEL_TX, 0, kLabelScore, 6, BANK_LABEL);
-    draw_number(PANEL_TX, 1, p->score, 6, BANK_VALUE);
+    /* Left: the counters, in the cartridge's own multi-tile lettering, and
+     * below a rule the per-piece statistics the 1P screen is known for. */
+    draw_tiles(HUD_L_TX, 0, kLabelScore, 6, BANK_LABEL);
+    draw_number(HUD_L_TX, 1, p->score, 6, BANK_VALUE);
 
-    draw_tiles(PANEL_TX, 2, kLabelLines, 6, BANK_LABEL);
-    draw_number(PANEL_TX, 3, p->lines, 4, BANK_VALUE);
+    draw_tiles(HUD_L_TX, 3, kLabelLines, 6, BANK_LABEL);
+    draw_number(HUD_L_TX + 1, 4, p->lines, 4, BANK_VALUE);
 
-    draw_tiles(PANEL_TX, 4, kLabelLevel, 6, BANK_LABEL);
-    draw_number(PANEL_TX, 5, p->level, 2, BANK_VALUE);
+    draw_tiles(HUD_L_TX, 6, kLabelLevel, 6, BANK_LABEL);
+    draw_number(HUD_L_TX + 2, 7, p->level, 2, BANK_VALUE);
 
-    draw_tiles(PANEL_TX, 6, kLabelNext, 4, BANK_LABEL);
-    draw_next_piece(PANEL_TX, 7);
-
-    draw_rule(PANEL_TX, 10, PANEL_W, BANK_VALUE);
-    draw_text(PANEL_TX + 2, 11, "STATS", BANK_LABEL);
+    draw_rule(HUD_L_TX, 9, HUD_L_W, BANK_VALUE);
+    draw_text(HUD_L_TX, 10, "STATS", BANK_LABEL);
     for (int piece = TT_I; piece <= TT_Z; piece++) {
-        int ty = 12 + (piece - TT_I);
+        int ty = 11 + (piece - TT_I);
         char letter[2] = { kPieceLetter[piece], 0 };
-        draw_text(PANEL_TX + 1, ty, letter, BANK_LABEL);
-        draw_number(PANEL_TX + 3, ty, p->piece_stats[piece], 3, BANK_VALUE);
+        draw_text(HUD_L_TX, ty, letter, BANK_LABEL);
+        draw_number(HUD_L_TX + 2, ty, p->piece_stats[piece], 3, BANK_VALUE);
     }
 
     if (!p->game_active) {
-        draw_text(PANEL_TX + 2, 19, "OVER", BANK_LABEL);
+        draw_text(HUD_L_TX + 1, 19, "OVER", BANK_LABEL);
     } else {
-        clear_region(PANEL_TX + 2, 19, 4, 1);
+        clear_region(HUD_L_TX + 1, 19, 4, 1);
     }
+
+    /* Right: the next piece, which is the one thing a player looks at while
+     * a piece is falling, so it sits beside the field rather than under a
+     * column of numbers. */
+    draw_tiles(HUD_R_TX, 0, kLabelNext, 4, BANK_LABEL);
+    draw_next_piece(HUD_R_TX, 2);
 }
 
 static void draw_field(void) {
@@ -561,8 +594,9 @@ static void clear_screen(void) {
 static void draw_title(void) {
     for (int ty = 0; ty < SCREEN_TITLE_H_TILES; ty++) {
         for (int tx = 0; tx < SCREEN_TITLE_W; tx++) {
-            uint16_t tile = TITLE_TILE_BASE + kScreenTitleTiles[ty * SCREEN_TITLE_W + tx];
-            set_map_tile(tx, ty, WITH_BANK(tile, PAL_TITLE_BANK));
+            int i = ty * SCREEN_TITLE_W + tx;
+            uint16_t tile = TITLE_TILE_BASE + kScreenTitleTiles[i];
+            set_map_tile(tx, ty, WITH_BANK(tile, PAL_TITLE_BASE + kScreenTitlePalettes[i]));
         }
     }
 }
@@ -580,24 +614,29 @@ static void draw_level_select(uint8_t start_level, uint8_t music) {
     for (int ty = 0; ty < SCREEN_MENU_H_TILES; ty++) {
         for (int tx = 0; tx < SCREEN_MENU_W; tx++) {
             int i = ty * SCREEN_MENU_W + tx;
-            set_map_tile(tx, ty, WITH_BANK(kScreenMenuTiles[i], kScreenMenuPalettes[i]));
+            set_map_tile(tx, ty,
+                          WITH_BANK(kScreenMenuTiles[i], PAL_MENU_BASE + kScreenMenuPalettes[i]));
         }
     }
 
-    draw_text(9, 4, "LEVEL SELECT", BANK_LABEL);
+    /* Rows 8-14 of this window are the space the cartridge's own selection
+     * screens write into — its GAME SELECT list lives exactly there — so the
+     * port's selection goes in the same place rather than over the frame or
+     * the big TETRIS logo above it. */
+    draw_text(9, 8, "LEVEL SELECT", PAL_MENU_BASE + 3);
     for (int level = 0; level < START_LEVEL_COUNT; level++) {
-        /* The chosen level is picked out in the label colour, the way the
+        /* The chosen level is picked out in a different palette, the way the
          * ROM highlights a menu selection. */
-        draw_number(6 + level * 2, 9, (uint32_t)level, 1,
-                     level == start_level ? BANK_LABEL : BANK_VALUE);
+        draw_number(6 + level * 2, 10, (uint32_t)level, 1,
+                     level == start_level ? BANK_HILITE : PAL_MENU_BASE + 3);
     }
-    draw_text(6, 12, "LEFT RIGHT TO SET", BANK_VALUE);
+    draw_text(6, 12, "LEFT RIGHT TO SET", PAL_MENU_BASE + 3);
 
-    draw_text(10, 15, "MUSIC", BANK_LABEL);
-    clear_region(6, 16, 18, 1);
-    draw_text(10 - (int)(music_name_len(music) / 2) + 2, 16,
-               kMusicNames[music], BANK_VALUE);
-    draw_text(8, 17, "UP DOWN TO PICK", BANK_VALUE);
+    draw_text(12, 14, "MUSIC", PAL_MENU_BASE + 3);
+    clear_region(4, 15, 22, 1);
+    draw_text(15 - (int)(music_name_len(music) / 2), 15,
+               kMusicNames[music], BANK_HILITE);
+    draw_text(7, 17, "UP DOWN TO PICK", PAL_MENU_BASE + 3);
 }
 
 int main(void) {
