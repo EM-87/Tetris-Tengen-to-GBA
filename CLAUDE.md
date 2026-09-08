@@ -3,8 +3,9 @@
 Port of Tetris (NES, Tengen) to GBA. Goal: 1:1 gameplay and graphics for the
 playfield itself; the surrounding HUD is redesigned to fit the GBA's narrower
 screen (see `reference/NOTES.md`'s resolution-mapping section for the exact
-numbers and reasoning — short version: the 80×160px playfield fits the GBA's
-160px height exactly with zero scaling; only the side panels need reflowing).
+numbers — short version: the framed 96×160px playfield fits the GBA's 160px
+height exactly with zero scaling, and `make gba-check` asserts that against a
+running ROM; only the side panels need reflowing).
 
 ## Ground rules for this project specifically
 
@@ -22,12 +23,13 @@ numbers and reasoning — short version: the 80×160px playfield fits the GBA's
    `reference/disasm/README.md.txt`) are fine for cross-checking a hunch, but
    the ROM decides ties.
 
-2. **Never silently upgrade a PLACEHOLDER to VERIFIED.** `tengen_core.c` marks
-   unverified constants with `TODO(verify)` comments (gravity curve, exact
-   line-clear scoring, soft-drop rate ramp — full list in
-   `reference/NOTES.md`). When one of these gets traced from the ROM, update
-   the comment, the value, and `reference/NOTES.md`'s table together in the
-   same change. Don't add new unverified "facts" presented as confirmed.
+2. **Never silently upgrade a guess to VERIFIED.** There are currently no
+   placeholders left in the core — `reference/NOTES.md`'s PLACEHOLDER section
+   reads "Nothing", and keeping it that way is the point. If something new
+   can't be traced to the ROM, mark it `TODO(verify)` at its point of use AND
+   list it there; when it does get traced, update the comment, the value and
+   that table in the same change. Never present an untraced value as
+   confirmed — several rules here looked plausible and were wrong.
 
 3. **Core stays platform-independent.** `src/tengen_core.{h,c}` must keep
    compiling with plain `gcc -std=c99`, no GBA headers, no `#ifdef GBA`
@@ -62,32 +64,42 @@ numbers and reasoning — short version: the 80×160px playfield fits the GBA's
 3. ~~Stand up `gba/`~~ — done. It builds with a stock `arm-none-eabi-gcc`
    (no devkitARM required), boots in mGBA, and `make gba-check` verifies it
    renders and plays rather than merely links.
-4. **Real graphics.** The tiles in `gba/main.c` are placeholders generated at
-   runtime. The genuine 8×8 art lives in the original ROM's CHR data, which
+4. ~~HUD and title screen~~ — done: next piece, score, level, lines, per-piece
+   statistics, game over, and a title screen with level select (0-9, the range
+   the ROM's own menu allows).
+5. ~~Palettes~~ — done, and these are the game's real colours rather than
+   placeholders: the palette tables ARE in the disassembly even though the
+   tile art isn't. Tracing them also caught a fidelity bug worth remembering:
+   settled blocks are background tiles sharing one level-wide palette, and
+   only the falling piece and preview are sprites with their own colours.
+6. **Real graphics.** The tile *shapes* in `gba/main.c` are still placeholders
+   generated at runtime. The genuine 8×8 art lives in the original ROM's CHR data, which
    is not in this repo — the disassembly build reads it from
    `gfx/game_tileset.chr` (`reference/disasm/entry.asm.txt`), and
    `reference/disasm/split_chr.py.txt` / `nes_chr_decode.py.txt` are the
    tools that extract it from a cartridge dump. The renderer is already
    built around 8×8 tiles and the core's `tengen_tile_id_for_cell` table, so
-   this should be a data path, not a rewrite. NES 2bpp CHR maps onto GBA
-   4bpp tiles directly.
-5. HUD for the GBA's narrower side panels: score, lines, level, next piece,
-   stats. `reference/disasm/gameModeNametable1P.asm.txt` shows what the NES
-   drew and where; there are 72px on each side of the field to work with
-   versus the NES's 88.
-6. Long-bar/undo cheat codes (`reference/NOTES.md` → "Cheat-code state
+   this should be a data path, not a rewrite. `tools/chr_to_gba.py` already
+   does the 2bpp-planar-to-4bpp-packed conversion (`make tiles ROM=...`, and
+   `make tiles-check` verifies the format handling without a ROM). The one
+   structural gap left is noted in `reference/NOTES.md`: the ROM's playfield
+   stores sub-tile ids, this core stores piece ids.
+7. Long-bar/undo cheat codes (`reference/NOTES.md` → "Cheat-code state
    exists") — a well-known, well-loved Tengen feature; the RAM layout is
    mapped, the behavior isn't traced yet.
-7. Title screen, menus, and the 2P/coop modes. The core already models coop
-   (including its 12-column field) and two players; only the GBA front end
-   is single-player.
-8. Audio (`setMusicOrSoundEffect` plus the `MUSIC_*`/`SOUND_*` constants in
+8. The 2P and coop modes. The core already models coop (including its
+   12-column field) and two players; only the GBA front end is single-player.
+9. The line-clear animation — the core clears rows instantly, the ROM plays
+   an animation first (`stageLineClearAnimation`, `lineClearTimerP1/2`).
+10. Audio (`setMusicOrSoundEffect` plus the `MUSIC_*`/`SOUND_*` constants in
    `constants.asm.txt`) — lowest priority, gameplay fidelity comes first.
 
 ## Build
 
 - `make test` — native core tests, gcc only. The everyday loop.
 - `make gba` — cross-compiles `build/tengen.gba`.
+- `make tiles-check` — verifies the CHR converter's format handling.
+- `make tiles ROM=/path/to/clean.nes` — converts real cartridge art (optional).
 - `make gba-check` — boots the ROM headlessly in mGBA and asserts it draws
   the field where the resolution mapping says it should and that a piece
   actually falls.

@@ -9,12 +9,16 @@ adaptando solo lo que la propia pantalla del GBA obliga a adaptar.
 
 La pantalla de GBA (240×160 px) no es del mismo tamaño que la de NES
 (256×240 px), pero el **campo de juego** de Tengen Tetris — 10 columnas × 20
-filas de tiles de 8×8 — mide 80×160 px, y esos 160 px de alto son *exactamente*
-el alto completo de la pantalla del GBA. El playfield entra sin recortar ni
-escalar, tile por tile. Lo que no entra 1:1 es el HUD alrededor (NES tiene
-176px de ancho sobrantes para repartir a los costados; GBA tiene 160px), así
-que el plan es: **playfield y jugabilidad idénticos, marco/HUD rediseñado**
-para el ancho disponible. Ver `reference/NOTES.md` para el detalle.
+filas de tiles de 8×8, más las dos columnas de marco: 96×160 px — tiene
+*exactamente* los 160 px de alto de la pantalla del GBA. El playfield entra
+sin recortar ni escalar, tile por tile. Lo que no entra 1:1 es el HUD
+alrededor (al NES le sobran 160 px de ancho para repartir a los costados; al
+GBA 144), así que el plan es: **playfield y jugabilidad idénticos, HUD
+rediseñado** para los paneles más angostos.
+
+Eso no es teoría: `make gba-check` arranca la ROM en un emulador y verifica
+que el campo caiga exactamente en las columnas 72..167 y que las dos columnas
+de marco ocupen los 160 px de alto. Ver `reference/NOTES.md` para el detalle.
 
 ## Estado actual
 
@@ -28,9 +32,11 @@ Hay una ROM de GBA que arranca, se juega y corre las reglas reales de Tengen.
   auto-rotate, la curva de gravedad con sus niveles fraccionarios, el soft
   drop que acelera, el puntaje por pieza apoyada, y la subida de nivel.
 - `tests/test_tengen.c` — tests nativos de esas reglas (`make test`).
-- `gba/` — capa de GBA: registros de hardware, `crt0.s`, linker script y el
-  renderer por tiles. No depende de devkitARM ni de libgba: compila con un
-  `arm-none-eabi-gcc` estándar.
+- `gba/` — capa de GBA: registros de hardware, `crt0.s`, linker script, el
+  renderer por tiles, la fuente del HUD y las paletas reales del juego. No
+  depende de devkitARM ni de libgba: compila con un `arm-none-eabi-gcc`
+  estándar. Tiene pantalla de título con selección de nivel (0-9), HUD
+  completo (next, score, nivel, líneas, estadísticas por pieza) y game over.
 - `tools/run_rom.py` — arranca la ROM en mGBA headless y verifica que
   realmente dibuje y se juegue (`make gba-check`), no solo que linkee.
 - `reference/disasm/` — el disassembly completo que sirve de fuente de
@@ -39,16 +45,20 @@ Hay una ROM de GBA que arranca, se juega y corre las reglas reales de Tengen.
 
 ### Lo que falta
 
-- **Los gráficos son placeholders.** El arte real de 8×8 vive en la ROM
-  original (el disassembly lo saca de `gfx/game_tileset.chr`, ver
-  `reference/disasm/entry.asm.txt`) y no está en este repo. El renderer ya
-  está construido alrededor de tiles de 8×8 y de las tablas de tile ids del
-  propio core, así que meter el CHR real es un cambio de datos, no una
+- **Las formas de los gráficos son placeholders**, pero **los colores no**:
+  las paletas sí están en el disassembly y son las del juego original. El
+  arte de 8×8 vive en la CHR de la ROM original y no está en este repo;
+  `tools/chr_to_gba.py` lo convierte a tiles de GBA a partir de un dump que
+  aportes vos (`make tiles ROM=/ruta/clean.nes`). El renderer ya está armado
+  alrededor de tiles de 8×8, así que es un cambio de datos, no una
   reescritura.
-- **HUD**: score, líneas, nivel, próxima pieza y stats todavía no se dibujan.
 - **Audio**: nada todavía.
-- **Menús / título / modos 2P y coop**: el core ya modela coop (12 columnas)
-  y dos jugadores, pero la capa GBA arranca directo en una partida de 1P.
+- **Modos 2P y coop**: el core ya los modela (incluido el campo de 12
+  columnas del coop), pero la capa GBA es solo de un jugador por ahora. Del
+  menú original solo está la selección de nivel; falta tipo de partida,
+  handicap y selección de música.
+- **Animación de línea completa**: el core borra las filas al instante; la
+  ROM primero reproduce una animación.
 - La ROM corre en emuladores pero **no bootea en hardware real**: le falta el
   logo de Nintendo en el header (dato que no está en este repo). Pasarle
   `gbafix` de devkitPro lo resuelve. El checksum del header sí se calcula

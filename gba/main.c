@@ -307,34 +307,90 @@ static void draw_frame(void) {
     draw_hud();
 }
 
-int main(void) {
-    build_palette();
-    build_placeholder_tiles();
+/* Level select range, verified: computerMoveSelectTable (main.asm.txt:4819)
+ * holds the wrap limit for each menu row, and row 1 — menuPlayer1StartLevel —
+ * is 10, so start levels run 0..9 and wrap at both ends (main.asm.txt:4742-4763). */
+#define START_LEVEL_COUNT 10
 
-    /* Clear the map before showing it, or the first frame displays whatever
-     * VRAM powered up with. */
+typedef enum { SCREEN_TITLE, SCREEN_PLAYING } Screen;
+
+static void clear_screen(void) {
     for (int ty = 0; ty < 32; ty++) {
         for (int tx = 0; tx < MAP_W; tx++) set_map_tile(tx, ty, TILE_BLANK);
     }
+}
+
+static void draw_title(uint8_t start_level) {
+    clear_screen();
+    draw_text(9, 4, "TENGEN");
+    draw_text(9, 6, "TETRIS");
+
+    draw_text(7, 10, "LEVEL");
+    draw_number(14, 10, start_level, 1);
+    draw_text(5, 12, "UP DOWN TO SET");
+    draw_text(6, 15, "START TO PLAY");
+}
+
+int main(void) {
+    build_palette();
+    build_placeholder_tiles();
+    set_field_palette_for_level(0);
+
+    clear_screen();
 
     REG_BG0CNT = BG_4BPP | BG_SIZE_32x32 | BG_CHARBLOCK(CHARBLOCK) |
                   BG_SCREENBLOCK(SCREENBLOCK);
     REG_DISPCNT = DCNT_MODE0 | DCNT_BG0;
 
-    /* The seed is arbitrary for now. The ROM seeds from a frame counter that
-     * advances while the title screen waits for input, so the sequence you
-     * get depends on when you press Start — worth reproducing once there's a
-     * title screen to press Start on. */
-    tengen_new_game(&g_game, 0xACE1, 0, false, false);
+    Screen screen = SCREEN_TITLE;
+    uint8_t start_level = 0;
+    uint8_t shown_level = 0xFF;
+    uint8_t held_last = 0;
 
-    uint8_t shown_level = 0xFF; /* forces the first palette upload */
+    /* The ROM steps its RNG once per frame from the main loop
+     * (main.asm.txt:49-50) and whatever state it happens to be in when you
+     * press Start becomes the game's seed. Doing the same here means the
+     * sequence you get genuinely depends on when you start, rather than
+     * every session dealing identical pieces. */
+    TengenRng seed_source;
+    tengen_rng_seed(&seed_source, 0xACE1);
 
     for (;;) {
         uint8_t buttons = read_buttons();
+        uint8_t pressed = (uint8_t)(buttons & ~held_last);
+        held_last = buttons;
+        tengen_rng_step(&seed_source);
+
+        if (screen == SCREEN_TITLE) {
+            if (pressed & TENGEN_BTN_UP) {
+                start_level = (uint8_t)((start_level + START_LEVEL_COUNT - 1) % START_LEVEL_COUNT);
+            }
+            if (pressed & TENGEN_BTN_DOWN) {
+                start_level = (uint8_t)((start_level + 1) % START_LEVEL_COUNT);
+            }
+            if (pressed & TENGEN_BTN_START) {
+                uint16_t seed = (uint16_t)(seed_source.lo | (seed_source.hi << 8));
+                tengen_new_game(&g_game, seed, start_level, false, false);
+                shown_level = 0xFF;
+                screen = SCREEN_PLAYING;
+                vsync();
+                /* Wipe the title before the HUD takes over: draw_frame only
+                 * repaints the field and the panels' own cells, so anything
+                 * left elsewhere would show through. */
+                clear_screen();
+                continue;
+            }
+            vsync();
+            draw_title(start_level);
+            continue;
+        }
+
         tengen_step(&g_game, TENGEN_PLAYER_1, buttons);
 
-        if (!g_game.player[0].game_active && (buttons & TENGEN_BTN_START)) {
-            tengen_new_game(&g_game, 0xACE1, 0, false, false);
+        if (!g_game.player[0].game_active && (pressed & TENGEN_BTN_START)) {
+            screen = SCREEN_TITLE;
+            vsync();
+            continue;
         }
 
         if (g_game.player[0].level != shown_level) {

@@ -18,22 +18,25 @@ Antes de tocar código, leé en este orden:
    fuente de verdad, no la memoria de "cómo es el Tetris normal"; núcleo
    independiente de plataforma; nunca subir un placeholder a "verificado" sin
    citar la línea del disassembly que lo confirma).
-2. `tengen_gba_port/reference/NOTES.md` — qué está verificado contra la ROM
-   (con número de línea de `main.asm.txt`) y qué es todavía un placeholder
-   marcado `TODO(verify)`. Esto evita re-derivar de cero cosas como el
-   algoritmo de RNG, el wallkick, o el timing de DAS, que ya están trazados.
-3. `tengen_gba_port/README.md` — estado general y cómo compilar (`make test`,
-   solo necesita gcc; todavía no hay capa de GBA).
+2. `tengen_gba_port/reference/NOTES.md` — qué está verificado contra la ROM,
+   con número de línea de `main.asm.txt`. Evita re-derivar de cero cosas ya
+   trazadas: el RNG, el wallkick, el timing de DAS, la curva de gravedad, la
+   geometría del campo, el puntaje y las paletas.
+3. `tengen_gba_port/README.md` — estado general y cómo compilar.
 
-El núcleo del juego vive en `src/tengen_core.{h,c}` (C99 puro, sin
-dependencias de GBA) y tiene tests nativos en `tests/test_tengen.c`
-(`make test`). El disassembly completo de la ROM está en
-`reference/disasm/` — es la fuente primaria para cualquier duda sobre
-comportamiento exacto.
+El núcleo vive en `src/tengen_core.{h,c}` (C99 puro, sin dependencias de GBA)
+con tests nativos en `tests/test_tengen.c` (`make test`). La capa de GBA está
+en `gba/` y compila con un `arm-none-eabi-gcc` común, sin devkitARM. El
+disassembly completo está en `reference/disasm/` y es la fuente primaria para
+cualquier duda sobre comportamiento exacto.
 
-Lo próximo según `CLAUDE.md`'s roadmap: cerrar los placeholders listados en
-`reference/NOTES.md` (curva de gravedad por nivel, puntaje exacto por línea,
-rampa del soft-drop, indexado de niveles con start-level distinto de 0), cada
-uno respaldado por una relectura puntual de `main.asm.txt` en las líneas que
-`NOTES.md` ya señala como próximo objetivo, y un test nativo nuevo antes de
-tocar nada de GBA.
+Estado: ya hay una ROM jugable (`make gba`) con título, selección de nivel,
+HUD completo y las paletas reales del juego, y todas las mecánicas del core
+están trazadas al disassembly — la sección PLACEHOLDER de `NOTES.md` está
+vacía. Antes de dar por terminado cualquier cambio, correr `make test` y
+`make gba-check`.
+
+Lo próximo según el roadmap de `CLAUDE.md`: meter el arte real de los tiles
+(`tools/chr_to_gba.py` ya hace la conversión, falta que aportes un dump del
+cartucho), los códigos long-bar/undo, los modos 2P y coop, la animación de
+línea completa, y por último el audio.

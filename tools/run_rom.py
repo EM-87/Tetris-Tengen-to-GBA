@@ -101,16 +101,36 @@ def describe(rows):
     return cols
 
 
+KEY_START = 3  # set_keys takes bit indices, not a mask
+
+
+def start_game(core):
+    """Gets past the title screen into a game."""
+    run(core, 8)
+    core.set_keys(KEY_START)
+    run(core, 4)
+    core.set_keys()
+    run(core, 8)
+
+
 def selftest(rom_path):
     core, screen = load(rom_path)
     failures = []
 
+    # The title screen must come up first and must not be blank.
     run(core, 8)
+    title = pixels(screen)
+    if all(p == (0, 0, 0) for row in title for p in row):
+        failures.append("la pantalla de titulo quedo en negro")
+
+    start_game(core)
     rows = pixels(screen)
     cols = describe(rows)
 
     if all(p == (0, 0, 0) for row in rows for p in row):
         failures.append("la pantalla quedo completamente negra")
+    if rows == title:
+        failures.append("START no arranco la partida (la pantalla no cambio)")
 
     # The frame runs the full height of the screen: that is the whole point
     # of the 160px mapping.
@@ -165,6 +185,7 @@ def main():
         sys.exit(selftest(args.rom))
 
     core, screen = load(args.rom)
+    start_game(core)
     run(core, args.frames)
     describe(pixels(screen))
     if args.png:
