@@ -54,27 +54,45 @@ numbers and reasoning — short version: the 80×160px playfield fits the GBA's
 
 ## Roadmap (rough order)
 
-1. ~~Bootstrap the platform-independent core + tests~~ (done this session).
-2. Close out the PLACEHOLDER list in `reference/NOTES.md` — gravity curve,
-   scoring, soft-drop ramp, start-level threshold indexing — each backed by a
-   fresh trace of `main.asm.txt` and a native test.
-3. Long-bar/undo cheat codes (`reference/NOTES.md` → "Cheat-code state
-   exists") — a well-known, well-loved Tengen feature; RAM layout is already
-   mapped, behavior isn't traced yet.
-4. Stand up `gba/` (devkitARM + libgba, per the earlier project discussion):
-   a `main.c` that drives `tengen_step` at 60Hz, renders the playfield as an
-   8×8-tile background using the tile ids `tengen_core.h` already exposes,
-   and maps `REG_KEYINPUT` to `TengenButton`. Playfield rendering should be
-   pixel-identical to NES from day one, since that's the part that needs no
-   redesign — see `reference/NOTES.md`'s resolution section.
-5. HUD/frame redesign for the GBA's narrower side panels (score, lines,
-   level, next piece, stats — see `reference/disasm/gameModeNametable1P.asm.txt`
-   for what NES shows and where).
-6. Audio (`reference/disasm/main.asm.txt`'s `setMusicOrSoundEffect` and the
-   `MUSIC_*`/`SOUND_*` constants in `constants.asm.txt`) — lowest priority,
-   gameplay fidelity comes first.
+1. ~~Bootstrap the platform-independent core + tests~~ — done.
+2. ~~Close out every PLACEHOLDER in `reference/NOTES.md`~~ — done. Gravity
+   curve, fractional gravity, soft-drop ramp, scoring, level rule and the
+   playfield geometry are all traced and tested; that section now reads
+   "Nothing".
+3. ~~Stand up `gba/`~~ — done. It builds with a stock `arm-none-eabi-gcc`
+   (no devkitARM required), boots in mGBA, and `make gba-check` verifies it
+   renders and plays rather than merely links.
+4. **Real graphics.** The tiles in `gba/main.c` are placeholders generated at
+   runtime. The genuine 8×8 art lives in the original ROM's CHR data, which
+   is not in this repo — the disassembly build reads it from
+   `gfx/game_tileset.chr` (`reference/disasm/entry.asm.txt`), and
+   `reference/disasm/split_chr.py.txt` / `nes_chr_decode.py.txt` are the
+   tools that extract it from a cartridge dump. The renderer is already
+   built around 8×8 tiles and the core's `tengen_tile_id_for_cell` table, so
+   this should be a data path, not a rewrite. NES 2bpp CHR maps onto GBA
+   4bpp tiles directly.
+5. HUD for the GBA's narrower side panels: score, lines, level, next piece,
+   stats. `reference/disasm/gameModeNametable1P.asm.txt` shows what the NES
+   drew and where; there are 72px on each side of the field to work with
+   versus the NES's 88.
+6. Long-bar/undo cheat codes (`reference/NOTES.md` → "Cheat-code state
+   exists") — a well-known, well-loved Tengen feature; the RAM layout is
+   mapped, the behavior isn't traced yet.
+7. Title screen, menus, and the 2P/coop modes. The core already models coop
+   (including its 12-column field) and two players; only the GBA front end
+   is single-player.
+8. Audio (`setMusicOrSoundEffect` plus the `MUSIC_*`/`SOUND_*` constants in
+   `constants.asm.txt`) — lowest priority, gameplay fidelity comes first.
 
 ## Build
 
-`make test` (native, gcc only) is the everyday loop. `make gba` is a
-documented stub until step 4 above exists — see the Makefile's own comments.
+- `make test` — native core tests, gcc only. The everyday loop.
+- `make gba` — cross-compiles `build/tengen.gba`.
+- `make gba-check` — boots the ROM headlessly in mGBA and asserts it draws
+  the field where the resolution mapping says it should and that a piece
+  actually falls.
+
+Run `make test` and `make gba-check` before considering a change done. The
+first catches rule regressions; the second catches the ones that only appear
+once the code runs on ARM (alignment, the `-nostartfiles` build, VRAM
+layout), which the host tests structurally cannot.

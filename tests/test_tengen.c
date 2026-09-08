@@ -532,6 +532,109 @@ static void test_das_does_not_charge_while_down_is_held(void) {
     CHECK(game.player[0].das_left == 0);
 }
 
+/* Every locked cell must be reachable from the floor through other locked
+ * cells. Overhangs are legal in Tetris — an S landing on a ledge leaves a
+ * hole under one of its cells — but a piece always comes to rest touching
+ * something, so no locked group can ever be fully detached from the stack.
+ * A collision or lock bug shows up here as a floating cluster, which is
+ * exactly the kind of thing that's hard to be sure about by looking at a
+ * 240x160 screenshot. */
+static bool every_locked_cell_is_supported(const TengenPlayfield *field) {
+    bool seen[TENGEN_PF_HEIGHT][TENGEN_PF_WIDTH] = {{false}};
+    /* Flood fill upward from the bottom row through occupied cells. */
+    TengenCell stack[TENGEN_PF_HEIGHT * TENGEN_PF_WIDTH];
+    int top = 0;
+
+    for (int col = 0; col < TENGEN_PF_WIDTH; col++) {
+        if (field->cell[TENGEN_PF_HEIGHT - 1][col] != TT_NONE) {
+            seen[TENGEN_PF_HEIGHT - 1][col] = true;
+            stack[top].row = TENGEN_PF_HEIGHT - 1;
+            stack[top].col = (int8_t)col;
+            top++;
+        }
+    }
+
+    const int dr[4] = {-1, 1, 0, 0};
+    const int dc[4] = {0, 0, -1, 1};
+    while (top > 0) {
+        TengenCell cur = stack[--top];
+        for (int d = 0; d < 4; d++) {
+            int nr = cur.row + dr[d];
+            int nc = cur.col + dc[d];
+            if (nr < 0 || nr >= TENGEN_PF_HEIGHT || nc < 0 || nc >= TENGEN_PF_WIDTH) continue;
+            if (seen[nr][nc] || field->cell[nr][nc] == TT_NONE) continue;
+            seen[nr][nc] = true;
+            stack[top].row = (int8_t)nr;
+            stack[top].col = (int8_t)nc;
+            top++;
+        }
+    }
+
+    for (int row = 0; row < TENGEN_PF_HEIGHT; row++) {
+        for (int col = 0; col < TENGEN_PF_WIDTH; col++) {
+            if (field->cell[row][col] != TT_NONE && !seen[row][col]) return false;
+        }
+    }
+    return true;
+}
+
+static void test_no_piece_ever_locks_in_mid_air(void) {
+    /* Play out several games' worth of pieces under varied input and check
+     * the support invariant after every single lock. */
+    for (uint16_t seed = 1; seed <= 40; seed++) {
+        TengenGame game;
+        tengen_new_game(&game, seed, 0, false, false);
+
+        uint32_t rolling = seed;
+        for (int frame = 0; frame < 20000; frame++) {
+            if (!game.player[0].game_active) break;
+
+            /* Cheap deterministic input churn, so pieces land all over the
+             * field instead of stacking in one column. */
+            rolling = rolling * 1103515245u + 12345u;
+            uint8_t buttons = 0;
+            switch ((rolling >> 16) % 6) {
+                case 0: buttons = TENGEN_BTN_LEFT; break;
+                case 1: buttons = TENGEN_BTN_RIGHT; break;
+                case 2: buttons = TENGEN_BTN_A; break;
+                case 3: buttons = TENGEN_BTN_B; break;
+                default: buttons = TENGEN_BTN_DOWN; break;
+            }
+
+            TengenStepResult r = tengen_step(&game, TENGEN_PLAYER_1, buttons);
+            if (r.piece_locked) {
+                if (!every_locked_cell_is_supported(&game.field[0])) {
+                    printf("  (seed %u, frame %d: a locked group is floating)\n",
+                           (unsigned)seed, frame);
+                    CHECK(false);
+                    return;
+                }
+            }
+        }
+    }
+    CHECK(true);
+}
+
+static void test_locked_cells_never_overwrite_the_walls(void) {
+    /* A piece writing into a wall column would quietly turn the frame into
+     * playable space and break full-row detection. */
+    for (uint16_t seed = 1; seed <= 20; seed++) {
+        TengenGame game;
+        tengen_new_game(&game, seed, 0, false, false);
+        uint32_t rolling = seed;
+        for (int frame = 0; frame < 8000; frame++) {
+            if (!game.player[0].game_active) break;
+            rolling = rolling * 1103515245u + 12345u;
+            uint8_t buttons = ((rolling >> 16) % 2) ? TENGEN_BTN_LEFT : TENGEN_BTN_RIGHT;
+            tengen_step(&game, TENGEN_PLAYER_1, buttons);
+        }
+        for (int row = 0; row < TENGEN_PF_HEIGHT; row++) {
+            CHECK(game.field[0].cell[row][0] == TT_WALL);
+            CHECK(game.field[0].cell[row][TENGEN_PF_WIDTH - 1] == TT_WALL);
+        }
+    }
+}
+
 int main(void) {
     test_rng_is_deterministic_and_never_stalls();
     test_rng_zero_seed_does_not_lock_up();
@@ -560,6 +663,8 @@ int main(void) {
     test_level_starts_at_the_chosen_start_level();
     test_level_is_recomputed_from_the_line_total();
     test_level_never_passes_the_rom_cap();
+    test_no_piece_ever_locks_in_mid_air();
+    test_locked_cells_never_overwrite_the_walls();
 
     if (g_failures == 0) {
         printf("All tests passed.\n");

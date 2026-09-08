@@ -240,6 +240,23 @@ uint32_t tengen_clear_full_rows(TengenPlayfield *field) {
     return mask;
 }
 
+int tengen_active_piece_cells(const TengenGame *game, TengenPlayerSlot slot,
+                               TengenCell out[4]) {
+    const TengenPiece *piece = &game->player[slot].piece;
+    if (piece->current <= TT_NONE || piece->current >= TENGEN_TETROMINO_COUNT) return 0;
+
+    int written = 0;
+    for (int r = 0; r < 4 && written < 4; r++) {
+        for (int c = 0; c < 4 && written < 4; c++) {
+            if (!tengen_piece_occupies(piece->current, piece->orientation, r, c)) continue;
+            out[written].row = (int8_t)(piece->y + r - TENGEN_ROM_ROW_ORIGIN);
+            out[written].col = (int8_t)(piece->x + c - TENGEN_ROM_COL_ORIGIN);
+            written++;
+        }
+    }
+    return written;
+}
+
 static void lock_piece(TengenGame *game, TengenPlayerSlot slot) {
     TengenPlayerState *p = &game->player[slot];
     TengenPlayfield *field = &game->field[game->coop ? 0 : slot];

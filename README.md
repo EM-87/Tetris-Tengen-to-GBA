@@ -18,30 +18,59 @@ para el ancho disponible. Ver `reference/NOTES.md` para el detalle.
 
 ## Estado actual
 
-Arrancando. Lo que existe hoy:
+Hay una ROM de GBA que arranca, se juega y corre las reglas reales de Tengen.
 
-- `src/tengen_core.{h,c}` — núcleo de reglas del juego, independiente de
-  plataforma (compila con cualquier gcc, sin GBA de por medio todavía).
-  Implementa: playfield, las 7 piezas con sus 4 orientaciones, el
-  generador de piezas real de Tengen (con su sesgo característico, sin
-  anti-repetición), el rotado con su wallkick-solo-a-la-izquierda, DAS,
-  auto-rotate, líneas y subida de nivel.
-- `tests/test_tengen.c` — tests nativos (host) de esas reglas.
-- `reference/disasm/` — el disassembly completo de Tetris (NES, Tengen) que
-  sirve de fuente de verdad; ver `reference/disasm/README.md.txt` para el
-  proyecto de disassembly en sí, y `reference/NOTES.md` para el resumen
-  curado de qué está verificado contra la ROM y qué es un placeholder.
-- Todavía no hay capa GBA (video/input/audio). Ese es el próximo paso una
-  vez el núcleo esté suficientemente probado — ver `CLAUDE.md`.
+- `src/tengen_core.{h,c}` — núcleo de reglas, independiente de plataforma
+  (C99 puro, sin dependencias de GBA). Todas sus mecánicas están trazadas al
+  disassembly y citadas línea por línea: el generador de piezas real de
+  Tengen (con su sesgo característico, sin anti-repetición), el rotado con su
+  wallkick que solo patea a la izquierda, el DAS de 11/6 frames, el
+  auto-rotate, la curva de gravedad con sus niveles fraccionarios, el soft
+  drop que acelera, el puntaje por pieza apoyada, y la subida de nivel.
+- `tests/test_tengen.c` — tests nativos de esas reglas (`make test`).
+- `gba/` — capa de GBA: registros de hardware, `crt0.s`, linker script y el
+  renderer por tiles. No depende de devkitARM ni de libgba: compila con un
+  `arm-none-eabi-gcc` estándar.
+- `tools/run_rom.py` — arranca la ROM en mGBA headless y verifica que
+  realmente dibuje y se juegue (`make gba-check`), no solo que linkee.
+- `reference/disasm/` — el disassembly completo que sirve de fuente de
+  verdad, y `reference/NOTES.md` con el resumen curado de qué está
+  verificado y contra qué línea de la ROM.
 
-## Compilar y correr los tests
+### Lo que falta
+
+- **Los gráficos son placeholders.** El arte real de 8×8 vive en la ROM
+  original (el disassembly lo saca de `gfx/game_tileset.chr`, ver
+  `reference/disasm/entry.asm.txt`) y no está en este repo. El renderer ya
+  está construido alrededor de tiles de 8×8 y de las tablas de tile ids del
+  propio core, así que meter el CHR real es un cambio de datos, no una
+  reescritura.
+- **HUD**: score, líneas, nivel, próxima pieza y stats todavía no se dibujan.
+- **Audio**: nada todavía.
+- **Menús / título / modos 2P y coop**: el core ya modela coop (12 columnas)
+  y dos jugadores, pero la capa GBA arranca directo en una partida de 1P.
+- La ROM corre en emuladores pero **no bootea en hardware real**: le falta el
+  logo de Nintendo en el header (dato que no está en este repo). Pasarle
+  `gbafix` de devkitPro lo resuelve. El checksum del header sí se calcula
+  solo en el build.
+
+## Compilar
 
 ```sh
-make test
+make test        # tests del núcleo en el host, solo necesita gcc
+make gba         # compila la ROM -> build/tengen.gba
+make gba-check   # arranca la ROM en mGBA headless y la verifica
 ```
 
-Solo necesita gcc — no hace falta devkitARM todavía. `make gba` existe como
-target documentado para cuando exista la capa GBA (ver `Makefile`).
+Para `make gba` hace falta un toolchain ARM:
+
+```sh
+apt-get install gcc-arm-none-eabi      # Debian/Ubuntu
+brew install --cask gcc-arm-embedded   # macOS
+```
+
+Para `make gba-check`, además: `pip install pygba` y la librería de mGBA
+(`apt-get install libmgba0.10`).
 
 ## Estructura
 
@@ -49,10 +78,11 @@ target documentado para cuando exista la capa GBA (ver `Makefile`).
 tengen_gba_port/
 ├── src/                  núcleo del juego (C99, sin dependencias de GBA)
 ├── tests/                tests nativos del núcleo
+├── gba/                  capa de GBA: hardware, crt0, linker script, renderer
+├── tools/                utilidades de build y verificación de la ROM
 ├── reference/
 │   ├── disasm/           disassembly completo de Tetris (NES, Tengen)
-│   └── NOTES.md          verificado vs. placeholder, con citas a la ROM
-├── gba/                  (no existe todavía) capa específica de GBA
+│   └── NOTES.md          mecánicas verificadas, con citas a la ROM
 ├── CLAUDE.md             cómo trabajar en este proyecto
 └── PROMPT_ARRANQUE.md    resumen para retomar el trabajo en una sesión nueva
 ```

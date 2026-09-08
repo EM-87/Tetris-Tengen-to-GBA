@@ -297,6 +297,23 @@ bool tengen_try_rotate(TengenGame *game, TengenPlayerSlot slot, bool clockwise);
  * itself update score/lines/level — tengen_step does that. */
 uint32_t tengen_clear_full_rows(TengenPlayfield *field);
 
+/* One cell of the active piece, already translated out of the ROM's
+ * coordinate space into field storage indices. `row` is a visible row and
+ * CAN BE NEGATIVE, meaning the cell is still in the hidden area above the
+ * field — renderers should skip those rather than clamp them. */
+typedef struct {
+    int8_t row; /* visible row; < 0 means above the field */
+    int8_t col; /* storage column, 0..TENGEN_PF_WIDTH-1 */
+} TengenCell;
+
+/* Fills `out` with the active piece's four occupied cells and returns how
+ * many were written (always 4 for a real piece, 0 if there is none). Exists
+ * so renderers don't have to re-derive the ROM-to-storage coordinate
+ * mapping — getting that subtly wrong is exactly the kind of bug that only
+ * shows up as "the piece draws one column off". */
+int tengen_active_piece_cells(const TengenGame *game, TengenPlayerSlot slot,
+                               TengenCell out[4]);
+
 #ifdef __cplusplus
 }
 #endif
