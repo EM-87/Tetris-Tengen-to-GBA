@@ -1,6 +1,6 @@
 # Tengen Tetris (NES) → GBA: verified mechanics and open questions
 
-This is the distilled result of one research pass over `disasm/main.asm.txt`
+This is the distilled result of the research passes over `disasm/main.asm.txt`
 (the Tengen Tetris NES disassembly — see `disasm/README.md.txt` for that
 project's own scope/credits) plus `disasm/notes.txt.txt`, `disasm/tetris-ram.asm.txt`
 and `disasm/constants.asm.txt`. Its job is to save the next session from
@@ -8,11 +8,13 @@ re-deriving anything below from scratch, and to point precisely at what's
 still unknown so it can be tightened without re-reading the whole disassembly.
 
 Every "VERIFIED" item was confirmed by reading the actual 6502 and, where the
-logic wasn't obvious from a single glance (carry-flag conventions, bit
-packing), tracing it by hand to a plain-English rule before it went into
-`src/tengen_core.c`. Every "PLACEHOLDER" item is real, working code in the
-core, just not yet checked against this specific ROM — it's there so the game
-is playable end-to-end while the remaining disassembly work happens.
+logic wasn't obvious from a single glance (carry-flag conventions, nibble
+packing, ASCII-digit arithmetic), tracing it by hand to a plain-English rule
+before it went into `src/tengen_core.c`, with a test in
+`tests/test_tengen.c` pinning the behavior. Several of these took two passes
+to get right — the wall kick, the DAS charge, the spawn table's indexing and
+the level-up rule were all initially plausible-looking and wrong — so treat
+"it compiles and looks reasonable" as no evidence at all here.
 
 ## Resolution mapping (the reason this project is feasible as a "1:1" port)
 
@@ -50,6 +52,7 @@ is playable end-to-end while the remaining disassembly work happens.
 | Auto-rotate | `main.asm.txt:153-183` | Holding B (`autoRotateCounterP1/2`) or A (`autoRotateClockwiseP1/2`) for 15 frames (`$0F`) starts auto-rotating. Unlike DAS, **the counter is never reloaded down** once past 15 — it fires again *every single frame* thereafter for as long as the button is held (until release resets it to 0). This is the source of Tengen's well-known "hold a button and the piece spins wildly" behavior. B increments orientation (this file calls that "clockwise"); A decrements it ("counter-clockwise") — the ROM's own variable names for these two counters are reversed from what they do, which is worth remembering if `main.asm.txt` is read again later. |
 | Wall kick | `main.asm.txt:538-575` | Traced via the actual carry-flag convention of `checkPositionAndClearFlagsOnCarrySet` (confirmed by reading `main.asm.txt:1017-1073`: the routine returns **carry SET = valid position**, via the `$2D` sentinel — `$2D` starts at `$FF`/negative and a `bmi`+`sec` path returns carry set only when no collision was ever recorded during the scan). With that convention, rotation is: try the new orientation in place → if valid, keep it; else shift one column **left** and try the same new orientation → if valid, keep both; else revert orientation and position entirely. It never tries right. This matches the wiki quote already sitting in `notes.txt.txt:160`: *"Because basic rotation can fail when a piece is against the right wall, but not when the same piece is against the left wall, this game will wallkick one square to the left if basic rotation fails."* — including the (real, faithfully reproduced) oddity that it still only ever tries left even flush against the left wall, where a left kick can't possibly help. |
 | Level-up thresholds | `main.asm.txt:1473-1478` (`bonusLinesTable`) | Bytes decode as ASCII digit pairs: 03,06,09,12,15,20,25,30,35,40,45,50,55,60,65,70,75,80,85,90,95 — i.e. every 3 lines up to level 5, then every 5 lines. Encoded in `TENGEN_LEVEL_LINE_THRESHOLDS`. |
+| **Level is recomputed, not incremented** | `main.asm.txt:3140-3186` | On every line clear the ROM walks `bonusLinesTable` from the start, counts how many thresholds the running line total has reached, and sets the level to `start_level + that count` — committing it only if it's higher than the current level. This is not equivalent to stepping the level by one per clear: a clear that crosses two thresholds at once advances two levels. The start level offsets the whole curve, and the ones digit is clamped at '7' so the result never exceeds 17. |
 | "Plant piece into playfield" on lock | `main.asm.txt:856-908` (`L8565`) | Confirms the nibble-packing scheme; reimplemented behaviorally (not bit-for-bit) in `lock_piece`. |
 | **Gravity curve** | `main.asm.txt:3970-4025` (`L9AEE`, `possibleFallTimerTable` at `$9B36`) | 18 entries, one per level 0-17: 33,28,24,20,17,14,11,9,7,6,5,5,4,4,3,4,3,3 frames per row. **Entry 15 (4) is genuinely slower than entry 14 (3)** — the ROM's bytes really do bump back up; it's not a transcription slip, and the fractional masks below depend on it. Coop uses a separate, strictly monotonic table (`L9B48` at `$9B48`): 33,28,24,20,18,17,16,15,14,13,12,11,10,9,8,7,6,5. |
 | **Fractional gravity (levels 10-17)** | `main.asm.txt:3985-4000`, mask table `L9B50` at `$9B50` | For levels ≥10 the ROM ANDs the piece's current row with a per-level mask and either uses `table[level]` or falls back to `table[level-1]`, so a level can average a non-integer frames-per-row (level 15 alternates 4/3 for an effective 3.5; level 14 uses 3 one row in four for 3.75). The polarity of the test **flips** between the 10-15 band (`beq`) and the 16+ band (`bne`). Masks for levels 10-17: `01,00,01,00,03,01,03,00`. The mask bytes physically overlap the tail of the coop fall-timer table — deliberate ROM byte reuse, not an error. |
@@ -62,13 +65,22 @@ is playable end-to-end while the remaining disassembly work happens.
 
 ## PLACEHOLDER (implemented, but not yet checked against this ROM)
 
-These live in `tengen_core.c`, each marked `TODO(verify)` at the point of use:
+Nothing. Every mechanic the core implements is now traced to the
+disassembly and cited both here and at its point of use in
+`src/tengen_core.c`.
 
-- **Level-up threshold indexing for non-zero start levels**: the ROM
-  computes an index into `bonusLinesTable` combined with `menuPlayer1StartLevel`
-  (`main.asm.txt:3140-3182`) in a way this pass didn't fully untangle — the
-  core currently indexes the table by `level - start_level`, which is a
-  reasonable guess but not confirmed to match a game started above level 0.
+Two things are deliberately *not* implemented rather than guessed at, and
+both are listed as next targets below: the long-bar/undo cheat codes, and
+the line-clear animation's timing (the core clears rows instantly; the ROM
+plays an animation first). Neither affects the rules the core does model.
+
+One known deviation, documented rather than reproduced: the ROM keeps score
+and line counts as ASCII digits and does its arithmetic digit by digit. The
+core uses plain integers and reproduces the one place where that's
+observable — the score wrapping to 100000 past 999999. The line counter has
+a similar digit clamp (`main.asm.txt:3129-3133`) that isn't modelled,
+because reaching 10000 lines in one game isn't a realistic scenario to
+preserve bug-for-bug.
 
 ## Suggested next disassembly targets (in priority order)
 

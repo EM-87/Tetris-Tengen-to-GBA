@@ -338,6 +338,33 @@ uint8_t tengen_frames_per_row(uint8_t level, int8_t piece_y, bool coop) {
     return table[index];
 }
 
+/* Level, VERIFIED against main.asm.txt:3140-3186.
+ *
+ * The ROM does not increment the level a step at a time — it recomputes it
+ * from scratch on every line clear as `start_level + (number of
+ * bonusLinesTable thresholds the running line total has reached)`, walking
+ * the table until the first threshold it hasn't reached, then only commits
+ * the result if it's higher than the current level. Recomputing rather than
+ * incrementing matters: a clear that crosses two thresholds at once (say a
+ * tetris taking the total from 2 to 6) advances two levels, which a
+ * one-step-per-clear implementation would silently get wrong.
+ *
+ * The ones digit is clamped at '7' (main.asm.txt:3168-3170), i.e. level 17.
+ *
+ * Not modelled: in demo/title states the ROM substitutes a flat +10 for the
+ * start level (main.asm.txt:3157-3160). That path never runs during play. */
+static uint8_t level_for_lines(uint32_t lines, uint8_t start_level) {
+    const unsigned count = sizeof(TENGEN_LEVEL_LINE_THRESHOLDS) /
+                            sizeof(TENGEN_LEVEL_LINE_THRESHOLDS[0]);
+    unsigned passed = 0;
+    while (passed < count && lines >= TENGEN_LEVEL_LINE_THRESHOLDS[passed]) {
+        passed++;
+    }
+    unsigned level = (unsigned)start_level + passed;
+    if (level > TENGEN_MAX_LEVEL) level = TENGEN_MAX_LEVEL;
+    return (uint8_t)level;
+}
+
 /* Scoring, VERIFIED against L9A47 (main.asm.txt:3874-3893), its shift-add
  * multiply L98D7 (main.asm.txt:3632-3685), the doubling pass L9A17
  * (main.asm.txt:3843-3871) and the digit-wise accumulate L9A6A
@@ -568,11 +595,9 @@ TengenStepResult tengen_step(TengenGame *game, TengenPlayerSlot slot, uint8_t he
 
                 /* No score is awarded here on purpose: this game pays per
                  * piece locked, not per line cleared (see add_lock_score). */
-                uint8_t idx = (uint8_t)(p->level - p->start_level);
-                if (idx < sizeof(TENGEN_LEVEL_LINE_THRESHOLDS) / sizeof(TENGEN_LEVEL_LINE_THRESHOLDS[0]) &&
-                    p->lines >= TENGEN_LEVEL_LINE_THRESHOLDS[idx] &&
-                    p->level < TENGEN_MAX_LEVEL) { /* the ROM clamps at 17, main.asm.txt:3168-3170 */
-                    p->level++;
+                uint8_t new_level = level_for_lines(p->lines, p->start_level);
+                if (new_level > p->level) {
+                    p->level = new_level;
                     result.leveled_up = true;
                 }
             }

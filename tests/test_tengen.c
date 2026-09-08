@@ -302,6 +302,69 @@ static void test_level_up_thresholds_match_rom_table(void) {
     CHECK(TENGEN_LEVEL_LINE_THRESHOLDS[20] == 95);
 }
 
+/* Drives the game until the player has cleared at least `target_lines`.
+ *
+ * Each round it stages a bottom row that is full except for the exact two
+ * columns a centred O piece drops into, then forces the active piece to be
+ * that O. Leaving a gap the piece can't actually fill is the easy way to
+ * write a test that passes while exercising nothing, so the caller should
+ * always assert the line count really moved. */
+static void clear_lines_until(TengenGame *game, uint32_t target_lines) {
+    /* An O spawned at x=7 occupies local columns 0-1, i.e. storage 5 and 6. */
+    const int gap_left = 5, gap_right = 6;
+
+    for (int guard = 0; guard < 200 && game->player[0].lines < target_lines; guard++) {
+        if (!game->player[0].game_active) return;
+
+        for (int row = 0; row < TENGEN_PF_HEIGHT; row++) {
+            for (int col = 1; col < TENGEN_PF_WIDTH - 1; col++) {
+                bool bottom = (row == TENGEN_PF_HEIGHT - 1);
+                bool in_gap = (col == gap_left || col == gap_right);
+                game->field[0].cell[row][col] = (bottom && !in_gap) ? TT_I : TT_NONE;
+            }
+        }
+
+        game->player[0].piece.current = TT_O;
+        game->player[0].piece.orientation = 0;
+        game->player[0].piece.x = 7;
+        game->player[0].piece.y = TENGEN_SPAWN_Y;
+
+        uint32_t lines_before = game->player[0].lines;
+        for (int frame = 0; frame < 4000 && game->player[0].lines == lines_before; frame++) {
+            if (!game->player[0].game_active) return;
+            tengen_step(game, TENGEN_PLAYER_1, TENGEN_BTN_DOWN);
+        }
+    }
+}
+
+static void test_level_starts_at_the_chosen_start_level(void) {
+    TengenGame game;
+    tengen_new_game(&game, 31, 9, false, false);
+    CHECK(game.player[0].level == 9);
+    CHECK(game.player[0].start_level == 9);
+    /* And gravity should immediately reflect it, not level 0's 33 frames. */
+    CHECK(tengen_frames_per_row(game.player[0].level, 0, false) == 6);
+}
+
+static void test_level_is_recomputed_from_the_line_total(void) {
+    /* The ROM recomputes level as start_level + thresholds_passed on every
+     * clear rather than incrementing (main.asm.txt:3140-3186), so a start
+     * level offsets the whole curve. */
+    TengenGame game;
+    tengen_new_game(&game, 33, 5, false, false);
+    clear_lines_until(&game, 3);
+    CHECK(game.player[0].lines >= 3); /* the helper must actually have cleared lines */
+    /* Three lines is the first threshold, so exactly one level above start. */
+    CHECK(game.player[0].level == 6);
+}
+
+static void test_level_never_passes_the_rom_cap(void) {
+    TengenGame game;
+    tengen_new_game(&game, 37, TENGEN_MAX_LEVEL, false, false);
+    clear_lines_until(&game, 6);
+    CHECK(game.player[0].level == TENGEN_MAX_LEVEL);
+}
+
 static void test_das_charges_before_repeating(void) {
     TengenGame game;
     tengen_new_game(&game, 9, 0, false, false);
@@ -494,6 +557,9 @@ int main(void) {
     test_walls_block_movement_in_1p_but_not_coop();
     test_top_out_when_piece_rests_above_the_field();
     test_score_is_awarded_per_piece_and_rewards_height();
+    test_level_starts_at_the_chosen_start_level();
+    test_level_is_recomputed_from_the_line_total();
+    test_level_never_passes_the_rom_cap();
 
     if (g_failures == 0) {
         printf("All tests passed.\n");
