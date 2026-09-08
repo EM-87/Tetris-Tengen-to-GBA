@@ -25,19 +25,20 @@ the level-up rule were all initially plausible-looking and wrong — so treat
   vertical scaling or cropping on GBA — every row is visible, pixel-for-pixel,
   same as NES.
 - With the frame's two wall columns included, the drawn field is 12 tiles
-  wide: **96×160 px**. That is what the GBA build actually places, centred at
-  tile column 9 (x = 72..167) — `make gba-check` asserts exactly those
-  bounds, so this mapping is verified by running the ROM, not just on paper.
-- Width: NES has 256-96=160px around the framed field for HUD (see
-  `disasm/gameModeNametable1P.asm.txt` for the 1P layout: statistics down the
-  left, score/level/next-piece to the right). GBA has 240-96=144px, i.e. 72px
-  per side against the NES's 80.
-- **Decision**: keep the playfield's footprint and tile graphics identical to
-  the NES (same 8×8 art once real CHR is available, same tile-id tables in
-  `tengen_core.c`); redesign only the surrounding HUD for the narrower
-  panels. This is exactly the "1:1 en jugabilidad y gráficos del campo, marco
-  adaptado" split the project started from — and it costs nothing on the axis
-  that matters, because the vertical fit is exact.
+  wide: **96×160 px**, and it keeps the NES's own column position (2-13).
+- **Horizontally**, 32 columns become 30. The two that go come out of the
+  6-column decorative divider, the one element that is pure ornament; the
+  4-column TETRIS banner inside it survives, as do both borders, the whole
+  field and the full 10-column panel. Nothing is scaled or cropped.
+- **Vertically**, 30 rows become 20 and the field needs all 20 — so the GBA
+  window is exactly the NES's playfield rows (8-27). That costs the NES's
+  header strip, which is where its SCORE / LINES / LEVEL / NEXT labels live,
+  so those move into the side panel the NES left mostly empty. Same tiles,
+  same lettering, stacked instead of spread. This is the one deliberate
+  rearrangement in the whole port.
+- `make gba-check` asserts all of it against a running ROM: the field's
+  column bounds, that both wall columns reach the full 160px, and that the
+  border, banner and panel are all actually drawn.
 
 ## VERIFIED
 
@@ -69,18 +70,22 @@ the level-up rule were all initially plausible-looking and wrong — so treat
 | **Palettes** | `piecePaletteIndex0..B` at `main.asm.txt:5364-5399`; `setPiecePalette` at `:5338`; `setPlayfieldPaletteFromLevel` at `:5328` | One table of twelve three-colour entries serves double duty: indexed by PIECE ID it colours a piece (entry 1 = I, 2 = T, ... 7 = Z), and indexed by the LEVEL'S ONES DIGIT it colours the playfield — which is why the field recolours each level and repeats every ten. Entry 10 is the line-clear flash, 11 the bonus animation. Transcribed into `gba/palette.h`. The NES colour indices are in the ROM; what they *look like* is in the PPU hardware and is only ever approximated. |
 | **Settled blocks are not coloured per piece** | `main.asm.txt:3723-3728` vs `:3205`, palette addresses at `:5334-5342` | `setPiecePalette` writes to `$3F11+`, a SPRITE palette, and is called once per piece dealt; `setPlayfieldPaletteFromLevel` writes to `$3F01+`, a BACKGROUND palette, and is called on level-up. So the falling piece and the next-piece preview are sprites carrying their own colour, while everything already locked is background drawn in one level-wide scheme. A renderer that tints settled blocks by the piece they came from looks wrong — this port did exactly that until the palette code was traced. |
 | **The playfield stores tile ids, not piece ids** | `notes.txt.txt:35` ("nibble aligns with tile index"), planting code at `main.asm.txt:928-935` | Each playfield nibble holds the sub-tile index (1-14) taken from `orientationTiles`, not the piece id. This core stores piece ids instead, which is behaviourally identical (both just mean "occupied") and lets it keep per-piece information the ROM discards — but it means the joined-block artwork can't be reproduced exactly until the field also carries tile ids. That's the one remaining structural gap for pixel-perfect settled blocks; it only matters once real CHR art is available. |
+| **Screen layout** | `gameModeNametable1P` at `main.asm.txt:C028` onward | The 1P screen is 32x30 tiles: border at columns 0-1 and 30-31, the playfield at columns 2-13 rows 8-27 (12 columns — 10 playable plus the two walls — by exactly 20 rows), a 6-column decorative divider at 14-19 carrying the vertical TETRIS banner, and the score/stats panel at 20-29. The header strip in rows 0-7 holds the SCORE / LINES / LEVEL / NEXT labels; those are multi-tile graphics, while "HIGH SCORE" and "STATS" are plain ASCII, because the tileset's letters and digits sit at their ASCII codes. |
+| **The playfield's tiles come from the nibble itself** | `L8544` at `main.asm.txt:829-842` | The routine that fills the screen buffer stores the playfield nibble **directly** as the nametable tile id — no lookup, no offset. So cell value 1-14 is a block tile and the wall's `$F` is tile `$0F`, which is why walls need no special case in the renderer. `$0F` is a block graphic with transparent corners, not a solid bar; a renderer that assumes a solid wall column will look wrong. |
+| **The dancers** | poses at `$C8BC-$C9FF`; driver at `main.asm.txt:6392-6499`; stage from `levelUpAnimationColsRows1` at `$B7FF` | The between-levels Cossack dancers are sprites: eight of them, each four 8x8 tiles in a 2x2 forming one 16x16 figure. A pose is just four tile ids; a per-dancer script advances one pose every 8 frames, the figure's X advances every 4 (they walk), and `eor #$40` on the OAM attribute flips them so they turn around. Their stage is the vertical TETRIS banner: the level-up blit is 4 columns x 18 rows at nametable (14,10), which clears exactly that banner to make room. **Not traced:** each dancer's individual choreography script — those have branch and random-selection entries — so the port walks the pose table from staggered starts at the ROM's cadence instead. |
 | Cheat-code state exists (long bar / undo) | `tetris-ram.asm.txt:121-134` | `codeInputYPlayer1/2`, `longBarCodeUsedP1/2`, `undoCodeUsedP1/2`, `lastCurrentBlockP1/2` etc. Tengen's famous in-game level-up entry codes and the "undo" cheat have dedicated RAM; **not yet implemented in the core** — worth a dedicated pass since these are a well-known, requested-by-fans Tengen feature. |
 
 ## PLACEHOLDER (implemented, but not yet checked against this ROM)
 
 Nothing. Every mechanic the core implements is now traced to the
 disassembly and cited both here and at its point of use in
-`src/tengen_core.c`.
+`src/tengen_core.c`, and the graphics all come from the cartridge rather
+than being redrawn.
 
-Two things are deliberately *not* implemented rather than guessed at, and
-both are listed as next targets below: the long-bar/undo cheat codes, and
-the line-clear animation's timing (the core clears rows instantly; the ROM
-plays an animation first). Neither affects the rules the core does model.
+Three things are deliberately *not* implemented rather than guessed at: the
+long-bar/undo cheat codes, the line-clear animation's timing (the core
+clears rows instantly; the ROM plays an animation first), and each dancer's
+individual choreography script. None affects the rules the core models.
 
 One known deviation, documented rather than reproduced: the ROM keeps score
 and line counts as ASCII digits and does its arithmetic digit by digit. The

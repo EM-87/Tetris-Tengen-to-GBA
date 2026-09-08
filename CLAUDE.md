@@ -72,34 +72,32 @@ running ROM; only the side panels need reflowing).
    tile art isn't. Tracing them also caught a fidelity bug worth remembering:
    settled blocks are background tiles sharing one level-wide palette, and
    only the falling piece and preview are sprites with their own colours.
-6. **Real graphics.** The tile *shapes* in `gba/main.c` are still placeholders
-   generated at runtime. The genuine 8×8 art lives in the original ROM's CHR data, which
-   is not in this repo — the disassembly build reads it from
-   `gfx/game_tileset.chr` (`reference/disasm/entry.asm.txt`), and
-   `reference/disasm/split_chr.py.txt` / `nes_chr_decode.py.txt` are the
-   tools that extract it from a cartridge dump. The renderer is already
-   built around 8×8 tiles and the core's `tengen_tile_id_for_cell` table, so
-   this should be a data path, not a rewrite. `tools/chr_to_gba.py` already
-   does the 2bpp-planar-to-4bpp-packed conversion (`make tiles ROM=...`, and
-   `make tiles-check` verifies the format handling without a ROM). The one
-   structural gap left is noted in `reference/NOTES.md`: the ROM's playfield
-   stores sub-tile ids, this core stores piece ids.
-7. Long-bar/undo cheat codes (`reference/NOTES.md` → "Cheat-code state
+6. ~~Real graphics~~ — done. `tools/extract_assets.py` pulls the tiles,
+   palettes, screen layout and dancer poses out of a cartridge dump
+   (`make assets ROM=...`); nothing in the port is drawn by hand. The
+   generated headers stay out of version control.
+7. ~~Real-hardware boot~~ — done, via devkitPro's `gbafix` vendored in
+   `tools/gbafix/`, with `tools/check_header.py` verifying the result.
+8. ~~The between-levels dancers~~ — done, with the ROM's own poses and
+   cadence, on the banner column the level-up blit clears for them. Their
+   individual choreography scripts are still untraced (noted in NOTES.md).
+9. Long-bar/undo cheat codes (`reference/NOTES.md` → "Cheat-code state
    exists") — a well-known, well-loved Tengen feature; the RAM layout is
    mapped, the behavior isn't traced yet.
-8. The 2P and coop modes. The core already models coop (including its
+10. The 2P and coop modes. The core already models coop (including its
    12-column field) and two players; only the GBA front end is single-player.
-9. The line-clear animation — the core clears rows instantly, the ROM plays
+11. The line-clear animation — the core clears rows instantly, the ROM plays
    an animation first (`stageLineClearAnimation`, `lineClearTimerP1/2`).
-10. Audio (`setMusicOrSoundEffect` plus the `MUSIC_*`/`SOUND_*` constants in
+12. Audio (`setMusicOrSoundEffect` plus the `MUSIC_*`/`SOUND_*` constants in
    `constants.asm.txt`) — lowest priority, gameplay fidelity comes first.
 
 ## Build
 
 - `make test` — native core tests, gcc only. The everyday loop.
 - `make gba` — cross-compiles `build/tengen.gba`.
-- `make tiles-check` — verifies the CHR converter's format handling.
-- `make tiles ROM=/path/to/clean.nes` — converts real cartridge art (optional).
+- `make assets ROM=/path/to/tetris.nes` — regenerates the graphics headers
+  from a cartridge dump. Required once before `make gba` on a fresh clone.
+- `make assets-check` — verifies the asset conversion without needing a ROM.
 - `make gba-check` — boots the ROM headlessly in mGBA and asserts it draws
   the field where the resolution mapping says it should and that a piece
   actually falls.

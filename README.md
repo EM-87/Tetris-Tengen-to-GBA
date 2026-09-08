@@ -16,9 +16,17 @@ alrededor (al NES le sobran 160 px de ancho para repartir a los costados; al
 GBA 144), así que el plan es: **playfield y jugabilidad idénticos, HUD
 rediseñado** para los paneles más angostos.
 
+En horizontal sobran exactamente 2 de las 32 columnas del NES, y salen del
+divisor decorativo que separa el campo del panel — el único elemento que es
+puro adorno. En vertical el NES tiene 30 filas y el GBA 20, y el campo se
+lleva las 20 exactas: por eso la franja de etiquetas que el NES pone *arriba*
+del campo baja al panel lateral, que el NES dejaba casi vacío. Mismos tiles,
+misma tipografía, apilados en vez de repartidos.
+
 Eso no es teoría: `make gba-check` arranca la ROM en un emulador y verifica
-que el campo caiga exactamente en las columnas 72..167 y que las dos columnas
-de marco ocupen los 160 px de alto. Ver `reference/NOTES.md` para el detalle.
+que el campo caiga en sus columnas, que las dos columnas de marco lleguen a
+los 160 px de alto, y que el marco, el banner y el panel se dibujen. Ver
+`reference/NOTES.md` para el detalle.
 
 ## Estado actual
 
@@ -32,11 +40,13 @@ Hay una ROM de GBA que arranca, se juega y corre las reglas reales de Tengen.
   auto-rotate, la curva de gravedad con sus niveles fraccionarios, el soft
   drop que acelera, el puntaje por pieza apoyada, y la subida de nivel.
 - `tests/test_tengen.c` — tests nativos de esas reglas (`make test`).
-- `gba/` — capa de GBA: registros de hardware, `crt0.s`, linker script, el
-  renderer por tiles, la fuente del HUD y las paletas reales del juego. No
-  depende de devkitARM ni de libgba: compila con un `arm-none-eabi-gcc`
-  estándar. Tiene pantalla de título con selección de nivel (0-9), HUD
-  completo (next, score, nivel, líneas, estadísticas por pieza) y game over.
+- `gba/` — capa de GBA: registros de hardware, `crt0.s`, linker script y el
+  renderer. No depende de devkitARM ni de libgba: compila con un
+  `arm-none-eabi-gcc` estándar. Tiene título con selección de nivel (0-9),
+  HUD completo, game over, y los bailarines cosacos entre niveles.
+- `tools/extract_assets.py` — saca del cartucho original los tiles, las
+  paletas, el layout de pantalla y las poses de los bailarines. **Todo el
+  arte del port sale de ahí; no hay nada dibujado a mano.**
 - `tools/run_rom.py` — arranca la ROM en mGBA headless y verifica que
   realmente dibuje y se juegue (`make gba-check`), no solo que linkee.
 - `reference/disasm/` — el disassembly completo que sirve de fuente de
@@ -45,13 +55,6 @@ Hay una ROM de GBA que arranca, se juega y corre las reglas reales de Tengen.
 
 ### Lo que falta
 
-- **Las formas de los gráficos son placeholders**, pero **los colores no**:
-  las paletas sí están en el disassembly y son las del juego original. El
-  arte de 8×8 vive en la CHR de la ROM original y no está en este repo;
-  `tools/chr_to_gba.py` lo convierte a tiles de GBA a partir de un dump que
-  aportes vos (`make tiles ROM=/ruta/clean.nes`). El renderer ya está armado
-  alrededor de tiles de 8×8, así que es un cambio de datos, no una
-  reescritura.
 - **Audio**: nada todavía.
 - **Modos 2P y coop**: el core ya los modela (incluido el campo de 12
   columnas del coop), pero la capa GBA es solo de un jugador por ahora. Del
@@ -59,18 +62,32 @@ Hay una ROM de GBA que arranca, se juega y corre las reglas reales de Tengen.
   handicap y selección de música.
 - **Animación de línea completa**: el core borra las filas al instante; la
   ROM primero reproduce una animación.
-- La ROM corre en emuladores pero **no bootea en hardware real**: le falta el
-  logo de Nintendo en el header (dato que no está en este repo). Pasarle
-  `gbafix` de devkitPro lo resuelve. El checksum del header sí se calcula
-  solo en el build.
+- **Coreografía exacta de los bailarines**: los bailarines están, con su arte
+  y sus poses reales, en su sitio y a la cadencia de la ROM; lo que no está
+  trazado es el script individual de cada uno (tienen saltos y selección
+  aleatoria), así que recorren la tabla de poses desde puntos escalonados.
 
 ## Compilar
+
+El arte del juego **no está en este repo**: sale de un dump del cartucho
+original que aportes vos. Una vez, para generarlo:
+
+```sh
+make assets ROM=/ruta/a/tetris.nes
+```
+
+Después:
 
 ```sh
 make test        # tests del núcleo en el host, solo necesita gcc
 make gba         # compila la ROM -> build/tengen.gba
 make gba-check   # arranca la ROM en mGBA headless y la verifica
 ```
+
+`build/tengen.gba` **arranca en hardware real**. El header lleva el logo de
+arranque que el BIOS exige, puesto por `gbafix` (la herramienta oficial de
+devkitPro, vendorizada en `tools/gbafix/`), y `tools/check_header.py`
+comprueba después las tres validaciones que hace el BIOS.
 
 Para `make gba` hace falta un toolchain ARM:
 
@@ -89,7 +106,7 @@ tengen_gba_port/
 ├── src/                  núcleo del juego (C99, sin dependencias de GBA)
 ├── tests/                tests nativos del núcleo
 ├── gba/                  capa de GBA: hardware, crt0, linker script, renderer
-├── tools/                utilidades de build y verificación de la ROM
+├── tools/                extracción de assets, verificación de ROM, gbafix
 ├── reference/
 │   ├── disasm/           disassembly completo de Tetris (NES, Tengen)
 │   └── NOTES.md          mecánicas verificadas, con citas a la ROM

@@ -35,8 +35,10 @@
 
 /* Generated from a cartridge dump by tools/extract_assets.py. */
 #include "tiles_game.h"
+#include "tiles_dancers.h"
 #include "screen_1p.h"
 #include "palettes_rom.h"
+#include "dancer_poses.h"
 
 #define CHARBLOCK   0
 #define SCREENBLOCK 28  /* 28 * 2KB = 56KB in, clear of the 8KB of tile data */
@@ -61,6 +63,39 @@
  * does on the NES (main.asm.txt:5328). Bank 4 carries the falling piece's own
  * colours, mirroring setPiecePalette's separate sprite palette. */
 #define PAL_PIECE_BANK 4
+
+/* ----------------------------------------------------------------------- *
+ * The between-levels dancers
+ *
+ * On the NES these are sprites, eight of them, each built from four 8x8
+ * tiles in a 2x2 block. A per-dancer script steps through poses every 8
+ * frames while the figure walks sideways and flips horizontally
+ * (main.asm.txt:6392-6499). The level-up blit clears the vertical TETRIS
+ * banner to make room, which is how we know that column is their stage.
+ *
+ * Reproduced here with the cartridge's own dancer tiles and pose table, at
+ * the same cadence and in the same place. The one thing NOT taken from the
+ * ROM is each dancer's individual choreography script — those scripts have
+ * branch and random-selection entries that this pass did not trace, so the
+ * dancers here simply walk the pose table from staggered starting points.
+ * See reference/NOTES.md.
+ * ----------------------------------------------------------------------- */
+#define DANCER_COUNT 8
+#define DANCER_SPRITES 4              /* four 8x8 tiles in a 2x2 per dancer */
+#define DANCER_POSE_FRAMES 8          /* pose advance cadence, from the ROM */
+#define DANCER_WALK_FRAMES 4          /* X advance cadence, from the ROM */
+#define DANCER_SHOW_FRAMES 200        /* how long the interlude lasts */
+#define PAL_OBJ_DANCER 0
+
+/* Their stage: the banner column, in the tile coordinates the level-up blit
+ * clears. On the NES that blit is 4 columns x 18 rows at nametable (14,10),
+ * which inside this port's window is columns 14-17, rows 2-19. */
+#define DANCER_STAGE_TX 14
+#define DANCER_STAGE_TY 2
+#define DANCER_STAGE_TW 4
+#define DANCER_STAGE_TH 18
+#define DANCER_STAGE_X (DANCER_STAGE_TX * 8)
+#define DANCER_STAGE_Y (DANCER_STAGE_TY * 8)
 
 #define WITH_BANK(tile, bank) ((uint16_t)((tile) | ((bank) << 12)))
 
@@ -142,6 +177,60 @@ static void set_piece_palette(TengenTetromino piece) {
     const uint8_t *entry = kRomPiecePalettes[piece];
     vu16 *bank = MEM_PALETTE + PAL_PIECE_BANK * 16;
     for (int i = 0; i < 3; i++) bank[1 + i] = nes_colour_to_gba(entry[i]);
+}
+
+static void upload_dancer_tiles(void) {
+    vu16 *dst = MEM_OBJ_TILES;
+    for (unsigned i = 0; i < sizeof(kDancerTiles); i += 2) {
+        dst[i / 2] = (uint16_t)(kDancerTiles[i] | (kDancerTiles[i + 1] << 8));
+    }
+    /* piecePaletteIndexB is labelled "bonus animation" in the disassembly
+     * (main.asm.txt:5397-5399) — the level-up interlude's own colours. */
+    const uint8_t *entry = kRomPiecePalettes[11];
+    vu16 *pal = MEM_PALETTE_OBJ + PAL_OBJ_DANCER * 16;
+    pal[0] = nes_colour_to_gba(TENGEN_BACKDROP_INDEX);
+    for (int i = 0; i < 3; i++) pal[1 + i] = nes_colour_to_gba(entry[i]);
+}
+
+static void oam_set(int index, int x, int y, uint16_t tile, bool hflip) {
+    vu16 *entry = MEM_OAM + index * 4;
+    entry[0] = (uint16_t)OBJ_ATTR0_Y(y);
+    entry[1] = (uint16_t)(OBJ_ATTR1_X(x) | (hflip ? OBJ_ATTR1_HFLIP : 0));
+    entry[2] = (uint16_t)(tile | OBJ_ATTR2_PAL(PAL_OBJ_DANCER));
+}
+
+static void oam_hide_all(void) {
+    for (int i = 0; i < 128; i++) MEM_OAM[i * 4] = OBJ_ATTR0_HIDDEN;
+}
+
+/* Places the eight dancers for one frame of the interlude. */
+static void draw_dancers(int elapsed) {
+    int pose_step = elapsed / DANCER_POSE_FRAMES;
+    int walk = elapsed / DANCER_WALK_FRAMES;
+
+    for (int d = 0; d < DANCER_COUNT; d++) {
+        /* Staggered starting poses so the eight are not in lockstep. */
+        int pose = (pose_step + d * 7) % DANCER_POSE_COUNT;
+        const uint8_t *tiles = kDancerPoses[pose];
+
+        /* Two columns of four, filling the banner's stage. They walk, and
+         * turn around at the edges — the ROM flips them the same way. */
+        int lane = d & 1;
+        int row = d >> 1;
+        int travel = (walk + d * 5) % 32;
+        bool facing_left = travel >= 16;
+        int offset = facing_left ? (31 - travel) : travel;
+
+        /* Two lanes of four, evenly filling the 32x144 stage. */
+        int x = DANCER_STAGE_X + lane * 16 + (offset >> 3);
+        int y = DANCER_STAGE_Y + row * 36;
+
+        for (int s = 0; s < DANCER_SPRITES; s++) {
+            int sx = x + ((s & 1) ? 8 : 0);
+            int sy = y + ((s & 2) ? 8 : 0);
+            oam_set(d * DANCER_SPRITES + s, sx, sy, tiles[s], facing_left);
+        }
+    }
 }
 
 static void set_map_tile(int tx, int ty, uint16_t entry) {
@@ -316,15 +405,19 @@ int main(void) {
     set_field_palette_for_level(0);
     clear_screen();
 
+    upload_dancer_tiles();
+    oam_hide_all();
+
     REG_BG0CNT = BG_4BPP | BG_SIZE_32x32 | BG_CHARBLOCK(CHARBLOCK) |
                   BG_SCREENBLOCK(SCREENBLOCK);
-    REG_DISPCNT = DCNT_MODE0 | DCNT_BG0;
+    REG_DISPCNT = DCNT_MODE0 | DCNT_BG0 | DCNT_OBJ | DCNT_OBJ_1D;
 
     Screen screen = SCREEN_TITLE;
     uint8_t start_level = 0;
     uint8_t shown_level = 0xFF;
     TengenTetromino shown_piece = TT_NONE;
     uint8_t held_last = 0;
+    int dancer_frames = 0;   /* > 0 while the level-up interlude is running */
 
     /* The ROM steps its RNG once per frame from the main loop
      * (main.asm.txt:49-50), and whatever state it is in when Start is pressed
@@ -360,10 +453,31 @@ int main(void) {
             continue;
         }
 
-        tengen_step(&g_game, TENGEN_PLAYER_1, buttons);
+        /* The level-up interlude holds the game still while the dancers
+         * perform, the way the ROM switches to its bonus state. Any button
+         * cuts it short, which is what the original does too
+         * (main.asm.txt:9037-9045). */
+        if (dancer_frames > 0) {
+            if (pressed) dancer_frames = 1;
+            dancer_frames--;
+            if (dancer_frames == 0) {
+                oam_hide_all();
+                draw_static_screen();
+            } else {
+                clear_region(DANCER_STAGE_TX, DANCER_STAGE_TY,
+                              DANCER_STAGE_TW, DANCER_STAGE_TH);
+                draw_dancers(DANCER_SHOW_FRAMES - dancer_frames);
+            }
+            vsync();
+            continue;
+        }
+
+        TengenStepResult step = tengen_step(&g_game, TENGEN_PLAYER_1, buttons);
+        if (step.leveled_up) dancer_frames = DANCER_SHOW_FRAMES;
 
         if (!g_game.player[0].game_active && (pressed & TENGEN_BTN_START)) {
             screen = SCREEN_TITLE;
+            oam_hide_all();
             vsync();
             continue;
         }
