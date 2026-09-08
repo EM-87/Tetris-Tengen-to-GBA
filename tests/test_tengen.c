@@ -76,9 +76,106 @@ static void test_spawn_position_matches_rom(void) {
     TengenGame game;
     tengen_new_game(&game, 42, 0, false, false);
     CHECK(game.player[0].piece.y == TENGEN_SPAWN_Y);
-    CHECK(game.player[0].piece.x == TENGEN_SPAWN_X[0]);
+    /* 1P uses entry [2] (= 7), NOT entry [0] — the table is only indexed by
+     * player in coop. main.asm.txt:3716-3720. */
+    CHECK(game.player[0].piece.x == TENGEN_SPAWN_X[2]);
+    CHECK(game.player[0].piece.x == 7);
     CHECK(game.player[0].piece.orientation == 0);
     CHECK(tengen_position_valid(&game, TENGEN_PLAYER_1));
+
+    /* Spawn sits above the visible field, so the piece slides in. */
+    CHECK(TENGEN_SPAWN_Y < TENGEN_ROM_ROW_ORIGIN);
+
+    /* Coop spawns the two players on opposite sides of one shared field. */
+    TengenGame coop;
+    tengen_new_game(&coop, 42, 0, true, true);
+    CHECK(coop.player[0].piece.x == TENGEN_SPAWN_X[0]);
+    CHECK(coop.player[1].piece.x == TENGEN_SPAWN_X[1]);
+}
+
+static void test_walls_are_present_in_1p_and_absent_in_coop(void) {
+    /* initPlayer1orCoopPlayfield writes solid wall nibbles in 1P/2P and
+     * leaves them open in coop, widening coop to 12 columns
+     * (main.asm.txt:3468-3495 and its own comment at :3483). */
+    TengenGame solo;
+    tengen_new_game(&solo, 5, 0, false, false);
+    for (int row = 0; row < TENGEN_PF_HEIGHT; row++) {
+        CHECK(solo.field[0].cell[row][0] == TT_WALL);
+        CHECK(solo.field[0].cell[row][TENGEN_PF_WIDTH - 1] == TT_WALL);
+        CHECK(solo.field[0].cell[row][1] == TT_NONE);
+        CHECK(solo.field[0].cell[row][TENGEN_PF_WIDTH - 2] == TT_NONE);
+    }
+
+    TengenGame coop;
+    tengen_new_game(&coop, 5, 0, true, true);
+    for (int row = 0; row < TENGEN_PF_HEIGHT; row++) {
+        CHECK(coop.field[0].cell[row][0] == TT_NONE);
+        CHECK(coop.field[0].cell[row][TENGEN_PF_WIDTH - 1] == TT_NONE);
+    }
+}
+
+static void test_walls_block_movement_in_1p_but_not_coop(void) {
+    /* The same x that runs into a wall in 1P is playable in coop. */
+    TengenGame solo;
+    tengen_new_game(&solo, 6, 0, false, false);
+    solo.player[0].piece.current = TT_O;   /* occupies local cols 0-1 */
+    solo.player[0].piece.y = 10;
+    solo.player[0].piece.x = TENGEN_ROM_COL_ORIGIN + 1; /* flush against the left wall */
+    CHECK(tengen_position_valid(&solo, TENGEN_PLAYER_1));
+    CHECK(!tengen_try_move(&solo, TENGEN_PLAYER_1, -1));
+
+    TengenGame coop;
+    tengen_new_game(&coop, 6, 0, true, true);
+    coop.player[0].piece.current = TT_O;
+    coop.player[0].piece.y = 10;
+    coop.player[0].piece.x = TENGEN_ROM_COL_ORIGIN + 1;
+    CHECK(tengen_try_move(&coop, TENGEN_PLAYER_1, -1)); /* the extra column exists here */
+}
+
+static void test_top_out_when_piece_rests_above_the_field(void) {
+    /* main.asm.txt:588-590: a piece that comes to rest with its box top still
+     * above the visible field ends the game. Fill the field solid, then let a
+     * piece fall onto it. */
+    TengenGame game;
+    tengen_new_game(&game, 8, 0, false, false);
+    for (int row = 0; row < TENGEN_PF_HEIGHT; row++) {
+        for (int col = 1; col < TENGEN_PF_WIDTH - 1; col++) {
+            game.field[0].cell[row][col] = TT_I;
+        }
+    }
+    game.player[0].piece.current = TT_O;
+    game.player[0].piece.x = 7;
+    game.player[0].piece.y = TENGEN_SPAWN_Y;
+
+    bool topped = false;
+    for (int frame = 0; frame < 600 && !topped; frame++) {
+        TengenStepResult r = tengen_step(&game, TENGEN_PLAYER_1, 0);
+        topped = r.topped_out;
+    }
+    CHECK(topped);
+    CHECK(!game.player[0].game_active);
+}
+
+static void test_score_is_awarded_per_piece_and_rewards_height(void) {
+    /* Verified formula: (level+1) * ((level+1) + rows_above_floor), where
+     * rows_above_floor counts from the obstruction up to the floor — so a
+     * piece resting high scores MORE, not less (main.asm.txt:3874-3893). */
+    TengenGame low, high;
+    tengen_new_game(&low, 21, 0, false, false);
+    tengen_new_game(&high, 21, 0, false, false);
+
+    /* `high` gets a stack to land on early; `low` falls all the way down. */
+    for (int col = 1; col < TENGEN_PF_WIDTH - 1; col++) {
+        high.field[0].cell[2][col] = TT_I;
+    }
+
+    for (int frame = 0; frame < 2000; frame++) {
+        if (low.player[0].score == 0) tengen_step(&low, TENGEN_PLAYER_1, 0);
+        if (high.player[0].score == 0) tengen_step(&high, TENGEN_PLAYER_1, 0);
+    }
+    CHECK(low.player[0].score > 0);
+    CHECK(high.player[0].score > 0);
+    CHECK(high.player[0].score > low.player[0].score);
 }
 
 static void test_o_piece_never_needs_a_kick(void) {
@@ -104,45 +201,96 @@ static void test_wall_kick_only_ever_shifts_left(void) {
     tengen_new_game(&game, 3, 0, false, false);
     TengenPiece *piece = &game.player[0].piece;
     piece->current = TT_T;
-    piece->orientation = 1; /* vertical T, main.asm.txt:1111 orientationForT[1] = 8C,80 */
-    piece->y = 0;
-    piece->x = TENGEN_PF_WIDTH - 2; /* flush against the right wall for this orientation */
+    piece->orientation = 1; /* vertical T (main.asm.txt:1111): local cols 0-1 */
+    piece->y = 10;
+    /* Rightmost x where this orientation still fits: its local columns land on
+     * the last two playable storage columns. */
+    piece->x = TENGEN_ROM_COL_ORIGIN + TENGEN_PF_WIDTH - 3;
+    CHECK(tengen_position_valid(&game, TENGEN_PLAYER_1));
+
+    /* Orientation 2 is three columns wide, so rotating in place would put a
+     * cell in the wall — the rotation can only succeed via the left kick. */
+    int8_t x_before = piece->x;
+    CHECK(tengen_try_rotate(&game, TENGEN_PLAYER_1, true));
+    CHECK(piece->orientation == 2);
+    CHECK(piece->x == x_before - 1); /* kicked exactly one column left */
+    CHECK(tengen_position_valid(&game, TENGEN_PLAYER_1));
+}
+
+static void test_rotation_fails_cleanly_when_the_kick_cannot_help(void) {
+    /* Against the LEFT wall the kick shifts further into the wall, so it
+     * can't rescue the rotation — the ROM still only ever tries left, and
+     * the piece must end up exactly as it started. */
+    TengenGame game;
+    tengen_new_game(&game, 4, 0, false, false);
+    TengenPiece *piece = &game.player[0].piece;
+    piece->current = TT_I;
+    piece->orientation = 1; /* vertical I ($44,$44): occupies local column 1 only */
+    piece->y = 10;
+    piece->x = TENGEN_ROM_COL_ORIGIN; /* puts that column in storage col 1, the leftmost playable one */
     CHECK(tengen_position_valid(&game, TENGEN_PLAYER_1));
 
     int8_t x_before = piece->x;
-    bool rotated = tengen_try_rotate(&game, TENGEN_PLAYER_1, true);
-    if (rotated) {
-        CHECK(piece->x <= x_before); /* only ever kicks left, never right */
-    }
-    /* Whether or not this particular orientation pair needs a kick, the
-     * piece must always end up in a legal position. */
-    CHECK(tengen_position_valid(&game, TENGEN_PLAYER_1));
+    uint8_t orientation_before = piece->orientation;
+    /* Horizontal I spans four columns starting at local col 0, which would
+     * run off the left edge both in place and one column further left. */
+    CHECK(!tengen_try_rotate(&game, TENGEN_PLAYER_1, true));
+    CHECK(piece->x == x_before);
+    CHECK(piece->orientation == orientation_before);
 }
 
 static void test_move_rejects_out_of_bounds(void) {
     TengenGame game;
     tengen_new_game(&game, 1, 0, false, false);
-    game.player[0].piece.current = TT_O;
-    game.player[0].piece.x = 0;
-    CHECK(!tengen_try_move(&game, TENGEN_PLAYER_1, -1)); /* would leave the field */
-    CHECK(game.player[0].piece.x == 0);                  /* reverted */
+    game.player[0].piece.current = TT_O; /* occupies local columns 0-1 */
+    game.player[0].piece.y = 10;
+    /* Sitting flush against the left wall: legal here, illegal one further. */
+    game.player[0].piece.x = TENGEN_ROM_COL_ORIGIN + 1;
+    CHECK(tengen_position_valid(&game, TENGEN_PLAYER_1));
+    CHECK(!tengen_try_move(&game, TENGEN_PLAYER_1, -1));
+    CHECK(game.player[0].piece.x == TENGEN_ROM_COL_ORIGIN + 1); /* reverted */
 }
 
 static void test_line_clear_detects_and_collapses(void) {
+    /* Build a 1P field: walls in the outer columns, ten playable cells. */
     TengenPlayfield field;
     memset(&field, 0, sizeof(field));
-    for (int col = 0; col < TENGEN_PF_WIDTH; col++) {
-        field.cell[TENGEN_PF_HEIGHT - 1][col] = TT_I; /* bottom row: full */
+    for (int row = 0; row < TENGEN_PF_HEIGHT; row++) {
+        field.cell[row][0] = TT_WALL;
+        field.cell[row][TENGEN_PF_WIDTH - 1] = TT_WALL;
     }
-    field.cell[TENGEN_PF_HEIGHT - 2][0] = TT_T; /* row above: a single marker cell */
+    /* Filling only the PLAYABLE columns must count as a full row — the wall
+     * sentinels are what make that work without mode-specific bounds. */
+    for (int col = 1; col < TENGEN_PF_WIDTH - 1; col++) {
+        field.cell[TENGEN_PF_HEIGHT - 1][col] = TT_I;
+    }
+    field.cell[TENGEN_PF_HEIGHT - 2][1] = TT_T; /* row above: a single marker cell */
 
     uint32_t mask = tengen_clear_full_rows(&field);
     CHECK(mask == (1u << (TENGEN_PF_HEIGHT - 1)));
     /* The marker cell should have dropped down into the now-empty bottom row. */
-    CHECK(field.cell[TENGEN_PF_HEIGHT - 1][0] == TT_T);
-    for (int col = 1; col < TENGEN_PF_WIDTH; col++) {
+    CHECK(field.cell[TENGEN_PF_HEIGHT - 1][1] == TT_T);
+    for (int col = 2; col < TENGEN_PF_WIDTH - 1; col++) {
         CHECK(field.cell[TENGEN_PF_HEIGHT - 1][col] == TT_NONE);
     }
+    /* And the frame must survive the collapse, including on the row that was
+     * vacated at the top. */
+    for (int row = 0; row < TENGEN_PF_HEIGHT; row++) {
+        CHECK(field.cell[row][0] == TT_WALL);
+        CHECK(field.cell[row][TENGEN_PF_WIDTH - 1] == TT_WALL);
+    }
+}
+
+static void test_a_row_of_walls_alone_is_not_a_full_row(void) {
+    /* Guards the sentinel trick from the obvious failure mode: an empty 1P
+     * field must not read as twenty completed lines. */
+    TengenPlayfield field;
+    memset(&field, 0, sizeof(field));
+    for (int row = 0; row < TENGEN_PF_HEIGHT; row++) {
+        field.cell[row][0] = TT_WALL;
+        field.cell[row][TENGEN_PF_WIDTH - 1] = TT_WALL;
+    }
+    CHECK(tengen_clear_full_rows(&field) == 0);
 }
 
 static void test_level_up_thresholds_match_rom_table(void) {
@@ -328,6 +476,8 @@ int main(void) {
     test_spawn_position_matches_rom();
     test_o_piece_never_needs_a_kick();
     test_wall_kick_only_ever_shifts_left();
+    test_rotation_fails_cleanly_when_the_kick_cannot_help();
+    test_a_row_of_walls_alone_is_not_a_full_row();
     test_move_rejects_out_of_bounds();
     test_line_clear_detects_and_collapses();
     test_level_up_thresholds_match_rom_table();
@@ -340,6 +490,10 @@ int main(void) {
     test_soft_drop_accelerates_while_held();
     test_fresh_direction_press_is_swallowed_after_soft_drop();
     test_das_does_not_charge_while_down_is_held();
+    test_walls_are_present_in_1p_and_absent_in_coop();
+    test_walls_block_movement_in_1p_but_not_coop();
+    test_top_out_when_piece_rests_above_the_field();
+    test_score_is_awarded_per_piece_and_rewards_height();
 
     if (g_failures == 0) {
         printf("All tests passed.\n");

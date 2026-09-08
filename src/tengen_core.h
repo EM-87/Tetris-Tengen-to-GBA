@@ -50,18 +50,42 @@ extern "C" {
 /* ----------------------------------------------------------------------- *
  * Playfield
  *
- * The ROM packs the playfield as one nibble per cell with sentinel F0/0F
- * wall columns and an FF floor row baked right into the same buffer the
- * collision check walks (notes.txt: "playfield is stored with 1 tile per
- * nibble ... walls are built with F0 on left, 0F on right. Floor is FF").
- * That trick exists purely to make the 6502 collision routine cheap; a
- * clean C port has no reason to replicate the bit-packing, so this core
- * uses one byte per cell and does explicit bounds checks instead. The
- * *behavior* (10x20 visible field, values 0=empty/1..7=locked piece id)
- * matches the ROM exactly.
+ * The ROM packs the playfield as one nibble per cell, with sentinel wall
+ * columns and floor rows baked right into the same buffer the collision
+ * check walks (notes.txt: "playfield is stored with 1 tile per nibble ...
+ * walls are built with F0 on left, 0F on right. Floor is FF"). This core
+ * drops the nibble packing (one byte per cell instead) but KEEPS the
+ * sentinel idea, because that's what makes both collision and full-row
+ * detection fall out for free in either play mode — see below.
+ *
+ * Layout verified against initPlayer1orCoopPlayfield (main.asm.txt:3468-3503):
+ * each ROM row is 8 bytes / 16 nibbles, of which nibbles 3..12 are the ten
+ * playable cells, nibbles 2 and 13 are the walls, and 0,1,14,15 are padding.
+ * The buffer runs 26 open rows (0..25) followed by two solid floor rows, so
+ * the floor sits at row 26 — which is exactly the constant the scoring
+ * routine subtracts against (main.asm.txt:1062), an independent confirmation
+ * of the geometry.
+ *
+ * This core stores 12 columns per row, mapping storage column = ROM nibble
+ * - 2. So:
+ *   - 1P / 2P: columns 1..10 are playable, columns 0 and 11 hold TT_WALL.
+ *   - Coop:    all 12 columns are playable. The ROM writes $00 instead of
+ *              the wall nibbles in coop specifically to widen the field by
+ *              one column on each side (its own comment says so at
+ *              main.asm.txt:3483), so coop really is a 12-wide game.
  * ----------------------------------------------------------------------- */
-#define TENGEN_PF_WIDTH  10
-#define TENGEN_PF_HEIGHT 20
+#define TENGEN_PF_WIDTH  12 /* storage width; see the mode note above */
+#define TENGEN_PF_HEIGHT 20 /* visible rows, = ROM rows 6..25 */
+
+/* Piece coordinates are kept in the ROM's own space rather than remapped, so
+ * they can be compared against the disassembly directly. Translate with:
+ *   storage_column = piece.x + local_col - TENGEN_ROM_COL_ORIGIN
+ *   visible_row    = piece.y + local_row - TENGEN_ROM_ROW_ORIGIN
+ * A visible_row below 0 is the hidden area above the field, where pieces
+ * spawn; it is legal to occupy and simply isn't drawn. */
+#define TENGEN_ROM_COL_ORIGIN  2
+#define TENGEN_ROM_ROW_ORIGIN  6  /* ROM row of the top visible playfield row */
+#define TENGEN_ROM_FLOOR_ROW  26  /* first solid floor row (main.asm.txt:3496-3502) */
 
 /* Piece ids match player1TetrominoCurrent's values 0-7 exactly
  * (tetris-ram.asm.txt:80; notes.txt lines 11-18). */
@@ -74,7 +98,12 @@ typedef enum {
     TT_L = 5,
     TT_S = 6,
     TT_Z = 7,
-    TENGEN_TETROMINO_COUNT = 8
+    TENGEN_TETROMINO_COUNT = 8,
+    /* Not a piece: the sentinel the ROM keeps in the wall columns. Stored in
+     * the field so collision and full-row checks need no mode-specific
+     * bounds logic — exactly why the ROM does it that way. Renderers should
+     * treat it as frame, not as a block. */
+    TT_WALL = 8
 } TengenTetromino;
 
 /* Button bits match constants.asm.txt:1-8 exactly, so a GBA REG_KEYINPUT
@@ -186,11 +215,22 @@ bool tengen_piece_occupies(TengenTetromino piece, uint8_t orientation, int row, 
  * renderer, not by collision logic. main.asm.txt:1125-1150. */
 uint8_t tengen_tile_id_for_cell(TengenTetromino piece, uint8_t orientation, int occupied_index);
 
-/* Spawn column by mode: index 0 = player 1 / 1P, 1 = player 2, 2 = coop.
- * VERIFIED, main.asm.txt:3802 (tetrominoXSpawnTable). Spawn row is always 4
- * (constants.asm.txt:63, TETROMINO_Y_INIT). */
+/* tetrominoXSpawnTable = {3, 9, 7} (main.asm.txt:3802). Read carefully, the
+ * indexing is not what the layout suggests: getNextTetromino
+ * (main.asm.txt:3716-3720) loads entry [2] = 7 for 1P *and* 2P, and only
+ * falls back to indexing by player — 3 for P1, 9 for P2 — in coop, where
+ * both players share one 12-wide field and need to start on opposite sides.
+ * So single-field play always spawns dead centre at 7.
+ *
+ * Spawn row is always 4 (constants.asm.txt:63, TETROMINO_Y_INIT), which sits
+ * two rows ABOVE the visible field (TENGEN_ROM_ROW_ORIGIN is 6) — pieces
+ * genuinely slide in from off-screen in this game. */
 extern const int8_t TENGEN_SPAWN_X[3];
 #define TENGEN_SPAWN_Y 4
+
+/* A piece that comes to rest with its bounding box still starting above the
+ * visible field is a top-out (main.asm.txt:588-590, `cmp #$06`). */
+#define TENGEN_TOPOUT_ROW TENGEN_ROM_ROW_ORIGIN
 
 /* Cumulative lines needed to be AT level (start_level + i) for i in 0..20.
  * VERIFIED, main.asm.txt:1473-1478 (bonusLinesTable, decoded from ASCII digit

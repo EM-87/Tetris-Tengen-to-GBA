@@ -112,22 +112,51 @@ static TengenTetromino roll_next_piece(TengenRng *rng) {
 /* ----------------------------------------------------------------------- *
  * Collision / movement / rotation
  * ----------------------------------------------------------------------- */
-bool tengen_position_valid(const TengenGame *game, TengenPlayerSlot slot) {
+/* Shared by tengen_position_valid and the lock path. When a collision is
+ * found, `lowest_hit_row` (if non-NULL) receives the ROM row of the LOWEST
+ * colliding cell — the ROM's scan writes its hit index to $2D as it goes, so
+ * the last write wins, and that value is what the scoring routine consumes
+ * (main.asm.txt:1029-1064). */
+static bool position_valid_ex(const TengenGame *game, TengenPlayerSlot slot,
+                               int *lowest_hit_row) {
     const TengenPlayerState *p = &game->player[slot];
     const TengenPlayfield *field = &game->field[game->coop ? 0 : slot];
     const TengenPiece *piece = &p->piece;
+    bool ok = true;
 
     for (int r = 0; r < 4; r++) {
         for (int c = 0; c < 4; c++) {
             if (!tengen_piece_occupies(piece->current, piece->orientation, r, c)) continue;
-            int row = piece->y + r;
-            int col = piece->x + c;
-            if (col < 0 || col >= TENGEN_PF_WIDTH) return false;
-            if (row >= TENGEN_PF_HEIGHT) return false;
-            if (row >= 0 && field->cell[row][col] != TT_NONE) return false;
+
+            int rom_row = piece->y + r;
+            int storage_col = piece->x + c - TENGEN_ROM_COL_ORIGIN;
+            bool hit = false;
+
+            if (rom_row >= TENGEN_ROM_FLOOR_ROW) {
+                hit = true; /* the ROM's solid floor rows */
+            } else if (storage_col < 0 || storage_col >= TENGEN_PF_WIDTH) {
+                hit = true; /* past the buffer's padding nibbles entirely */
+            } else {
+                int visible_row = rom_row - TENGEN_ROM_ROW_ORIGIN;
+                /* Above the visible field is open space the piece spawns in. */
+                if (visible_row >= 0 &&
+                    field->cell[visible_row][storage_col] != TT_NONE) {
+                    hit = true; /* a locked block, or a TT_WALL sentinel */
+                }
+            }
+
+            if (hit) {
+                ok = false;
+                if (lowest_hit_row == NULL) return false;
+                if (rom_row > *lowest_hit_row) *lowest_hit_row = rom_row;
+            }
         }
     }
-    return true;
+    return ok;
+}
+
+bool tengen_position_valid(const TengenGame *game, TengenPlayerSlot slot) {
+    return position_valid_ex(game, slot, NULL);
 }
 
 bool tengen_try_move(TengenGame *game, TengenPlayerSlot slot, int dx) {
@@ -174,6 +203,10 @@ uint32_t tengen_clear_full_rows(TengenPlayfield *field) {
     uint32_t mask = 0;
     for (int row = 0; row < TENGEN_PF_HEIGHT; row++) {
         bool full = true;
+        /* Scanning all 12 stored columns works for both modes without a
+         * special case: in 1P/2P the two wall columns hold TT_WALL and are
+         * therefore always "occupied", so the test reduces to the ten
+         * playable cells; in coop there are no walls and all twelve count. */
         for (int col = 0; col < TENGEN_PF_WIDTH; col++) {
             if (field->cell[row][col] == TT_NONE) { full = false; break; }
         }
@@ -183,9 +216,20 @@ uint32_t tengen_clear_full_rows(TengenPlayfield *field) {
 
     /* Collapse: build a fresh field skipping cleared rows, matching the
      * ROM's plant-then-drop-remaining-rows behavior (main.asm.txt:856-908,
-     * L8565, though re-implemented cleanly rather than nibble-by-nibble). */
+     * L8565, though re-implemented cleanly rather than nibble-by-nibble).
+     * Rows vacated at the top are refilled from row 0's wall pattern so the
+     * frame survives a clear. */
+    uint8_t empty_row[TENGEN_PF_WIDTH];
+    for (int col = 0; col < TENGEN_PF_WIDTH; col++) {
+        empty_row[col] = (field->cell[0][col] == TT_WALL) ? (uint8_t)TT_WALL
+                                                          : (uint8_t)TT_NONE;
+    }
+
     TengenPlayfield collapsed;
-    memset(&collapsed, 0, sizeof(collapsed));
+    for (int row = 0; row < TENGEN_PF_HEIGHT; row++) {
+        memcpy(collapsed.cell[row], empty_row, sizeof(empty_row));
+    }
+
     int dst = TENGEN_PF_HEIGHT - 1;
     for (int row = TENGEN_PF_HEIGHT - 1; row >= 0; row--) {
         if (mask & (1u << row)) continue;
@@ -202,10 +246,14 @@ static void lock_piece(TengenGame *game, TengenPlayerSlot slot) {
     for (int r = 0; r < 4; r++) {
         for (int c = 0; c < 4; c++) {
             if (!tengen_piece_occupies(p->piece.current, p->piece.orientation, r, c)) continue;
-            int row = p->piece.y + r;
-            int col = p->piece.x + c;
-            if (row >= 0 && row < TENGEN_PF_HEIGHT && col >= 0 && col < TENGEN_PF_WIDTH) {
-                field->cell[row][col] = (uint8_t)p->piece.current;
+            int visible_row = p->piece.y + r - TENGEN_ROM_ROW_ORIGIN;
+            int storage_col = p->piece.x + c - TENGEN_ROM_COL_ORIGIN;
+            /* Cells still above the field simply aren't stored — they're off
+             * the top of the buffer, which is what makes a high lock a
+             * top-out rather than a write out of bounds. */
+            if (visible_row >= 0 && visible_row < TENGEN_PF_HEIGHT &&
+                storage_col >= 0 && storage_col < TENGEN_PF_WIDTH) {
+                field->cell[visible_row][storage_col] = (uint8_t)p->piece.current;
             }
         }
     }
@@ -217,8 +265,9 @@ static void spawn_piece(TengenGame *game, TengenPlayerSlot slot) {
     p->piece.next = roll_next_piece(&p->rng);
     p->piece.orientation = 0;
     p->piece.y = TENGEN_SPAWN_Y;
-    int spawn_index = game->coop ? 2 : (int)slot;
-    p->piece.x = TENGEN_SPAWN_X[spawn_index];
+    /* main.asm.txt:3716-3720: 1P and 2P both spawn centred at entry [2];
+     * only coop indexes the table by player so the two share a wide field. */
+    p->piece.x = game->coop ? TENGEN_SPAWN_X[slot] : TENGEN_SPAWN_X[2];
     /* main.asm.txt:3689-3691: both the fall timer and the soft-drop threshold
      * start at 20 on spawn, before the level's own gravity value takes over
      * on the first reload. */
@@ -289,10 +338,70 @@ uint8_t tengen_frames_per_row(uint8_t level, int8_t piece_y, bool coop) {
     return table[index];
 }
 
+/* Scoring, VERIFIED against L9A47 (main.asm.txt:3874-3893), its shift-add
+ * multiply L98D7 (main.asm.txt:3632-3685), the doubling pass L9A17
+ * (main.asm.txt:3843-3871) and the digit-wise accumulate L9A6A
+ * (main.asm.txt:3894-3948).
+ *
+ * Three things about this differ from what "Tetris scoring" usually means,
+ * and all three are real:
+ *
+ *  1. Points are awarded **per piece locked**, not per line cleared. Clearing
+ *     lines is worth nothing directly; it's worth something because it keeps
+ *     you alive to lock more pieces.
+ *  2. The reward grows the HIGHER the piece comes to rest. $2D is the number
+ *     of rows between the obstruction and the floor, so building tall is what
+ *     pays — the opposite of a drop-distance bonus.
+ *  3. A fully-accelerated soft drop (threshold down to 1) doubles the award.
+ *
+ * The award is computed as (level+1) * ((level+1) + rows_above_floor). The
+ * level term reads oddly in the ROM — ones digit + 1, plus a flat 10 when the
+ * tens digit is set — but since the level caps at 17 the tens digit is only
+ * ever 0 or 1, so it works out to exactly level + 1 across the whole range. */
+static uint32_t add_lock_score(uint32_t score, uint8_t level, int lowest_hit_row,
+                                uint8_t drop_rate_possible) {
+    if (lowest_hit_row < 0) return score;
+
+    int rows_above_floor = TENGEN_ROM_FLOOR_ROW - lowest_hit_row;
+    if (rows_above_floor < 0) rows_above_floor = 0;
+
+    uint32_t level_term = (uint32_t)level + 1;
+    uint32_t award = level_term * (level_term + (uint32_t)rows_above_floor);
+
+    /* L98D7 renders the product as three decimal digits, and L9A17's doubling
+     * saturates them at 9,9,9. The product itself can't exceed 999 at the
+     * ROM's level cap (18 * 38 = 684), but the doubled value can. */
+    if (award > 999) award = 999;
+    if (drop_rate_possible < 2) {
+        award *= 2;
+        if (award > 999) award = 999;
+    }
+
+    score += award;
+
+    /* main.asm.txt:3942-3946: the hundred-thousands digit is replaced by '1'
+     * rather than carrying when it would pass '9', so the score wraps to
+     * 100000 instead of rolling over to 0 or sticking at 999999. */
+    if (score > 999999) score = 100000 + (score % 100000);
+    return score;
+}
+
 void tengen_new_game(TengenGame *game, uint16_t seed, uint8_t start_level, bool two_player, bool coop) {
     memset(game, 0, sizeof(*game));
     game->two_player = two_player;
     game->coop = coop;
+
+    /* initPlayer1orCoopPlayfield (main.asm.txt:3468-3495): the wall columns
+     * are written as solid nibbles in 1P/2P and left open in coop, which is
+     * what makes coop a 12-wide game. */
+    if (!coop) {
+        for (int f = 0; f < 2; f++) {
+            for (int row = 0; row < TENGEN_PF_HEIGHT; row++) {
+                game->field[f].cell[row][0] = TT_WALL;
+                game->field[f].cell[row][TENGEN_PF_WIDTH - 1] = TT_WALL;
+            }
+        }
+    }
 
     TengenRng shared;
     tengen_rng_seed(&shared, seed);
@@ -425,8 +534,26 @@ TengenStepResult tengen_step(TengenGame *game, TengenPlayerSlot slot, uint8_t he
 
     if (gravity_tick) {
         p->piece.y++;
-        if (!tengen_position_valid(game, slot)) {
+        int lowest_hit_row = -1;
+        if (!position_valid_ex(game, slot, &lowest_hit_row)) {
             p->piece.y--;
+
+            /* Score first: the ROM awards points at the moment of the failed
+             * move, from the collision it just recorded, and does so BEFORE
+             * deciding whether this was a normal lock or a top-out
+             * (main.asm.txt:582-590). */
+            p->score = add_lock_score(p->score, p->level, lowest_hit_row,
+                                       p->drop_rate_possible);
+
+            /* main.asm.txt:588-590: resting with the box top still above the
+             * visible field ends the game — the piece is not planted. */
+            if (p->piece.y < TENGEN_TOPOUT_ROW) {
+                p->game_active = false;
+                result.topped_out = true;
+                p->held_last_frame = held_buttons;
+                return result;
+            }
+
             lock_piece(game, slot);
             result.piece_locked = true;
 
@@ -439,13 +566,8 @@ TengenStepResult tengen_step(TengenGame *game, TengenPlayerSlot slot, uint8_t he
                 result.lines_cleared = true;
                 result.rows_cleared_mask = cleared;
 
-                /* TODO(verify): placeholder scoring — see reference/NOTES.md.
-                 * Uses the classic 40/100/300/1200 * (level+1) shape as a
-                 * reasonable stand-in until main.asm.txt's score-add routine
-                 * (around line 3900, near player1ScoreOnes) is traced. */
-                static const uint16_t base_score[5] = {0, 40, 100, 300, 1200};
-                p->score += (uint32_t)base_score[count] * (p->level + 1);
-
+                /* No score is awarded here on purpose: this game pays per
+                 * piece locked, not per line cleared (see add_lock_score). */
                 uint8_t idx = (uint8_t)(p->level - p->start_level);
                 if (idx < sizeof(TENGEN_LEVEL_LINE_THRESHOLDS) / sizeof(TENGEN_LEVEL_LINE_THRESHOLDS[0]) &&
                     p->lines >= TENGEN_LEVEL_LINE_THRESHOLDS[idx] &&
