@@ -163,20 +163,162 @@ static void test_das_charges_before_repeating(void) {
 
     int8_t start_x = game.player[0].piece.x;
 
-    /* Frame 1: fresh press moves immediately. */
+    /* Frame 1 of the hold: the fresh press moves immediately, and the DAS
+     * counter starts charging on this same frame (counter = 1). */
     tengen_step(&game, TENGEN_PLAYER_1, TENGEN_BTN_LEFT);
     CHECK(game.player[0].piece.x == start_x - 1);
+    CHECK(game.player[0].das_left == 1);
 
-    /* Frames 2..10 (9 more, held): still charging, no further movement. */
+    /* Frames 2..10: still charging, no further movement. */
     int8_t x_after_press = game.player[0].piece.x;
-    for (int i = 0; i < TENGEN_DAS_CHARGE_FIRST - 1; i++) {
+    for (int i = 0; i < TENGEN_DAS_CHARGE_FIRST - 2; i++) {
         tengen_step(&game, TENGEN_PLAYER_1, TENGEN_BTN_LEFT);
     }
     CHECK(game.player[0].piece.x == x_after_press);
+    CHECK(game.player[0].das_left == TENGEN_DAS_CHARGE_FIRST - 1);
 
-    /* One more frame reaches the charge threshold and fires. */
+    /* Frame 11 of the hold reaches the charge threshold and fires, and the
+     * counter reloads to 5 rather than 0 — that reload is what makes every
+     * subsequent repeat 6 frames apart instead of another 11. */
     tengen_step(&game, TENGEN_PLAYER_1, TENGEN_BTN_LEFT);
     CHECK(game.player[0].piece.x == x_after_press - 1);
+    CHECK(game.player[0].das_left == TENGEN_DAS_CHARGE_FIRST - TENGEN_DAS_CHARGE_REPEAT);
+
+    /* And the next repeat lands exactly 6 frames later. */
+    int8_t x_after_first_repeat = game.player[0].piece.x;
+    for (int i = 0; i < TENGEN_DAS_CHARGE_REPEAT - 1; i++) {
+        tengen_step(&game, TENGEN_PLAYER_1, TENGEN_BTN_LEFT);
+    }
+    CHECK(game.player[0].piece.x == x_after_first_repeat);
+    tengen_step(&game, TENGEN_PLAYER_1, TENGEN_BTN_LEFT);
+    CHECK(game.player[0].piece.x == x_after_first_repeat - 1);
+}
+
+static void test_gravity_curve_matches_rom_table(void) {
+    /* possibleFallTimerTable, main.asm.txt:4016-4019. Levels 0-9 are a
+     * straight lookup with no row dependence. */
+    const uint8_t expected[10] = {33, 28, 24, 20, 17, 14, 11, 9, 7, 6};
+    for (uint8_t level = 0; level < 10; level++) {
+        for (int8_t y = 0; y < 4; y++) {
+            CHECK(tengen_frames_per_row(level, y, false) == expected[level]);
+        }
+    }
+    /* The ROM's own non-monotonic bump: level 15 is slower than level 14's
+     * fastest case. Pinned here so nobody "fixes" the table later. */
+    CHECK(tengen_frames_per_row(15, 0, false) == 4);
+    CHECK(tengen_frames_per_row(15, 1, false) == 3);
+}
+
+static void test_gravity_is_fractional_above_level_ten(void) {
+    /* Levels 10-17 alternate between two table entries based on the piece's
+     * row, which is how the ROM gets effectively fractional speeds
+     * (main.asm.txt:3985-4000). Level 10 (mask $01) should alternate 5/6. */
+    CHECK(tengen_frames_per_row(10, 0, false) == 5);
+    CHECK(tengen_frames_per_row(10, 1, false) == 6);
+    CHECK(tengen_frames_per_row(10, 2, false) == 5);
+    CHECK(tengen_frames_per_row(10, 3, false) == 6);
+
+    /* Level 11 (mask $00) never alternates. */
+    for (int8_t y = 0; y < 8; y++) {
+        CHECK(tengen_frames_per_row(11, y, false) == 5);
+    }
+
+    /* Level 14 (mask $03) takes the fast entry only on rows divisible by 4. */
+    CHECK(tengen_frames_per_row(14, 0, false) == 3);
+    CHECK(tengen_frames_per_row(14, 1, false) == 4);
+    CHECK(tengen_frames_per_row(14, 2, false) == 4);
+    CHECK(tengen_frames_per_row(14, 3, false) == 4);
+
+    /* Level 16 flips the polarity (bne instead of beq in the ROM): the SLOW
+     * entry is the one row in four, not the fast one. */
+    CHECK(tengen_frames_per_row(16, 0, false) == 4);
+    CHECK(tengen_frames_per_row(16, 1, false) == 3);
+}
+
+static void test_coop_uses_its_own_gentler_curve(void) {
+    /* L9B48, main.asm.txt:4021-4025 — monotonic, and never fractional. */
+    const uint8_t expected[18] = {33,28,24,20,18,17,16,15,14,13,12,11,10,9,8,7,6,5};
+    for (uint8_t level = 0; level <= TENGEN_MAX_LEVEL; level++) {
+        for (int8_t y = 0; y < 4; y++) {
+            CHECK(tengen_frames_per_row(level, y, true) == expected[level]);
+        }
+    }
+}
+
+static void test_gravity_clamps_above_max_level(void) {
+    CHECK(tengen_frames_per_row(TENGEN_MAX_LEVEL, 0, false) ==
+          tengen_frames_per_row(99, 0, false));
+}
+
+static void test_soft_drop_requires_down_alone(void) {
+    /* main.asm.txt:185-188: `and #DOWN+LEFT+RIGHT; cmp #DOWN` — Down combined
+     * with a direction does NOT soft drop, it resets the threshold to 5. */
+    TengenGame game;
+    tengen_new_game(&game, 11, 0, false, false);
+    game.player[0].piece.current = TT_O;
+    game.player[0].piece.x = 4;
+    game.player[0].piece.y = 0;
+
+    for (int i = 0; i < 30; i++) {
+        tengen_step(&game, TENGEN_PLAYER_1, TENGEN_BTN_DOWN | TENGEN_BTN_LEFT);
+    }
+    CHECK(game.player[0].drop_rate_possible == TENGEN_DROP_RATE_AFTER_RELEASE);
+    CHECK(game.player[0].drop_repeat == 0);
+}
+
+static void test_soft_drop_accelerates_while_held(void) {
+    /* Each firing tightens the threshold by one (floored at 1), so a held
+     * Down speeds up over the life of a piece (main.asm.txt:198-201). */
+    TengenGame game;
+    tengen_new_game(&game, 13, 0, false, false);
+    game.player[0].piece.current = TT_O;
+    game.player[0].piece.x = 4;
+    game.player[0].piece.y = 0;
+
+    uint8_t before = game.player[0].drop_rate_possible;
+    CHECK(before == TENGEN_DROP_RATE_AT_SPAWN);
+
+    /* Run enough frames for at least one soft-drop firing. */
+    for (int i = 0; i < TENGEN_DROP_RATE_AT_SPAWN; i++) {
+        tengen_step(&game, TENGEN_PLAYER_1, TENGEN_BTN_DOWN);
+    }
+    CHECK(game.player[0].drop_rate_possible < before);
+    CHECK(game.player[0].drop_rate_possible >= 1);
+}
+
+static void test_fresh_direction_press_is_swallowed_after_soft_drop(void) {
+    /* main.asm.txt:98-107: a new Left/Right press is discarded outright if
+     * Down was held on the previous frame. */
+    TengenGame game;
+    tengen_new_game(&game, 17, 0, false, false);
+    game.player[0].piece.current = TT_O;
+    game.player[0].piece.x = 4;
+    game.player[0].piece.y = 0;
+
+    tengen_step(&game, TENGEN_PLAYER_1, TENGEN_BTN_DOWN);
+    int8_t x_before = game.player[0].piece.x;
+    /* Down was held last frame, so this fresh Left press is ignored. */
+    tengen_step(&game, TENGEN_PLAYER_1, TENGEN_BTN_LEFT);
+    CHECK(game.player[0].piece.x == x_before);
+    /* The frame after, with Down no longer in last frame's state, it works. */
+    tengen_step(&game, TENGEN_PLAYER_1, 0);
+    tengen_step(&game, TENGEN_PLAYER_1, TENGEN_BTN_LEFT);
+    CHECK(game.player[0].piece.x == x_before - 1);
+}
+
+static void test_das_does_not_charge_while_down_is_held(void) {
+    /* main.asm.txt:111-114: the DAS counter only advances when the direction
+     * is held and Down is not. */
+    TengenGame game;
+    tengen_new_game(&game, 19, 0, false, false);
+    game.player[0].piece.current = TT_O;
+    game.player[0].piece.x = 5;
+    game.player[0].piece.y = 0;
+
+    for (int i = 0; i < 30; i++) {
+        tengen_step(&game, TENGEN_PLAYER_1, TENGEN_BTN_LEFT | TENGEN_BTN_DOWN);
+    }
+    CHECK(game.player[0].das_left == 0);
 }
 
 int main(void) {
@@ -190,6 +332,14 @@ int main(void) {
     test_line_clear_detects_and_collapses();
     test_level_up_thresholds_match_rom_table();
     test_das_charges_before_repeating();
+    test_gravity_curve_matches_rom_table();
+    test_gravity_is_fractional_above_level_ten();
+    test_coop_uses_its_own_gentler_curve();
+    test_gravity_clamps_above_max_level();
+    test_soft_drop_requires_down_alone();
+    test_soft_drop_accelerates_while_held();
+    test_fresh_direction_press_is_swallowed_after_soft_drop();
+    test_das_does_not_charge_while_down_is_held();
 
     if (g_failures == 0) {
         printf("All tests passed.\n");

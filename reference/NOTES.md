@@ -49,32 +49,36 @@ is playable end-to-end while the remaining disassembly work happens.
 | Wall kick | `main.asm.txt:538-575` | Traced via the actual carry-flag convention of `checkPositionAndClearFlagsOnCarrySet` (confirmed by reading `main.asm.txt:1017-1073`: the routine returns **carry SET = valid position**, via the `$2D` sentinel — `$2D` starts at `$FF`/negative and a `bmi`+`sec` path returns carry set only when no collision was ever recorded during the scan). With that convention, rotation is: try the new orientation in place → if valid, keep it; else shift one column **left** and try the same new orientation → if valid, keep both; else revert orientation and position entirely. It never tries right. This matches the wiki quote already sitting in `notes.txt.txt:160`: *"Because basic rotation can fail when a piece is against the right wall, but not when the same piece is against the left wall, this game will wallkick one square to the left if basic rotation fails."* — including the (real, faithfully reproduced) oddity that it still only ever tries left even flush against the left wall, where a left kick can't possibly help. |
 | Level-up thresholds | `main.asm.txt:1473-1478` (`bonusLinesTable`) | Bytes decode as ASCII digit pairs: 03,06,09,12,15,20,25,30,35,40,45,50,55,60,65,70,75,80,85,90,95 — i.e. every 3 lines up to level 5, then every 5 lines. Encoded in `TENGEN_LEVEL_LINE_THRESHOLDS`. |
 | "Plant piece into playfield" on lock | `main.asm.txt:856-908` (`L8565`) | Confirms the nibble-packing scheme; reimplemented behaviorally (not bit-for-bit) in `lock_piece`. |
+| **Gravity curve** | `main.asm.txt:3970-4025` (`L9AEE`, `possibleFallTimerTable` at `$9B36`) | 18 entries, one per level 0-17: 33,28,24,20,17,14,11,9,7,6,5,5,4,4,3,4,3,3 frames per row. **Entry 15 (4) is genuinely slower than entry 14 (3)** — the ROM's bytes really do bump back up; it's not a transcription slip, and the fractional masks below depend on it. Coop uses a separate, strictly monotonic table (`L9B48` at `$9B48`): 33,28,24,20,18,17,16,15,14,13,12,11,10,9,8,7,6,5. |
+| **Fractional gravity (levels 10-17)** | `main.asm.txt:3985-4000`, mask table `L9B50` at `$9B50` | For levels ≥10 the ROM ANDs the piece's current row with a per-level mask and either uses `table[level]` or falls back to `table[level-1]`, so a level can average a non-integer frames-per-row (level 15 alternates 4/3 for an effective 3.5; level 14 uses 3 one row in four for 3.75). The polarity of the test **flips** between the 10-15 band (`beq`) and the 16+ band (`bne`). Masks for levels 10-17: `01,00,01,00,03,01,03,00`. The mask bytes physically overlap the tail of the coop fall-timer table — deliberate ROM byte reuse, not an error. |
+| **Level cap** | `main.asm.txt:3168-3170` | The level-up code clamps the displayed level to "17", which is exactly the length of the fall-timer table. `TENGEN_MAX_LEVEL`. |
+| **Soft drop requires Down alone** | `main.asm.txt:185-188` | `and #DOWN+LEFT+RIGHT; cmp #DOWN` — holding Down together with Left or Right does **not** soft drop; it resets the soft-drop threshold to 5 instead. Same exclusivity applies in reverse to DAS (`main.asm.txt:111-114`): the DAS counter only charges while Down is *not* held. |
+| **Soft-drop acceleration** | `main.asm.txt:189-216` | Every time the soft drop fires it tightens its own threshold by one (floored at 1), so a held Down accelerates: first step after 20 frames, then 19, 18… Releasing Down (or pressing a direction) resets the threshold to **5**, not back to 20 — so a second soft drop on the same piece bites much faster than the first. `L9AEE` additionally clamps the threshold to the level's gravity value, so soft dropping is never slower than plain gravity (`main.asm.txt:4008-4011`). |
+| **Fresh direction press swallowed after Down** | `main.asm.txt:98-107` | A new Left/Right press is discarded outright if Down was held on the *previous* frame — you cannot start a horizontal move on the frame you stop soft-dropping. |
 | Cheat-code state exists (long bar / undo) | `tetris-ram.asm.txt:121-134` | `codeInputYPlayer1/2`, `longBarCodeUsedP1/2`, `undoCodeUsedP1/2`, `lastCurrentBlockP1/2` etc. Tengen's famous in-game level-up entry codes and the "undo" cheat have dedicated RAM; **not yet implemented in the core** — worth a dedicated pass since these are a well-known, requested-by-fans Tengen feature. |
 
 ## PLACEHOLDER (implemented, but not yet checked against this ROM)
 
 These live in `tengen_core.c`, each marked `TODO(verify)` at the point of use:
 
-- **Gravity curve** (`frames_per_row_placeholder`): the spawn-time fall timer
-  value of 20 frames *is* verified (`main.asm.txt:3689-3691`), but the
-  per-level reload table past that point was not located in this pass — the
-  natural-fall code (`main.asm.txt:502-513`, `L8320`) decrements a per-frame
-  counter and calls `L9AEE` on reaching zero, and `L9AEE` (not yet read) is
-  the most likely place the level-dependent reload value lives. The current
-  table is the commonly-cited classic-NES-Tetris curve (48 frames/row at
-  level 0 down to 1 at level 29), used as a reasonable stand-in.
-- **Line-clear scoring** (`base_score[]` in `tengen_step`): score-add code
-  exists around `main.asm.txt:3900` (near `player1ScoreOnes`, in the same
-  area as `genNextPseudoRandom2x`/`dropRatePossibleP1` handling) but the
-  exact per-line-count formula wasn't decoded this pass. Current values
-  (40/100/300/1200 × (level+1)) are the classic NES Tetris shape, not
-  confirmed Tengen-specific numbers.
-- **Soft-drop rate ramp** (`drop_rate_possible`): confirmed values are 20 at
-  spawn (`main.asm.txt:3689-3691`) and 5 immediately after one specific lock
-  path (`main.asm.txt:624-629`, `L840B`) — but that second path looked like
-  a distinct "soft-drop caused an immediate re-lock" case, not the general
-  lock path (`L8417`), and wasn't fully disambiguated from it this session.
-  The core currently never re-tightens `drop_rate_possible` after spawn.
+- **Scoring** (`base_score[]` in `tengen_step`): partially traced, not yet
+  implemented faithfully. What's known: points are awarded **per piece
+  locked**, not per line cleared — `L9A47` (`main.asm.txt:3874-3893`) is
+  called from the lock path (`main.asm.txt:586`). It computes a level
+  multiplier as `level_ones_digit + 1`, plus a flat **+10 if the level's tens
+  digit is ≥ '1'** — note that's a flat 10, so the multiplier caps at 11 for
+  every level from 10 to 17. It then adds `$2D` (a landing-height value the
+  collision routine leaves behind, `main.asm.txt:1057-1064`) and multiplies
+  via the shift-add routine `L98D7`, with `L9A17` **doubling** the result
+  when `dropRatePossible < 2` (i.e. a fully-accelerated soft drop scores
+  double). The score itself is stored as six ASCII digits, added with
+  decimal fixups (`L9A6A`, `main.asm.txt:3894-3948`), and the hundred-
+  thousands digit saturates at '1' rather than carrying (`main.asm.txt:3945-3946`).
+  **The remaining unknown is `$EA`**, the row base `$2D` is computed
+  against — without it the landing-height term can't be pinned down. Until
+  then the core keeps a placeholder line-clear score (40/100/300/1200 ×
+  (level+1)), which is the wrong *shape* for Tengen, not just the wrong
+  numbers.
 - **Level-up threshold indexing for non-zero start levels**: the ROM
   computes an index into `bonusLinesTable` combined with `menuPlayer1StartLevel`
   (`main.asm.txt:3140-3182`) in a way this pass didn't fully untangle — the
@@ -83,16 +87,18 @@ These live in `tengen_core.c`, each marked `TODO(verify)` at the point of use:
 
 ## Suggested next disassembly targets (in priority order)
 
-1. `L9AEE` (called from the natural-fall branch at `main.asm.txt:509`) — most
-   likely location of the real gravity-speed-per-level table.
-2. The code around `main.asm.txt:3900` (`player1ScoreOnes` addition) — likely
-   the real line-clear/soft-drop scoring formula.
-3. `codeInputYPlayer1/2` handling (search `tetris-ram.asm.txt:121` outward)
+1. **`$EA` (and `$EB`)** — the playfield row/column base the collision routine
+   uses (`main.asm.txt:1061`, `1091`, `1097`) and that `$2D`'s landing-height
+   value is computed against. Pinning this down unblocks the scoring formula,
+   which is otherwise fully traced (see the scoring entry above). Look for
+   where `$EA`/`$EB` are written — likely in the playfield-init path
+   (`initPlayer1orCoopPlayfield`, `main.asm.txt:3327`).
+2. `codeInputYPlayer1/2` handling (search `tetris-ram.asm.txt:121` outward)
    — the long-bar/undo cheat codes, a well-known Tengen feature fans will
    expect in a faithful port.
-4. Confirm `dropRatePossibleP1` transitions beyond spawn (20) and the one
-   post-lock case found (5) — whether it ramps per soft-drop frame, per
-   piece, or per level.
+3. The line-clear animation/timing path (`stageLineClearAnimation`,
+   `main.asm.txt:1274`, and `lineClearTimerP1/2`) — needed for the GBA
+   renderer to reproduce the clear animation's cadence, not just its result.
 
 ## A note on frame rate
 

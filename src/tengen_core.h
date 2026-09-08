@@ -208,6 +208,27 @@ extern const uint8_t TENGEN_LEVEL_LINE_THRESHOLDS[21];
 #define TENGEN_AUTOROTATE_CHARGE 15 /* frames held before auto-rotate kicks in (fires every frame after) */
 
 /* ----------------------------------------------------------------------- *
+ * Gravity and soft drop (VERIFIED, main.asm.txt:184-216, 3970-4025)
+ * ----------------------------------------------------------------------- */
+/* The ROM's level counter tops out here — the level-up code clamps the
+ * displayed level to "17" (main.asm.txt:3168-3170), which is exactly the
+ * length of the fall-timer table. */
+#define TENGEN_MAX_LEVEL 17
+
+/* Soft-drop repeat threshold at piece spawn, and the (lower) value it resets
+ * to whenever Down stops being held alone. main.asm.txt:3689-3691, 213-216. */
+#define TENGEN_DROP_RATE_AT_SPAWN 20
+#define TENGEN_DROP_RATE_AFTER_RELEASE 5
+
+/* Frames the piece waits before gravity pulls it down one row, for a given
+ * level. `piece_y` matters because levels 10-17 alternate between two table
+ * entries based on the piece's row, giving effectively fractional gravity
+ * (e.g. level 15 averages 3.5 frames/row); pass the piece's row BEFORE the
+ * move, which is when the ROM reads it. Coop mode uses a separate, gentler
+ * table. */
+uint8_t tengen_frames_per_row(uint8_t level, int8_t piece_y, bool coop);
+
+/* ----------------------------------------------------------------------- *
  * Game lifecycle
  * ----------------------------------------------------------------------- */
 void tengen_new_game(TengenGame *game, uint16_t seed, uint8_t start_level, bool two_player, bool coop);

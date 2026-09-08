@@ -219,25 +219,74 @@ static void spawn_piece(TengenGame *game, TengenPlayerSlot slot) {
     p->piece.y = TENGEN_SPAWN_Y;
     int spawn_index = game->coop ? 2 : (int)slot;
     p->piece.x = TENGEN_SPAWN_X[spawn_index];
-    p->fall_timer = 20; /* main.asm.txt:3689-3691, verified spawn value */
+    /* main.asm.txt:3689-3691: both the fall timer and the soft-drop threshold
+     * start at 20 on spawn, before the level's own gravity value takes over
+     * on the first reload. */
+    p->fall_timer = TENGEN_DROP_RATE_AT_SPAWN;
     p->drop_repeat = 0;
-    p->drop_rate_possible = 20; /* same source; see reference/NOTES.md for the ramp-down TODO */
+    p->drop_rate_possible = TENGEN_DROP_RATE_AT_SPAWN;
 }
 
-/* TODO(verify): placeholder gravity curve. Nothing in this session's pass
- * over main.asm.txt pinned down the per-level frames-per-row table (the
- * fall timer's reload value past the initial spawn's 20 hasn't been traced
- * — see reference/NOTES.md). This uses the widely-cited classic-NES-Tetris
- * speed curve as a starting point so the game is playable end-to-end; treat
- * every value here as unverified against this specific ROM until checked. */
-static uint8_t frames_per_row_placeholder(uint8_t level) {
-    static const uint8_t table[] = {
-        48,43,38,33,28,23,18,13,8,6,
-        5,5,5,4,4,4,3,3,3,2,
-        2,2,2,2,2,2,2,2,2,1
-    };
-    if (level >= sizeof(table) / sizeof(table[0])) return 1;
-    return table[level];
+/* Gravity, VERIFIED against L9AEE (main.asm.txt:3970-4025).
+ *
+ * possibleFallTimerTable ($9B36) holds 18 entries, one per level 0..17 — and
+ * 17 really is the ceiling: the level-up code clamps the displayed level to
+ * '1','7' (main.asm.txt:3168-3170), which is exactly the length of this table.
+ *
+ * Note entry 15 (4 frames) is SLOWER than entry 14 (3 frames). That is not a
+ * transcription slip — the ROM's bytes really do bump back up there, and the
+ * level 14/15/16 masks below lean on it to produce their averages. Kept
+ * as-is; "fixing" it would make the port less faithful, not more. */
+static const uint8_t kFallTimerTable[18] = {
+    0x21, 0x1C, 0x18, 0x14, 0x11, 0x0E, 0x0B, 0x09, /* 33 28 24 20 17 14 11 9 */
+    0x07, 0x06, 0x05, 0x05, 0x04, 0x04, 0x03, 0x04, /*  7  6  5  5  4  4  3 4 */
+    0x03, 0x03                                       /*  3  3 */
+};
+
+/* Coop uses its own, gentler table (L9B48, $9B48). Same 18 levels, and it
+ * stays strictly monotonic. */
+static const uint8_t kFallTimerTableCoop[18] = {
+    0x21, 0x1C, 0x18, 0x14, 0x12, 0x11, 0x10, 0x0F, /* 33 28 24 20 18 17 16 15 */
+    0x0E, 0x0D, 0x0C, 0x0B, 0x0A, 0x09, 0x08, 0x07, /* 14 13 12 11 10  9  8  7 */
+    0x06, 0x05                                       /*  6  5 */
+};
+
+/* Fractional-gravity masks (L9B50, $9B50), indexed by level, only consulted
+ * for levels >= 10. The ROM ANDs the piece's current Y with the mask and, on
+ * the result, either uses table[level] or drops back to table[level-1] — so a
+ * level can average a non-integer number of frames per row (e.g. level 15
+ * alternates 4 and 3 for an effective 3.5). Note these bytes physically
+ * overlap the tail of the coop fall-timer table above; that's the ROM
+ * reusing the same bytes for two purposes, not an error here.
+ *
+ * Only indices 10..17 are ever read; 0..9 are filler so the index math
+ * matches the ROM's without an offset. */
+static const uint8_t kFractionalGravityMask[18] = {
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0x01, 0x00, 0x01, 0x00, 0x03, 0x01, 0x03, 0x00
+};
+
+/* Reproduces L9AEE: pick the fall-timer reload value for this level, taking
+ * the piece's current row into account for the fractional levels. The ROM
+ * calls this BEFORE moving the piece down, so callers must pass the piece's
+ * pre-move Y to stay frame-accurate. */
+uint8_t tengen_frames_per_row(uint8_t level, int8_t piece_y, bool coop) {
+    if (level > TENGEN_MAX_LEVEL) level = TENGEN_MAX_LEVEL;
+    const uint8_t *table = coop ? kFallTimerTableCoop : kFallTimerTable;
+
+    uint8_t index = level;
+    if (level >= 10 && !coop) {
+        /* main.asm.txt:3985-4000. The polarity of the test flips between the
+         * 10-15 band and the 16+ band, which is why this reads as two cases
+         * rather than one. */
+        uint8_t masked = (uint8_t)piece_y & kFractionalGravityMask[level];
+        if (level >= 16) {
+            if (masked == 0 && index > 0) index--;
+        } else {
+            if (masked != 0 && index > 0) index--;
+        }
+    }
+    return table[index];
 }
 
 void tengen_new_game(TengenGame *game, uint16_t seed, uint8_t start_level, bool two_player, bool coop) {
@@ -259,15 +308,30 @@ void tengen_new_game(TengenGame *game, uint16_t seed, uint8_t start_level, bool 
     }
 }
 
+/* main.asm.txt:108-150. Two things worth spelling out, because both are easy
+ * to get subtly wrong:
+ *
+ *  - A shift fires from two independent sources OR'd together: the fresh
+ *    press (edge), and the DAS repeat. The caller passes the already-filtered
+ *    edge bits in `new_presses`.
+ *  - DAS only charges while the direction is held AND Down is NOT
+ *    (`and #BUTTON_DOWN+BUTTON_LEFT; cmp #BUTTON_LEFT`). Holding Down+Left
+ *    zeroes the counter outright. The counter also increments on the press
+ *    frame itself, which is why the first repeat lands on the 11th frame of
+ *    the hold rather than the 11th frame after it. */
 static void apply_das(uint8_t held, uint8_t new_presses, TengenButton dir_btn,
                        uint8_t *das_counter, bool *fire) {
-    *fire = false;
-    if (!(held & dir_btn)) { *das_counter = 0; return; }
-    if (new_presses & dir_btn) { *fire = true; *das_counter = 0; return; }
-    (*das_counter)++;
-    if (*das_counter >= TENGEN_DAS_CHARGE_FIRST) {
-        *fire = true;
-        *das_counter = TENGEN_DAS_CHARGE_FIRST - TENGEN_DAS_CHARGE_REPEAT; /* reload to 5: verified, main.asm.txt:124 */
+    *fire = (new_presses & dir_btn) != 0;
+    if ((held & dir_btn) && !(held & TENGEN_BTN_DOWN)) {
+        (*das_counter)++;
+        if (*das_counter >= TENGEN_DAS_CHARGE_FIRST) {
+            *fire = true;
+            /* Reloads to 5, not 0 (main.asm.txt:124) — that's what makes the
+             * repeat interval 6 frames while the initial charge is 11. */
+            *das_counter = TENGEN_DAS_CHARGE_FIRST - TENGEN_DAS_CHARGE_REPEAT;
+        }
+    } else {
+        *das_counter = 0;
     }
 }
 
@@ -289,6 +353,19 @@ TengenStepResult tengen_step(TengenGame *game, TengenPlayerSlot slot, uint8_t he
 
     uint8_t new_presses = (uint8_t)(held_buttons & ~p->held_last_frame);
 
+    /* Down is never edge-triggered — it only ever acts through the soft-drop
+     * repeat counter (main.asm.txt:82-83 masks it out of the new-press set). */
+    new_presses &= (uint8_t)~TENGEN_BTN_DOWN;
+
+    /* main.asm.txt:98-107: a fresh Left/Right press is discarded outright if
+     * Down was held on the previous frame. In practice this means you cannot
+     * start a horizontal move on the frame you stop soft-dropping — a real
+     * quirk of Tengen's input handling, not an emulation artifact. */
+    if ((new_presses & (TENGEN_BTN_LEFT | TENGEN_BTN_RIGHT)) &&
+        (p->held_last_frame & TENGEN_BTN_DOWN)) {
+        new_presses &= (uint8_t)~(TENGEN_BTN_LEFT | TENGEN_BTN_RIGHT);
+    }
+
     /* Order mirrors doSomethingWithInputDuringGameplay: left, right, then
      * B (cw) rotate, then A (ccw) rotate (main.asm.txt:96-183, 538-575). */
     bool move_left, move_right, rotate_cw, rotate_ccw;
@@ -302,24 +379,48 @@ TengenStepResult tengen_step(TengenGame *game, TengenPlayerSlot slot, uint8_t he
     if (rotate_cw) tengen_try_rotate(game, slot, true);
     if (rotate_ccw) tengen_try_rotate(game, slot, false);
 
-    /* Gravity / soft drop (main.asm.txt:184-207 feeds dropRepeatP1 vs.
-     * dropRatePossibleP1; main.asm.txt:502-513 feeds the natural fall
-     * timer). Soft-drop ramp-down past the spawn value is a placeholder —
-     * see reference/NOTES.md. */
+    /* Soft drop (main.asm.txt:184-216) and natural gravity
+     * (main.asm.txt:502-513 + L9AEE) are two separate paths that can each
+     * pull the piece down one row.
+     *
+     * Soft drop engages ONLY while Down is held with neither Left nor Right
+     * (`and #DOWN+LEFT+RIGHT; cmp #DOWN`). Every time it fires it also
+     * tightens its own threshold by one (floored at 1), so holding Down
+     * accelerates: the first step waits 20 frames, then 19, 18, and so on.
+     * Letting go — or pressing a direction — resets the threshold to 5,
+     * which is why a second soft drop on the same piece bites much faster
+     * than the first. */
     bool gravity_tick = false;
-    if (held_buttons & TENGEN_BTN_DOWN) {
+    bool soft_dropping = (held_buttons & (TENGEN_BTN_DOWN | TENGEN_BTN_LEFT | TENGEN_BTN_RIGHT))
+                          == TENGEN_BTN_DOWN;
+
+    if (soft_dropping) {
         p->drop_repeat++;
         if (p->drop_repeat >= p->drop_rate_possible) {
             gravity_tick = true;
+            if (p->drop_rate_possible >= 2) p->drop_rate_possible--;
             p->drop_repeat = 0;
         }
     } else {
         p->drop_repeat = 0;
-        if (p->fall_timer > 0) p->fall_timer--;
-        if (p->fall_timer == 0) {
-            gravity_tick = true;
-            p->fall_timer = frames_per_row_placeholder(p->level);
-        }
+        p->drop_rate_possible = TENGEN_DROP_RATE_AFTER_RELEASE;
+    }
+
+    /* Natural gravity runs in parallel with soft drop rather than instead of
+     * it: the ROM decrements this counter every frame in L8320 and OR's its
+     * result into the same "move down" bit the soft drop sets, so a frame
+     * where both fire still moves the piece exactly one row. */
+    if (p->fall_timer > 0) p->fall_timer--;
+    if (p->fall_timer == 0) gravity_tick = true;
+
+    if (gravity_tick) {
+        /* L9AEE reloads the fall timer from the level's gravity table using
+         * the piece's row BEFORE it moves, and clamps the soft-drop
+         * threshold so soft dropping is never slower than plain gravity
+         * (main.asm.txt:4008-4011). */
+        uint8_t reload = tengen_frames_per_row(p->level, p->piece.y, game->coop);
+        p->fall_timer = reload;
+        if (reload < p->drop_rate_possible) p->drop_rate_possible = reload;
     }
 
     if (gravity_tick) {
@@ -347,7 +448,8 @@ TengenStepResult tengen_step(TengenGame *game, TengenPlayerSlot slot, uint8_t he
 
                 uint8_t idx = (uint8_t)(p->level - p->start_level);
                 if (idx < sizeof(TENGEN_LEVEL_LINE_THRESHOLDS) / sizeof(TENGEN_LEVEL_LINE_THRESHOLDS[0]) &&
-                    p->lines >= TENGEN_LEVEL_LINE_THRESHOLDS[idx]) {
+                    p->lines >= TENGEN_LEVEL_LINE_THRESHOLDS[idx] &&
+                    p->level < TENGEN_MAX_LEVEL) { /* the ROM clamps at 17, main.asm.txt:3168-3170 */
                     p->level++;
                     result.leveled_up = true;
                 }
