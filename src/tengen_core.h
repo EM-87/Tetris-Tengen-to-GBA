@@ -8,34 +8,20 @@
  * playfield to a tile background, reading REG_KEYINPUT, etc.) lives elsewhere and
  * only calls into this API.
  *
- * Every rule implemented here is cross-referenced against the disassembly in
- * ../reference/disasm/main.asm.txt (the Tengen Tetris (NES) disassembly project,
- * see ../reference/disasm/README.md.txt). See ../reference/NOTES.md for the full
- * verified-vs-placeholder breakdown with ROM address citations. In short:
+ * Every rule implemented here is traced to the disassembly in
+ * ../reference/disasm/main.asm.txt (the Tengen Tetris (NES) disassembly
+ * project, see ../reference/disasm/README.md.txt) and cited at its point of
+ * use. ../reference/NOTES.md is the index, with ROM line numbers; its
+ * PLACEHOLDER section is empty, and the rule for keeping it that way is in
+ * ../CLAUDE.md.
  *
- *   VERIFIED against the ROM (byte-exact or algorithm-exact):
- *     - Playfield size (10x20) and piece spawn position/orientation
- *     - All 7 tetromino orientation bitmaps + sub-tile id tables
- *     - The RNG algorithm and the "reroll on 0 of 8" piece selector
- *       (this is why Tengen can deal long S/Z droughts/streaks - there is no
- *       anti-repeat logic, unlike the Nintendo-published NES Tetris)
- *     - The DAS timing (11 frames to first repeat, 6 frames between repeats)
- *     - The "auto-rotate" feature bound to A/B (hold ~15 frames -> spins every
- *       frame while held)
- *     - The single-column-left-only wall kick (a real, well-documented Tengen
- *       quirk: rotation kicks one column left on failure, even when that makes
- *       no sense against the left wall; it never kicks right)
- *     - The cumulative lines-per-level table (3,6,9,12,15, then every 5)
- *
- *   PLACEHOLDER pending further disassembly work (flagged in this file and in
- *   tengen_core.c with TODO(verify) and a pointer to where to keep digging):
- *     - Exact gravity (frames-per-row) curve per level
- *     - Exact score awarded per line clear / soft drop
- *     - The finer points of soft-drop rate ramping (dropRatePossibleP1)
- *
- * This is intentional: shipping a wrong "verified" number is worse than a
- * clearly labeled placeholder. Tighten these as reference/disasm/main.asm.txt
- * gets fully traced (see reference/NOTES.md's TODO list).
+ * Some highlights, because they are what make this Tengen rather than Tetris
+ * in general: a piece selector with no anti-repeat (hence the notorious
+ * droughts), a rotation that only ever wall-kicks one column LEFT, an
+ * auto-rotate that spins every frame once a button is held ~15, DAS that
+ * charges 11 frames then repeats every 6, gravity that goes fractional above
+ * level 10, and scoring that pays per piece locked — more the HIGHER it
+ * lands, not the further it falls.
  */
 #ifndef TENGEN_CORE_H
 #define TENGEN_CORE_H
@@ -99,12 +85,33 @@ typedef enum {
     TT_S = 6,
     TT_Z = 7,
     TENGEN_TETROMINO_COUNT = 8,
-    /* Not a piece: the sentinel the ROM keeps in the wall columns. Stored in
-     * the field so collision and full-row checks need no mode-specific
-     * bounds logic — exactly why the ROM does it that way. Renderers should
-     * treat it as frame, not as a block. */
-    TT_WALL = 8
+    /* Not a piece: the sentinel the ROM keeps in the wall columns, and it
+     * really is $F there — see the cell-value note below. Stored in the field
+     * so collision and full-row checks need no mode-specific bounds logic,
+     * exactly why the ROM does it that way. Renderers should treat it as
+     * frame, not as a block. */
+    TT_WALL = 15
 } TengenTetromino;
+
+/* WHAT A PLAYFIELD CELL HOLDS
+ *
+ * The same thing the ROM's nibble holds (notes.txt.txt:35, "nibble aligns
+ * with tile index"): 0 for empty, 1..14 for one of the fourteen block tiles,
+ * and 15 for a wall. It is NOT the piece id.
+ *
+ * That distinction is what makes settled blocks look right. The ROM's block
+ * artwork is directional — a cell drawn with the tile for "top-left corner
+ * of a piece" joins onto its neighbours, and a piece that locked as an
+ * L-shape leaves a different set of tiles behind than the same cells would
+ * as part of an S. Storing piece ids and picking a tile at draw time cannot
+ * reproduce that, because by then the piece boundary is gone.
+ *
+ * The ROM discards the piece id at lock time and so does this core; nothing
+ * needs it afterwards, since settled blocks are all drawn in one level-wide
+ * palette (see reference/NOTES.md). */
+#define TENGEN_CELL_EMPTY 0
+#define TENGEN_CELL_WALL  15
+#define TENGEN_CELL_IS_BLOCK(v) ((v) >= 1 && (v) <= 14)
 
 /* Button bits match constants.asm.txt:1-8 exactly, so a GBA REG_KEYINPUT
  * read can be remapped to this bitmask with a single small lookup instead

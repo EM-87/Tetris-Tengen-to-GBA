@@ -578,6 +578,46 @@ static bool every_locked_cell_is_supported(const TengenPlayfield *field) {
     return true;
 }
 
+static void test_locking_stores_tile_ids_not_piece_ids(void) {
+    /* The ROM's playfield nibble holds a block TILE id, not the piece it came
+     * from (notes.txt.txt:35). That's what lets settled blocks keep the
+     * directional artwork that joins them into shapes; storing piece ids and
+     * choosing tiles at draw time cannot reproduce it, because the piece
+     * boundary is gone by then. */
+    TengenGame game;
+    tengen_new_game(&game, 77, 0, false, false);
+
+    /* Drop an O straight down. Its orientation-0 bitmap is 1100/1100, so it
+     * occupies four cells whose tile ids are 0x0B,0x0E,0x0D,0x0C in scan
+     * order (main.asm.txt:1131-1133, tilesForO). */
+    game.player[0].piece.current = TT_O;
+    game.player[0].piece.orientation = 0;
+    game.player[0].piece.x = 7;
+    game.player[0].piece.y = TENGEN_SPAWN_Y;
+
+    for (int frame = 0; frame < 4000; frame++) {
+        if (tengen_step(&game, TENGEN_PLAYER_1, TENGEN_BTN_DOWN).piece_locked) break;
+    }
+
+    int col = 7 - TENGEN_ROM_COL_ORIGIN; /* storage column of the piece's left edge */
+    int bottom = TENGEN_PF_HEIGHT - 1;
+    CHECK(game.field[0].cell[bottom - 1][col]     == 0x0B);
+    CHECK(game.field[0].cell[bottom - 1][col + 1] == 0x0E);
+    CHECK(game.field[0].cell[bottom][col]         == 0x0D);
+    CHECK(game.field[0].cell[bottom][col + 1]     == 0x0C);
+
+    /* And emphatically not the piece id. */
+    CHECK(game.field[0].cell[bottom][col] != TT_O);
+
+    /* Every stored block must be a legal tile id, never a stray value. */
+    for (int row = 0; row < TENGEN_PF_HEIGHT; row++) {
+        for (int c = 1; c < TENGEN_PF_WIDTH - 1; c++) {
+            uint8_t v = game.field[0].cell[row][c];
+            CHECK(v == TENGEN_CELL_EMPTY || TENGEN_CELL_IS_BLOCK(v));
+        }
+    }
+}
+
 static void test_piece_stats_count_dealt_pieces_in_1p_only(void) {
     /* main.asm.txt:3730-3797: counted as the piece is dealt, and the whole
      * routine is skipped outside 1P. */
@@ -695,6 +735,7 @@ int main(void) {
     test_level_starts_at_the_chosen_start_level();
     test_level_is_recomputed_from_the_line_total();
     test_level_never_passes_the_rom_cap();
+    test_locking_stores_tile_ids_not_piece_ids();
     test_piece_stats_count_dealt_pieces_in_1p_only();
     test_no_piece_ever_locks_in_mid_air();
     test_locked_cells_never_overwrite_the_walls();

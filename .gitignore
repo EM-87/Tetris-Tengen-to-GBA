@@ -2,6 +2,10 @@ build/
 *.gba
 *.sav
 
-# Tile data converted from a cartridge dump by tools/chr_to_gba.py. Generated
-# locally from artwork that isn't ours to redistribute.
+# Graphics generated from a cartridge dump by tools/extract_assets.py: tiles,
+# palettes and the screen layout. These are the original game's artwork, so
+# they are built locally from a dump you supply rather than committed here.
+# Run: make assets ROM=/path/to/tetris.nes
 gba/tiles_*.h
+gba/screen_1p.h
+gba/palettes_rom.h

@@ -2,81 +2,94 @@
  * main.c — GBA front end for the verified Tengen Tetris core.
  *
  * All the game rules live in ../src/tengen_core.c and know nothing about the
- * GBA. This file does three things and nothing else: read the keypad into
- * TengenButton bits, call tengen_step once per frame, and draw the field.
- * Keeping the split that clean is what lets `make test` verify the rules on
- * the host and this file stay small enough to eyeball.
+ * GBA. This file reads the keypad into TengenButton bits, calls tengen_step
+ * once per frame, and draws. Keeping the split that clean is what lets
+ * `make test` verify the rules on the host.
  *
- * SCREEN LAYOUT — this is the resolution mapping the whole project rests on:
+ * GRAPHICS: every tile, palette and layout here comes from the original
+ * cartridge, converted by ../tools/extract_assets.py. Nothing is redrawn.
  *
- *   The playfield is 12 stored columns x 20 rows of 8x8 tiles = 96 x 160 px
- *   (10 playable columns plus the two wall columns; coop plays all 12).
- *   160 px is EXACTLY the GBA's screen height, so the field needs no scaling
- *   or cropping at all — it maps tile-for-tile, the same as on NES. That
- *   leaves 240 - 96 = 144 px, i.e. 72 px on each side, for the HUD. The NES
- *   had 176 px of surround to work with, so the HUD is the only thing that
- *   has to be redesigned for the narrower screen; the field itself is 1:1.
+ * SCREEN LAYOUT — the whole project rests on this fitting:
  *
- * GRAPHICS STATUS: the block tiles below are placeholders generated at
- * runtime, not the real game art. The genuine 8x8 CHR graphics live in the
- * original ROM (the disassembly build pulls them from `gfx/game_tileset.chr`,
- * see reference/disasm/entry.asm.txt) and are not part of this repo. The
- * renderer is deliberately built around 8x8 tiles and the core's own tile-id
- * tables so that dropping the real CHR in later is a data change, not a
- * rewrite. See ../README.md.
+ *   The NES screen is 32x30 tiles; the GBA is 30x20. The playfield is 12
+ *   tiles wide (10 playable + 2 walls) by 20 tall, which is 96x160 px —
+ *   exactly the GBA's full height. So the field maps tile-for-tile with no
+ *   scaling and no cropping, and the adaptation is entirely in what surrounds
+ *   it:
+ *
+ *     horizontally: 32 columns -> 30. The two that go are taken from the
+ *       decorative divider beside the playfield, the one element that is pure
+ *       ornament. Both borders, the whole field and the full-width panel
+ *       survive at original size. Done in extract_assets.py.
+ *
+ *     vertically: 30 rows -> 20, and the field needs all 20. So the NES's
+ *       header strip — the SCORE / LINES / LEVEL / NEXT labels that sit above
+ *       the field — moves into the side panel, which the NES left mostly
+ *       empty. Same tiles, same lettering, stacked instead of spread. That is
+ *       the one deliberate rearrangement, and it is why the port keeps the
+ *       original's look rather than substituting its own.
  */
 #include "gba_hw.h"
-#include "font.h"
 #include "palette.h"
 #include "../src/tengen_core.h"
 
+/* Generated from a cartridge dump by tools/extract_assets.py. */
+#include "tiles_game.h"
+#include "screen_1p.h"
+#include "palettes_rom.h"
+
 #define CHARBLOCK   0
-#define SCREENBLOCK 28  /* 28 * 2KB = 56KB in, clear of the tile data below */
+#define SCREENBLOCK 28  /* 28 * 2KB = 56KB in, clear of the 8KB of tile data */
 
-#define MAP_W 32        /* a 32x32 tile background */
-#define SCREEN_TW 30    /* visible tiles across */
-#define SCREEN_TH 20    /* visible tiles down */
+#define MAP_W 32
+#define SCREEN_TW 30
+#define SCREEN_TH 20
 
-/* Where the playfield's top-left tile sits on screen, in 8x8 tiles. */
-#define FIELD_ORIGIN_TX ((SCREEN_TW - TENGEN_PF_WIDTH) / 2)  /* centred: 9 */
-#define FIELD_ORIGIN_TY 0                                     /* full height, no margin */
+/* Which 20 of the layout's 30 rows the GBA shows: the playfield's own rows.
+ * Everything the NES drew above and below them is what got relocated. */
+#define WINDOW_TOP SCREEN_1P_FIELD_TY
 
-/* The two HUD panels the narrower GBA screen leaves either side of the
- * field: 9 tiles (72px) each, versus the NES's 11 (88px). */
-#define PANEL_L_TX 0
-#define PANEL_R_TX (FIELD_ORIGIN_TX + TENGEN_PF_WIDTH + 1)
+#define FIELD_TX SCREEN_1P_FIELD_TX
+#define FIELD_TY 0   /* the field starts at the top of the visible window */
 
-/* Tile indices in VRAM. Tile 0 must stay blank: it's what the rest of the
- * map is filled with. */
-#define TILE_BLANK 0
-#define TILE_BLOCK 1        /* one shape, recoloured per piece by palette bank */
-#define TILE_WALL  2
-#define TILE_FONT_BASE 16   /* 10 digits then 26 letters */
+/* The panel the reflow leaves free, in GBA tile columns. */
+#define PANEL_TX 18
+#define PANEL_W  10
 
-/* Palette banks. Each NES palette is three colours plus a shared backdrop,
- * and seven pieces' worth doesn't fit the 16 entries of a single 4bpp
- * palette — so each piece gets its own bank and the tilemap entry selects
- * between them (bits 12-15). That's what lets one block tile shape serve
- * every piece: the colours are chosen at draw time, not baked into pixels. */
-#define PAL_BANK_FOR_PIECE(piece) ((piece) - 1)  /* pieces 1..7 -> banks 0..6 */
-#define PAL_UI_BANK 7
-#define PAL_FIELD_BANK 8   /* settled blocks: one level-driven scheme for all */
+/* Palette banks. Banks 0-3 are the ROM's four background palettes; bank 0 is
+ * additionally rewritten per level, which is what setPlayfieldPaletteFromLevel
+ * does on the NES (main.asm.txt:5328). Bank 4 carries the falling piece's own
+ * colours, mirroring setPiecePalette's separate sprite palette. */
+#define PAL_PIECE_BANK 4
 
-/* Builds a tilemap entry: tile index in bits 0-9, palette bank in 12-15. */
 #define WITH_BANK(tile, bank) ((uint16_t)((tile) | ((bank) << 12)))
+
+/* Tile ids in the cartridge's own tileset, taken from the nametable it ships
+ * (see reference/NOTES.md). Reusing the game's lettering is the difference
+ * between the port looking like Tengen Tetris and looking like a clone. */
+#define T_BLANK      0x00
+#define T_RULE_LEFT  0x75
+#define T_RULE_MID   0x76
+#define T_RULE_RIGHT 0x79
+
+static const uint8_t kLabelScore[6] = {0x6D, 0x6E, 0x6F, 0x70, 0x71, 0x72};
+static const uint8_t kLabelLines[6] = {0x7A, 0x7B, 0x7C, 0x7D, 0x7E, 0x7F};
+static const uint8_t kLabelLevel[6] = {0x7A, 0x80, 0x81, 0x82, 0x83, 0x84};
+static const uint8_t kLabelNext[4]  = {0x91, 0x92, 0x93, 0x94};
+
+/* The tileset's letters and digits sit at their ASCII codes, which is how the
+ * ROM's own nametable spells "HIGH SCORE" and "STATS". */
+static uint16_t ascii_tile(char c) { return (uint16_t)(unsigned char)c; }
 
 static TengenGame g_game;
 
 static void vsync(void) {
-    /* Wait out the current vblank, then wait for the next one, so a caller
-     * that arrives mid-vblank doesn't fall through both. */
     while (REG_VCOUNT >= 160) { }
     while (REG_VCOUNT < 160) { }
 }
 
-/* Reads the keypad and translates it into the core's button bits. The GBA
- * has every button the NES did, so this is a straight 1:1 remap with no
- * compromises — which is the whole reason the controls can be faithful. */
+/* The GBA has every button the NES did, so this is a straight 1:1 remap with
+ * no compromises — which is why the controls can be faithful. */
 static uint8_t read_buttons(void) {
     uint16_t keys = (uint16_t)(~REG_KEYINPUT & KEY_MASK); /* KEYINPUT is active low */
     uint8_t out = 0;
@@ -91,251 +104,216 @@ static uint8_t read_buttons(void) {
     return out;
 }
 
-static void write_tile_4bpp(int tile_index, const uint8_t pixels[64]) {
-    /* 4bpp tiles pack two pixels per byte, low nibble first. */
-    vu16 *dst = MEM_CHARBLOCK(CHARBLOCK) + tile_index * 16;
-    for (int i = 0; i < 32; i += 2) {
-        uint16_t lo = (uint16_t)((pixels[i * 2 + 0] & 0xF) | ((pixels[i * 2 + 1] & 0xF) << 4));
-        uint16_t hi = (uint16_t)((pixels[i * 2 + 2] & 0xF) | ((pixels[i * 2 + 3] & 0xF) << 4));
-        dst[i / 2] = (uint16_t)(lo | (hi << 8));
+static void upload_tiles(void) {
+    vu16 *dst = MEM_CHARBLOCK(CHARBLOCK);
+    const uint8_t *src = kGameTiles;
+    for (unsigned i = 0; i < sizeof(kGameTiles); i += 2) {
+        dst[i / 2] = (uint16_t)(src[i] | (src[i + 1] << 8));
     }
 }
 
-static void build_placeholder_tiles(void) {
-    uint8_t pixels[64];
-
-    /* Tile 0: blank. Colour 0 is the shared backdrop in every bank, so this
-     * one tile works regardless of which palette bank it's drawn with. */
-    for (int i = 0; i < 64; i++) pixels[i] = 0;
-    write_tile_4bpp(TILE_BLANK, pixels);
-
-    /* A single block tile serves all seven pieces: the palette bank in the
-     * tilemap entry picks the colours, so the shape is shared. Colours 1-3
-     * are that piece's three real Tengen colours, arranged as the bevel the
-     * NES art uses — light top-left, mid body, dark bottom-right. */
-    for (int y = 0; y < 8; y++) {
-        for (int x = 0; x < 8; x++) {
-            uint8_t colour = 2;
-            if (x == 0 || y == 0) colour = 1;
-            else if (x == 7 || y == 7) colour = 3;
-            pixels[y * 8 + x] = colour;
+/* The four background palettes exactly as the cartridge stores them. Entry 0
+ * of each is the shared backdrop. */
+static void upload_palettes(void) {
+    for (int bank = 0; bank < 4; bank++) {
+        vu16 *dst = MEM_PALETTE + bank * 16;
+        for (int i = 0; i < 4; i++) {
+            dst[i] = nes_colour_to_gba(kRomBgPalette[bank * 4 + i]);
         }
     }
-    write_tile_4bpp(TILE_BLOCK, pixels);
-
-    /* Wall tile, drawn in the UI bank whose colour 1 tracks the level. */
-    for (int i = 0; i < 64; i++) pixels[i] = 1;
-    write_tile_4bpp(TILE_WALL, pixels);
-
-    /* Font tiles: digits then letters, one glyph per tile, so drawing text
-     * later is just writing tile indices into the map — no re-uploading
-     * pixels when the score changes. */
-    for (int glyph = 0; glyph < 36; glyph++) {
-        const uint8_t *rows = (glyph < 10) ? kFontDigits[glyph]
-                                            : kFontLetters[glyph - 10];
-        for (int i = 0; i < 64; i++) pixels[i] = 0;
-        for (int y = 0; y < FONT_ROWS; y++) {
-            for (int x = 0; x < FONT_COLS; x++) {
-                if (rows[y] & (1 << (FONT_COLS - 1 - x))) {
-                    pixels[(y + 1) * 8 + (x + 1)] = 3; /* UI bank's text colour */
-                }
-            }
-        }
-        write_tile_4bpp(TILE_FONT_BASE + glyph, pixels);
-    }
+    vu16 *piece = MEM_PALETTE + PAL_PIECE_BANK * 16;
+    piece[0] = nes_colour_to_gba(TENGEN_BACKDROP_INDEX);
 }
 
-static uint16_t font_tile(char c) {
-    if (c >= '0' && c <= '9') return WITH_BANK(TILE_FONT_BASE + (c - '0'), PAL_UI_BANK);
-    if (c >= 'A' && c <= 'Z') return WITH_BANK(TILE_FONT_BASE + 10 + (c - 'A'), PAL_UI_BANK);
-    return TILE_BLANK;
-}
-
-static void build_palette(void) {
-    vu16 *pal = MEM_PALETTE;
-
-    /* One bank per piece, carrying that piece's three real Tengen colours
-     * (palette.h explains the indexing) plus the shared black backdrop. */
-    for (int piece = TT_I; piece <= TT_Z; piece++) {
-        vu16 *bank = pal + PAL_BANK_FOR_PIECE(piece) * 16;
-        bank[0] = nes_colour_to_gba(TENGEN_BACKDROP_INDEX);
-        for (int i = 0; i < 3; i++) {
-            bank[1 + i] = nes_colour_to_gba(kTengenPaletteIndices[piece][i]);
-        }
-    }
-
-    vu16 *ui = pal + PAL_UI_BANK * 16;
-    ui[0] = nes_colour_to_gba(TENGEN_BACKDROP_INDEX);
-    ui[3] = rgb15(31, 31, 31); /* text */
-    /* ui[1] (the frame) is set by set_field_palette_for_level below. */
-}
-
-/* setPlayfieldPaletteFromLevel (main.asm.txt:5328-5333) recolours the field
- * using the LEVEL'S ONES DIGIT as the palette index — which is why the
- * colours cycle every ten levels rather than running out at level 9. */
+/* setPlayfieldPaletteFromLevel (main.asm.txt:5328) recolours the settled
+ * field using the LEVEL'S ONES DIGIT as the index, which is why the colours
+ * cycle every ten levels. It writes background palette 0, entries 1-3. */
 static void set_field_palette_for_level(uint8_t level) {
-    const uint8_t *entry = kTengenPaletteIndices[level % 10];
-
-    /* The settled blocks. */
-    vu16 *field = MEM_PALETTE + PAL_FIELD_BANK * 16;
-    field[0] = nes_colour_to_gba(TENGEN_BACKDROP_INDEX);
-    for (int i = 0; i < 3; i++) field[1 + i] = nes_colour_to_gba(entry[i]);
-
-    /* The frame, in the same level scheme but the darkest tone so it reads
-     * as a border rather than as more stack. */
-    vu16 *ui = MEM_PALETTE + PAL_UI_BANK * 16;
-    ui[1] = nes_colour_to_gba(entry[2]);
-    ui[2] = nes_colour_to_gba(entry[1]);
+    const uint8_t *entry = kRomPiecePalettes[level % 10];
+    vu16 *bank0 = MEM_PALETTE;
+    for (int i = 0; i < 3; i++) bank0[1 + i] = nes_colour_to_gba(entry[i]);
 }
 
-static void set_map_tile(int tx, int ty, uint16_t tile) {
+/* setPiecePalette (main.asm.txt:5338) indexes the same table by PIECE ID and
+ * writes a sprite palette, so the falling piece carries its own colours while
+ * everything settled shares the level's. */
+static void set_piece_palette(TengenTetromino piece) {
+    if (piece <= TT_NONE || piece >= TENGEN_TETROMINO_COUNT) return;
+    const uint8_t *entry = kRomPiecePalettes[piece];
+    vu16 *bank = MEM_PALETTE + PAL_PIECE_BANK * 16;
+    for (int i = 0; i < 3; i++) bank[1 + i] = nes_colour_to_gba(entry[i]);
+}
+
+static void set_map_tile(int tx, int ty, uint16_t entry) {
     if (tx < 0 || tx >= MAP_W || ty < 0 || ty >= 32) return;
-    MEM_SCREENBLOCK(SCREENBLOCK)[ty * MAP_W + tx] = tile;
+    MEM_SCREENBLOCK(SCREENBLOCK)[ty * MAP_W + tx] = entry;
 }
 
-/* Settled blocks all share the field palette, which tracks the level.
- *
- * That's not a simplification, it's what the ROM does: locked blocks are
- * background tiles coloured by setPlayfieldPaletteFromLevel (a $3F0x
- * background palette), while the falling piece and the next-piece preview
- * are SPRITES coloured by setPiecePalette (a $3F1x sprite palette, set once
- * per piece dealt). So the stack is monochrome-per-level and only the
- * active piece carries its own colour. See reference/NOTES.md. */
-static uint16_t tile_for_cell(uint8_t cell) {
-    if (cell == TT_NONE) return TILE_BLANK;
-    if (cell == TT_WALL) return WITH_BANK(TILE_WALL, PAL_UI_BANK);
-    return WITH_BANK(TILE_BLOCK, PAL_FIELD_BANK);
+/* Paints the cartridge's own screen: the braided border, the vertical TETRIS
+ * banner, every decorative tile, each with the palette the ROM's attribute
+ * table assigns it. */
+static void draw_static_screen(void) {
+    for (int ty = 0; ty < SCREEN_TH; ty++) {
+        int layout_row = ty + WINDOW_TOP;
+        for (int tx = 0; tx < SCREEN_TW; tx++) {
+            int i = layout_row * SCREEN_1P_W + tx;
+            set_map_tile(tx, ty, WITH_BANK(kScreen1pTiles[i], kScreen1pPalettes[i]));
+        }
+    }
 }
 
-/* The active piece and the preview, which do get their own colours. */
-static uint16_t tile_for_active_piece(uint8_t piece) {
-    return WITH_BANK(TILE_BLOCK, PAL_BANK_FOR_PIECE(piece));
+static void draw_tiles(int tx, int ty, const uint8_t *tiles, int count, int bank) {
+    for (int i = 0; i < count; i++) set_map_tile(tx + i, ty, WITH_BANK(tiles[i], bank));
 }
 
-static void draw_text(int tx, int ty, const char *text) {
-    for (int i = 0; text[i]; i++) set_map_tile(tx + i, ty, font_tile(text[i]));
+static void draw_text(int tx, int ty, const char *text, int bank) {
+    for (int i = 0; text[i]; i++) set_map_tile(tx + i, ty, WITH_BANK(ascii_tile(text[i]), bank));
 }
 
-/* Right-aligned, zero-padded, matching how the ROM shows its fixed-width
- * counters (its score really is six digits wide, always). */
-static void draw_number(int tx, int ty, uint32_t value, int digits) {
+static void draw_number(int tx, int ty, uint32_t value, int digits, int bank) {
     for (int i = digits - 1; i >= 0; i--) {
-        set_map_tile(tx + i, ty, font_tile((char)('0' + (value % 10))));
+        set_map_tile(tx + i, ty, WITH_BANK(ascii_tile((char)('0' + (value % 10))), bank));
         value /= 10;
     }
 }
 
-static void clear_region(int tx, int ty, int w, int h) {
-    for (int y = 0; y < h; y++) {
-        for (int x = 0; x < w; x++) set_map_tile(tx + x, ty + y, TILE_BLANK);
-    }
+/* The horizontal rules the NES draws under each label, built from the same
+ * cap-and-middle tiles it uses. */
+static void draw_rule(int tx, int ty, int width, int bank) {
+    set_map_tile(tx, ty, WITH_BANK(T_RULE_LEFT, bank));
+    for (int i = 1; i < width - 1; i++) set_map_tile(tx + i, ty, WITH_BANK(T_RULE_MID, bank));
+    set_map_tile(tx + width - 1, ty, WITH_BANK(T_RULE_RIGHT, bank));
 }
 
-/* The next-piece preview. Drawn from the same orientation-0 bitmap the game
- * logic uses, so it can't drift out of sync with what actually spawns. */
+static void clear_region(int tx, int ty, int w, int h) {
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++) set_map_tile(tx + x, ty + y, T_BLANK);
+}
+
+/* Palette banks for panel content, chosen to match how the NES colours the
+ * same lettering in its header strip. */
+#define BANK_LABEL 1   /* gold, as the ROM draws SCORE/LEVEL */
+#define BANK_VALUE 2   /* blue/white, as it draws the counters */
+
 static void draw_next_piece(int tx, int ty) {
-    clear_region(tx, ty, 4, 4);
+    clear_region(tx, ty, 4, 3);
     TengenTetromino next = g_game.player[0].piece.next;
     if (next <= TT_NONE || next >= TENGEN_TETROMINO_COUNT) return;
+    /* Drawn from the same orientation bitmap and tile table the game logic
+     * uses, so the preview cannot drift out of sync with what spawns. */
+    int occupied = 0;
     for (int r = 0; r < 4; r++) {
         for (int c = 0; c < 4; c++) {
-            if (tengen_piece_occupies(next, 0, r, c)) {
-                set_map_tile(tx + c, ty + r, tile_for_active_piece((uint8_t)next));
-            }
+            if (!tengen_piece_occupies(next, 0, r, c)) continue;
+            uint8_t tile = tengen_tile_id_for_cell(next, 0, occupied);
+            occupied++;
+            if (r < 3) set_map_tile(tx + c, ty + r, WITH_BANK(tile, PAL_PIECE_BANK));
         }
     }
 }
 
-static void draw_hud(void) {
+static void draw_panel(void) {
     const TengenPlayerState *p = &g_game.player[0];
+    static const char kPieceLetter[TENGEN_TETROMINO_COUNT] = {0,'I','T','O','J','L','S','Z'};
 
-    draw_text(PANEL_R_TX, 1, "NEXT");
-    draw_next_piece(PANEL_R_TX, 3);
+    draw_tiles(PANEL_TX, 0, kLabelScore, 6, BANK_LABEL);
+    draw_number(PANEL_TX, 1, p->score, 6, BANK_VALUE);
 
-    draw_text(PANEL_R_TX, 8, "SCORE");
-    draw_number(PANEL_R_TX, 9, p->score, 6);
+    draw_tiles(PANEL_TX, 2, kLabelLines, 6, BANK_LABEL);
+    draw_number(PANEL_TX, 3, p->lines, 4, BANK_VALUE);
 
-    draw_text(PANEL_R_TX, 11, "LEVEL");
-    draw_number(PANEL_R_TX, 12, p->level, 2);
+    draw_tiles(PANEL_TX, 4, kLabelLevel, 6, BANK_LABEL);
+    draw_number(PANEL_TX, 5, p->level, 2, BANK_VALUE);
 
-    draw_text(PANEL_R_TX, 14, "LINES");
-    draw_number(PANEL_R_TX, 15, p->lines, 4);
+    draw_tiles(PANEL_TX, 6, kLabelNext, 4, BANK_LABEL);
+    draw_next_piece(PANEL_TX, 7);
 
-    /* Left panel: per-piece statistics, same information the NES 1P screen
-     * shows as a bar chart. The NES had the height for bars; 9 tiles of
-     * width here suit an icon-plus-count list better, so this is the one
-     * place the HUD deliberately departs from the original's presentation
-     * rather than its content. */
-    draw_text(PANEL_L_TX + 1, 1, "STATS");
+    draw_rule(PANEL_TX, 10, PANEL_W, BANK_VALUE);
+    draw_text(PANEL_TX + 2, 11, "STATS", BANK_LABEL);
     for (int piece = TT_I; piece <= TT_Z; piece++) {
-        int ty = 3 + (piece - TT_I) * 2;
-        set_map_tile(PANEL_L_TX + 1, ty, tile_for_active_piece((uint8_t)piece));
-        draw_number(PANEL_L_TX + 3, ty, p->piece_stats[piece], 3);
+        int ty = 12 + (piece - TT_I);
+        char letter[2] = { kPieceLetter[piece], 0 };
+        draw_text(PANEL_TX + 1, ty, letter, BANK_LABEL);
+        draw_number(PANEL_TX + 3, ty, p->piece_stats[piece], 3, BANK_VALUE);
     }
 
     if (!p->game_active) {
-        draw_text(PANEL_R_TX, 17, "GAME");
-        draw_text(PANEL_R_TX, 18, "OVER");
+        draw_text(PANEL_TX + 2, 19, "OVER", BANK_LABEL);
     } else {
-        clear_region(PANEL_R_TX, 17, 5, 2);
+        clear_region(PANEL_TX + 2, 19, 4, 1);
     }
 }
 
-static void draw_frame(void) {
+static void draw_field(void) {
     const TengenPlayfield *field = &g_game.field[0];
-
     for (int row = 0; row < TENGEN_PF_HEIGHT; row++) {
         for (int col = 0; col < TENGEN_PF_WIDTH; col++) {
-            set_map_tile(FIELD_ORIGIN_TX + col, FIELD_ORIGIN_TY + row,
-                          tile_for_cell(field->cell[row][col]));
+            /* A cell's value IS its tile index — that is the whole point of
+             * the ROM's nibble encoding (notes.txt.txt:35), and it means the
+             * wall needs no special case: its sentinel 15 is tile $0F, the
+             * frame graphic. Empty is 0, which is the blank tile. All of it
+             * draws in the level's palette. */
+            set_map_tile(FIELD_TX + col, FIELD_TY + row,
+                          WITH_BANK(field->cell[row][col], 0));
         }
     }
 
-    /* The falling piece is drawn over the settled field rather than being
-     * written into it — it isn't part of the field until it locks. Cells
-     * still above the field (negative rows) are skipped, which is what makes
-     * a piece visibly slide in from off-screen the way the ROM does. */
+    /* The falling piece is drawn over the settled field rather than into it,
+     * and in its own palette — the ROM draws it as sprites for exactly that
+     * reason. Cells above the field are skipped, which is what makes a piece
+     * visibly slide in from off-screen the way the original does. */
     TengenCell cells[4];
     int count = tengen_active_piece_cells(&g_game, TENGEN_PLAYER_1, cells);
+    TengenTetromino current = g_game.player[0].piece.current;
     for (int i = 0; i < count; i++) {
         if (cells[i].row < 0) continue;
-        set_map_tile(FIELD_ORIGIN_TX + cells[i].col,
-                      FIELD_ORIGIN_TY + cells[i].row,
-                      tile_for_active_piece((uint8_t)g_game.player[0].piece.current));
+        uint8_t tile = tengen_tile_id_for_cell(current, g_game.player[0].piece.orientation, i);
+        set_map_tile(FIELD_TX + cells[i].col, FIELD_TY + cells[i].row,
+                      WITH_BANK(tile, PAL_PIECE_BANK));
     }
-
-    draw_hud();
 }
 
-/* Level select range, verified: computerMoveSelectTable (main.asm.txt:4819)
- * holds the wrap limit for each menu row, and row 1 — menuPlayer1StartLevel —
- * is 10, so start levels run 0..9 and wrap at both ends (main.asm.txt:4742-4763). */
+/* ----------------------------------------------------------------------- *
+ * Title screen
+ * ----------------------------------------------------------------------- */
+/* Start levels run 0..9 and wrap at both ends, which is the range the ROM's
+ * own menu allows: computerMoveSelectTable (main.asm.txt:4819) holds the wrap
+ * limit per menu row, and menuPlayer1StartLevel's is 10. */
 #define START_LEVEL_COUNT 10
 
 typedef enum { SCREEN_TITLE, SCREEN_PLAYING } Screen;
 
 static void clear_screen(void) {
-    for (int ty = 0; ty < 32; ty++) {
-        for (int tx = 0; tx < MAP_W; tx++) set_map_tile(tx, ty, TILE_BLANK);
-    }
+    for (int ty = 0; ty < 32; ty++)
+        for (int tx = 0; tx < MAP_W; tx++) set_map_tile(tx, ty, T_BLANK);
 }
 
 static void draw_title(uint8_t start_level) {
     clear_screen();
-    draw_text(9, 4, "TENGEN");
-    draw_text(9, 6, "TETRIS");
 
-    draw_text(7, 10, "LEVEL");
-    draw_number(14, 10, start_level, 1);
-    draw_text(5, 12, "UP DOWN TO SET");
-    draw_text(6, 15, "START TO PLAY");
+    /* Keep the border columns from the real layout so the title sits in the
+     * same frame the game does. */
+    for (int ty = 0; ty < SCREEN_TH; ty++) {
+        int layout_row = ty + WINDOW_TOP;
+        for (int tx = 0; tx < SCREEN_TW; tx++) {
+            if (tx > 1 && tx < SCREEN_TW - 2) continue;
+            int i = layout_row * SCREEN_1P_W + tx;
+            set_map_tile(tx, ty, WITH_BANK(kScreen1pTiles[i], kScreen1pPalettes[i]));
+        }
+    }
+
+    draw_text(11, 4, "TENGEN", BANK_LABEL);
+    draw_text(11, 6, "TETRIS", BANK_LABEL);
+    draw_tiles(9, 10, kLabelLevel, 6, BANK_LABEL);
+    draw_number(17, 10, start_level, 1, BANK_VALUE);
+    draw_text(7, 13, "UP DOWN TO SET", BANK_VALUE);
+    draw_text(8, 15, "START TO PLAY", BANK_VALUE);
 }
 
 int main(void) {
-    build_palette();
-    build_placeholder_tiles();
+    upload_tiles();
+    upload_palettes();
     set_field_palette_for_level(0);
-
     clear_screen();
 
     REG_BG0CNT = BG_4BPP | BG_SIZE_32x32 | BG_CHARBLOCK(CHARBLOCK) |
@@ -345,13 +323,13 @@ int main(void) {
     Screen screen = SCREEN_TITLE;
     uint8_t start_level = 0;
     uint8_t shown_level = 0xFF;
+    TengenTetromino shown_piece = TT_NONE;
     uint8_t held_last = 0;
 
     /* The ROM steps its RNG once per frame from the main loop
-     * (main.asm.txt:49-50) and whatever state it happens to be in when you
-     * press Start becomes the game's seed. Doing the same here means the
-     * sequence you get genuinely depends on when you start, rather than
-     * every session dealing identical pieces. */
+     * (main.asm.txt:49-50), and whatever state it is in when Start is pressed
+     * becomes the game's seed. Doing the same means the piece sequence
+     * depends on when you start rather than being identical every session. */
     TengenRng seed_source;
     tengen_rng_seed(&seed_source, 0xACE1);
 
@@ -362,22 +340,19 @@ int main(void) {
         tengen_rng_step(&seed_source);
 
         if (screen == SCREEN_TITLE) {
-            if (pressed & TENGEN_BTN_UP) {
+            if (pressed & TENGEN_BTN_UP)
                 start_level = (uint8_t)((start_level + START_LEVEL_COUNT - 1) % START_LEVEL_COUNT);
-            }
-            if (pressed & TENGEN_BTN_DOWN) {
+            if (pressed & TENGEN_BTN_DOWN)
                 start_level = (uint8_t)((start_level + 1) % START_LEVEL_COUNT);
-            }
             if (pressed & TENGEN_BTN_START) {
                 uint16_t seed = (uint16_t)(seed_source.lo | (seed_source.hi << 8));
                 tengen_new_game(&g_game, seed, start_level, false, false);
                 shown_level = 0xFF;
+                shown_piece = TT_NONE;
                 screen = SCREEN_PLAYING;
                 vsync();
-                /* Wipe the title before the HUD takes over: draw_frame only
-                 * repaints the field and the panels' own cells, so anything
-                 * left elsewhere would show through. */
                 clear_screen();
+                draw_static_screen();
                 continue;
             }
             vsync();
@@ -397,8 +372,13 @@ int main(void) {
             shown_level = g_game.player[0].level;
             set_field_palette_for_level(shown_level);
         }
+        if (g_game.player[0].piece.current != shown_piece) {
+            shown_piece = g_game.player[0].piece.current;
+            set_piece_palette(shown_piece);
+        }
 
         vsync();
-        draw_frame();
+        draw_field();
+        draw_panel();
     }
 }

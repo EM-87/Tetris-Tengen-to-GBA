@@ -32,11 +32,21 @@ except ImportError as exc:  # pragma: no cover - environment problem, not logic
 SCREEN_W, SCREEN_H = 240, 160
 TILE = 8
 
-# Must match gba/main.c's FIELD_ORIGIN_TX / TENGEN_PF_WIDTH.
-FIELD_TILES_W = 12
-FIELD_ORIGIN_TX = (30 - FIELD_TILES_W) // 2
-FIELD_X0 = FIELD_ORIGIN_TX * TILE
-FIELD_X1 = FIELD_X0 + FIELD_TILES_W * TILE
+# The screen layout, in tile columns. These mirror gba/main.c and the reflow
+# done by tools/extract_assets.py; if they drift apart, the checks below stop
+# meaning anything, so they are asserted against the running ROM rather than
+# assumed.
+COL_BORDER_L = (0, 2)     # braided border
+COL_FIELD = (2, 14)       # 12 columns: wall, 10 playable, wall
+COL_BANNER = (14, 18)     # vertical TETRIS banner
+COL_PANEL = (18, 28)      # score / lines / level / next / stats
+COL_BORDER_R = (28, 30)
+
+FIELD_TILES_W = COL_FIELD[1] - COL_FIELD[0]
+FIELD_X0 = COL_FIELD[0] * TILE
+FIELD_X1 = COL_FIELD[1] * TILE
+WALL_L_X = COL_FIELD[0] * TILE            # left wall column
+WALL_R_X = (COL_FIELD[1] - 1) * TILE      # right wall column
 
 
 def load(rom_path):
@@ -93,11 +103,11 @@ def describe(rows):
         return cols
 
     print(f"columnas con contenido: {min(lit)}..{max(lit)}")
-    print(f"  campo:  {FIELD_X0}..{FIELD_X1 - 1} (96px, el alto completo)")
-    left = [x for x in lit if x < FIELD_X0]
-    right = [x for x in lit if x >= FIELD_X1]
-    print(f"  panel izq: {f'{min(left)}..{max(left)}' if left else 'vacio'}")
-    print(f"  panel der: {f'{min(right)}..{max(right)}' if right else 'vacio'}")
+    for name, bounds in (("borde izq", COL_BORDER_L), ("campo", COL_FIELD),
+                         ("banner", COL_BANNER), ("panel", COL_PANEL),
+                         ("borde der", COL_BORDER_R)):
+        x0, x1 = bounds[0] * TILE, bounds[1] * TILE
+        print(f"  {name:10s} x={x0:3d}..{x1 - 1:3d}")
     return cols
 
 
@@ -132,30 +142,33 @@ def selftest(rom_path):
     if rows == title:
         failures.append("START no arranco la partida (la pantalla no cambio)")
 
-    # The frame runs the full height of the screen: that is the whole point
-    # of the 160px mapping.
-    wall_col = cols[FIELD_X0]
-    if wall_col != SCREEN_H:
-        failures.append(
-            f"la columna de muro izquierda no ocupa todo el alto "
-            f"({wall_col}/{SCREEN_H} px)")
-    if cols[FIELD_X1 - 1] != SCREEN_H:
-        failures.append("la columna de muro derecha no ocupa todo el alto")
+    def region(bounds):
+        return sum(cols[x] for x in range(bounds[0] * TILE, bounds[1] * TILE))
 
-    # Nothing may be drawn between the walls' outer edges and the panels —
-    # i.e. the field must not have crept outside its 96px allocation.
-    for x in range(FIELD_X0 - 8, FIELD_X0):
-        if cols[x]:
-            failures.append(f"hay contenido a la izquierda del campo (x={x})")
-            break
+    # Each region must actually have been drawn. A blank one means a tile
+    # upload, a palette or a layout index went wrong.
+    for name, bounds in (("borde izquierdo", COL_BORDER_L),
+                         ("banner TETRIS", COL_BANNER),
+                         ("panel del HUD", COL_PANEL),
+                         ("borde derecho", COL_BORDER_R)):
+        painted = region(bounds)
+        if painted == 0:
+            failures.append(f"{name} quedo vacio")
+        else:
+            print(f"  {name}: {painted} px")
 
-    # The HUD lives to the right of the field; if it vanished, the panel
-    # would be blank.
-    hud = sum(cols[x] for x in range(FIELD_X1, SCREEN_W))
-    if hud == 0:
-        failures.append("el panel derecho (HUD) quedo vacio")
-    else:
-        print(f"pixeles del HUD a la derecha del campo: {hud}")
+    # The field runs the FULL height of the screen — that is the whole point
+    # of the 160px vertical fit, and the first thing a bad window offset
+    # breaks. Checked per tile ROW rather than per pixel: the ROM draws its
+    # walls with a block graphic that has transparent corners, so the
+    # invariant is that no row of the wall column is missing, not that every
+    # pixel of it is lit.
+    for name, x in (("muro izquierdo", WALL_L_X), ("muro derecho", WALL_R_X)):
+        empty_rows = [ty for ty in range(SCREEN_H // TILE)
+                      if not any(rows[ty * TILE + dy][x + dx] != (0, 0, 0)
+                                 for dy in range(TILE) for dx in range(TILE))]
+        if empty_rows:
+            failures.append(f"al {name} le faltan filas de tiles: {empty_rows}")
 
     # A piece must actually fall: the screen has to change over time without
     # any input at all.

@@ -257,12 +257,21 @@ int tengen_active_piece_cells(const TengenGame *game, TengenPlayerSlot slot,
     return written;
 }
 
+/* Plants the piece into the field, storing each cell's BLOCK TILE ID rather
+ * than the piece id — see the cell-value note in tengen_core.h for why that
+ * matters. Mirrors L85B3/L8565 (main.asm.txt:911-935, 856-908), which walks
+ * the same scan order pulling ids out of the piece's tile table. */
 static void lock_piece(TengenGame *game, TengenPlayerSlot slot) {
     TengenPlayerState *p = &game->player[slot];
     TengenPlayfield *field = &game->field[game->coop ? 0 : slot];
+    int occupied_index = 0;
     for (int r = 0; r < 4; r++) {
         for (int c = 0; c < 4; c++) {
             if (!tengen_piece_occupies(p->piece.current, p->piece.orientation, r, c)) continue;
+            uint8_t tile = tengen_tile_id_for_cell(p->piece.current, p->piece.orientation,
+                                                    occupied_index);
+            occupied_index++;
+
             int visible_row = p->piece.y + r - TENGEN_ROM_ROW_ORIGIN;
             int storage_col = p->piece.x + c - TENGEN_ROM_COL_ORIGIN;
             /* Cells still above the field simply aren't stored — they're off
@@ -270,7 +279,7 @@ static void lock_piece(TengenGame *game, TengenPlayerSlot slot) {
              * top-out rather than a write out of bounds. */
             if (visible_row >= 0 && visible_row < TENGEN_PF_HEIGHT &&
                 storage_col >= 0 && storage_col < TENGEN_PF_WIDTH) {
-                field->cell[visible_row][storage_col] = (uint8_t)p->piece.current;
+                field->cell[visible_row][storage_col] = tile;
             }
         }
     }
