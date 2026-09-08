@@ -26,22 +26,31 @@
  * rewrite. See ../README.md.
  */
 #include "gba_hw.h"
+#include "font.h"
 #include "../src/tengen_core.h"
 
 #define CHARBLOCK   0
 #define SCREENBLOCK 28  /* 28 * 2KB = 56KB in, clear of the tile data below */
 
 #define MAP_W 32        /* a 32x32 tile background */
+#define SCREEN_TW 30    /* visible tiles across */
+#define SCREEN_TH 20    /* visible tiles down */
 
 /* Where the playfield's top-left tile sits on screen, in 8x8 tiles. */
-#define FIELD_ORIGIN_TX ((30 - TENGEN_PF_WIDTH) / 2)  /* centred: 9 */
-#define FIELD_ORIGIN_TY 0                              /* full height, no margin */
+#define FIELD_ORIGIN_TX ((SCREEN_TW - TENGEN_PF_WIDTH) / 2)  /* centred: 9 */
+#define FIELD_ORIGIN_TY 0                                     /* full height, no margin */
+
+/* The two HUD panels the narrower GBA screen leaves either side of the
+ * field: 9 tiles (72px) each, versus the NES's 11 (88px). */
+#define PANEL_L_TX 0
+#define PANEL_R_TX (FIELD_ORIGIN_TX + TENGEN_PF_WIDTH + 1)
 
 /* Tile indices in VRAM. Tile 0 must stay blank: it's what the rest of the
  * map is filled with. */
 #define TILE_BLANK 0
 #define TILE_BLOCK_BASE 1   /* one tile per piece id, 1..7 */
 #define TILE_WALL  9
+#define TILE_FONT_BASE 16   /* 10 digits then 26 letters */
 
 static TengenGame g_game;
 
@@ -105,6 +114,29 @@ static void build_placeholder_tiles(void) {
     /* Wall tile: a flat frame colour. */
     for (int i = 0; i < 64; i++) pixels[i] = 10;
     write_tile_4bpp(TILE_WALL, pixels);
+
+    /* Font tiles: digits then letters, one glyph per tile, so drawing text
+     * later is just writing tile indices into the map — no re-uploading
+     * pixels when the score changes. */
+    for (int glyph = 0; glyph < 36; glyph++) {
+        const uint8_t *rows = (glyph < 10) ? kFontDigits[glyph]
+                                            : kFontLetters[glyph - 10];
+        for (int i = 0; i < 64; i++) pixels[i] = 0;
+        for (int y = 0; y < FONT_ROWS; y++) {
+            for (int x = 0; x < FONT_COLS; x++) {
+                if (rows[y] & (1 << (FONT_COLS - 1 - x))) {
+                    pixels[(y + 1) * 8 + (x + 1)] = 8; /* white, inset one pixel */
+                }
+            }
+        }
+        write_tile_4bpp(TILE_FONT_BASE + glyph, pixels);
+    }
+}
+
+static uint16_t font_tile(char c) {
+    if (c >= '0' && c <= '9') return (uint16_t)(TILE_FONT_BASE + (c - '0'));
+    if (c >= 'A' && c <= 'Z') return (uint16_t)(TILE_FONT_BASE + 10 + (c - 'A'));
+    return TILE_BLANK;
 }
 
 static void build_palette(void) {
@@ -133,6 +165,67 @@ static uint16_t tile_for_cell(uint8_t cell) {
     return (uint16_t)(TILE_BLOCK_BASE + cell - 1);
 }
 
+static void draw_text(int tx, int ty, const char *text) {
+    for (int i = 0; text[i]; i++) set_map_tile(tx + i, ty, font_tile(text[i]));
+}
+
+/* Right-aligned, zero-padded, matching how the ROM shows its fixed-width
+ * counters (its score really is six digits wide, always). */
+static void draw_number(int tx, int ty, uint32_t value, int digits) {
+    for (int i = digits - 1; i >= 0; i--) {
+        set_map_tile(tx + i, ty, font_tile((char)('0' + (value % 10))));
+        value /= 10;
+    }
+}
+
+static void clear_region(int tx, int ty, int w, int h) {
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) set_map_tile(tx + x, ty + y, TILE_BLANK);
+    }
+}
+
+/* The next-piece preview. Drawn from the same orientation-0 bitmap the game
+ * logic uses, so it can't drift out of sync with what actually spawns. */
+static void draw_next_piece(int tx, int ty) {
+    clear_region(tx, ty, 4, 4);
+    TengenTetromino next = g_game.player[0].piece.next;
+    if (next <= TT_NONE || next >= TENGEN_TETROMINO_COUNT) return;
+    for (int r = 0; r < 4; r++) {
+        for (int c = 0; c < 4; c++) {
+            if (tengen_piece_occupies(next, 0, r, c)) {
+                set_map_tile(tx + c, ty + r, tile_for_cell((uint8_t)next));
+            }
+        }
+    }
+}
+
+static void draw_hud(void) {
+    const TengenPlayerState *p = &g_game.player[0];
+
+    draw_text(PANEL_R_TX, 1, "NEXT");
+    draw_next_piece(PANEL_R_TX, 3);
+
+    draw_text(PANEL_R_TX, 8, "SCORE");
+    draw_number(PANEL_R_TX, 9, p->score, 6);
+
+    draw_text(PANEL_R_TX, 11, "LEVEL");
+    draw_number(PANEL_R_TX, 12, p->level, 2);
+
+    draw_text(PANEL_R_TX, 14, "LINES");
+    draw_number(PANEL_R_TX, 15, p->lines, 4);
+
+    /* The left panel is where the NES puts per-piece statistics. The core
+     * doesn't count those yet (the ROM keeps them at pieceStatsI..Z,
+     * $0053-$0059), so it stays empty rather than showing invented numbers. */
+    if (!p->game_active) {
+        draw_text(PANEL_L_TX + 1, 9, "GAME");
+        draw_text(PANEL_L_TX + 1, 10, "OVER");
+        draw_text(PANEL_L_TX, 12, "START");
+    } else {
+        clear_region(PANEL_L_TX, 9, 6, 4);
+    }
+}
+
 static void draw_frame(void) {
     const TengenPlayfield *field = &g_game.field[0];
 
@@ -155,6 +248,8 @@ static void draw_frame(void) {
                       FIELD_ORIGIN_TY + cells[i].row,
                       tile_for_cell((uint8_t)g_game.player[0].piece.current));
     }
+
+    draw_hud();
 }
 
 int main(void) {

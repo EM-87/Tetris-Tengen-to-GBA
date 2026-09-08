@@ -83,15 +83,21 @@ def describe(rows):
     non_black = sum(1 for row in rows for p in row if p != (0, 0, 0))
     print(f"pixeles no negros: {non_black} / {SCREEN_W * SCREEN_H}")
 
-    # Column occupancy profile, to see where the field actually landed.
+    # Column occupancy profile, split by region: the field has a fixed
+    # allocation, the HUD legitimately extends past it.
     cols = [sum(1 for y in range(SCREEN_H) if rows[y][x] != (0, 0, 0))
             for x in range(SCREEN_W)]
     lit = [x for x, c in enumerate(cols) if c > 0]
-    if lit:
-        print(f"columnas con contenido: {min(lit)}..{max(lit)} "
-              f"(esperado {FIELD_X0}..{FIELD_X1 - 1})")
-    else:
+    if not lit:
         print("columnas con contenido: ninguna (pantalla vacia)")
+        return cols
+
+    print(f"columnas con contenido: {min(lit)}..{max(lit)}")
+    print(f"  campo:  {FIELD_X0}..{FIELD_X1 - 1} (96px, el alto completo)")
+    left = [x for x in lit if x < FIELD_X0]
+    right = [x for x in lit if x >= FIELD_X1]
+    print(f"  panel izq: {f'{min(left)}..{max(left)}' if left else 'vacio'}")
+    print(f"  panel der: {f'{min(right)}..{max(right)}' if right else 'vacio'}")
     return cols
 
 
@@ -106,19 +112,30 @@ def selftest(rom_path):
     if all(p == (0, 0, 0) for row in rows for p in row):
         failures.append("la pantalla quedo completamente negra")
 
-    lit = [x for x, c in enumerate(cols) if c > 0]
-    if lit:
-        if min(lit) != FIELD_X0 or max(lit) != FIELD_X1 - 1:
-            failures.append(
-                f"el campo no cae donde dice el mapeo de resolucion: "
-                f"ocupa {min(lit)}..{max(lit)}, esperado {FIELD_X0}..{FIELD_X1 - 1}")
-        # The frame runs the full height of the screen: that is the whole
-        # point of the 160px mapping.
-        wall_col = cols[FIELD_X0]
-        if wall_col != SCREEN_H:
-            failures.append(
-                f"la columna de muro izquierda no ocupa todo el alto "
-                f"({wall_col}/{SCREEN_H} px)")
+    # The frame runs the full height of the screen: that is the whole point
+    # of the 160px mapping.
+    wall_col = cols[FIELD_X0]
+    if wall_col != SCREEN_H:
+        failures.append(
+            f"la columna de muro izquierda no ocupa todo el alto "
+            f"({wall_col}/{SCREEN_H} px)")
+    if cols[FIELD_X1 - 1] != SCREEN_H:
+        failures.append("la columna de muro derecha no ocupa todo el alto")
+
+    # Nothing may be drawn between the walls' outer edges and the panels —
+    # i.e. the field must not have crept outside its 96px allocation.
+    for x in range(FIELD_X0 - 8, FIELD_X0):
+        if cols[x]:
+            failures.append(f"hay contenido a la izquierda del campo (x={x})")
+            break
+
+    # The HUD lives to the right of the field; if it vanished, the panel
+    # would be blank.
+    hud = sum(cols[x] for x in range(FIELD_X1, SCREEN_W))
+    if hud == 0:
+        failures.append("el panel derecho (HUD) quedo vacio")
+    else:
+        print(f"pixeles del HUD a la derecha del campo: {hud}")
 
     # A piece must actually fall: the screen has to change over time without
     # any input at all.
