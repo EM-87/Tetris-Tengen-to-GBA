@@ -291,6 +291,18 @@ static void spawn_piece(TengenGame *game, TengenPlayerSlot slot) {
     p->fall_timer = TENGEN_DROP_RATE_AT_SPAWN;
     p->drop_repeat = 0;
     p->drop_rate_possible = TENGEN_DROP_RATE_AT_SPAWN;
+
+    /* Piece statistics (main.asm.txt:3730-3797, the tail of getNextTetromino).
+     * Counted as the piece is DEALT, not as it locks, and only in 1P: the ROM
+     * checks `menuGameMode` and skips the whole routine for 2P/coop/vs, which
+     * is why only the 1P screen has a stats panel. The count saturates rather
+     * than wrapping. */
+    if (!game->two_player && !game->coop &&
+        p->piece.current > TT_NONE && p->piece.current < TENGEN_TETROMINO_COUNT) {
+        if (p->piece_stats[p->piece.current] < TENGEN_PIECE_STAT_MAX) {
+            p->piece_stats[p->piece.current]++;
+        }
+    }
 }
 
 /* Gravity, VERIFIED against L9AEE (main.asm.txt:3970-4025).

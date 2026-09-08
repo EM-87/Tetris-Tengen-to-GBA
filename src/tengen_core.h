@@ -176,7 +176,16 @@ typedef struct {
     uint8_t level;
     uint8_t start_level;
     bool game_active;
+    /* How many of each piece have been dealt, indexed by TengenTetromino
+     * (slot 0 unused). The ROM keeps these at pieceStatsI..pieceStatsZ
+     * ($0053-$0059) and drives the 1P screen's bar chart from them. Counted
+     * on spawn, capped, and only tracked in 1P — see tengen_core.c. */
+    uint8_t piece_stats[TENGEN_TETROMINO_COUNT];
 } TengenPlayerState;
+
+/* The ROM stops counting a piece at 144 (main.asm.txt:3755), which is where
+ * its eight-tall bar chart runs out of room. */
+#define TENGEN_PIECE_STAT_MAX 144
 
 typedef struct {
     TengenPlayfield field[2];       /* player1Playfield / player2Playfield; coop shares [0] */

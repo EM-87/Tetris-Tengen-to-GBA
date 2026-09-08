@@ -214,15 +214,23 @@ static void draw_hud(void) {
     draw_text(PANEL_R_TX, 14, "LINES");
     draw_number(PANEL_R_TX, 15, p->lines, 4);
 
-    /* The left panel is where the NES puts per-piece statistics. The core
-     * doesn't count those yet (the ROM keeps them at pieceStatsI..Z,
-     * $0053-$0059), so it stays empty rather than showing invented numbers. */
+    /* Left panel: per-piece statistics, same information the NES 1P screen
+     * shows as a bar chart. The NES had the height for bars; 9 tiles of
+     * width here suit an icon-plus-count list better, so this is the one
+     * place the HUD deliberately departs from the original's presentation
+     * rather than its content. */
+    draw_text(PANEL_L_TX + 1, 1, "STATS");
+    for (int piece = TT_I; piece <= TT_Z; piece++) {
+        int ty = 3 + (piece - TT_I) * 2;
+        set_map_tile(PANEL_L_TX + 1, ty, tile_for_cell((uint8_t)piece));
+        draw_number(PANEL_L_TX + 3, ty, p->piece_stats[piece], 3);
+    }
+
     if (!p->game_active) {
-        draw_text(PANEL_L_TX + 1, 9, "GAME");
-        draw_text(PANEL_L_TX + 1, 10, "OVER");
-        draw_text(PANEL_L_TX, 12, "START");
+        draw_text(PANEL_R_TX, 17, "GAME");
+        draw_text(PANEL_R_TX, 18, "OVER");
     } else {
-        clear_region(PANEL_L_TX, 9, 6, 4);
+        clear_region(PANEL_R_TX, 17, 5, 2);
     }
 }
 

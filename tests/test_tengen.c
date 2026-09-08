@@ -578,6 +578,38 @@ static bool every_locked_cell_is_supported(const TengenPlayfield *field) {
     return true;
 }
 
+static void test_piece_stats_count_dealt_pieces_in_1p_only(void) {
+    /* main.asm.txt:3730-3797: counted as the piece is dealt, and the whole
+     * routine is skipped outside 1P. */
+    TengenGame solo;
+    tengen_new_game(&solo, 51, 0, false, false);
+    /* One piece has been dealt by tengen_new_game's initial spawn. */
+    unsigned total = 0;
+    for (int piece = TT_I; piece <= TT_Z; piece++) total += solo.player[0].piece_stats[piece];
+    CHECK(total == 1);
+    CHECK(solo.player[0].piece_stats[solo.player[0].piece.current] == 1);
+
+    /* Play a while; the total must track the number of pieces dealt. */
+    uint32_t rolling = 51;
+    unsigned locks = 0;
+    for (int frame = 0; frame < 20000 && solo.player[0].game_active; frame++) {
+        rolling = rolling * 1103515245u + 12345u;
+        uint8_t buttons = ((rolling >> 16) % 3) ? TENGEN_BTN_DOWN : TENGEN_BTN_LEFT;
+        if (tengen_step(&solo, TENGEN_PLAYER_1, buttons).piece_locked) locks++;
+    }
+    total = 0;
+    for (int piece = TT_I; piece <= TT_Z; piece++) total += solo.player[0].piece_stats[piece];
+    CHECK(locks > 0);
+    CHECK(total == locks + 1); /* every lock deals a replacement, plus the first */
+
+    /* 2P and coop don't track stats at all. */
+    TengenGame coop;
+    tengen_new_game(&coop, 51, 0, true, true);
+    unsigned coop_total = 0;
+    for (int piece = TT_I; piece <= TT_Z; piece++) coop_total += coop.player[0].piece_stats[piece];
+    CHECK(coop_total == 0);
+}
+
 static void test_no_piece_ever_locks_in_mid_air(void) {
     /* Play out several games' worth of pieces under varied input and check
      * the support invariant after every single lock. */
@@ -663,6 +695,7 @@ int main(void) {
     test_level_starts_at_the_chosen_start_level();
     test_level_is_recomputed_from_the_line_total();
     test_level_never_passes_the_rom_cap();
+    test_piece_stats_count_dealt_pieces_in_1p_only();
     test_no_piece_ever_locks_in_mid_air();
     test_locked_cells_never_overwrite_the_walls();
 
