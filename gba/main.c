@@ -94,35 +94,43 @@
 /* ----------------------------------------------------------------------- *
  * The between-levels dancers
  *
- * On the NES these are sprites, eight of them, each built from four 8x8
- * tiles in a 2x2 block. A per-dancer script steps through poses every 8
- * frames while the figure walks sideways and flips horizontally
- * (main.asm.txt:6392-6499). The level-up blit clears the vertical TETRIS
- * banner to make room, which is how we know that column is their stage.
+ * Sprites, six of them in a 1P game, each four 8x8 tiles in a 2x2 block.
+ * They are stacked in one column 24 pixels apart, and the level-up blit —
+ * which is what makes room for them — does more than clear the TETRIS
+ * banner: it draws their STAGE into it, five ledges of tile $9D one every
+ * three rows (`levelUpAnimationColsRows1` at $B7FF, tiles at `LC82C`). The
+ * ledges land exactly 24 pixels apart, under the dancers' feet, which is
+ * what pins the two tables to each other.
  *
- * Reproduced here with the cartridge's own dancer tiles and pose table, at
- * the same cadence and in the same place. The one thing NOT taken from the
- * ROM is each dancer's individual choreography script — those scripts have
- * branch and random-selection entries that this pass did not trace, so the
- * dancers here simply walk the pose table from staggered starting points.
- * See reference/NOTES.md.
+ * They start at x $61, just left of the banner, and walk right onto it one
+ * pixel every four frames; the pose advances every eight
+ * (main.asm.txt:6392-6499). Positions, stage and poses are all the ROM's,
+ * from tools/extract_assets.py.
+ *
+ * WHAT IS STILL NOT THE ROM'S: each dancer's individual choreography. The
+ * ROM gives every dancer a pointer into a little program whose entries are
+ * poses, jumps to other programs, or random branches, decided by comparing
+ * the pointer against $B14D and $C8BC — traced now and written up in
+ * reference/NOTES.md, but not yet wired up here, so these walk the pose
+ * table from staggered starting points instead.
  * ----------------------------------------------------------------------- */
-#define DANCER_COUNT 8
+#define DANCER_COUNT DANCER_SOLO_COUNT
 #define DANCER_SPRITES 4              /* four 8x8 tiles in a 2x2 per dancer */
 #define DANCER_POSE_FRAMES 8          /* pose advance cadence, from the ROM */
 #define DANCER_WALK_FRAMES 4          /* X advance cadence, from the ROM */
 #define DANCER_SHOW_FRAMES 200        /* how long the interlude lasts */
 #define PAL_OBJ_DANCER 0
 
-/* Their stage: the banner column, in the tile coordinates the level-up blit
- * clears. On the NES that blit is 4 columns x 18 rows at nametable (14,10),
- * which inside this port's window is columns 14-17, rows 2-19. */
+/* The blit's own tile coordinates: 4 columns x 18 rows at nametable (14,10),
+ * which inside this port's window (which starts at nametable row 8) is
+ * columns 14-17, rows 2-19. */
 #define DANCER_STAGE_TX 14
 #define DANCER_STAGE_TY 2
-#define DANCER_STAGE_TW 4
-#define DANCER_STAGE_TH 18
-#define DANCER_STAGE_X (DANCER_STAGE_TX * 8)
-#define DANCER_STAGE_Y (DANCER_STAGE_TY * 8)
+#define DANCER_STAGE_TW DANCER_STAGE_COLS
+#define DANCER_STAGE_TH DANCER_STAGE_ROWS
+/* The ROM's sprite coordinates are NES screen pixels; this window starts at
+ * nametable row 8, so a NES y of 64 is this screen's 0. */
+#define DANCER_Y_ORIGIN (SCREEN_1P_FIELD_TY * 8)
 
 /* ----------------------------------------------------------------------- *
  * The line-clear sweep
@@ -300,36 +308,35 @@ static void oam_hide_all(void) {
     for (int i = 0; i < 128; i++) MEM_OAM[i * 4] = OBJ_ATTR0_HIDDEN;
 }
 
-/* Places the eight dancers for one frame of the interlude. */
+/* Places the dancers for one frame of the interlude, in the ROM's own
+ * positions: one column of six, 24 pixels apart, walking right off their
+ * starting mark onto the ledges. */
 static void draw_dancers(int elapsed) {
     int pose_step = elapsed / DANCER_POSE_FRAMES;
     int walk = elapsed / DANCER_WALK_FRAMES;
 
     for (int d = 0; d < DANCER_COUNT; d++) {
-        /* Staggered starting poses so the eight are not in lockstep. */
+        /* Staggered starting poses so the six are not in lockstep. This is
+         * the stand-in for the per-dancer script; see the note above. */
         int pose = (pose_step + d * 7) % DANCER_POSE_COUNT;
         const uint8_t *tiles = kDancerPoses[pose];
 
-        /* Two columns of four, filling the banner's stage. They walk, and
-         * turn around at the edges — the ROM flips them the same way. */
-        int lane = d & 1;
-        int row = d >> 1;
-        int travel = (walk + d * 5) % 32;
-        bool facing_left = travel >= 16;
-        int offset = facing_left ? (31 - travel) : travel;
-
-        /* Two lanes of four, evenly filling the 32x144 stage. */
-        int x = DANCER_STAGE_X + lane * 16 + (offset >> 3);
-        int y = DANCER_STAGE_Y + row * 36;
+        int x = kDancerStartX[d] + walk;
+        int y = (int)kDancerStartY[d] - DANCER_Y_ORIGIN;
+        /* Once a dancer walks off the far side of the stage it stops there
+         * rather than wandering into the score panel. */
+        int limit = (DANCER_STAGE_TX + DANCER_STAGE_TW) * 8 - 16;
+        if (x > limit) x = limit;
 
         for (int s = 0; s < DANCER_SPRITES; s++) {
             int sx = x + ((s & 1) ? 8 : 0);
             int sy = y + ((s & 2) ? 8 : 0);
-            oam_set(d * DANCER_SPRITES + s, sx, sy, tiles[s], facing_left,
+            oam_set(d * DANCER_SPRITES + s, sx, sy, tiles[s], false,
                      PAL_OBJ_DANCER);
         }
     }
 }
+
 
 /* The puff of smoke crossing each completed row: five sprites in a row, the
  * head at the column the sweep has reached and the rest trailing one column
@@ -367,6 +374,14 @@ static void draw_static_screen(void) {
             set_map_tile(tx, ty, WITH_BANK(kScreen1pTiles[i], kScreen1pPalettes[i]));
         }
     }
+}
+
+/* The stage the level-up blit paints where the banner was. */
+static void draw_dancer_stage(void) {
+    for (int y = 0; y < DANCER_STAGE_TH; y++)
+        for (int x = 0; x < DANCER_STAGE_TW; x++)
+            set_map_tile(DANCER_STAGE_TX + x, DANCER_STAGE_TY + y,
+                          WITH_BANK(kDancerStage[y][x], 1));
 }
 
 static void draw_tiles(int tx, int ty, const uint8_t *tiles, int count, int bank) {
@@ -691,8 +706,7 @@ int main(void) {
                 draw_static_screen();
                 nes_audio_play(kMusicTracks[music]);
             } else {
-                clear_region(DANCER_STAGE_TX, DANCER_STAGE_TY,
-                              DANCER_STAGE_TW, DANCER_STAGE_TH);
+                draw_dancer_stage();
                 draw_dancers(DANCER_SHOW_FRAMES - dancer_frames);
             }
             vsync();

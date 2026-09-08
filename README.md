@@ -80,10 +80,14 @@ Hay una ROM de GBA que arranca, se juega y corre las reglas reales de Tengen.
   columnas del coop), pero la capa GBA es solo de un jugador por ahora. Del
   menú original solo está la selección de nivel; faltan tipo de partida,
   handicap y selección de música.
-- **Coreografía exacta de los bailarines**: los bailarines están, con su arte
-  y sus poses reales, en su sitio y a la cadencia de la ROM; lo que no está
-  trazado es el script individual de cada uno (tienen saltos y selección
-  aleatoria), así que recorren la tabla de poses desde puntos escalonados.
+- **Coreografía exacta de los bailarines**: están los seis, con su arte, sus
+  poses, sus posiciones y su escenario reales — el blit de subida de nivel no
+  solo despeja el banner, además dibuja las repisas sobre las que se paran, y
+  eso ya está. Lo que falta son los datos del script individual de cada uno.
+  El intérprete de esos scripts sí está trazado (ver `reference/NOTES.md`:
+  cada entrada es una pose, un salto o una bifurcación al azar según contra
+  qué dirección se compare), pero los datos no están cargados todavía, así
+  que recorren la tabla de poses desde puntos escalonados.
 
 ## Controles
 

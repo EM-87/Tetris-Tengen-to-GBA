@@ -75,6 +75,26 @@ PIECE_PALETTE_ADDR = 0xA788     # piecePaletteIndex0..B
 DANCER_POSE_ADDR = 0xC8BC
 DANCER_POSE_END = 0xCA00
 
+# Where the dancers stand, and what they stand on.
+#
+# The level-up blit (`levelUpAnimationColsRows1` at $B7FF: 4 columns x 18 rows
+# at nametable (14,10)) does not just clear the TETRIS banner — it draws the
+# dancers' STAGE into it: five ledges of tile $9D, one every three rows. Their
+# spacing is exactly the 24px spacing of the six dancer positions below, which
+# is what pins the two tables to each other.
+DANCER_STAGE_ADDR = 0xC82C      # LC82C, the blit's tile data
+DANCER_STAGE_COLS = 4
+DANCER_STAGE_ROWS = 18
+# Per-dancer starting X, Y and OAM attributes ($8E5C / $8E6A / $8E78). Entries
+# 0-5 are the six a 1P or 2P game uses, stacked in one column; 6-13 are coop's,
+# in pairs down the two sides. main.asm.txt:2085-2108 picks the range: 1P/2P
+# take 0..min(count,6), coop takes 6..count+6.
+DANCER_POS_X_ADDR = 0x8E5C
+DANCER_POS_Y_ADDR = 0x8E6A
+DANCER_ATTR_ADDR = 0x8E78
+DANCER_POS_COUNT = 14
+DANCER_SOLO_COUNT = 6
+
 # The title screen: "TENGEN PRESENTS / THE SOVIET MIND GAME / TETRIS" over
 # St Basil's Cathedral. Its nametable carries no attribute table (the next
 # thing in the ROM is fireworksData00), because the whole screen uses one
@@ -526,7 +546,7 @@ def emit_title_header(tiles, palette, source):
     return "\n".join(lines)
 
 
-def emit_dancer_poses_header(poses, source):
+def emit_dancer_poses_header(poses, stage_rows, pos_x, pos_y, source):
     lines = [
         "/*",
         " * dancer_poses.h — the between-levels dancers' animation poses.",
@@ -545,12 +565,37 @@ def emit_dancer_poses_header(poses, source):
         "#include <stdint.h>",
         "",
         f"#define DANCER_POSE_COUNT {len(poses)}",
+        f"#define DANCER_SOLO_COUNT {DANCER_SOLO_COUNT}",
+        f"#define DANCER_STAGE_COLS {DANCER_STAGE_COLS}",
+        f"#define DANCER_STAGE_ROWS {DANCER_STAGE_ROWS}",
         "",
         "static const uint8_t kDancerPoses[DANCER_POSE_COUNT][4] = {",
     ]
     for pose in poses:
         lines.append("    { " + ", ".join(f"0x{b:02X}" for b in pose) + " },")
-    lines += ["};", "", "#endif /* DANCER_POSES_H */", ""]
+    lines += [
+        "};",
+        "",
+        "/* Their stage, straight out of the level-up blit: five ledges of tile",
+        " * $9D, one every three rows, 24px apart — the same 24px the dancer",
+        " * positions below are spaced by. */",
+        f"static const uint8_t kDancerStage[{DANCER_STAGE_ROWS}][{DANCER_STAGE_COLS}] = {{",
+    ]
+    for row in stage_rows:
+        lines.append("    { " + ", ".join(f"0x{b:02X}" for b in row) + " },")
+    lines += [
+        "};",
+        "",
+        "/* Where each dancer starts, in NES screen pixels. They walk right from",
+        " * here, one pixel every four frames, onto the ledges. */",
+        f"static const uint8_t kDancerStartX[DANCER_SOLO_COUNT] = {{ "
+        + ", ".join(f"0x{b:02X}" for b in pos_x[:DANCER_SOLO_COUNT]) + " };",
+        f"static const uint8_t kDancerStartY[DANCER_SOLO_COUNT] = {{ "
+        + ", ".join(f"0x{b:02X}" for b in pos_y[:DANCER_SOLO_COUNT]) + " };",
+        "",
+        "#endif /* DANCER_POSES_H */",
+        "",
+    ]
     return "\n".join(lines)
 
 
@@ -676,6 +721,12 @@ def main() -> int:
     pose_bytes = rom.at(DANCER_POSE_ADDR, DANCER_POSE_END - DANCER_POSE_ADDR)
     poses = [pose_bytes[i:i + 4] for i in range(0, len(pose_bytes), 4)]
 
+    stage = rom.at(DANCER_STAGE_ADDR, DANCER_STAGE_COLS * DANCER_STAGE_ROWS)
+    stage_rows = [stage[r * DANCER_STAGE_COLS:(r + 1) * DANCER_STAGE_COLS]
+                  for r in range(DANCER_STAGE_ROWS)]
+    dancer_x = rom.at(DANCER_POS_X_ADDR, DANCER_POS_COUNT)
+    dancer_y = rom.at(DANCER_POS_Y_ADDR, DANCER_POS_COUNT)
+
     title_nt = rom.at(TITLE_NAMETABLE_ADDR, NAMETABLE_BYTES)
     title_palette = rom.at(TITLE_BG_PALETTE_ADDR, 4)
 
@@ -692,7 +743,8 @@ def main() -> int:
         "screen_title.h": emit_title_header(compose_title(title_nt), title_palette, src),
         "tiles_title.h": emit_tiles_header(
             "kTitleTiles", "TILES_TITLE", convert_tiles(rom.chr_bank(2)), f"{src} [title]"),
-        "dancer_poses.h": emit_dancer_poses_header(poses, f"{src} [dancers]"),
+        "dancer_poses.h": emit_dancer_poses_header(
+            poses, stage_rows, dancer_x, dancer_y, f"{src} [dancers]"),
         "tiles_game.h": emit_tiles_header(
             "kGameTiles", "TILES_GAME", convert_tiles(rom.chr_bank(0)), f"{src} [game]"),
         "tiles_dancers.h": emit_tiles_header(
