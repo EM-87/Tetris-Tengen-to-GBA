@@ -46,15 +46,17 @@ Hay una ROM de GBA que arranca, se juega y corre las reglas reales de Tengen.
   catedral de San Basilio), el selector de nivel dentro del marco de menú de
   la ROM, HUD completo, game over, la animación de línea completa (la
   bocanada de humo que cruza la fila y deja escrito SINGLE / DOUBLE /
-  TRIPLE / TETRIS donde estaban los bloques) y los bailarines cosacos entre
-  niveles.
+  TRIPLE / TETRIS donde estaban los bloques), la pausa con su placa original,
+  los tres códigos de trucos de Tengen (subir de nivel, barra larga y deshacer
+  la última pieza) y los bailarines cosacos entre niveles.
 - `tools/extract_assets.py` — saca del cartucho original los tiles, las
   paletas, el layout de pantalla y las poses de los bailarines. **Todo el
   arte del port sale de ahí; no hay nada dibujado a mano.**
 - `tools/run_rom.py` — arranca la ROM en mGBA headless y verifica que
   realmente dibuje y se juegue (`make gba-check`), no solo que linkee:
-  incluye ver la animación de línea completa sprite por sprite y comprobar
-  que deja escrita la palabra correcta.
+  incluye ver la animación de línea completa sprite por sprite, comprobar
+  que deja escrita la palabra correcta, y pausar y teclear los códigos de
+  trucos.
 - `reference/disasm/` — el disassembly completo que sirve de fuente de
   verdad, y `reference/NOTES.md` con el resumen curado de qué está
   verificado y contra qué línea de la ROM.
@@ -70,6 +72,27 @@ Hay una ROM de GBA que arranca, se juega y corre las reglas reales de Tengen.
   y sus poses reales, en su sitio y a la cadencia de la ROM; lo que no está
   trazado es el script individual de cada uno (tienen saltos y selección
   aleatoria), así que recorren la tabla de poses desde puntos escalonados.
+
+## Controles
+
+Los del NES, uno a uno: la cruceta mueve y hace soft drop (solo Abajo a
+secas: Abajo+lateral no acelera, igual que en el original), **A** y **B**
+rotan — y si los dejás apretados 15 frames la pieza empieza a girar sola,
+que es una rareza real de Tengen, no un bug del port —, y **START** pausa.
+
+Con el juego en pausa entran los tres códigos originales, un botón por
+frame:
+
+| Código | Secuencia | Límite |
+|---|---|---|
+| Subir de nivel | Arriba Abajo Arriba Abajo Izq Der B B A | ilimitado (tope 17) |
+| Barra larga | Abajo Abajo Izq Der Izq Der B A | una por nivel |
+| Deshacer | Izq Abajo Der Arriba Izq Abajo Der B A | una por partida |
+
+Están reproducidos con sus manías: un botón que rompe la secuencia se come
+esa pulsación, y al completar un código el cursor no se rebobina, así que
+volver a pulsar **A** repite el último — que es como se sube de nivel a
+pulsos de A.
 
 ## Compilar
 

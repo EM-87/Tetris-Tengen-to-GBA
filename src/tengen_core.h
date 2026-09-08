@@ -195,6 +195,21 @@ typedef struct {
      * collapse when it reaches zero. */
     uint8_t line_clear_timer;
     uint32_t clearing_rows;   /* bit i set => row i is completed and waiting */
+
+    /* Cheat-code entry, mirroring $01B6-$01BB. See TENGEN_CHEAT_* below. */
+    uint8_t code_input_y;       /* codeInputYPlayer1: offset into the code table */
+    uint8_t long_bar_code_used; /* longBarCodeUsedP1: cleared on every level-up */
+    uint8_t undo_code_used;     /* undoCodeUsedP1: cleared only on a new game */
+
+    /* The snapshot the undo code restores, taken the instant a piece comes to
+     * rest and before the next is dealt (L85B3, main.asm.txt:911-925). A line
+     * clear wipes it (L94E4, main.asm.txt:3087-3092), which is what stops an
+     * undo from putting back a piece whose row has already gone. */
+    TengenTetromino last_piece;
+    uint8_t last_orientation;
+    int8_t last_x;
+    int8_t last_y;
+    TengenRng last_rng;
 } TengenPlayerState;
 
 /* main.asm.txt:1192-1197: the timer starts at $1D in 1P/2P and $21 in coop. */
@@ -233,7 +248,39 @@ typedef struct {
     TengenPlayerState player[2];
     bool coop;
     bool two_player;
+    /* gameState == GAMESTATE_PAUSED. Start toggles it (pauseOrUnpause,
+     * main.asm.txt:7184-7215) and it is where the cheat codes are entered. */
+    bool paused;
 } TengenGame;
+
+/* ----------------------------------------------------------------------- *
+ * The cheat codes (VERIFIED, checkCodeInput at main.asm.txt:7025-7182)
+ *
+ * Tengen's three famous button codes, entered WHILE PAUSED, one button per
+ * frame:
+ *
+ *   level up:  Up Down Up Down Left Right B B A
+ *   long bar:  Down Down Left Right Left Right B A
+ *   undo:      Left Down Right Up Left Down Right B A
+ *
+ * Each has its own limit and its own quirk, all of them reproduced:
+ *   - Level up adds one level (capped at 17) and is unlimited.
+ *   - The long bar hands you an I piece and can be used once per level. Only
+ *     levelling up by PLAY clears its "used" flag (main.asm.txt:3190); the
+ *     level-up code above deliberately doesn't, so the two codes can't be
+ *     alternated for an endless supply of long bars.
+ *   - Undo takes back the last piece you dropped, ONCE per game, and only if
+ *     no line has been cleared since.
+ *   - After a code completes, the ROM leaves the match cursor on its last
+ *     byte rather than resetting it, so pressing A again re-triggers the same
+ *     code. That is why the level-up code repeats on a single button.
+ * ----------------------------------------------------------------------- */
+typedef enum {
+    TENGEN_CHEAT_NONE = 0,
+    TENGEN_CHEAT_LEVEL_UP,
+    TENGEN_CHEAT_LONG_BAR,
+    TENGEN_CHEAT_UNDO
+} TengenCheat;
 
 typedef struct {
     bool piece_locked;
@@ -326,6 +373,19 @@ uint8_t tengen_frames_per_row(uint8_t level, int8_t piece_y, bool coop);
  * Game lifecycle
  * ----------------------------------------------------------------------- */
 void tengen_new_game(TengenGame *game, uint16_t seed, uint8_t start_level, bool two_player, bool coop);
+
+/* pauseOrUnpause (main.asm.txt:7184-7215) and the cheat-code entry it wraps
+ * (checkCodeInput, :7025-7182). Call ONCE per frame, BEFORE stepping the
+ * players, with each player's newly-pressed buttons (held & ~held_last_frame).
+ * That mirrors the ROM: one routine reads both controllers, feeds each
+ * player's own presses to its own code matcher, and then ORs the two for the
+ * Start check — which is why either player can pause.
+ *
+ * `out_cheat` (may be NULL) receives what fired for each player this frame.
+ * A game that isn't paused ignores the code input entirely, exactly as the
+ * ROM does. */
+void tengen_pause_input(TengenGame *game, const uint8_t new_presses[2],
+                         TengenCheat out_cheat[2]);
 
 /* Advances one player's piece by exactly one game frame (call at ~60Hz to
  * match the NES's ~60.1Hz / the GBA's ~59.7Hz — close enough that no frame

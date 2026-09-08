@@ -75,7 +75,8 @@ the level-up rule were all initially plausible-looking and wrong — so treat
 | **The dancers** | poses at `$C8BC-$C9FF`; driver at `main.asm.txt:6392-6499`; stage from `levelUpAnimationColsRows1` at `$B7FF` | The between-levels Cossack dancers are sprites: eight of them, each four 8x8 tiles in a 2x2 forming one 16x16 figure. A pose is just four tile ids; a per-dancer script advances one pose every 8 frames, the figure's X advances every 4 (they walk), and `eor #$40` on the OAM attribute flips them so they turn around. Their stage is the vertical TETRIS banner: the level-up blit is 4 columns x 18 rows at nametable (14,10), which clears exactly that banner to make room. **Not traced:** each dancer's individual choreography script — those have branch and random-selection entries — so the port walks the pose table from staggered starts at the ROM's cadence instead. |
 | **Title and menu screens** | `titleScreenNametable` at `$CA00`; `menuNametable` at `$B8A8` | The title is 32x30 with a 4-tile-thick border; its nametable carries **no** attribute table (the next thing in the ROM is `fireworksData00`), because the whole screen is drawn in one palette — bgPalette0's blues. The menu is the same decorative frame with an empty middle the game writes its wording into at runtime, which is why its selection screens all look alike. |
 | **The line-clear animation** | timer set at `main.asm.txt:1192-1197`; sprite staged by `L87FB` at `:1230-1273`; driver `stageLineClearAnimation` at `:1274-1338`; the write-back `L89E9` at `:1508-1546`; strings `lineClearSingle..lineClearTetris` at `:1548-1561`; palette `piecePaletteIndexA` at `:5394-5396` | Completing rows does **not** collapse them: the ROM marks each completed row with `$FE`, holds the game for `lineClearTimerP1` frames (`$1D` = 29 in 1P/2P, `$21` = 33 in coop) and animates them, collapsing only when the timer expires. The animation is a puff of smoke crossing each completed row left to right — five 8x8 sprites, tiles `$5B..$5F`, drawn in `piecePaletteIndexA`, which is `$0F,$0F,$0F`: **flat black**, a silhouette. Only the head is staged when the row completes; each step the sprite still sitting at the field's first column clones itself one OAM slot back with the next tile down, so the trail builds itself up to five. It advances one column **every other frame** — the driver decrements the timer every frame but acts only on odd values (`lsr a / bcc`, `:1280-1283`) — giving 14 steps for the 29-frame hold. The trailing sprite writes one character per column into the row it passes over, spelling `" SINGLE     "` / `" DOUBLE     "` / `" TRIPLE     "` / `" TETRIS     "` (12 characters, one per playfield column, walls included) chosen by `12 × rows_cleared` bytes past `lineClearTable`. Because the tail starts four columns behind the head and there are only 14 steps, it reaches the tenth column and no further, so the last two columns of the row keep their blocks until the collapse — reproduced as-is rather than tidied up. |
-| Cheat-code state exists (long bar / undo) | `tetris-ram.asm.txt:121-134` | `codeInputYPlayer1/2`, `longBarCodeUsedP1/2`, `undoCodeUsedP1/2`, `lastCurrentBlockP1/2` etc. Tengen's famous in-game level-up entry codes and the "undo" cheat have dedicated RAM; **not yet implemented in the core** — worth a dedicated pass since these are a well-known, requested-by-fans Tengen feature. |
+| **Pause** | `pauseOrUnpause` at `main.asm.txt:7184-7215`; gating at `:444-446`; plaque data at `:7293-7312` and `:8027-8028`, tiles at `:8061-8063` | Start toggles `gameState` between PLAYING (0) and PAUSED (1), and is ignored from any other state — so it does nothing on the game-over screen. Pausing stops gameplay but **not** the line-clear animation, because `stageLineClearAnimation` is called from the main loop unconditionally (`:66-70`) while `branchOnActiveDemoOrGameOver` returns early unless `gameState` is 0. The plaque is an 8×2 blit of the cartridge's own tiles at nametable (12,8), coloured with background palette 3 (`pauseAttrs` = `$EF,$BF`); unpausing restores those same two rows from `gameModeNametable1P+268`. |
+| **The cheat codes** | `checkCodeInput` at `main.asm.txt:7025-7182`; tables at `:7175-7182`; snapshot `L85B3` at `:911-925`; undo disarm `L94E4` at `:3087-3092`; long-bar refresh at `:3189-3190` | Entered **while paused**, one button per frame, and only if that player is still alive. Level up = Up Down Up Down Left Right B B A; long bar = Down Down Left Right Left Right B A; undo = Left Down Right Up Left Down Right B A. All three live in ONE table and share ONE cursor (`codeInputYPlayer1`), which is why several behaviours fall out that look like bugs and are not: a first press is tested against all three starts and commits to the first that matches (undo, then long bar, then level up); a press that breaks a sequence is **swallowed**, not re-tested; and the cursor is **never rewound on success**, so the last button of a completed code re-fires it — that is how the level-up code is repeated with bare A presses. Limits: level up is unlimited but stops at 17 (`:7059-7067`); the long bar is once per level, and only levelling up **by play** hands it back (`:3189-3190` — the level-up code deliberately doesn't, so the two can't be alternated); the undo is once per game and needs a snapshot, which a line clear wipes. The undo takes the last locked piece back out of the field, makes the piece you were holding `next`, rewinds the RNG to `lastRNGSeedP1`, and drops the recovered piece in at the top. |
 
 ## PLACEHOLDER (implemented, but not yet checked against this ROM)
 
@@ -84,9 +85,9 @@ disassembly and cited both here and at its point of use in
 `src/tengen_core.c`, and the graphics all come from the cartridge rather
 than being redrawn.
 
-Two things are deliberately *not* implemented rather than guessed at: the
-long-bar/undo cheat codes, and each dancer's individual choreography script.
-Neither affects the rules the core models.
+One thing is deliberately *not* implemented rather than guessed at: each
+dancer's individual choreography script. It doesn't affect the rules the core
+models.
 
 One known deviation, documented rather than reproduced: the ROM keeps score
 and line counts as ASCII digits and does its arithmetic digit by digit. The
@@ -98,13 +99,10 @@ preserve bug-for-bug.
 
 ## Suggested next disassembly targets (in priority order)
 
-1. `codeInputYPlayer1/2` handling (search `tetris-ram.asm.txt:121` outward)
-   — the long-bar/undo cheat codes, a well-known Tengen feature fans will
-   expect in a faithful port.
-2. Each dancer's choreography script (the pointer tables the driver at
+1. Each dancer's choreography script (the pointer tables the driver at
    `main.asm.txt:6392-6499` walks) — the only part of the level-up
    interlude still approximated.
-3. The 2P and coop front end: the menu rows for game type, handicap and
+2. The 2P and coop front end: the menu rows for game type, handicap and
    music (`main.asm.txt:4742-4830`), and the second player's screen half.
 
 ## A note on frame rate

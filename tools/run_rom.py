@@ -11,14 +11,16 @@ Usage:
     python3 tools/run_rom.py build/tengen.gba [--frames N] [--png OUT.png]
     python3 tools/run_rom.py build/tengen.gba --selftest
     python3 tools/run_rom.py build/tengen.gba --lineclear
+    python3 tools/run_rom.py build/tengen.gba --pause
 
 --selftest checks the things a broken port would get wrong: that the screen
 isn't blank, that the playfield frame is where the resolution mapping says it
 should be, and that a piece actually falls.
 
 --lineclear watches the line-clear animation happen, sprite by sprite and
-tile by tile. It needs `build/tengen.elf` next to the ROM (for the address of
-the game state) and an `arm-none-eabi-nm` to read it with.
+tile by tile. --pause pauses the game and types in the cheat codes. Both need
+`build/tengen.elf` next to the ROM (for the address of the game state) and an
+`arm-none-eabi-nm` to read it with.
 
 Requires: pip install pygba  (pulls in the mGBA bindings)
           plus the mGBA shared library, e.g. apt-get install libmgba0.10
@@ -368,6 +370,102 @@ def lineclear_check(rom_path, row_count):
     return 0
 
 
+# ---------------------------------------------------------------------------
+# Pause and the cheat codes
+#
+# Start pauses; the codes go in while paused. The rules are tested on the host
+# (tests/test_tengen.c); what is checked here is that the GBA layer wires them
+# up at all and draws the ROM's own PAUSE plaque where it should.
+# ---------------------------------------------------------------------------
+PAUSE_TX, PAUSE_TY, PAUSE_W = 10, 0, 8
+PAUSE_ROW0 = [0x10, 0x11, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0x12]  # main.asm.txt:8061
+PAUSE_ROW1 = [0x13, 0x14, 0xD7, 0xD8, 0xD9, 0xDA, 0xDB, 0x15]
+
+KEYS = {"A": 0, "B": 1, "SELECT": 2, "START": 3,
+        "RIGHT": 4, "LEFT": 5, "UP": 6, "DOWN": 7}
+CODE_LEVEL_UP = "UP DOWN UP DOWN LEFT RIGHT B B A".split()
+CODE_LONG_BAR = "DOWN DOWN LEFT RIGHT LEFT RIGHT B A".split()
+
+# Offsets into g_game, from the structs in src/tengen_core.h. The compiler is
+# arm-none-eabi with the EABI's default -fshort-enums, so a TengenTetromino is
+# one byte; a mismatch would show up immediately as nonsense readings, which
+# the checks below would catch.
+OFF_CURRENT = 488
+OFF_Y = 492
+OFF_LEVEL = 504
+
+
+def pause_box(core, row):
+    return [core.memory.u16[SCREENBLOCK_ADDR + ((PAUSE_TY + row) * 32 + PAUSE_TX + x) * 2] & 0x3FF
+            for x in range(PAUSE_W)]
+
+
+def pause_check(rom_path):
+    base, why = game_state_address(rom_path)
+    if base is None:
+        print(f"SALTADO: {why}")
+        return 0
+
+    core, _ = load(rom_path)
+    start_game(core)
+    m = core.memory
+    failures = []
+
+    def tap(name):
+        core.set_keys(KEYS[name])
+        core.run_frame()
+        core.set_keys()
+        core.run_frame()
+
+    y_before = m.u8[base + OFF_Y]
+    tap("START")
+    run(core, 120)
+    if m.u8[base + OFF_Y] != y_before:
+        failures.append("la pieza siguio cayendo con el juego en pausa")
+    if pause_box(core, 0) != PAUSE_ROW0 or pause_box(core, 1) != PAUSE_ROW1:
+        failures.append(f"la placa de PAUSE no se dibujo: {pause_box(core, 0)}")
+    else:
+        print(f"  placa de PAUSE en ({PAUSE_TX},{PAUSE_TY}), tiles de la ROM")
+
+    level = m.u8[base + OFF_LEVEL]
+    for button in CODE_LEVEL_UP:
+        tap(button)
+    if m.u8[base + OFF_LEVEL] != level + 1:
+        failures.append(f"el codigo de nivel dejo el nivel en {m.u8[base + OFF_LEVEL]}, "
+                        f"esperaba {level + 1}")
+    tap("A")   # the ROM leaves the cursor on the last byte, so A repeats it
+    if m.u8[base + OFF_LEVEL] != level + 2:
+        failures.append("pulsar A otra vez no repitio el codigo de nivel")
+    else:
+        print(f"  codigo de nivel: {level} -> {m.u8[base + OFF_LEVEL]} (y repite con A)")
+
+    # A press that breaks a sequence is swallowed, so a neutral button is
+    # needed before the next code -- that is the ROM's matcher, not a hack.
+    tap("SELECT")
+    for button in CODE_LONG_BAR:
+        tap(button)
+    if m.u8[base + OFF_CURRENT] != 1:
+        failures.append(f"el codigo de barra larga dio la pieza "
+                        f"{m.u8[base + OFF_CURRENT]}, esperaba 1 (I)")
+    else:
+        print("  codigo de barra larga: la pieza en juego pasa a ser la I")
+
+    tap("START")
+    run(core, 4)
+    if pause_box(core, 0) == PAUSE_ROW0:
+        failures.append("la placa de PAUSE se quedo despues de despausar")
+    run(core, 120)
+    if m.u8[base + OFF_Y] == y_before:
+        failures.append("el juego no siguio despues de despausar")
+
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: START pausa y despausa, y los codigos de trucos responden.")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("rom")
@@ -376,12 +474,16 @@ def main():
     ap.add_argument("--selftest", action="store_true")
     ap.add_argument("--lineclear", action="store_true",
                      help="watch the line-clear animation, for 1 row and for 4")
+    ap.add_argument("--pause", action="store_true",
+                     help="check Start pauses and the cheat codes respond")
     args = ap.parse_args()
 
     if args.selftest:
         sys.exit(selftest(args.rom))
     if args.lineclear:
         sys.exit(lineclear_check(args.rom, 1) or lineclear_check(args.rom, 4))
+    if args.pause:
+        sys.exit(pause_check(args.rom))
 
     core, screen = load(args.rom)
     start_game(core)

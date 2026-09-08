@@ -248,6 +248,181 @@ uint32_t tengen_clear_full_rows(TengenPlayfield *field) {
     return tengen_collapse_rows(field, tengen_find_full_rows(field));
 }
 
+/* ----------------------------------------------------------------------- *
+ * Cheat codes (VERIFIED, checkCodeInput at main.asm.txt:7025-7182)
+ *
+ * The three codes are ONE array here, in the ROM's own order and with its
+ * terminators, because the matcher's behaviour depends on that: it walks a
+ * single cursor through this table (`codeInputYPlayer1`) and tells the codes
+ * apart purely by where the cursor is when it hits a 0. Splitting them into
+ * three separate arrays would look tidier and would quietly change how a
+ * half-entered code behaves.
+ *
+ * Offsets, straight from the ROM's addresses ($B5A8 / $B5B2 / $B5BB):
+ *   levelUpCode     0
+ *   getLongbarCode 10 ($0A), terminator at 18 ($12)
+ *   undoCode       19 ($13), terminator at 28 ($1C)
+ * ----------------------------------------------------------------------- */
+#define CODE_LONGBAR_START 0x0A
+#define CODE_LONGBAR_END   0x12
+#define CODE_UNDO_START    0x13
+#define CODE_UNDO_END      0x1C
+
+static const uint8_t kCheatCodes[] = {
+    /* levelUpCode: up, down, up, down, left, right, b, b, a */
+    TENGEN_BTN_UP, TENGEN_BTN_DOWN, TENGEN_BTN_UP, TENGEN_BTN_DOWN,
+    TENGEN_BTN_LEFT, TENGEN_BTN_RIGHT, TENGEN_BTN_B, TENGEN_BTN_B,
+    TENGEN_BTN_A, 0,
+    /* getLongbarCode: down, down, left, right, left, right, b, a */
+    TENGEN_BTN_DOWN, TENGEN_BTN_DOWN, TENGEN_BTN_LEFT, TENGEN_BTN_RIGHT,
+    TENGEN_BTN_LEFT, TENGEN_BTN_RIGHT, TENGEN_BTN_B, TENGEN_BTN_A, 0,
+    /* undoCode: left, down, right, up, left, down, right, b, a */
+    TENGEN_BTN_LEFT, TENGEN_BTN_DOWN, TENGEN_BTN_RIGHT, TENGEN_BTN_UP,
+    TENGEN_BTN_LEFT, TENGEN_BTN_DOWN, TENGEN_BTN_RIGHT, TENGEN_BTN_B,
+    TENGEN_BTN_A, 0,
+};
+
+/* The level-up code's own level bump. Separate from the one checkLevelUp
+ * does, and deliberately different: it does NOT refresh the long bar
+ * (main.asm.txt:7051-7070 vs :3186-3191). */
+static void cheat_level_up(TengenGame *game, TengenPlayerSlot slot) {
+    TengenPlayerState *p = &game->player[slot];
+    /* main.asm.txt:7059-7067 refuses to store a level of 18, digit by digit;
+     * with the cap at 17 that is exactly this. */
+    if (p->level >= TENGEN_MAX_LEVEL) return;
+    p->level++;
+    if (game->coop) game->player[slot ^ 1].level = p->level;
+    p->fall_timer = 60; /* main.asm.txt:7075, `lda #$3C` */
+}
+
+/* @spawnReplacementTetromino (main.asm.txt:7113-7128): both the long bar and
+ * the undo end here, dropping `current` in at the top with a fresh 60-frame
+ * fall timer. It does NOT roll a new piece or touch the statistics. */
+static void cheat_respawn_current(TengenGame *game, TengenPlayerSlot slot) {
+    TengenPlayerState *p = &game->player[slot];
+    p->piece.y = TENGEN_SPAWN_Y;
+    p->piece.x = game->coop ? TENGEN_SPAWN_X[slot] : TENGEN_SPAWN_X[2];
+    p->piece.orientation = 0;
+    p->fall_timer = 60;
+}
+
+/* Takes the last locked piece back out of the field, using the snapshot of
+ * where it came to rest. That is what the ROM's L84D8/L8607/L8565/L8426
+ * sequence does (main.asm.txt:7166-7169): it re-reads the window around the
+ * restored position, zeroes the piece's own cells and writes the result back
+ * into the playfield. */
+static void erase_snapshot_piece(TengenGame *game, TengenPlayerSlot slot) {
+    TengenPlayerState *p = &game->player[slot];
+    TengenPlayfield *field = &game->field[game->coop ? 0 : slot];
+    for (int row = 0; row < 4; row++) {
+        for (int col = 0; col < 4; col++) {
+            if (!tengen_piece_occupies(p->last_piece, p->last_orientation, row, col))
+                continue;
+            int f_row = p->last_y + row - TENGEN_ROM_ROW_ORIGIN;
+            int f_col = p->last_x + col - TENGEN_ROM_COL_ORIGIN;
+            if (f_row < 0 || f_row >= TENGEN_PF_HEIGHT) continue;
+            if (f_col < 0 || f_col >= TENGEN_PF_WIDTH) continue;
+            field->cell[f_row][f_col] = TENGEN_CELL_EMPTY;
+        }
+    }
+}
+
+/* @applyUndoCode, main.asm.txt:7131-7170. */
+static bool cheat_undo(TengenGame *game, TengenPlayerSlot slot) {
+    TengenPlayerState *p = &game->player[slot];
+    if (p->undo_code_used) return false;
+    if (p->last_piece == TT_NONE) return false;  /* a line clear wiped it */
+    p->undo_code_used++;
+
+    /* The piece you were holding becomes the next one. The ROM guards this
+     * with `beq` and leaves a "todo: look into why current piece id might be
+     * 0" comment at :7154 — reproduced as the same guard, not as a fix. */
+    if (p->piece.current != TT_NONE) p->piece.next = p->piece.current;
+
+    p->piece.orientation = p->last_orientation;
+    p->piece.x = p->last_x;
+    p->piece.y = p->last_y;
+    p->piece.current = p->last_piece;
+    p->rng = p->last_rng;   /* rewinds the lookahead too */
+
+    erase_snapshot_piece(game, slot);
+    cheat_respawn_current(game, slot);
+    return true;
+}
+
+/* @applyLongbarCode, main.asm.txt:7107-7112. */
+static bool cheat_long_bar(TengenGame *game, TengenPlayerSlot slot) {
+    TengenPlayerState *p = &game->player[slot];
+    if (p->long_bar_code_used) return false;
+    p->long_bar_code_used = 1;
+    p->piece.current = TT_I;    /* `sta player1TetrominoCurrent,x` with A = 1 */
+    cheat_respawn_current(game, slot);
+    return true;
+}
+
+static TengenCheat check_code_input(TengenGame *game, TengenPlayerSlot slot,
+                                     uint8_t new_presses) {
+    TengenPlayerState *p = &game->player[slot];
+    if (!p->game_active) return TENGEN_CHEAT_NONE;
+    if (new_presses == 0) return TENGEN_CHEAT_NONE;
+
+    uint8_t y = p->code_input_y;
+    if (y == 0) {
+        /* From a standing start the first press is tested against all three
+         * codes; a match jumps the cursor straight to that code's second
+         * byte (main.asm.txt:7033-7047). */
+        if (new_presses == kCheatCodes[CODE_UNDO_START]) {
+            p->code_input_y = CODE_UNDO_START + 1;
+            return TENGEN_CHEAT_NONE;
+        }
+        if (new_presses == kCheatCodes[CODE_LONGBAR_START]) {
+            p->code_input_y = CODE_LONGBAR_START + 1;
+            return TENGEN_CHEAT_NONE;
+        }
+    }
+
+    if (new_presses != kCheatCodes[y]) {
+        /* The press that breaks a sequence is swallowed: the ROM stores 0 and
+         * returns without re-testing it against the code starts. */
+        p->code_input_y = 0;
+        return TENGEN_CHEAT_NONE;
+    }
+
+    y++;
+    if (kCheatCodes[y] != 0) {
+        p->code_input_y = y;
+        return TENGEN_CHEAT_NONE;
+    }
+
+    /* Complete. Note what is NOT done here: the cursor is left where it was,
+     * so the code's last button on its own re-triggers it (main.asm.txt:7098
+     * is only reached from the partial-match paths). */
+    if (y == CODE_LONGBAR_END)
+        return cheat_long_bar(game, slot) ? TENGEN_CHEAT_LONG_BAR : TENGEN_CHEAT_NONE;
+    if (y == CODE_UNDO_END)
+        return cheat_undo(game, slot) ? TENGEN_CHEAT_UNDO : TENGEN_CHEAT_NONE;
+    cheat_level_up(game, slot);
+    return TENGEN_CHEAT_LEVEL_UP;
+}
+
+void tengen_pause_input(TengenGame *game, const uint8_t new_presses[2],
+                         TengenCheat out_cheat[2]) {
+    TengenCheat fired[2] = { TENGEN_CHEAT_NONE, TENGEN_CHEAT_NONE };
+
+    /* Codes first, then the Start check — the ROM's order, and it matters:
+     * the Start press that unpauses also runs through the matcher, where it
+     * matches nothing and resets the cursor. */
+    if (game->paused) {
+        for (int i = 0; i < 2; i++)
+            fired[i] = check_code_input(game, (TengenPlayerSlot)i, new_presses[i]);
+    }
+
+    if ((new_presses[0] | new_presses[1]) & TENGEN_BTN_START)
+        game->paused = !game->paused;
+
+    if (out_cheat) { out_cheat[0] = fired[0]; out_cheat[1] = fired[1]; }
+}
+
 uint8_t tengen_line_clear_step(const TengenGame *game, TengenPlayerSlot slot) {
     const TengenPlayerState *p = &game->player[slot];
     if (p->line_clear_timer == 0) return 0;
@@ -564,12 +739,21 @@ TengenStepResult tengen_step(TengenGame *game, TengenPlayerSlot slot, uint8_t he
             result.lines_collapsed = true;
             result.rows_cleared_mask = cleared;
 
+            /* L94E4 (main.asm.txt:3087-3092) clears lastCurrentBlock as the
+             * rows come down, which disarms the undo code: there is no longer
+             * a coherent board to put the piece back into. */
+            p->last_piece = TT_NONE;
+            if (game->coop) game->player[slot ^ 1].last_piece = TT_NONE;
+
             /* No score is awarded here on purpose: this game pays per piece
              * locked, not per line cleared (see add_lock_score). */
             uint8_t new_level = level_for_lines(p->lines, p->start_level);
             if (new_level > p->level) {
                 p->level = new_level;
                 result.leveled_up = true;
+                /* main.asm.txt:3189-3190: reaching a level by PLAY hands back
+                 * the long bar. The cheat level-up does not. */
+                p->long_bar_code_used = 0;
             }
 
             spawn_piece(game, slot);
@@ -578,6 +762,17 @@ TengenStepResult tengen_step(TengenGame *game, TengenPlayerSlot slot, uint8_t he
                 result.topped_out = true;
             }
         }
+        p->held_last_frame = held_buttons;
+        return result;
+    }
+
+    /* Paused: gameplay stops here. The ROM gates it on gameState being 0
+     * (branchOnActiveDemoOrGameOver, main.asm.txt:444-446) — but note the
+     * line-clear animation above is deliberately NOT gated, because
+     * stageLineClearAnimation is called from the main loop unconditionally
+     * (main.asm.txt:66-70), so a clear started before pausing still finishes.
+     * Cheat-code entry happens in tengen_pause_input, not here. */
+    if (game->paused) {
         p->held_last_frame = held_buttons;
         return result;
     }
@@ -659,6 +854,16 @@ TengenStepResult tengen_step(TengenGame *game, TengenPlayerSlot slot, uint8_t he
         int lowest_hit_row = -1;
         if (!position_valid_ex(game, slot, &lowest_hit_row)) {
             p->piece.y--;
+
+            /* Snapshot for the undo code, taken here and nowhere else: the
+             * ROM calls L85B3 between backing the piece out of the collision
+             * and scoring it (main.asm.txt:583-584), so it records where the
+             * piece came to rest and the RNG state before the next is dealt. */
+            p->last_piece = p->piece.current;
+            p->last_orientation = p->piece.orientation;
+            p->last_x = p->piece.x;
+            p->last_y = p->piece.y;
+            p->last_rng = p->rng;
 
             /* Score first: the ROM awards points at the moment of the failed
              * move, from the collision it just recorded, and does so BEFORE

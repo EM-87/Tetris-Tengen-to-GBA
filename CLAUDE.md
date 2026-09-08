@@ -41,8 +41,7 @@ running ROM; only the side panels need reflowing).
 
 4. **Every new rule gets a native test before it gets GBA integration.**
    `tests/test_tengen.c` runs in milliseconds with `make test`. Adding a rule
-   (say, the long-bar/undo cheat codes from `reference/NOTES.md`'s TODO list)
-   without a test for its documented behavior is how a subtle 6502-carry-flag
+   (say, the 2P/coop front end from the roadmap below) without a test for its documented behavior is how a subtle 6502-carry-flag
    misreading turns into a silent gameplay bug — see how `tengen_try_rotate`
    was only trusted once `test_wall_kick_only_ever_shifts_left` demonstrated
    the actual kick happening, not just "a plausible-looking function."
@@ -90,9 +89,11 @@ running ROM; only the side panels need reflowing).
    completed row and leaves SINGLE / DOUBLE / TRIPLE / TETRIS written where
    the blocks were. Timing (one column every other frame) lives in the core
    with a test; the drawing is in `gba/main.c`.
-11. Long-bar/undo cheat codes (`reference/NOTES.md` → "Cheat-code state
-   exists") — a well-known, well-loved Tengen feature; the RAM layout is
-   mapped, the behavior isn't traced yet.
+11. ~~Pause and the long-bar/undo/level-up cheat codes~~ — done, traced in
+   full. The three codes share one table and one cursor in the ROM, which is
+   where their odd behaviours come from (a broken sequence swallows the press
+   that broke it; a completed code re-fires on its last button); all of it is
+   reproduced and tested rather than tidied up.
 12. The 2P and coop modes. The core already models coop (including its
    12-column field) and two players; only the GBA front end is single-player.
 13. Audio (`setMusicOrSoundEffect` plus the `MUSIC_*`/`SOUND_*` constants in

@@ -440,6 +440,244 @@ static void test_line_clear_sweep_advances_every_other_frame(void) {
     CHECK(advances >= TENGEN_PF_WIDTH);
 }
 
+/* ----------------------------------------------------------------------- *
+ * Cheat codes
+ * ----------------------------------------------------------------------- */
+
+/* Feeds one button press, as a press-then-release pair of frames, through
+ * the pause/code path for player 1. Returns whatever fired. */
+static TengenCheat press_code_button(TengenGame *game, uint8_t button) {
+    TengenCheat fired[2];
+    uint8_t presses[2] = { button, 0 };
+    tengen_pause_input(game, presses, fired);
+    tengen_step(game, TENGEN_PLAYER_1, button);
+    uint8_t none[2] = { 0, 0 };
+    tengen_pause_input(game, none, NULL);
+    tengen_step(game, TENGEN_PLAYER_1, 0);
+    return fired[0];
+}
+
+static TengenCheat enter_code(TengenGame *game, const uint8_t *buttons, int count) {
+    TengenCheat last = TENGEN_CHEAT_NONE;
+    for (int i = 0; i < count; i++) last = press_code_button(game, buttons[i]);
+    return last;
+}
+
+static const uint8_t kLevelUpButtons[9] = {
+    TENGEN_BTN_UP, TENGEN_BTN_DOWN, TENGEN_BTN_UP, TENGEN_BTN_DOWN,
+    TENGEN_BTN_LEFT, TENGEN_BTN_RIGHT, TENGEN_BTN_B, TENGEN_BTN_B, TENGEN_BTN_A
+};
+static const uint8_t kLongBarButtons[8] = {
+    TENGEN_BTN_DOWN, TENGEN_BTN_DOWN, TENGEN_BTN_LEFT, TENGEN_BTN_RIGHT,
+    TENGEN_BTN_LEFT, TENGEN_BTN_RIGHT, TENGEN_BTN_B, TENGEN_BTN_A
+};
+static const uint8_t kUndoButtons[9] = {
+    TENGEN_BTN_LEFT, TENGEN_BTN_DOWN, TENGEN_BTN_RIGHT, TENGEN_BTN_UP,
+    TENGEN_BTN_LEFT, TENGEN_BTN_DOWN, TENGEN_BTN_RIGHT, TENGEN_BTN_B,
+    TENGEN_BTN_A
+};
+
+static void pause_game(TengenGame *game) {
+    uint8_t presses[2] = { TENGEN_BTN_START, 0 };
+    tengen_pause_input(game, presses, NULL);
+    CHECK(game->paused);
+}
+
+static void test_start_pauses_and_stops_the_game(void) {
+    TengenGame game;
+    tengen_new_game(&game, 7, 0, false, false);
+    CHECK(!game.paused);
+
+    int8_t y_before = game.player[0].piece.y;
+    pause_game(&game);
+
+    /* 200 frames of gravity and input, all of it ignored. */
+    for (int i = 0; i < 200; i++) tengen_step(&game, TENGEN_PLAYER_1, TENGEN_BTN_DOWN);
+    CHECK(game.player[0].piece.y == y_before);
+
+    uint8_t presses[2] = { TENGEN_BTN_START, 0 };
+    tengen_pause_input(&game, presses, NULL);
+    CHECK(!game.paused);
+    for (int i = 0; i < 200; i++) tengen_step(&game, TENGEN_PLAYER_1, 0);
+    CHECK(game.player[0].piece.y != y_before);
+}
+
+static void test_codes_only_count_while_paused(void) {
+    /* checkCodeInput is only reached from the paused branch of pauseOrUnpause
+     * (main.asm.txt:7186-7192), so a code typed during play does nothing. */
+    TengenGame game;
+    tengen_new_game(&game, 7, 3, false, false);
+    CHECK(enter_code(&game, kLevelUpButtons, 9) == TENGEN_CHEAT_NONE);
+    CHECK(game.player[0].level == 3);
+
+    pause_game(&game);
+    CHECK(enter_code(&game, kLevelUpButtons, 9) == TENGEN_CHEAT_LEVEL_UP);
+    CHECK(game.player[0].level == 4);
+}
+
+static void test_level_up_code_repeats_on_its_last_button(void) {
+    /* The ROM never rewinds the match cursor when a code completes, so the
+     * final A on its own fires it again (main.asm.txt:7095-7098 is only
+     * reached from the partial-match paths). This is the well-known way the
+     * level-up code is used to climb quickly. */
+    TengenGame game;
+    tengen_new_game(&game, 7, 0, false, false);
+    pause_game(&game);
+
+    CHECK(enter_code(&game, kLevelUpButtons, 9) == TENGEN_CHEAT_LEVEL_UP);
+    CHECK(game.player[0].level == 1);
+    CHECK(press_code_button(&game, TENGEN_BTN_A) == TENGEN_CHEAT_LEVEL_UP);
+    CHECK(game.player[0].level == 2);
+    CHECK(press_code_button(&game, TENGEN_BTN_A) == TENGEN_CHEAT_LEVEL_UP);
+    CHECK(game.player[0].level == 3);
+}
+
+static void test_level_up_code_stops_at_the_rom_cap(void) {
+    TengenGame game;
+    tengen_new_game(&game, 7, 9, false, false);
+    pause_game(&game);
+    CHECK(enter_code(&game, kLevelUpButtons, 9) == TENGEN_CHEAT_LEVEL_UP);
+    for (int i = 0; i < 40; i++) press_code_button(&game, TENGEN_BTN_A);
+    CHECK(game.player[0].level == TENGEN_MAX_LEVEL);
+}
+
+static void test_long_bar_code_gives_an_i_once_per_level(void) {
+    TengenGame game;
+    tengen_new_game(&game, 7, 0, false, false);
+    pause_game(&game);
+
+    TengenTetromino next_before = game.player[0].piece.next;
+    CHECK(enter_code(&game, kLongBarButtons, 8) == TENGEN_CHEAT_LONG_BAR);
+    CHECK(game.player[0].piece.current == TT_I);
+    /* It replaces what you were holding and does NOT consume the preview. */
+    CHECK(game.player[0].piece.next == next_before);
+    /* Dropped in at the top, upright, with a fresh timer. */
+    CHECK(game.player[0].piece.y == TENGEN_SPAWN_Y);
+    CHECK(game.player[0].piece.orientation == 0);
+
+    /* Second time on the same level: refused. */
+    game.player[0].piece.current = TT_S;
+    CHECK(enter_code(&game, kLongBarButtons, 8) == TENGEN_CHEAT_NONE);
+    CHECK(game.player[0].piece.current == TT_S);
+
+    /* The cheat level-up deliberately does not hand it back... */
+    CHECK(enter_code(&game, kLevelUpButtons, 9) == TENGEN_CHEAT_LEVEL_UP);
+    CHECK(enter_code(&game, kLongBarButtons, 8) == TENGEN_CHEAT_NONE);
+
+    /* ...but levelling up by play does (main.asm.txt:3189-3190). */
+    game.player[0].long_bar_code_used = 0;
+    CHECK(enter_code(&game, kLongBarButtons, 8) == TENGEN_CHEAT_LONG_BAR);
+    CHECK(game.player[0].piece.current == TT_I);
+}
+
+/* Drops one piece to the bottom of an empty field and returns the row it
+ * settled on. */
+static int drop_one_piece(TengenGame *game) {
+    for (int frame = 0; frame < 4000; frame++) {
+        if (tengen_step(game, TENGEN_PLAYER_1, TENGEN_BTN_DOWN).piece_locked)
+            return frame;
+    }
+    return -1;
+}
+
+static int occupied_cells(const TengenPlayfield *field) {
+    int n = 0;
+    for (int row = 0; row < TENGEN_PF_HEIGHT; row++)
+        for (int col = 1; col < TENGEN_PF_WIDTH - 1; col++)
+            if (field->cell[row][col] != TENGEN_CELL_EMPTY) n++;
+    return n;
+}
+
+static void test_undo_code_takes_the_last_piece_back_once(void) {
+    TengenGame game;
+    tengen_new_game(&game, 23, 0, false, false);
+
+    TengenTetromino dropped = game.player[0].piece.current;
+    CHECK(drop_one_piece(&game) >= 0);
+    CHECK(occupied_cells(&game.field[0]) == 4);
+    TengenTetromino falling = game.player[0].piece.current;
+
+    pause_game(&game);
+    CHECK(enter_code(&game, kUndoButtons, 9) == TENGEN_CHEAT_UNDO);
+
+    /* The piece comes out of the stack and back into your hand, and the one
+     * you were holding goes back to being next. */
+    CHECK(occupied_cells(&game.field[0]) == 0);
+    CHECK(game.player[0].piece.current == dropped);
+    CHECK(game.player[0].piece.next == falling);
+    CHECK(game.player[0].piece.y == TENGEN_SPAWN_Y);
+
+    /* Once per game: a second undo is refused even after another drop. */
+    uint8_t unpause[2] = { TENGEN_BTN_START, 0 };
+    tengen_pause_input(&game, unpause, NULL);
+    CHECK(!game.paused);
+    CHECK(drop_one_piece(&game) >= 0);
+    pause_game(&game);
+    CHECK(enter_code(&game, kUndoButtons, 9) == TENGEN_CHEAT_NONE);
+    CHECK(occupied_cells(&game.field[0]) == 4);
+}
+
+static void test_undo_is_disarmed_by_a_line_clear(void) {
+    /* L94E4 clears lastCurrentBlock as the rows come down
+     * (main.asm.txt:3087-3092), so there is nothing to put back. */
+    TengenGame game;
+    tengen_new_game(&game, 91, 0, false, false);
+
+    for (int row = 0; row < TENGEN_PF_HEIGHT; row++)
+        for (int col = 1; col < TENGEN_PF_WIDTH - 1; col++)
+            game.field[0].cell[row][col] =
+                (row == TENGEN_PF_HEIGHT - 1 && col != 5 && col != 6) ? TT_I : TT_NONE;
+
+    game.player[0].piece.current = TT_O;
+    game.player[0].piece.orientation = 0;
+    game.player[0].piece.x = 7;
+    game.player[0].piece.y = TENGEN_SPAWN_Y;
+
+    bool collapsed = false;
+    for (int frame = 0; frame < 4000 && !collapsed; frame++)
+        collapsed = tengen_step(&game, TENGEN_PLAYER_1, TENGEN_BTN_DOWN).lines_collapsed;
+    CHECK(collapsed);
+    CHECK(game.player[0].lines == 1);
+
+    pause_game(&game);
+    CHECK(enter_code(&game, kUndoButtons, 9) == TENGEN_CHEAT_NONE);
+}
+
+static void test_a_wrong_button_restarts_the_code(void) {
+    TengenGame game;
+    tengen_new_game(&game, 7, 0, false, false);
+    pause_game(&game);
+
+    /* Six of the nine, then a wrong one. */
+    for (int i = 0; i < 6; i++) press_code_button(&game, kLevelUpButtons[i]);
+    CHECK(press_code_button(&game, TENGEN_BTN_SELECT) == TENGEN_CHEAT_NONE);
+    /* Finishing the code from where it was left off must do nothing... */
+    for (int i = 6; i < 9; i++)
+        CHECK(press_code_button(&game, kLevelUpButtons[i]) == TENGEN_CHEAT_NONE);
+    CHECK(game.player[0].level == 0);
+    /* ...and starting over must work. */
+    CHECK(enter_code(&game, kLevelUpButtons, 9) == TENGEN_CHEAT_LEVEL_UP);
+    CHECK(game.player[0].level == 1);
+}
+
+static void test_codes_share_one_cursor_the_way_the_rom_does(void) {
+    /* All three codes live in one table and one cursor walks it, so a first
+     * press that starts two codes commits to the one the ROM tests first.
+     * Down starts the long bar; Left starts the undo; Up starts level-up. */
+    TengenGame game;
+    tengen_new_game(&game, 7, 0, false, false);
+    pause_game(&game);
+
+    /* Down, then the rest of the LONG BAR code: that is what Down commits to,
+     * even though Down is also the second byte of the level-up code. */
+    CHECK(enter_code(&game, kLongBarButtons, 8) == TENGEN_CHEAT_LONG_BAR);
+
+    /* And Left commits to the undo code, not to level-up's fifth byte. */
+    press_code_button(&game, TENGEN_BTN_SELECT);   /* clears the cursor */
+    for (int i = 0; i < 7; i++) press_code_button(&game, kUndoButtons[i]);
+    CHECK(game.player[0].code_input_y == 0x13 + 7);
+}
+
 static void test_level_starts_at_the_chosen_start_level(void) {
     TengenGame game;
     tengen_new_game(&game, 31, 9, false, false);
@@ -837,6 +1075,15 @@ int main(void) {
     test_score_is_awarded_per_piece_and_rewards_height();
     test_completed_rows_wait_before_they_collapse();
     test_line_clear_sweep_advances_every_other_frame();
+    test_start_pauses_and_stops_the_game();
+    test_codes_only_count_while_paused();
+    test_level_up_code_repeats_on_its_last_button();
+    test_level_up_code_stops_at_the_rom_cap();
+    test_long_bar_code_gives_an_i_once_per_level();
+    test_undo_code_takes_the_last_piece_back_once();
+    test_undo_is_disarmed_by_a_line_clear();
+    test_a_wrong_button_restarts_the_code();
+    test_codes_share_one_cursor_the_way_the_rom_does();
     test_level_starts_at_the_chosen_start_level();
     test_level_is_recomputed_from_the_line_total();
     test_level_never_passes_the_rom_cap();

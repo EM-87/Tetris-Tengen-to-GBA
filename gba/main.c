@@ -133,6 +133,30 @@ static const char *const kClearWord[5] = {
     " TETRIS     ",
 };
 
+/* ----------------------------------------------------------------------- *
+ * The pause box
+ *
+ * pauseTiles (main.asm.txt:8061-8063) is an 8x2 block of the cartridge's own
+ * tiles, blitted over the screen at nametable (12,8) — the right edge of the
+ * playfield and the start of the decorative divider (pausePPUAddr1 = $210C,
+ * and unpausePPUAddr1/2 put the same two rows back). pauseAttrs ($EF,$BF)
+ * colours it with background palette 3.
+ *
+ * Here it sits two columns further left, which is the same shift the divider
+ * itself took to fit 32 columns into 30, so it lands in the same place
+ * relative to the art around it.
+ * ----------------------------------------------------------------------- */
+#define PAUSE_TX 10
+#define PAUSE_TY 0
+#define PAUSE_W 8
+#define PAUSE_H 2
+#define BANK_PAUSE 3
+
+static const uint8_t kPauseTiles[PAUSE_H][PAUSE_W] = {
+    {0x10, 0x11, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0x12},
+    {0x13, 0x14, 0xD7, 0xD8, 0xD9, 0xDA, 0xDB, 0x15},
+};
+
 #define WITH_BANK(tile, bank) ((uint16_t)((tile) | ((bank) << 12)))
 
 /* Tile ids in the cartridge's own tileset, taken from the nametable it ships
@@ -461,6 +485,13 @@ static void draw_field(void) {
     }
 }
 
+static void draw_pause_box(void) {
+    for (int y = 0; y < PAUSE_H; y++)
+        for (int x = 0; x < PAUSE_W; x++)
+            set_map_tile(PAUSE_TX + x, PAUSE_TY + y,
+                          WITH_BANK(kPauseTiles[y][x], BANK_PAUSE));
+}
+
 /* ----------------------------------------------------------------------- *
  * Title screen
  * ----------------------------------------------------------------------- */
@@ -602,6 +633,18 @@ int main(void) {
             continue;
         }
 
+        /* Start pauses, and the cheat codes go in while paused — both are
+         * the core's job (tengen_pause_input mirrors the ROM's own
+         * pauseOrUnpause, which is where checkCodeInput lives). A code that
+         * fires shows up on its own: a level-up through the palette check
+         * below, a long bar or an undo through the current-piece check. */
+        if (g_game.player[0].game_active) {
+            uint8_t presses[2] = { pressed, 0 };
+            bool was_paused = g_game.paused;
+            tengen_pause_input(&g_game, presses, 0);
+            if (was_paused && !g_game.paused) draw_static_screen();
+        }
+
         TengenStepResult step = tengen_step(&g_game, TENGEN_PLAYER_1, buttons);
         if (step.leveled_up) dancer_frames = DANCER_SHOW_FRAMES;
 
@@ -633,5 +676,8 @@ int main(void) {
             oam_hide_all();
             sweeping = false;
         }
+
+        /* Last, so it sits over whatever was just drawn. */
+        if (g_game.paused) draw_pause_box();
     }
 }
