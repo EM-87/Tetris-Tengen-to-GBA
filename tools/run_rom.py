@@ -46,6 +46,7 @@ except ImportError as exc:  # pragma: no cover - environment problem, not logic
 
 SCREEN_W, SCREEN_H = 240, 160
 TILE = 8
+SCREEN_TW_TILES = SCREEN_W // TILE
 
 # The screen layout, in tile columns. These mirror gba/main.c and the reflow
 # done by tools/extract_assets.py; if they drift apart, the checks below stop
@@ -53,13 +54,13 @@ TILE = 8
 # assumed.
 # The cartridge's columns are resequenced to put the playfield in the middle
 # with the HUD split either side; see SCREEN_SEGMENTS in extract_assets.py.
-COL_EDGE_L = (0, 2)       # the screen's left edge, braid borrowed from the ROM
-COL_HUD_L = (2, 8)        # score / lines / level / stats
+# 8 | 2 | 10 | 2 | 8 — a box, the board's braid, the ten playable columns,
+# the braid again, and a box of the same width. Symmetric by construction.
+COL_BOX_L = (0, 8)        # score / lines / level
 COL_FRAME_L = (8, 10)     # the board's left frame, which is its left wall
 COL_FIELD = (10, 20)      # the ten playable columns — dead centre
 COL_FRAME_R = (20, 22)    # the board's right frame
-COL_BANNER = (22, 26)     # vertical TETRIS banner, and the dancers' stage
-COL_HUD_R = (26, 30)      # next piece
+COL_BOX_R = (22, 30)      # next piece, and the piece histogram
 
 # The walls are the cartridge's own frame art, drawn once with the screen, not
 # blocks painted from the playfield buffer — see the note in gba/main.c.
@@ -132,10 +133,9 @@ def describe(rows):
         return cols
 
     print(f"columnas con contenido: {min(lit)}..{max(lit)}")
-    for name, bounds in (("borde izq", COL_EDGE_L), ("HUD izq", COL_HUD_L),
-                         ("marco izq", COL_FRAME_L), ("campo", COL_FIELD),
-                         ("marco der", COL_FRAME_R), ("banner", COL_BANNER),
-                         ("HUD der", COL_HUD_R)):
+    for name, bounds in (("recuadro izq", COL_BOX_L), ("marco izq", COL_FRAME_L),
+                         ("campo", COL_FIELD), ("marco der", COL_FRAME_R),
+                         ("recuadro der", COL_BOX_R)):
         x0, x1 = bounds[0] * TILE, bounds[1] * TILE
         print(f"  {name:10s} x={x0:3d}..{x1 - 1:3d}")
     return cols
@@ -196,17 +196,24 @@ def selftest(rom_path):
 
     # Each region must actually have been drawn. A blank one means a tile
     # upload, a palette or a layout index went wrong.
-    for name, bounds in (("borde izquierdo", COL_EDGE_L),
-                         ("HUD izquierdo", COL_HUD_L),
+    for name, bounds in (("recuadro izquierdo", COL_BOX_L),
                          ("marco izquierdo", COL_FRAME_L),
                          ("marco derecho", COL_FRAME_R),
-                         ("banner TETRIS", COL_BANNER),
-                         ("HUD derecho", COL_HUD_R)):
+                         ("recuadro derecho", COL_BOX_R)):
         painted = region(bounds)
         if painted == 0:
             failures.append(f"{name} quedo vacio")
         else:
             print(f"  {name}: {painted} px")
+
+    # ...and the two boxes must be the SAME WIDTH and the board centred
+    # between them. This is the layout's whole claim, so it is asserted
+    # against the running ROM rather than left to the extractor's self-test.
+    left_margin = COL_FRAME_L[0]
+    right_margin = SCREEN_TW_TILES - COL_FRAME_R[1]
+    if left_margin != right_margin:
+        failures.append(f"los recuadros no son simetricos: {left_margin} "
+                        f"columnas a la izquierda y {right_margin} a la derecha")
 
     # The field runs the FULL height of the screen — that is the whole point
     # of the 160px vertical fit, and the first thing a bad window offset
@@ -414,7 +421,14 @@ def lineclear_check(rom_path, row_count):
 # (tests/test_tengen.c); what is checked here is that the GBA layer wires them
 # up at all and draws the ROM's own PAUSE plaque where it should.
 # ---------------------------------------------------------------------------
-PAUSE_TX, PAUSE_TY, PAUSE_W = 20, 0, 8
+# The plaque is CENTRED, both ways — on the cartridge its eight columns are
+# 12..19 of 32, which is the middle of the screen, and that relationship is
+# what the port keeps rather than the column number. gba/main.c derives these
+# the same way.
+PAUSE_W = 8
+PAUSE_H = 2
+PAUSE_TX = (SCREEN_TW_TILES - PAUSE_W) // 2
+PAUSE_TY = ((SCREEN_H // TILE) - PAUSE_H) // 2
 PAUSE_ROW0 = [0x10, 0x11, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0x12]  # main.asm.txt:8061
 PAUSE_ROW1 = [0x13, 0x14, 0xD7, 0xD8, 0xD9, 0xDA, 0xDB, 0x15]
 
@@ -516,8 +530,18 @@ def pause_check(rom_path):
 # of as music that is subtly wrong in a way nobody notices.
 # ---------------------------------------------------------------------------
 APU_REGS = 0x18
-APU_OFFSET = 16      # Nes6502.bus.apu; see the struct in gba/nes6502.h
-FAULT_OFFSET = 48    # Nes6502.faulted, at the end of the same struct
+# Where the APU register file and the fault flag sit inside Nes6502. These
+# move whenever that struct changes, so the ROM exports them rather than
+# letting a constant here drift out of date: kNes6502Probe is three halfwords,
+# {offsetof(bus.apu), offsetof(faulted), how many registers}. Reading a stale
+# offset does not fail loudly — it reads a neighbouring byte and quietly
+# reports the wrong thing, which is how a real check turns into a green light
+# that means nothing.
+def nes6502_probe(rom_path, core):
+    addr, why = game_state_address(rom_path, "kNes6502Probe")
+    if addr is None:
+        return None, why
+    return tuple(core.memory.u16[addr + i * 2] for i in range(3)), None
 GOLDEN_PATH = "gba/audio_golden.bin"
 AUDIO_ALIGN_SEARCH = 30   # frames of ROM start-up to look through for the match
 
@@ -532,48 +556,89 @@ REG_SOUND1CNT_H = 0x04000062
 # not the signal: the signal's own 60Hz band is just bass notes. Measured at
 # 41% when the port applied channels on every register WRITE, and 10% once it
 # only applied them on a register CHANGE, so the limit sits between.
-BUZZ_LIMIT = 0.25
 AUDIO_RATE = 32768
 
 
-def frame_rate_buzz(core):
-    """How much of the envelope's movement happens at exactly the frame rate."""
-    try:
-        import numpy as np
-    except ImportError:
-        return None
+# ---------------------------------------------------------------------------
+# Pausing has to actually stop the sound.
+#
+# This engine ends a note by clearing the channel's bit in $4015, not by
+# letting a length counter run out, and suspending the music clears them all.
+# A port that only re-applies a channel when its period or volume registers
+# change would never notice, and the last note would drone on under the pause
+# and come back layered over the music on the way out — which is what "the
+# music sounds doubled when I pause" is.
+#
+# This reads the GBA's own sound registers rather than listening to the
+# output. That is a deliberate retreat: the mGBA binding here does hand back
+# real samples (with the sound switched off at REG_SOUNDCNT_X the RMS is
+# exactly zero), but the same code over the same build gives a silent pause on
+# one run and a loud one on the next, so a measurement of the waveform cannot
+# be trusted to mean anything. The registers are reproducible and they are
+# the thing the port actually controls: every channel's volume nibble at zero
+# and no channel flagged as sounding IS silence, whatever the buffer says.
+# ---------------------------------------------------------------------------
+REG_SOUND1CNT_H = 0x04000062     # channels 1, 2 and 4 keep their volume in
+REG_SOUND2CNT_L = 0x04000068     # bits 12-15 of these
+REG_SOUND3CNT_L = 0x04000070     # bit 7 is the wave channel's own on/off
+REG_SOUND4CNT_L = 0x04000078
+REG_SOUNDCNT_X  = 0x04000084     # bits 0-3: which channels are sounding
 
-    buf = core.get_audio_channels()
-    buf.set_rate(AUDIO_RATE)
-    buf.clear()
-    chunks = []
-    for _ in range(420):
+
+def sound_state(core):
+    io = core._native.memory.io
+
+    def reg(addr):
+        return io[(addr - 0x04000000) >> 1]
+
+    return {
+        "pulso 1": (reg(REG_SOUND1CNT_H) >> 12) & 0xF,
+        "pulso 2": (reg(REG_SOUND2CNT_L) >> 12) & 0xF,
+        "triangulo": 1 if (reg(REG_SOUND3CNT_L) & 0x80) else 0,
+        "ruido": (reg(REG_SOUND4CNT_L) >> 12) & 0xF,
+        "activos": reg(REG_SOUNDCNT_X) & 0x0F,
+    }
+
+
+def pause_audio_check(rom_path):
+    core, screen = load(rom_path)    # `screen` must stay alive; see load()
+    start_game(core)
+
+    # The music has to have got going, or a silent pause proves nothing.
+    heard = set()
+    for _ in range(180):
         core.run_frame()
-        available = buf.available
-        if available:
-            chunks.append(np.array(list(buf.read(available)), dtype=np.int16))
-    if not chunks:
-        return None
-    mono = np.concatenate(chunks).reshape(-1, 2).mean(axis=1)
-    if mono.size < AUDIO_RATE:
-        return None
+        state = sound_state(core)
+        if state["activos"]:
+            heard.add(state["activos"])
 
-    envelope = np.abs(mono[AUDIO_RATE // 2:])          # skip the set-up
-    smooth = np.convolve(envelope, np.ones(64) / 64, mode="valid")
-    width = min(len(smooth), 32768)
-    if width < 8192:
-        return None
-    window = (smooth[:width] - smooth[:width].mean()) * np.hanning(width)
-    spectrum = np.abs(np.fft.rfft(window))
-    freqs = np.fft.rfftfreq(width, 1.0 / AUDIO_RATE)
-    total = spectrum[(freqs > 5) & (freqs < 400)].sum()
-    if total <= 0:
-        return None
-    frame_hz = 59.7275
-    at_frame_rate = sum(
-        spectrum[(freqs > frame_hz * k - 1.5) & (freqs < frame_hz * k + 1.5)].sum()
-        for k in (1, 2, 3))
-    return float(at_frame_rate / total)
+    core.set_keys(KEYS["START"])
+    run(core, 4)
+    core.set_keys()
+    run(core, 8)
+
+    worst = {k: 0 for k in sound_state(core)}
+    for _ in range(120):
+        core.run_frame()
+        for k, v in sound_state(core).items():
+            worst[k] = max(worst[k], v)
+
+    print(f"  sonando: se oyeron los canales {sorted(heard)}")
+    print("  en pausa: " + ", ".join(f"{k}={v}" for k, v in worst.items()))
+
+    failures = []
+    if not heard:
+        failures.append("no habia musica que pausar; la medida no prueba nada")
+    for name in ("pulso 1", "pulso 2", "triangulo", "ruido", "activos"):
+        if worst[name]:
+            failures.append(f"en pausa {name} sigue sonando ({worst[name]})")
+
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: al pausar todos los canales quedan a cero.")
+    return 0
 
 
 def audio_check(rom_path):
@@ -589,9 +654,17 @@ def audio_check(rom_path):
     golden = [raw[i:i + APU_REGS] for i in range(0, len(raw), APU_REGS)]
 
     core, screen = load(rom_path)   # `screen` must stay alive; see load()
+    probe, why = nes6502_probe(rom_path, core)
+    if probe is None:
+        print(f"SALTADO: {why}")
+        return 0
+    apu_offset, fault_offset, apu_regs = probe
+    if apu_regs != APU_REGS:
+        print(f"FALLA: la ROM dice {apu_regs} registros de APU, el golden trae {APU_REGS}")
+        return 1
     iwram = core.memory.iwram
-    apu_off = base + APU_OFFSET - 0x03000000
-    fault_off = base + FAULT_OFFSET - 0x03000000
+    apu_off = base + apu_offset - 0x03000000
+    fault_off = base + fault_offset - 0x03000000
 
     seen = []
     for _ in range(len(golden) + AUDIO_ALIGN_SEARCH):
@@ -649,18 +722,13 @@ def audio_check(rom_path):
         else:
             print(f"  presupuesto de CPU: {len(drops)} caidas, todas a 33 frames exactos")
 
-    modulation = frame_rate_buzz(core)
-    if modulation is None:
-        print("  (sin comprobar el troceado: numpy no disponible)")
-    else:
-        print(f"  troceado a la frecuencia de frame: {100 * modulation:.1f}% "
-              "de la modulacion de la envolvente")
-        if modulation > BUZZ_LIMIT:
-            failures.append(
-                f"el sonido se trocea: {100 * modulation:.1f}% de la envolvente "
-                f"modula a 59.7Hz (limite {100 * BUZZ_LIMIT:.0f}%). Casi siempre "
-                "significa que se estan re-disparando canales cada frame en vez "
-                "de solo cuando cambian.")
+    # The choppiness this check used to measure — how much of the envelope
+    # moves at exactly the frame rate — came out of the emulator's audio
+    # buffer, and that measurement is not reproducible here: the same build
+    # over the same frames gives 2% on one run and 4% on the next. A number
+    # that changes when nothing changed is not evidence, so it is gone rather
+    # than quietly reported. What replaced it is `--pause-audio`, which reads
+    # the sound registers instead and gives the same answer every time.
 
     for f in failures:
         print(f"FALLA: {f}")
@@ -762,6 +830,8 @@ def main():
                      help="check Start pauses and the cheat codes respond")
     ap.add_argument("--audio", action="store_true",
                      help="check the emulated sound engine against its golden recording")
+    ap.add_argument("--pause-audio", action="store_true",
+                     help="check that pausing actually silences the sound")
     ap.add_argument("--link", action="store_true",
                      help="check the 2-player front end with no cable attached")
     args = ap.parse_args()
@@ -774,6 +844,8 @@ def main():
         sys.exit(pause_check(args.rom))
     if args.audio:
         sys.exit(audio_check(args.rom))
+    if args.pause_audio:
+        sys.exit(pause_audio_check(args.rom))
     if args.link:
         sys.exit(link_check(args.rom))
 

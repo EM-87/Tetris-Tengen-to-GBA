@@ -70,6 +70,11 @@ Hay una ROM de GBA que arranca, se juega y corre las reglas reales de Tengen.
   enlazadas y las compara byte a byte); el cable vive en `gba/link.c` y va
   por interrupción, para que ninguna consola pueda perderse una
   transferencia ni mandar botones viejos.
+- `tools/render_nes.py` + `tools/zoom.py` — dibujan las pantallas del
+  cartucho original tal como las vería una NES (ejecutando su propia rutina
+  de subida de nametable, con su CHR y sus paletas) y permiten ampliarlas
+  pixel a pixel. Es la imagen de referencia: cada decisión gráfica del port
+  se contrasta contra ella en vez de contra un recuerdo.
 - `tools/run_rom.py` — arranca la ROM en mGBA headless y verifica que
   realmente dibuje y se juegue (`make gba-check`), no solo que linkee:
   incluye ver la animación de línea completa sprite por sprite, comprobar

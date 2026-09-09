@@ -142,5 +142,6 @@ gba-check: $(GBA_ROM)
 	python3 tools/run_rom.py $(GBA_ROM) --lineclear
 	python3 tools/run_rom.py $(GBA_ROM) --pause
 	python3 tools/run_rom.py $(GBA_ROM) --audio
+	python3 tools/run_rom.py $(GBA_ROM) --pause-audio
 	python3 tools/run_rom.py $(GBA_ROM) --link
 	python3 tools/run_link.py $(GBA_ROM)

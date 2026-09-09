@@ -29,6 +29,7 @@
  * is 1.171728..., kept below as a 16.16 fixed-point multiplier.
  */
 #include "nes_audio.h"
+#include <stddef.h>
 #include "nes6502.h"
 #include "gba_hw.h"
 #include "audio_prg.h"
@@ -85,8 +86,21 @@ static bool g_ready;
 
 /* The APU as it was after the previous frame. Channels are only touched when
  * one of their registers actually CHANGES VALUE — see nes_audio_frame. */
-static uint8_t g_prev[0x18];
+/* Where the test harness finds things inside Nes6502, exported rather than
+ * worked out by hand on the other side. tools/run_rom.py reads the emulated
+ * APU register file and the interpreter's fault flag out of a running ROM,
+ * and both live at offsets that move whenever this struct gains a field —
+ * which is exactly what happened when the length counters needed to know
+ * about WRITES and not just values. An offset copied into a Python constant
+ * goes quietly wrong at that point and the checks start reading a
+ * neighbouring byte. This makes the ELF the single place that knows. */
+const uint16_t kNes6502Probe[3] = {
+    (uint16_t)offsetof(Nes6502, bus.apu),
+    (uint16_t)offsetof(Nes6502, faulted),
+    0x18,                                  /* how many APU registers there are */
+};
 
+static uint8_t g_prev[0x18];
 /* The engine's program bytes, copied out of cartridge ROM into external WRAM
  * at startup. Every 6502 instruction fetch reads from here, so it is worth
  * the copy: external WRAM answers in fewer cycles than the cartridge bus, and
@@ -231,7 +245,15 @@ void nes_audio_frame(void) {
      * the change therefore retriggered all four channels sixty times a
      * second, which is audible as a buzz chopping up every held note. The
      * engine only changes a channel's registers when its note or volume
-     * actually changes, so diffing costs nothing and fixes it. */
+     * actually changes, so diffing costs nothing and fixes it.
+     *
+     * $4015 IS THE NOTE-OFF. This engine does not rely on the APU's length
+     * counters at all — it sets the halt bit on every note it starts
+     * ($4000 = $B7) and then ends notes by clearing the channel's bit in
+     * $4015, several times a frame as it works through the voices. So the
+     * enable bits are part of "changed", and a port that models the length
+     * counters instead gets nothing for the trouble: they never count down
+     * in this game. Measured, not assumed. */
     if (changed(apu, R_SQ1_VOL, R_SQ1_HI, 0x01)) apply_pulse(0, apu, enables & 0x01);
     if (changed(apu, R_SQ2_VOL, R_SQ2_HI, 0x02)) apply_pulse(1, apu, enables & 0x02);
     if (changed(apu, R_TRI_LIN, R_TRI_HI, 0x04)) apply_triangle(apu, enables & 0x04);

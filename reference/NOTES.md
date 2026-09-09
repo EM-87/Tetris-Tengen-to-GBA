@@ -134,6 +134,87 @@ preserve bug-for-bug.
 4. `computerMove`, the AI behind VERSUS COMPUTER and WITH COMPUTER — the one
    two-player mode that needs no second console.
 
+## The 1P screen, and what the port does with it
+
+The cartridge's 32 columns are three things side by side, and reading them
+wrong is what made every earlier layout here lopsided:
+
+| NES columns | What it is |
+| --- | --- |
+| 0-1 | braid `6A 6B` — the playfield's LEFT wall |
+| 2-11 | the ten playable columns, rows 8-27 |
+| 12-13 | braid `73 74` — its RIGHT wall |
+| 14-17 | the vertical TETRIS banner, a raised pillar |
+| 18-19 | braid `6A 6B` again |
+| 20-29 | the score panel: blank canvas the game writes into |
+| 30-31 | braid `73 74` |
+
+`6A 6B` is a left-hand wall and `73 74` a right-hand one, and the pair either
+side of a run is what makes it read as a recessed well; the banner has them
+the other way round, which is what makes IT read as raised. Rows 0-1 and
+28-29 close the frame top and bottom, and rows 2-7 are the header strip
+(SCORE / HIGH SCORE / LINES / LEVEL / STATS / NEXT).
+
+The port's thirty columns are `8 | 2 | 10 | 2 | 8`: a box, the board's own
+braid, the ten playable columns, the braid, a box of the same width. What
+that costs is the TETRIS banner, which has no room on the play screen any
+more — the right-hand box becomes the dancers' stage during a level-up, the
+way the cartridge's own blit takes over the banner.
+
+Two fix-ups the column runs cannot express, both because a column is not
+uniform down its length: NES rows 8-9 of columns 12-13 hold the banner box's
+top corners rather than braid, and rows 26-27 of columns 21-27 hold the piece
+icons. Both are patched in `reflow_screen`.
+
+### The piece statistics are BARS
+
+`L9997` (`main.asm.txt:3752-3798`) draws each piece's count as a vertical bar
+growing out of a little picture of that piece, not as a number:
+
+    tile = $21 + (count & 7)          eight steps of fill inside one tile
+    row  = base - (count >> 3)        every eighth piece moves up a row
+
+so after N pieces the bar is N/8 solid tiles with an N%8 partial on top. The
+icons sit at nametable rows 26-27, columns 21-27, and the attribute table
+gives the I its own palette (bank 3), T/O/J/L a second (bank 1) and S/Z a
+third (bank 2) — which is why the row is not seven identical shapes. The ROM
+caps the bar at 144 (`cmp #$90 / bcs`), exactly the 18 rows its panel is
+tall; the port's box is shorter so the same rule caps lower.
+
+### How long the dancers dance
+
+Not a number to guess at. `checkLevelUp` (`main.asm.txt:1956-1979`) reuses
+player1FallTimer as the interlude's clock and advances it once every SIXTEEN
+frames (`lda frameCounterLow / and #$0F / bne`):
+
+| Timer | What happens |
+| --- | --- |
+| 0 | `showLevelBonus` (:1926): silence, gameState = LEVELUP |
+| 13 | `L8D6B` (:2034): level-up music, the dancers' palette, the stage blit, and the timer is forced to `$7C` = 124 |
+| 124 → 244 | they perform — 120 steps of 16 frames, about 32 seconds |
+| 244 | `L9035` (:2393) starts the wind-down, forcing the timer to `$F5` |
+| wraps past 255 | `finishLevelUpAnimation` (:2465), back to play |
+
+A button does not cut it short, it fast-forwards: L9035 computes
+`$7C - timer - 5`, clamps it to at least `$F5`, and you still get the three
+seconds of wind-down.
+
+### Where the PAUSE plaque goes
+
+`pausePPUAddr1 = $210C` with `pauseColsRows1 = $88,$02` — eight columns by two
+rows at nametable (12,8), i.e. columns 12-19 of 32. That is the middle of the
+screen, and the relationship worth keeping is "centred", not "column 12":
+on thirty columns it centres at 11.
+
+### $4015 is this engine's note-off
+
+The sound engine sets the length counter's halt bit on every note it starts
+(`$4000 = $B7`) and ends notes by clearing the channel's bit in `$4015`,
+several times a frame as it works through the voices. So the APU's length
+counters never count down in this game, and a port that models them gets
+nothing; what it must do instead is treat the enable bits as part of "has
+this channel changed". Measured against the running ROM, not assumed.
+
 ## Two players over a link cable
 
 The cartridge's 2P is a RACE: two independent 10-wide playfields, and nothing

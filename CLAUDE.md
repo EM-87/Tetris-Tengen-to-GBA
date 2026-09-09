@@ -64,9 +64,12 @@ running ROM; only the side panels need reflowing).
 3. ~~Stand up `gba/`~~ — done. It builds with a stock `arm-none-eabi-gcc`
    (no devkitARM required), boots in mGBA, and `make gba-check` verifies it
    renders and plays rather than merely links.
-4. ~~HUD and title screen~~ — done: next piece, score, level, lines, per-piece
-   statistics, game over, and a title screen with level select (0-9, the range
-   the ROM's own menu allows).
+4. ~~HUD and title screen~~ — done, and laid out as `8 | 2 | 10 | 2 | 8`:
+   two boxes of equal width either side of the braided board. Left holds
+   SCORE / LINES / LEVEL / HIGH SCORE, right holds the next piece and the
+   piece histogram — BARS growing out of the cartridge's own piece icons, in
+   the cartridge's own palettes, which is what the original shows and not the
+   column of numbers this had for a while. See reference/NOTES.md.
 5. ~~Palettes~~ — done, and these are the game's real colours rather than
    placeholders: the palette tables ARE in the disassembly even though the
    tile art isn't. Tracing them also caught a fidelity bug worth remembering:
@@ -82,9 +85,11 @@ running ROM; only the side panels need reflowing).
    cadence, on the banner column the level-up blit clears for them. Their
    individual choreography scripts are still untraced (noted in NOTES.md).
 9. ~~Title and menu screens~~ — done, from the cartridge's own title art and
-   menu frame. The title composes 32x30 down to 30x20 by dropping the thick
-   top/bottom border and one spire-tip row; the menu drops two columns from
-   its empty middle. Neither scales anything.
+   menu frame. The title stays a FRAMED PICTURE: its ten spare rows come out
+   of the artwork (the thin spire above the tent roof, three rows of the
+   cathedral's brick bodies) rather than out of the frame, because an earlier
+   pass bought them from the frame and left the lettering running off the top
+   edge with the second copyright line cut off the bottom.
 10. ~~The line-clear animation~~ — done, and it turned out to be one of the
    game's signatures rather than a pause: a black puff of smoke crosses each
    completed row and leaves SINGLE / DOUBLE / TRIPLE / TETRIS written where

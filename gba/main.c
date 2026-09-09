@@ -81,14 +81,19 @@
 #define FIELD_COL0 1              /* storage column of the first playable one */
 #define FIELD_PLAYABLE (TENGEN_PF_WIDTH - 2)
 
-/* The two halves of the HUD, in GBA tile columns, on the canvas the reflow
- * leaves either side of the centred board. Splitting it is what stops the
- * screen reading as lopsided now that the playfield is in the middle:
- * the counters and the piece statistics go left, the next piece goes right. */
-#define HUD_L_TX 2
-#define HUD_L_W  6
-#define HUD_R_TX 26
-#define HUD_R_W  4
+/* THE TWO BOXES.
+ *
+ * The reflow leaves eight blank columns of the cartridge's own score-panel
+ * canvas on each side of the framed board — 8 | 2 | 10 | 2 | 8 — and those are
+ * the two boxes the HUD lives in. Same width, same rows, mirrored about the
+ * board: the screen reads the same from either edge.
+ *
+ * Left holds the counters, right holds the next piece and the piece
+ * histogram, and during a level-up the right box is handed over to the
+ * dancers, which is what the cartridge does with its banner. */
+#define BOX_L_TX 0
+#define BOX_R_TX 22
+#define BOX_W    8
 
 /* PALETTE BANKS.
  *
@@ -140,13 +145,42 @@
 #define DANCER_SPRITES 4              /* four 8x8 tiles in a 2x2 per dancer */
 #define DANCER_POSE_FRAMES 8          /* pose advance cadence, from the ROM */
 #define DANCER_WALK_FRAMES 4          /* X advance cadence, from the ROM */
-#define DANCER_SHOW_FRAMES 200        /* how long the interlude lasts */
 #define PAL_OBJ_DANCER 0   /* banks 0-3: spritePalette2 */
 
-/* The blit's own tile coordinates: 4 columns x 18 rows at nametable (14,10),
- * which inside this port's window (which starts at nametable row 8) is
- * columns 14-17, rows 2-19. */
-#define DANCER_STAGE_TX 22
+/* HOW LONG THEY DANCE, which is not a number anybody would guess.
+ *
+ * The interlude is driven by player1FallTimer, reused as its clock
+ * (`checkLevelUp`, main.asm.txt:1956-1979). The timer advances by one every
+ * SIXTEEN frames — `lda frameCounterLow / and #$0F / bne` — and the state
+ * machine reads:
+ *
+ *   showLevelBonus (:1926)  sets the timer to 0 and silences the music
+ *   timer reaches 13        L8D6B (:2034) starts the show: level-up music,
+ *                           the dancers' palette, the stage blit, and the
+ *                           timer is set to $7C = 124
+ *   timer 124 -> 244        the dancers perform
+ *   timer 244               L9035 (:2393) begins the wind-down, forcing the
+ *                           timer to $F5 = 245
+ *   timer wraps past 255    finishLevelUpAnimation (:2465), back to play
+ *
+ * So the dancing itself is (244-124) * 16 = 1920 frames, about 32 seconds,
+ * and the wind-down another 11 * 16 = 176. This port had 200 frames total,
+ * which is not the same thing at all.
+ *
+ * A button does NOT cut it short; it fast-forwards. L9035 computes
+ * $7C - timer - 5 and clamps it to at least $F5, which lands you in the same
+ * wind-down — so an impatient player still gets three seconds of it, exactly
+ * as on the cartridge. */
+#define DANCER_TICK_FRAMES 16         /* frameCounterLow & $0F */
+#define DANCER_TIMER_START 0x7C       /* L8D6B */
+#define DANCER_TIMER_WINDDOWN 0xF4    /* L9035 compares against this */
+#define DANCER_TIMER_TAIL 0xF5        /* ...and forces at least this */
+
+/* The blit's own tile coordinates: 4 columns x 18 rows at nametable (14,10).
+ * The banner it used to cover has no place on the port's play screen, so the
+ * stage goes in the middle of the right-hand box instead — same size, same
+ * rows, and the box's own contents are put back when the show ends. */
+#define DANCER_STAGE_TX (BOX_R_TX + 2)
 #define DANCER_STAGE_TY 2
 #define DANCER_STAGE_TW DANCER_STAGE_COLS
 #define DANCER_STAGE_TH DANCER_STAGE_ROWS
@@ -193,14 +227,17 @@ static const char *const kClearWord[5] = {
  * and unpausePPUAddr1/2 put the same two rows back). pauseAttrs ($EF,$BF)
  * colours it with background palette 3.
  *
- * It moves with the art it sat on: the resequenced screen puts the board's
- * right frame at column 20, so the plaque starts there and runs across the
- * banner, the same relationship it has on the cartridge.
+ * On the cartridge those eight columns are 12..19 of 32, which puts the
+ * plaque dead centre of the screen. That is the relationship worth keeping,
+ * not the column number: on 30 columns it centres at (30-8)/2 = 11, and it is
+ * centred vertically too rather than sitting against the top edge. Reading the
+ * column number off the cartridge and using it unchanged is what left it
+ * hanging off to one side.
  * ----------------------------------------------------------------------- */
-#define PAUSE_TX 20
-#define PAUSE_TY 0
 #define PAUSE_W 8
 #define PAUSE_H 2
+#define PAUSE_TX ((SCREEN_TW - PAUSE_W) / 2)
+#define PAUSE_TY ((SCREEN_TH - PAUSE_H) / 2)
 #define BANK_PAUSE 3
 
 static const uint8_t kPauseTiles[PAUSE_H][PAUSE_W] = {
@@ -228,6 +265,9 @@ static const uint8_t kLabelNext[4]  = {0x91, 0x92, 0x93, 0x94};
 static uint16_t ascii_tile(char c) { return (uint16_t)(unsigned char)c; }
 
 static TengenLink g_session;
+/* The best score of this session. The cartridge's own 1P panel shows one
+ * (see draw_panel), and like the cartridge's it does not survive a reset. */
+static uint32_t g_high_score;
 /* Which player this console shows and plays. Always 0 in a solo game; in a
  * linked match it is the cable master that is player 1, so the two consoles
  * differ here and nowhere else. */
@@ -472,57 +512,118 @@ static void draw_next_piece(int tx, int ty) {
     }
 }
 
-static void draw_panel(void) {
-    const TengenPlayerState *p = &g_session.game.player[g_view];
-    static const char kPieceLetter[TENGEN_TETROMINO_COUNT] = {0,'I','T','O','J','L','S','Z'};
+/* ----------------------------------------------------------------------- *
+ * The piece histogram
+ *
+ * The cartridge counts every piece it hands out and draws each count as a
+ * vertical bar growing up out of a little picture of that piece
+ * (`L9997`, main.asm.txt:3752-3798). Its own arithmetic decides what a bar
+ * looks like and this reproduces it rather than approximating:
+ *
+ *   tile      = $21 + (count & 7)      -> eight steps of fill inside one tile
+ *   row       = base - (count >> 3)    -> every eighth piece moves up a row
+ *
+ * so after N pieces the bar is N/8 solid tiles with an N%8 partial on top.
+ * Drawing numbers here instead — which is what this port did — throws away
+ * the one part of the score panel a player actually reads at a glance.
+ *
+ * The ROM stops at 144 (`cmp #$90 / bcs`), which is exactly the 18 rows its
+ * panel is tall. This box is shorter, so the same rule caps lower; the count
+ * itself keeps going, only the bar stops growing.
+ * ----------------------------------------------------------------------- */
+#define STATS_TX (BOX_R_TX + 1)          /* seven columns inside an eight-wide box */
+#define STATS_ICON_TY 17                 /* the icons sit on the floor of the box */
+#define STATS_TOP_TY 7                   /* ...and the bars may reach this row */
+#define STATS_BAR_FULL (SCREEN_1P_STATS_BAR_TILE + 7)
+#define STATS_MAX_ROWS (STATS_ICON_TY - STATS_TOP_TY)
+#define BANK_STATS SCREEN_1P_STATS_BAR_BANK
 
-    /* Left: the counters, in the cartridge's own multi-tile lettering, and
-     * below a rule the per-piece statistics the 1P screen is known for. */
-    draw_tiles(HUD_L_TX, 0, kLabelScore, 6, BANK_LABEL);
-    draw_number(HUD_L_TX, 1, p->score, 6, BANK_VALUE);
+static void draw_stats(const TengenPlayerState *p) {
+    for (int i = 0; i < SCREEN_1P_STATS_PIECES; i++) {
+        int tx = STATS_TX + i;
+        /* Each icon in the palette the ROM's attribute table gives it: the
+         * I has its own, T/O/J/L share one, S and Z share another. */
+        int icon_bank = kStatsIconBanks[i];
+        set_map_tile(tx, STATS_ICON_TY, WITH_BANK(kStatsIcons[0][i], icon_bank));
+        set_map_tile(tx, STATS_ICON_TY + 1, WITH_BANK(kStatsIcons[1][i], icon_bank));
 
-    draw_tiles(HUD_L_TX, 3, kLabelLines, 6, BANK_LABEL);
-    draw_number(HUD_L_TX + 1, 4, p->lines, 4, BANK_VALUE);
+        uint16_t count = p->piece_stats[TT_I + i];
+        int full = count / 8;
+        int part = count % 8;
+        if (full > STATS_MAX_ROWS) { full = STATS_MAX_ROWS; part = 0; }
 
-    draw_tiles(HUD_L_TX, 6, kLabelLevel, 6, BANK_LABEL);
-    draw_number(HUD_L_TX + 2, 7, p->level, 2, BANK_VALUE);
-
-    draw_rule(HUD_L_TX, 9, HUD_L_W, BANK_VALUE);
-
-    if (g_session.game.two_player) {
-        /* A race needs the other board's numbers far more than it needs the
-         * piece histogram — which the ROM does not keep in 2P anyway
-         * (`updatePieceStatistics` is 1P only), so the space is free. */
-        const TengenPlayerState *o = &g_session.game.player[g_view ^ 1];
-        draw_text(HUD_L_TX, 10, "RIVAL", BANK_LABEL);
-        draw_number(HUD_L_TX, 12, o->score, 6, BANK_VALUE);
-        draw_text(HUD_L_TX, 14, "LN", BANK_LABEL);
-        draw_number(HUD_L_TX + 2, 14, o->lines, 4, BANK_VALUE);
-        draw_text(HUD_L_TX, 15, "LV", BANK_LABEL);
-        draw_number(HUD_L_TX + 3, 15, o->level, 2, BANK_VALUE);
-        if (!o->game_active) draw_text(HUD_L_TX + 1, 17, "OUT", BANK_LABEL);
-        else clear_region(HUD_L_TX + 1, 17, 4, 1);
-    } else {
-        draw_text(HUD_L_TX, 10, "STATS", BANK_LABEL);
-        for (int piece = TT_I; piece <= TT_Z; piece++) {
-            int ty = 11 + (piece - TT_I);
-            char letter[2] = { kPieceLetter[piece], 0 };
-            draw_text(HUD_L_TX, ty, letter, BANK_LABEL);
-            draw_number(HUD_L_TX + 2, ty, p->piece_stats[piece], 3, BANK_VALUE);
+        for (int r = 0; r < STATS_MAX_ROWS; r++) {
+            int ty = STATS_ICON_TY - 1 - r;
+            uint16_t tile = T_BLANK;
+            if (r < full) tile = STATS_BAR_FULL;
+            else if (r == full && part) tile = SCREEN_1P_STATS_BAR_TILE + part - 1;
+            set_map_tile(tx, ty, WITH_BANK(tile, BANK_STATS));
         }
     }
+}
 
-    if (!p->game_active) {
-        draw_text(HUD_L_TX + 1, 19, "OVER", BANK_LABEL);
+static void draw_panel(void) {
+    const TengenPlayerState *p = &g_session.game.player[g_view];
+    if (p->score > g_high_score) g_high_score = p->score;
+
+    /* Each box is closed top and bottom with the ROM's own rule tiles, so it
+     * reads as a panel rather than as text floating against the screen edge.
+     * The braid on the inner side and these two rules are its frame; the
+     * outer side is the edge of the screen, which is the one boundary the
+     * thirty columns cannot afford to draw. */
+    draw_rule(BOX_L_TX, 0, BOX_W, BANK_VALUE);
+    draw_rule(BOX_L_TX, 19, BOX_W, BANK_VALUE);
+    draw_rule(BOX_R_TX, 0, BOX_W, BANK_VALUE);
+    draw_rule(BOX_R_TX, 19, BOX_W, BANK_VALUE);
+
+    /* LEFT BOX: the counters, in the cartridge's own multi-tile lettering,
+     * each under a rule the way the ROM's header strip has them. */
+    draw_tiles(BOX_L_TX + 1, 1, kLabelScore, 6, BANK_LABEL);
+    draw_number(BOX_L_TX + 1, 2, p->score, 6, BANK_VALUE);
+    draw_rule(BOX_L_TX, 3, BOX_W, BANK_VALUE);
+
+    draw_tiles(BOX_L_TX + 1, 4, kLabelLines, 6, BANK_LABEL);
+    draw_number(BOX_L_TX + 2, 5, p->lines, 4, BANK_VALUE);
+    draw_rule(BOX_L_TX, 6, BOX_W, BANK_VALUE);
+
+    draw_tiles(BOX_L_TX + 1, 7, kLabelLevel, 6, BANK_LABEL);
+    draw_number(BOX_L_TX + 3, 8, p->level, 2, BANK_VALUE);
+    draw_rule(BOX_L_TX, 9, BOX_W, BANK_VALUE);
+
+    if (g_session.game.two_player) {
+        /* A race wants the other board's numbers where the histogram would
+         * be — which the ROM does not keep in 2P anyway, so nothing is lost. */
+        const TengenPlayerState *o = &g_session.game.player[g_view ^ 1];
+        draw_text(BOX_L_TX + 1, 11, "RIVAL", BANK_LABEL);
+        draw_number(BOX_L_TX + 1, 12, o->score, 6, BANK_VALUE);
+        draw_text(BOX_L_TX + 1, 14, "LN", BANK_LABEL);
+        draw_number(BOX_L_TX + 3, 14, o->lines, 4, BANK_VALUE);
+        draw_text(BOX_L_TX + 1, 15, "LV", BANK_LABEL);
+        draw_number(BOX_L_TX + 4, 15, o->level, 2, BANK_VALUE);
+        if (!o->game_active) draw_text(BOX_L_TX + 2, 17, "OUT", BANK_LABEL);
+        else clear_region(BOX_L_TX + 2, 17, 4, 1);
+
     } else {
-        clear_region(HUD_L_TX + 1, 19, 4, 1);
+        /* The cartridge's own 1P panel carries a HIGH SCORE beside the score
+         * — "HIGH" and "SCORE" in plain ASCII at nametable row 2, and
+         * highScoreHundredThousands is the seventh entry of
+         * statsDataAddresses (main.asm.txt:4100-4107). It is kept for the
+         * session rather than saved: this cartridge has no battery, and the
+         * ROM's own high score does not survive a power cycle either. */
+        draw_text(BOX_L_TX + 1, 11, "HIGH", BANK_LABEL);
+        draw_text(BOX_L_TX + 1, 12, "SCORE", BANK_LABEL);
+        draw_number(BOX_L_TX + 1, 13, g_high_score, 6, BANK_VALUE);
     }
 
-    /* Right: the next piece, which is the one thing a player looks at while
-     * a piece is falling, so it sits beside the field rather than under a
-     * column of numbers. */
-    draw_tiles(HUD_R_TX, 0, kLabelNext, 4, BANK_LABEL);
-    draw_next_piece(HUD_R_TX, 2);
+    if (!p->game_active) draw_text(BOX_L_TX + 2, 18, "OVER", BANK_LABEL);
+    else clear_region(BOX_L_TX + 2, 18, 4, 1);
+
+    /* RIGHT BOX: the next piece, which is the one thing a player looks at
+     * while a piece is falling, and under it the histogram. */
+    draw_tiles(BOX_R_TX + 2, 1, kLabelNext, 4, BANK_LABEL);
+    draw_next_piece(BOX_R_TX + 2, 3);
+    draw_rule(BOX_R_TX, 6, BOX_W, BANK_VALUE);
+    if (!g_session.game.two_player) draw_stats(p);
 }
 
 static void draw_field(void) {
@@ -746,8 +847,15 @@ static void draw_level_select(uint8_t start_level, uint8_t music) {
 
 static bool g_linked;            /* this match is running over the cable */
 static bool g_link_lost;         /* ...and the cable stopped answering */
+static bool g_repaint;           /* the static screen needs putting back */
 static uint8_t g_music;          /* which of the four in-game tunes */
-static int g_dancer_frames;      /* > 0 while the level-up interlude runs */
+/* The interlude's clock, which is the ROM's player1FallTimer: `active` while
+ * the show is on, `timer` counting $7C..$FF at one step every sixteen frames.
+ * See the note beside DANCER_TIMER_START for why it is shaped like this. */
+static bool g_dancer_active;
+static uint8_t g_dancer_timer;
+static uint16_t g_dancer_tick;   /* stands in for frameCounterLow & $0F */
+static int g_dancer_elapsed;     /* frames since the show started, for the poses */
 static uint8_t g_shown_level = 0xFF;
 static TengenTetromino g_shown_piece = TT_NONE;
 
@@ -768,11 +876,22 @@ static TengenTetromino g_shown_piece = TT_NONE;
  *  - topping out, silence and then the game-over tune (:608, :620) */
 static void announce_step(TengenStepResult step) {
     if (step.piece_locked) nes_audio_play(NES_SOUND_DROP);
-    if (step.lines_collapsed)
-        nes_audio_play(step.leveled_up ? NES_MUSIC_LEVELUP : NES_SOUND_LINECLEAR);
+    /* ONE call per event, and the level-up is one event. A clear that also
+     * raises the level used to reach setMusicOrSoundEffect(MUSIC_LEVELUP)
+     * twice in the same frame — once for the clear and once for the level —
+     * and the engine restarts a track every time it is handed one, so the
+     * intro began, was cut off a few hundred cycles later and began again.
+     * That is what a doubled tune sounds like. */
+    if (step.lines_collapsed && !step.leveled_up)
+        nes_audio_play(NES_SOUND_LINECLEAR);
     if (step.leveled_up) {
-        if (!g_linked) g_dancer_frames = DANCER_SHOW_FRAMES;
         nes_audio_play(NES_MUSIC_LEVELUP);
+        if (!g_linked) {
+            g_dancer_active = true;
+            g_dancer_timer = DANCER_TIMER_START;
+            g_dancer_tick = 0;
+            g_dancer_elapsed = 0;
+        }
     }
     if (step.topped_out) {
         nes_audio_play(NES_MUSIC_SILENCE);
@@ -857,7 +976,11 @@ static bool solo_play_frame(uint8_t buttons, uint8_t pressed) {
             /* pauseOrUnpause suspends and resumes the music
              * (main.asm.txt:7204-7211). */
             nes_audio_play(g_session.game.paused ? NES_MUSIC_SUSPEND : NES_MUSIC_RESUME);
-            if (was_paused) draw_static_screen();
+            /* The plaque has to be painted over on the way out, but this runs
+             * mid-frame; six hundred tiles written into VRAM while the screen
+             * is being scanned out is a visible tear. Flag it and let
+             * draw_match do it inside the blank with everything else. */
+            if (was_paused) g_repaint = true;
         }
         /* Every applied code plays this (main.asm.txt:7089, 7127). */
         if (cheat[0] != TENGEN_CHEAT_NONE)
@@ -868,14 +991,27 @@ static bool solo_play_frame(uint8_t buttons, uint8_t pressed) {
     return !match_over();
 }
 
-/* Everything the screen shows during a match, drawn on this console's own
- * vblank whatever the cable is doing. */
+/* Everything the screen shows during a match.
+ *
+ * ORDER MATTERS HERE, and getting it wrong is what made the pieces flicker.
+ * Everything below writes video memory — the tile map, OAM, palette RAM — and
+ * on a GBA all three want to be written during the vertical blank. This used
+ * to run nes_audio_frame() first, and that is not a small thing to do: it
+ * steps a 6502 interpreter through a whole frame of the cartridge's sound
+ * engine, which is thousands of instructions and eats the entire blank. Every
+ * tile and sprite then landed while the screen was being scanned out, so a
+ * falling piece could be drawn half in its old position and half in its new
+ * one. So: vsync, then draw, then the audio in the time that is left. */
 static void draw_match(bool *sweeping) {
     vsync();
-    nes_audio_frame();
+    if (g_repaint) {
+        draw_static_screen();
+        g_repaint = false;
+    }
+    refresh_palettes();
     draw_field();
     draw_panel();
-    if (g_link_lost) draw_text(HUD_R_TX, 6, "LINK", BANK_LABEL);
+    if (g_link_lost) draw_text(BOX_R_TX + 2, 8, "LINK", BANK_LABEL);
 
     /* The sweep's sprites, and the one tidy-up when it finishes. */
     if (g_session.game.player[g_view].line_clear_timer > 0) {
@@ -888,6 +1024,10 @@ static void draw_match(bool *sweeping) {
 
     /* Last, so it sits over whatever was just drawn. */
     if (g_session.game.paused) draw_pause_box();
+
+    /* And the sound engine afterwards, out of the blank, where it costs
+     * nothing but CPU time. */
+    nes_audio_frame();
 }
 
 int main(void) {
@@ -942,8 +1082,8 @@ int main(void) {
                 continue;
             }
             vsync();
-            nes_audio_frame();
             draw_title();
+            nes_audio_frame();
             continue;
         }
 
@@ -972,8 +1112,8 @@ int main(void) {
                 continue;
             }
             vsync();
-            nes_audio_frame();
             draw_game_select(game_mode);
+            nes_audio_frame();
             continue;
         }
 
@@ -1034,8 +1174,8 @@ int main(void) {
                 continue;
             }
             vsync();
-            nes_audio_frame();
             draw_level_select(start_level, g_music);
+            nes_audio_frame();
             continue;
         }
 
@@ -1081,8 +1221,8 @@ int main(void) {
             }
 
             vsync();
-            nes_audio_frame();
             draw_link_wait(&lobby);
+            nes_audio_frame();
             continue;
         }
 
@@ -1091,18 +1231,40 @@ int main(void) {
          * cuts it short, which is what the original does too
          * (main.asm.txt:9037-9045). It never runs in a linked match — see the
          * note above announce_step. */
-        if (g_dancer_frames > 0) {
-            if (pressed) g_dancer_frames = 1;
-            g_dancer_frames--;
-            if (g_dancer_frames == 0) {
+        if (g_dancer_active) {
+            /* One step of checkLevelUp: the timer advances every sixteenth
+             * frame, a button jumps it to the wind-down, and the show ends
+             * when it would pass $FF. */
+            if (pressed) {
+                int jump = DANCER_TIMER_START - g_dancer_timer - 5;
+                if (jump < DANCER_TIMER_TAIL) jump = DANCER_TIMER_TAIL;
+                if (g_dancer_timer < DANCER_TIMER_TAIL) {
+                    g_dancer_timer = (uint8_t)jump;
+                    nes_audio_play(NES_MUSIC_SILENCE);
+                }
+            } else if (g_dancer_timer == DANCER_TIMER_WINDDOWN) {
+                g_dancer_timer = DANCER_TIMER_TAIL;
+            }
+
+            if (++g_dancer_tick >= DANCER_TICK_FRAMES) {
+                g_dancer_tick = 0;
+                if (g_dancer_timer == 0xFF) {
+                    g_dancer_active = false;
+                } else {
+                    g_dancer_timer++;
+                }
+            }
+            g_dancer_elapsed++;
+
+            vsync();
+            if (!g_dancer_active) {
                 oam_hide_all();
                 draw_static_screen();
                 nes_audio_play(kMusicTracks[g_music]);
             } else {
                 draw_dancer_stage();
-                draw_dancers(DANCER_SHOW_FRAMES - g_dancer_frames);
+                draw_dancers(g_dancer_elapsed);
             }
-            vsync();
             nes_audio_frame();
             continue;
         }
@@ -1136,7 +1298,6 @@ int main(void) {
             continue;
         }
 
-        refresh_palettes();
         draw_match(&sweeping);
     }
 }

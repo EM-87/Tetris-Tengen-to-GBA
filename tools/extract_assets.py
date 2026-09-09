@@ -146,14 +146,37 @@ DANCER_SOLO_COUNT = 6
 
 # The title screen: "TENGEN PRESENTS / THE SOVIET MIND GAME / TETRIS" over
 # St Basil's Cathedral, drawn in all four of bgPalette0's palettes.
-# How the 32x30 title is composed down to the GBA's 30x20. The border is four
-# tiles thick on every side; dropping the top and bottom of it (and the very
-# tip of the tallest spire) is enough to fit everything that matters, while
-# three of the four side border columns stay. Nothing is scaled.
-TITLE_KEEP_COLS = (1, 31)       # 30 columns: 3 of the border each side + content
+# How the 32x30 title is composed down to the GBA's 30x20.
+#
+# The screen is a framed PICTURE and has to stay one: a two-tile brick-and-
+# jewel border, a two-tile braid inside it, then 24x22 of artwork. An earlier
+# pass here bought its ten rows by throwing away the top and bottom of the
+# frame, which left the lettering running off the top edge and cut the
+# "(C)1988 TENGEN" line off the bottom — the picture stopped being framed at
+# all, which is the one thing about this screen that has to survive.
+#
+# So the frame is kept on all four sides and the ten rows come out of the
+# ARTWORK instead, at the three places where a dropped row costs least:
+#
+#   rows 0-1, 28-29   the outer brick border. The braid inside it still reads
+#                     as a complete frame, and it is what the columns keep too.
+#   rows 12-14        the tall thin spire above the cathedral's tent roof —
+#                     one or two tiles per row, the emptiest artwork on the
+#                     screen. The roof itself, and every dome finial, stays.
+#   rows 19, 21, 23   three rows out of the cathedral's brick bodies, which are
+#                     a repeating texture. The building comes out squatter; no
+#                     silhouette is broken and no seam shows.
+#
+# Columns keep one of the two brick columns and both braid columns each side,
+# which is 1 + 2 + 24 + 2 + 1 = 30 with the picture whole and centred.
+TITLE_KEEP_COLS = (1, 31)
 TITLE_ROW_BLOCKS = (
+    (2, 4),    # the braid frame's top
     (4, 12),   # TENGEN / PRESENTS / THE SOVIET MIND GAME / the TETRIS logo
-    (13, 25),  # the cathedral, from just below its topmost spire tip
+    (15, 19),  # dome finials, the tent roof, the tops of the towers
+    (20, 21),  # \
+    (22, 23),  #  } the bodies, every other row
+    (24, 28),  # / the two copyright lines, then the braid frame's bottom
 )
 
 # The menu screen the ROM uses for its selection screens: a decorative frame
@@ -203,25 +226,49 @@ COL_PANEL = (20, 30)            # the second board area: blank canvas in 1P
 # How the GBA's 30 columns are built from the cartridge's 32, as
 # (first NES column, how many). Read down, this IS the screen:
 #
-#   port  0-1   the second area's left frame, reused as the screen's edge
-#   port  2-7   blank panel canvas -> the left half of the HUD
-#   port  8-9   the board's left frame
+#   port  0-7   blank panel canvas -> the LEFT box
+#   port  8-9   the board's left frame  (NES 0-1)
 #   port 10-19  the ten playable columns — dead centre, 80px either side
-#   port 20-21  the board's right frame
-#   port 22-25  the TETRIS banner, which is also the dancers' stage
-#   port 26-29  blank panel canvas -> the right half of the HUD
+#   port 20-21  the board's right frame (NES 12-13)
+#   port 22-29  blank panel canvas -> the RIGHT box
 #
-# The two columns that do not fit are the second area's right frame (NES
-# 30-31), which on a one-player screen has nothing left to frame.
+# 8 + 2 + 10 + 2 + 8 = 30, and it reads the same from either end: the board
+# in the middle with its own two-column braid, and a box of the same width on
+# each side. That symmetry is the point. An earlier arrangement put six
+# columns of HUD on the left and the TETRIS banner on the right, which left
+# the screen visibly lopsided and — worse — cut the cartridge's row of piece
+# icons in half, stranding two of them in the opposite corner.
+#
+# WHAT THIS COSTS: the vertical TETRIS banner (NES 14-17) has no place on the
+# play screen any more. Thirty columns cannot hold a ten-wide board, its
+# braid, two boxes wide enough for a six-digit score and a seven-column
+# histogram, AND a four-column banner. The banner survives on the title
+# screen, and the dancers still get their stage — the right-hand box becomes
+# it during a level-up, exactly as the cartridge's own blit takes over the
+# banner.
 SCREEN_SEGMENTS = (
-    (18, 2),
-    (20, 6),
+    (20, 8),
     (0, 2),
     (2, 10),
     (12, 2),
-    (14, 4),
-    (26, 4),
+    (22, 8),
 )
+
+# Two fix-ups the runs above cannot express, both because a column is not
+# uniform down its whole length:
+#
+#  - NES rows 8 AND 9 are where the banner's box begins, so columns 12-13 hold
+#    its two top-corner rows ($97 $98 then $9B $9C) rather than the braid
+#    ($73 $74) they hold on every other row. Lifted verbatim they put a hook on
+#    top of the board's right wall. The braid pair is what belongs there: the
+#    port has no banner for that box to be the top of.
+#  - NES rows 26-27, columns 21-27 hold the cartridge's row of piece icons
+#    for the statistics. The port draws those itself, where its own histogram
+#    is, so they are cleared out of the canvas rather than left to show
+#    through in both boxes at once.
+SCREEN_WALL_FIX = ((20, 0x73), (21, 0x74))   # port column -> tile
+SCREEN_WALL_FIX_ROWS = (8, 10)               # NES rows, the banner box's top
+SCREEN_BLANK = ((26, 28), (20, 30))          # (row range, NES column range)
 
 ROW_PLAYFIELD = (8, 28)         # 20 rows
 
@@ -353,10 +400,20 @@ def reflow_screen(nametable: bytes, attributes: bytes):
                  for c in range(start, start + count)]
     assert len(keep_cols) == 30, f"expected 30 columns, got {len(keep_cols)}"
 
+    blank_rows, blank_cols = SCREEN_BLANK
+
     tiles, palettes = [], []
     for row in range(30):
-        for col in keep_cols:
-            tiles.append(nametable[row * 32 + col])
+        for port_col, col in enumerate(keep_cols):
+            tile = nametable[row * 32 + col]
+            if (blank_rows[0] <= row < blank_rows[1] and
+                    blank_cols[0] <= col < blank_cols[1]):
+                tile = 0                       # the ROM's own piece icons
+            if SCREEN_WALL_FIX_ROWS[0] <= row < SCREEN_WALL_FIX_ROWS[1]:
+                for fix_col, fix_tile in SCREEN_WALL_FIX:
+                    if port_col == fix_col:
+                        tile = fix_tile        # braid, not the banner's corner
+            tiles.append(tile)
             palettes.append(attribute_palette(attributes, col, row))
     return tiles, palettes, keep_cols
 
@@ -493,7 +550,46 @@ def emit_tiles_header(name, guard, tiles, source):
     return "\n".join(lines)
 
 
-def emit_screen_header(tiles, palettes, keep_cols, source):
+# The piece-statistics histogram.
+#
+# The cartridge keeps a running count per piece and draws it as a vertical bar
+# (`L9997`, main.asm.txt:3752-3798). Two things come out of the ROM here:
+#
+#  - the ICONS. Seven little tetromino pictures, one per piece, two tiles tall,
+#    sitting at nametable rows 26-27 columns 21-27 with the bars growing up out
+#    of them. They are read from the nametable rather than typed in.
+#  - the BAR tiles. `lda pieceStatistics,x / and #$07 / adc #$21` — the tile is
+#    $21 plus the count's low three bits, so $21..$28 are eight steps of fill
+#    within one tile, and every eighth piece moves the write one row up
+#    (the address arithmetic at :3773-3790 subtracts 4*(count & $F8), and a
+#    nametable row is 32 bytes, so 8 counts == 32 bytes == one row).
+#
+# The cap is the ROM's too: `cmp #$90 / bcs` stops drawing at 144, which is the
+# 18 rows its panel is tall. The port's box is shorter, so it caps at whatever
+# it has room for — same rule, less room.
+STATS_ICON_ROWS = (26, 28)
+STATS_ICON_COLS = (21, 28)      # seven pieces, I T O J L S Z
+STATS_BAR_TILE = 0x21           # $21 + (count & 7); $28 is a full tile
+
+
+def read_stats_icons(nametable, attributes):
+    """The cartridge's seven piece icons: two rows of seven tiles, plus the
+    palette each column is drawn in.
+
+    The colours are not decoration to be picked: the attribute table gives the
+    I its own palette (bank 3), T/O/J/L a second (bank 1) and S/Z a third
+    (bank 2), which is why the row is not seven olive tetrominoes. The bars
+    above them are all bank 1."""
+    tiles = [[nametable[r * 32 + c] for c in range(*STATS_ICON_COLS)]
+             for r in range(*STATS_ICON_ROWS)]
+    banks = [attribute_palette(attributes, c, STATS_ICON_ROWS[0])
+             for c in range(*STATS_ICON_COLS)]
+    bar_bank = attribute_palette(attributes, STATS_ICON_COLS[0],
+                                  STATS_ICON_ROWS[0] - 2)
+    return tiles, banks, bar_bank
+
+
+def emit_screen_header(tiles, palettes, keep_cols, source, stats):
     origin_x, origin_y = playfield_origin(keep_cols)
     lines = [
         "/*",
@@ -533,7 +629,33 @@ def emit_screen_header(tiles, palettes, keep_cols, source):
               "static const uint8_t kScreen1pPalettes[900] = {"]
     for i in range(0, len(palettes), 30):
         lines.append("    " + ", ".join(str(p) for p in palettes[i:i + 30]) + ",")
-    lines += ["};", "", "#endif /* SCREEN_1P_H */", ""]
+    lines += [
+        "};",
+        "",
+        "/* The piece-statistics histogram, from the ROM: seven icons two tiles",
+        " * tall (nametable rows 26-27, columns 21-27) with a bar growing up out",
+        " * of each. A bar cell is STATS_BAR_TILE + (count & 7), so eight pieces",
+        " * fill one tile and move the next write a row up (main.asm.txt:3752-3798).",
+        " * Indexed [row][piece], piece 0 = I. */",
+        "#define SCREEN_1P_STATS_PIECES 7",
+        f"#define SCREEN_1P_STATS_BAR_TILE 0x{STATS_BAR_TILE:02X}",
+        "static const uint8_t kStatsIcons[2][SCREEN_1P_STATS_PIECES] = {",
+    ]
+    icons, icon_banks, bar_bank = stats
+    for row in icons:
+        lines.append("    { " + ", ".join(f"0x{t:02X}" for t in row) + " },")
+    lines += [
+        "};",
+        "",
+        "/* Which of the four background palettes each icon is drawn in, off the",
+        " * ROM's own attribute table. The bars all share one. */",
+        "static const uint8_t kStatsIconBanks[SCREEN_1P_STATS_PIECES] = { "
+        + ", ".join(str(b) for b in icon_banks) + " };",
+        f"#define SCREEN_1P_STATS_BAR_BANK {bar_bank}",
+        "",
+        "#endif /* SCREEN_1P_H */",
+        "",
+    ]
     return "\n".join(lines)
 
 
@@ -776,19 +898,30 @@ def self_test() -> int:
     tiles, palettes, keep = reflow_screen(nt[:960], bytes(64))
     if len(tiles) != 900 or len(palettes) != 900:
         failures.append("el reflow deberia producir 30x30 tiles")
-    # The board must arrive whole and in order: left frame, ten playable
-    # columns, right frame, banner — 18 of the cartridge's columns unbroken.
-    board = list(range(0, 18))
-    if keep[8:26] != board:
-        failures.append(f"el tablero no llego entero: {keep[8:26]}")
+    # The board must arrive whole and in order: its left braid, the ten
+    # playable columns and its right braid — 14 of the cartridge's columns
+    # unbroken and in the cartridge's own order.
+    board = list(range(0, 14))
+    if keep[8:22] != board:
+        failures.append(f"el tablero no llego entero: {keep[8:22]}")
     origin_x, _ = playfield_origin(keep)
     # The whole point of the resequencing: the ten playable columns centred.
     if origin_x * 8 + 40 != 120:
         failures.append(f"el playfield quedo centrado en {origin_x * 8 + 40}px, "
                         "esperado 120 (el centro de la pantalla)")
-    seen = sorted(keep)
-    if len(set(seen)) != len(seen):
-        failures.append("el reflow repite alguna columna")
+    # ...and the two boxes either side of it exactly the same width, which is
+    # the other half of the point. A layout that centres the board but leaves
+    # six columns on one side and four on the other still reads as lopsided.
+    left_box = keep.index(0)
+    right_box = 30 - (left_box + len(board))
+    if left_box != right_box:
+        failures.append(f"los recuadros no son simetricos: {left_box} y {right_box}")
+    # The board's own columns may not be duplicated anywhere. The boxes are
+    # allowed to share source columns — both are cut from the same ten blank
+    # ones of the cartridge's score panel, and blank is blank.
+    board_cols = [c for c in keep if c < 14]
+    if len(set(board_cols)) != len(board_cols):
+        failures.append("el reflow repite alguna columna del tablero")
 
     # The attribute reader, against a byte worked out by hand: $1B is
     # 00 01 10 11 -> top-left 3, top-right 2, bottom-left 1, bottom-right 0
@@ -885,7 +1018,8 @@ def main() -> int:
             "kGameTiles", "TILES_GAME", convert_tiles(rom.chr_bank(0)), f"{src} [game]"),
         "tiles_dancers.h": emit_tiles_header(
             "kDancerTiles", "TILES_DANCERS", convert_tiles(rom.chr_bank(1)), f"{src} [dancers]"),
-        "screen_1p.h": emit_screen_header(tiles, palettes, keep_cols, src),
+        "screen_1p.h": emit_screen_header(tiles, palettes, keep_cols, src,
+                                           read_stats_icons(nametable, attributes)),
         "palettes_rom.h": emit_palette_header(palette_sets, piece_palettes, src),
     }
 
