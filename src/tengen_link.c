@@ -85,6 +85,19 @@ void tengen_lobby_start(TengenLobby *lobby, uint16_t seed, uint8_t start_level,
     lobby->echo = TENGEN_LOBBY_NONE;
 }
 
+void tengen_lobby_start_held(TengenLobby *lobby, uint16_t seed) {
+    tengen_lobby_start(lobby, seed, 0, 0);
+    lobby->hold = true;
+}
+
+void tengen_lobby_release(TengenLobby *lobby, uint16_t seed,
+                           uint8_t start_level, uint8_t music) {
+    lobby->seed = seed;
+    lobby->start_level = start_level;
+    lobby->music = music;
+    lobby->hold = false;
+}
+
 uint16_t tengen_lobby_word(const TengenLobby *lobby, bool master) {
     if (!master) return tagged((TengenLobbyTag)lobby->echo, 0);
     switch ((TengenLobbyTag)lobby->stage) {
@@ -119,6 +132,11 @@ void tengen_lobby_apply(TengenLobby *lobby, bool master, bool got,
          * this a handshake rather than a hope — so every stage costs two
          * transfers and a console that missed one cannot be skipped past. */
         if (tag_of(slave_word) == (TengenLobbyTag)lobby->stage) {
+            lobby->linked = true;
+            /* Held at HELLO until the player has chosen. The echo still comes
+             * back every transfer, so neither end is anywhere near its
+             * timeout; the handshake is simply parked. */
+            if (lobby->hold && lobby->stage == TENGEN_LOBBY_HELLO) return;
             if (lobby->stage == TENGEN_LOBBY_GO) lobby->ready = true;
             else lobby->stage++;
         }
@@ -152,6 +170,9 @@ void tengen_lobby_apply(TengenLobby *lobby, bool master, bool got,
         default:
             break;
     }
-    if (tag != TENGEN_LOBBY_NONE) lobby->echo = (uint8_t)tag;
+    if (tag != TENGEN_LOBBY_NONE) {
+        lobby->echo = (uint8_t)tag;
+        lobby->linked = true;
+    }
     lobby->stage = (uint8_t)tag;
 }

@@ -216,17 +216,33 @@ def main():
                 core.set_keys(*(keys[i] if keys else []))
                 core.run_frame()
 
-    # Both players walk the same menus: title -> GAME SELECT -> 2 PLAYER ->
-    # level select -> the link screen.
-    def tap(name):
-        both(4, [[KEYS[name]], [KEYS[name]]])
+    # THE CHOOSING COMES AFTER THE CONNECTING NOW. Both players walk to the
+    # cable together — title, GAME SELECT, 2 PLAYER — and there the handshake
+    # parks at its greeting: whichever console the cable made master goes on to
+    # the level screen, the other stays put with a dancing cossack. So only
+    # the master's START starts the match.
+    def tap(name, who=None):
+        keys = [[KEYS[name]] if who in (None, i) else [] for i in range(2)]
+        both(4, keys)
         both(6, [[], []])
 
     both(8)
     tap("START")     # title -> game select
     tap("DOWN")      # 1 PLAYER -> 2 PLAYER
-    tap("START")     # -> level select
-    tap("START")     # -> link screen
+    tap("START")     # -> the cable
+
+    # Long enough for the greeting to land and the master to reach the menu.
+    both(40)
+    if cable.transfers == 0:
+        failures.append("no hubo ni una transferencia mientras se buscaban")
+
+    # Only the master presses START; the slave must not be able to start it.
+    tap("START", who=1)
+    both(20)
+    if read_bytes(master, session_addr, game_size) != bytes(game_size):
+        failures.append("el esclavo pudo arrancar la partida el solo")
+
+    tap("START", who=0)
 
     # The handshake is five stages of two transfers; give it far more than
     # that and then check it did not just time out.

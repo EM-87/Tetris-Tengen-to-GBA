@@ -676,6 +676,61 @@ Two things came out of chasing it:
   anything the ROM knows about, the same shape as planting completed rows for
   the line-clear check. With it, 399 of 399 frames are identical.
 
+## On a cable, the choosing comes after the connecting
+
+Only one of two linked players should be picking the level and the tune, and
+neither console knows which one that is until the cable has told them — the
+master is whichever end the hardware says it is. So 2 PLAYER now goes straight
+to the lobby, and the level screen comes afterwards, on the master only.
+
+The handshake did not have to change to allow it, because it is stop-and-wait:
+`tengen_lobby_start_held` parks the master at `TENGEN_LOBBY_HELLO` and
+`tengen_lobby_release` lets it run on. While parked the slave keeps echoing
+HELLO, every transfer succeeds and `idle` never climbs, so parking costs
+nothing — `test_the_lobby_connects_first_and_the_master_chooses_after` holds
+for twice the give-up window and then completes anyway.
+
+Two things that are easy to get wrong and were:
+
+* **The level screen has to keep the cable turning.** A lobby that stops
+  transferring looks exactly like a lobby whose cable fell out, and the guest
+  would give up after ten seconds of the master reading a menu.
+* **The jump to the menu has to be one-way.** Testing "connected and not
+  ready" sent the master back to the level screen the frame after it chose, and
+  it ping-ponged there while the guest went off and started the match alone.
+  `hold` is the flag that makes it happen once.
+
+The guest gets one of the cartridge's own cossacks in the middle of the screen,
+working through the same pose table the level-up interlude uses. It has nothing
+to read — the level and the tune are the master's — and a dancer that keeps
+dancing is a better status light than a line of text: while he moves, the cable
+is alive.
+
+## Eight columns, and why the panels open at the screen's edge
+
+The piece statistics are NOT seven separable icons. They are one seven-tile
+picture, drawn interlocked across the tile boundaries — render `kStatsIcons`
+side by side and the tetrominoes plainly straddle their tiles — so they cannot
+be squeezed into six columns at any pitch, sprites or not. (The BAR tiles can:
+they use six pixels of their eight. The icons are the constraint.)
+
+A closed braid box is two tiles of rope on all four sides, so a ten-column box
+leaves six, and six forces the histogram into two ranks. Opening the panel at
+the screen's edge — where the screen already ends, and where the cartridge's own
+HUD columns run into its screen border — leaves EIGHT, which is the seven-tile
+strip in one row with a column to spare, and room above it for NEXT.
+
+So the rope now runs along the top, the bottom and the side facing the board,
+with its corners on the board side only, because that is the only side that has
+one. The playfield's own frame is untouched: the panel's inner run is exactly
+where the cartridge's vertical run always was.
+
+One consequence worth writing down, because it cost a debugging session: the
+left panel's content is indented one column off the screen edge, and clearing a
+row with the panel's FULL interior width from that indented start runs one
+column past the interior and erases the rope itself, a row at a time. `BOX_L_W`
+is the interior minus that indent.
+
 ## Two players over a link cable
 
 The cartridge's 2P is a RACE: two independent 10-wide playfields, and nothing

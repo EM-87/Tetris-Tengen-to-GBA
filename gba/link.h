@@ -119,6 +119,16 @@ void link_tick(void);
 void link_lobby_start(TengenLobby *lobby, uint16_t seed, uint8_t start_level,
                        uint8_t music);
 
+/* The same, but PARKED at the greeting until link_lobby_release: the two
+ * consoles find each other before anybody picks a level or a tune, because on
+ * a cable only one of them should be picking and neither knows which until the
+ * cable says so. See tengen_lobby_start_held. */
+void link_lobby_start_held(TengenLobby *lobby, uint16_t seed);
+
+/* The master's choice, once it has one; lets the handshake run on. */
+void link_lobby_release(TengenLobby *lobby, uint16_t seed,
+                         uint8_t start_level, uint8_t music);
+
 /* One frame of it. Call once per frame until `ready` or `failed`. */
 void link_lobby_step(TengenLobby *lobby);
 

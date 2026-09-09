@@ -117,7 +117,11 @@ running ROM; only the side panels need reflowing).
    recording made by the reference interpreter in `tools/nes_cpu.py`, frame
    by frame and byte for byte, and checks the whole thing still fits in a
    GBA frame.
-13. ~~2P~~ — done, over a LINK CABLE, which is what the cartridge's 2P wants:
+13. ~~2P~~ — done, over a LINK CABLE, and the CHOOSING COMES AFTER THE
+   CONNECTING: 2 PLAYER goes straight to the lobby, the master reaches the
+   level screen from there and the guest waits with a dancing cossack. The
+   handshake parks at its greeting to allow it (`tengen_lobby_start_held` /
+   `_release`), which is free because it is stop-and-wait. which is what the cartridge's 2P wants:
    it is a race on two independent boards with nothing crossing between them,
    so the port runs lockstep (both consoles simulate both players from one
    seed and exchange only buttons). The rules and the handshake are in

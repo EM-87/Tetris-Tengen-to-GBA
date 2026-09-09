@@ -841,6 +841,44 @@ static void lobby_transfer(TengenLobby *master, TengenLobby *slave,
     tengen_lobby_apply(slave, false, carries, mw, sw);
 }
 
+/* THE MASTER PICKS AFTER CONNECTING, NOT BEFORE.
+ *
+ * On a cable only one of the two players should be choosing the level and the
+ * tune, and neither console knows which one that is until the cable has told
+ * them. So the lobby connects first and parks: the master keeps saying HELLO
+ * until tengen_lobby_release, and only then does the handshake run on.
+ *
+ * The parking has to be free. The handshake is stop-and-wait, so the slave
+ * keeps echoing HELLO, every transfer succeeds, and neither end's give-up
+ * counter moves — which this checks by holding for longer than the timeout
+ * and then completing anyway. */
+static void test_the_lobby_connects_first_and_the_master_chooses_after(void) {
+    TengenLobby master, slave;
+    tengen_lobby_start_held(&master, 0x0000);
+    tengen_lobby_start(&slave, 0x1111, 1, 0);
+
+    for (int i = 0; i < 4; i++) lobby_transfer(&master, &slave, true);
+    CHECK(master.linked);   /* the master should know the other end answered */
+    CHECK(slave.linked);   /* and the slave should know it heard one */
+    CHECK(!master.ready);   /* but nobody starts until the master has chosen */
+    CHECK(!slave.ready);   /* the slave least of all */
+
+    /* Held for twice the give-up window, and neither end gives up. */
+    for (int i = 0; i < TENGEN_LOBBY_TIMEOUT * 2; i++)
+        lobby_transfer(&master, &slave, true);
+    CHECK(!master.failed && !slave.failed);   /* parking must not look like silence */
+    CHECK(!master.ready && !slave.ready);   /* and must not start the match either */
+
+    tengen_lobby_release(&master, 0xBEEF, 7, 2);
+    for (int i = 0; i < 64 && !(master.ready && slave.ready); i++)
+        lobby_transfer(&master, &slave, true);
+
+    CHECK(master.ready && slave.ready);   /* released, the handshake should finish */
+    CHECK(slave.seed == 0xBEEF);   /* the slave takes the master's seed */
+    CHECK(slave.start_level == 7);   /* ...and its level */
+    CHECK(slave.music == 2);   /* ...and its tune */
+}
+
 static void test_the_lobby_agrees_on_a_game_and_both_leave_together(void) {
     TengenLobby master, slave;
     /* The two consoles arrive with different ideas of everything — which is
@@ -1374,6 +1412,7 @@ int main(void) {
     test_random_play_never_tops_out_on_a_nearly_empty_board();
     test_two_linked_machines_stay_identical();
     test_a_lost_transfer_stops_the_link_rather_than_drifting();
+    test_the_lobby_connects_first_and_the_master_chooses_after();
     test_the_lobby_agrees_on_a_game_and_both_leave_together();
     test_the_lobby_survives_transfers_that_do_not_arrive();
     test_a_lobby_with_nothing_on_the_other_end_gives_up();

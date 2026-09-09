@@ -152,53 +152,49 @@ DANCER_SOLO_COUNT = 6
 # and what has to survive is the cathedral WHOLE — its spire, its domes and
 # its bodies, at 1:1 — inside a frame that is closed on all four sides.
 #
-# THE FRAME IS TWO FRAMES, and only one of them fits. Outside there is a band
-# of gold ingots with red and green jewels set into it, two tiles thick;
+# THE FRAME IS TWO FRAMES, and the screen is not square. Outside there is a
+# band of gold ingots with red and green jewels set into it, two tiles thick;
 # inside that, a blue braid, another two tiles thick. Eight tiles of frame on
-# every side is more than a 30x20 screen can carry alongside the picture, so
-# the port keeps the OUTER one: the ingots and jewels, whole, all the way
-# round. An earlier pass kept the braid instead and dropped the ingots
-# entirely, and then had to buy its rows from the braid as well, which is why
-# the frame came out sliced along the top and bottom edges.
+# every side is more than a 30x20 screen can carry — but it is not square, and
+# that is the whole trick: SIDEWAYS there is room for both, VERTICALLY only for
+# the braid. So the picture is framed all the way round by the braid, the way
+# the cartridge frames it, and the two side bands carry the ingots and jewels
+# as well.
+#
+# Two earlier passes each kept one band and threw the other away, and both were
+# wrong the same way: the braid alone left the frame with no jewels at all, the
+# ingots alone left the picture without the frame it actually sits in.
 #
 # BOTH BANDS ARE A TWO-TILE PATTERN — a jewel (tiles 00 01 / 04 05) then an
 # ingot (08 09 / 11 12) — so every row and column kept below is kept in its
-# PAIR. Take one row of a jewel and you get half a jewel, which is the same
-# mistake in a different direction.
+# PAIR. Take one row of a jewel and you get half a jewel.
 #
-# COLUMNS: the ingots at 0-1 and 30-31, and the twenty-four between the two
-# braids. Both braid pairs go — 2-3 and 28-29 — because keeping one of them
-# leaves a bare blue strip running down one side of the picture with nothing
-# matching it on the other, which is what it looked like when only the left
-# pair was dropped. That makes the composition 28 columns, so it sits one
-# column in from each edge of the GBA's thirty, the way it did before.
+# COLUMNS: ingots 0-1, braid 2-3, twenty-two of the picture, braid 28-29,
+# ingots 30-31. The two the GBA lacks come off the picture's left margin, which
+# is blank once the subtitle and the first copyright line are gone.
 #
-# ROWS. Twenty of thirty, four of them frame, sixteen for the picture. The
-# picture wants TENGEN (2) + the TETRIS logo (4) + the cathedral (12) = 18, so
-# two rows have to come out of it. What goes, in the order the cartridge's
-# owner allowed:
+# ROWS: the braid at 2-3 and 26-27, and sixteen for the picture. It wants
+# TENGEN (2) + the TETRIS logo (4) + the cathedral (12) = 18, so two come out
+# of it. What goes, in the order the cartridge's owner allowed:
 #
-#   rows 2-3, 26-27   the blue braid, top and bottom, with its side columns.
+#   rows 0-1, 28-29   the ingot band top and bottom. No room, and the sides
+#                     carry it.
 #   rows 6-7          "PRESENTS" and "THE SOVIET MIND GAME".
-#   rows 24-25        the two copyright lines. They are not lost: the credit
-#                     moves to GAME SELECT, where it can also say who wrote
-#                     the game.
+#   rows 24-25        the two copyright lines. Not lost: the credit moved to
+#                     GAME SELECT.
 #   rows 12-13        the top two rows of the cathedral's thin central spire —
 #                     one tile wide, and the only part of the picture that can
 #                     go without leaving a cut edge. Row 14 stays, so the tip
-#                     is still there and now sits right up under the TETRIS
-#                     logo, which is where it was asked to go.
+#                     is still there, right under the TETRIS logo.
 TITLE_COL_BLOCKS = (
-    (0, 2),     # the ingots and jewels, left
-    (4, 28),    # the picture
-    (30, 32),   # the ingots and jewels, right
+    (0, 4),     # ingots and jewels, then the braid
+    (6, 32),    # the picture, the braid again, and the ingots
 )
 TITLE_ROW_BLOCKS = (
-    (0, 2),     # the ingot band, top
-    (4, 6),     # TENGEN
+    (2, 6),     # the braid's top band, then TENGEN
     (8, 12),    # the TETRIS logo
     (14, 24),   # the spire's tip, and the whole cathedral under it
-    (28, 30),   # the ingot band, bottom
+    (26, 28),   # the braid's bottom band
 )
 
 # The menu screen the ROM uses for its selection screens: a decorative frame

@@ -195,6 +195,16 @@ void link_lobby_start(TengenLobby *lobby, uint16_t seed, uint8_t start_level,
     lobby_send(lobby);
 }
 
+void link_lobby_start_held(TengenLobby *lobby, uint16_t seed) {
+    tengen_lobby_start_held(lobby, seed);
+    lobby_send(lobby);
+}
+
+void link_lobby_release(TengenLobby *lobby, uint16_t seed,
+                         uint8_t start_level, uint8_t music) {
+    tengen_lobby_release(lobby, seed, start_level, music);
+}
+
 void link_lobby_step(TengenLobby *lobby) {
     if (lobby->ready || lobby->failed) return;
 

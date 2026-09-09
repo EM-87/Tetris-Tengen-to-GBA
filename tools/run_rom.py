@@ -938,15 +938,15 @@ def skin_check(rom_path):
     core, screen = load(rom_path)           # `screen` must stay alive; see load()
     failures = []
 
-    # WHAT TELLS THE TWO SCREENS APART. Not whole frames: the release title has
-    # fireworks on it, so two frames of it are rarely identical and comparing
-    # pixels would call an unchanged screen "changed" every time. The
-    # structural difference is the edges — the prototype's frame is thirty
-    # columns and reaches both, the release's composition is twenty-eight and
-    # leaves a black column either side — and the edges do not animate.
-    def edge_lit(img):
-        return sum(1 for y in range(SCREEN_H)
-                   if img[y][0] != (0, 0, 0) or img[y][SCREEN_W - 1] != (0, 0, 0))
+    # WHAT TELLS THE TWO SCREENS APART: the TILEMAP, not the picture. The
+    # release title has fireworks on it, so two frames of it are rarely
+    # identical and comparing pixels would call an unchanged screen "changed"
+    # every time; and both frames now reach the screen's edges, so counting lit
+    # edge pixels cannot tell them apart either. Their frames are drawn from
+    # different tiles, and tiles do not animate.
+    def frame_tiles():
+        return [core.memory.u16[SCREENBLOCK_ADDR + (r * 32 + c) * 2]
+                for r in range(2, 18) for c in (0, 1, SCREEN_TW_TILES - 1)]
 
     def tap(key, settle=12):
         core.set_keys(key)
@@ -955,21 +955,19 @@ def skin_check(rom_path):
         run(core, settle)
 
     run(core, 40)
-    if edge_lit(pixels(screen)) > 8:
-        failures.append("la pantalla del release ya llega a los bordes")
+    release = frame_tiles()
 
     tap(KEYS["L"])
-    lit = edge_lit(pixels(screen))
-    if lit < SCREEN_H // 2:
+    proto = frame_tiles()
+    if proto == release:
         print("  esta ROM se construyo sin prototipo: L y R no tienen skin que poner")
         tap(KEYS["R"])
-        if edge_lit(pixels(screen)) >= SCREEN_H // 2:
+        if frame_tiles() != release:
             print("FALLA: R cambio algo que L no habia cambiado")
             return 1
         print("OK: sin skin de prototipo, y el titulo no se rompe por pulsar L o R.")
         return 0
-    print(f"  la skin del prototipo llena las 30 columnas "
-          f"({lit} filas tocan ambos bordes)")
+    print("  L pone el marco del prototipo, que es de otros tiles")
 
     # The release's fireworks and cathedral overlay belong to the release
     # picture; on the prototype's they must be gone.
@@ -978,11 +976,8 @@ def skin_check(rom_path):
     else:
         print("  los sprites del release (catedral y fuegos) se retiran con ella")
 
-    # Comparing whole frames would be wrong here: the release screen has
-    # fireworks on it, so two frames of it are rarely identical. The edges are
-    # the structural difference and they do not animate.
     tap(KEYS["R"])
-    if edge_lit(pixels(screen)) > 8:
+    if frame_tiles() != release:
         failures.append("R no devuelve la pantalla del release")
     else:
         print("  R vuelve al titulo del release")
@@ -991,7 +986,7 @@ def skin_check(rom_path):
     tap(KEYS["L"])
     for name in ("START", "B"):
         core.set_keys(KEYS[name]); run(core, 4); core.set_keys(); run(core, 10)
-    if edge_lit(pixels(screen)) < SCREEN_H // 2:
+    if frame_tiles() != proto:
         failures.append("la skin se pierde al salir del titulo y volver")
     else:
         print("  la skin se mantiene al salir del titulo y volver")
@@ -1104,18 +1099,17 @@ def leaving_title_check(rom_path):
         else:
             print(f"  mover el cursor toca la cancion: silencio y despues ${moved[1]:02X}")
 
-        # AND IT HAS TO COME BACK OUT. The preview used to follow the player
-        # all the way to the title, because each transition remembered to
-        # start music and none remembered to put the old one back. The title
-        # theme belongs to the title AND to game select, so backing out of the
-        # level screen has to return to it.
+        # AND IT HAS TO STOP COMING BACK OUT WITH YOU. The preview used to
+        # follow the player all the way to the title. Every front-end screen
+        # names its tune now and GAME SELECT's name is SILENCE, so backing out
+        # of the level screen is quiet — and the cathedral's music and its
+        # fireworks stop the moment you leave it.
         core.set_keys(KEYS["B"]); run(core, 4); core.set_keys(); run(core, 14)
-        back = last_two()
-        if back[0] != 0x08 or back[1] != 0x09:
+        if last_music() != 0x08:
             failures.append(
-                f"al volver a GAME SELECT no vuelve el tema del titulo: {back}")
+                f"al volver a GAME SELECT no se calla (${last_music():02X})")
         else:
-            print("  al volver a GAME SELECT vuelve el tema del titulo")
+            print("  al volver a GAME SELECT se hace el silencio")
 
         core.set_keys(KEYS["B"]); run(core, 4); core.set_keys(); run(core, 14)
         if last_music() != 0x09:
@@ -1157,6 +1151,9 @@ def leaving_title_check(rom_path):
     else:
         print("  SELECT mueve el cursor en GAME SELECT")
 
+    # ...and back onto 1 PLAYER, because SELECT just moved it and 2 PLAYER now
+    # goes to the cable instead of the level screen.
+    tap(KEYS["SELECT"])
     tap(KEYS["A"])
     if "LEVEL SELECT" not in tilemap_text(core, 8):
         failures.append("A no confirma en GAME SELECT")
@@ -1316,8 +1313,11 @@ def link_check(rom_path):
         failures.append("falta el credito a Pajitnov en GAME SELECT")
 
     tap("DOWN")                       # 1 PLAYER -> 2 PLAYER
-    tap("START")                      # game select -> level select
-    tap("START")                      # level select -> link screen
+    # 2 PLAYER goes STRAIGHT to the cable now: on a link game only one of the
+    # two players picks the level and the tune, and neither console knows which
+    # one that is until the cable has said so, so the choosing happens after
+    # the connecting and only on the master.
+    tap("START")                      # game select -> the cable
 
     if "LINK CABLE" not in tilemap_text(core, 8):
         failures.append("2 PLAYER no lleva a la pantalla de cable link")
@@ -1339,7 +1339,7 @@ def link_check(rom_path):
         print(f"  sin cable: '{msg}' tras {LINK_TIMEOUT_FRAMES} frames")
 
     tap("B")                          # back out of the link screen
-    if "LEVEL SELECT" not in tilemap_text(core, 8):
+    if "GAME SELECT" not in tilemap_text(core, 8):
         failures.append("B no vuelve del cable link al menu")
 
     for f in failures:

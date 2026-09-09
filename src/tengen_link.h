@@ -126,12 +126,30 @@ typedef struct {
     uint8_t echo;        /* slave: the tag it owes back */
     bool saw_go;         /* slave: GO has arrived once already */
     uint16_t idle;       /* consecutive failed transfers */
+    bool linked;         /* the other end has answered at least once */
+    bool hold;           /* master: stay at HELLO until the player has chosen */
 } TengenLobby;
 
 /* Starts a lobby. The master's seed/level/music are the ones that count; on
  * the slave they are overwritten by what arrives. */
 void tengen_lobby_start(TengenLobby *lobby, uint16_t seed, uint8_t start_level,
                          uint8_t music);
+
+/* Starts a lobby that CONNECTS AND THEN WAITS. The master keeps saying HELLO
+ * until tengen_lobby_release, so the two consoles find each other before
+ * anybody has chosen a level or a tune — which is the point: on a cable, only
+ * one of the two players should be picking, and neither knows which one that
+ * is until the cable tells them.
+ *
+ * Holding costs nothing, because the handshake is stop-and-wait: the slave
+ * keeps echoing HELLO, every transfer succeeds, and `idle` never climbs
+ * towards the timeout. */
+void tengen_lobby_start_held(TengenLobby *lobby, uint16_t seed);
+
+/* The master's choice, once it has one. Fills in the config and lets the
+ * handshake run on to GO. Does nothing on a lobby that was not held. */
+void tengen_lobby_release(TengenLobby *lobby, uint16_t seed,
+                           uint8_t start_level, uint8_t music);
 
 /* What this machine should put on the wire next. */
 uint16_t tengen_lobby_word(const TengenLobby *lobby, bool master);
