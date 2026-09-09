@@ -134,6 +134,54 @@ preserve bug-for-bug.
 4. `computerMove`, the AI behind VERSUS COMPUTER and WITH COMPUTER — the one
    two-player mode that needs no second console.
 
+## The walls do not stop at the top of the visible field
+
+The ROM's playfield is one flat array of 8-byte rows starting at row 0, and
+`L89C3` (`main.asm.txt:1481-1503`) writes the `$F0`/`$0F` wall nibbles into
+every row it builds — the rows a piece SPAWNS in included. Only coop leaves
+them clear (`bit playMode` there), which is what widens its field to twelve.
+
+The port stores only the twenty visible rows, so the spawn rows have to assert
+the walls themselves. Treating them as open space instead was a real bug and a
+nasty one: a piece could be walked sideways into the wall column while it was
+still above the field, and the first row it descended into then blocked it —
+so it came to rest at y=5, one short of `TENGEN_TOPOUT_ROW`, which ends the
+game. Four pieces into an empty board, GAME OVER, with nothing on screen to
+explain it.
+
+Two tests guard it: `test_the_walls_reach_above_the_visible_field` for the
+rule, and `test_random_play_never_tops_out_on_a_nearly_empty_board`, which
+plays 300 random games and fails if any ends with fewer than 24 cells down.
+The second is the one that would have caught it: the rule it tests is not a
+ROM detail, it is "a game does not end for no reason".
+
+## The GAME OVER plaque, and the frame the HUD borrows from it
+
+`gameOverTiles` ($C800, `main.asm.txt:8064-8067`) is six columns by four rows,
+blitted at nametable (4,12) in 1P — the middle of the playfield — by
+`gameOver1pColsRows1` (`$86,$04`) and `gameOver1pPPUAddr1` ($2184), in
+background palette 3:
+
+    29 2A 2A 2A 2A 2B        a box top
+    2C 47 41 4D 45 2F        | G  A  M  E |
+    2C 4F 56 45 52 2F        | O  V  E  R |
+    3A 3B 3B 3B 3B 3C        a box bottom
+
+so the cartridge's own thin frame is in there, and the port's HUD panels are
+drawn with it. What they had before was `$75`/`$76` with **`$79` as a
+right-hand cap, and `$79` is not a cap** — it is an unrelated block, which is
+what the grey stubs beside SCORE / LINES / LEVEL were. The header strip's real
+rules run the width of the NES screen and are junctions of a grid the port has
+no room for.
+
+## The menu loses two columns, and not from the middle
+
+The menu's horizontal TETRIS logo is at rows 10-12, columns 4-27: six letters
+of exactly four columns each, with no empty middle to borrow from. Taking the
+two spare columns from there cut the third letter's last column and the
+fourth's first, mashing the T and the R together. They come out of the blank
+padding at columns 2 and 29 instead.
+
 ## The 1P screen, and what the port does with it
 
 The cartridge's 32 columns are three things side by side, and reading them

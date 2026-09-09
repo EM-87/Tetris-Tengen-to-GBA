@@ -298,6 +298,18 @@ static uint8_t read_buttons(void) {
  * transfer (see link.h). Nothing else may go in here. */
 uint8_t link_read_buttons(void) { return read_buttons(); }
 
+/* L and R have no NES equivalent, so the game proper never sees them and
+ * they are free for the port's own switches. This reports the two together,
+ * as a fresh press. */
+static bool shoulder_chord(void) {
+    static bool was_held;
+    uint16_t keys = (uint16_t)(~REG_KEYINPUT & KEY_MASK);
+    bool held = (keys & KEY_L) && (keys & KEY_R);
+    bool pressed = held && !was_held;
+    was_held = held;
+    return pressed;
+}
+
 static void upload_tiles(void) {
     vu16 *dst = MEM_CHARBLOCK(CHARBLOCK);
     const uint8_t *src = kGameTiles;
@@ -471,12 +483,42 @@ static void draw_number(int tx, int ty, uint32_t value, int digits, int bank) {
     }
 }
 
-/* The horizontal rules the NES draws under each label, built from the same
- * cap-and-middle tiles it uses. */
-static void draw_rule(int tx, int ty, int width, int bank) {
-    set_map_tile(tx, ty, WITH_BANK(T_RULE_LEFT, bank));
-    for (int i = 1; i < width - 1; i++) set_map_tile(tx + i, ty, WITH_BANK(T_RULE_MID, bank));
-    set_map_tile(tx + width - 1, ty, WITH_BANK(T_RULE_RIGHT, bank));
+/* A panel, in the cartridge's own thin frame.
+ *
+ * The tiles are the ones the GAME OVER plaque is built from — corners, a top
+ * and bottom edge, and two sides — so nothing here is drawn by hand. What was
+ * here before was a "rule" made of $75/$76 with $79 as a right-hand cap, and
+ * $79 IS NOT A CAP: it is an unrelated block, which is why every counter had
+ * a grey stub hanging off it. The header strip's real rules on the cartridge
+ * run the width of the screen and are junctions of a grid this port has no
+ * room for; boxes are the honest substitute, and they are made of the ROM's
+ * own frame. */
+static void draw_box(int tx, int ty, int w, int h, int bank) {
+    for (int x = 1; x < w - 1; x++) {
+        set_map_tile(tx + x, ty, WITH_BANK(T_BOX_TOP, bank));
+        set_map_tile(tx + x, ty + h - 1, WITH_BANK(T_BOX_BOTTOM, bank));
+    }
+    for (int y = 1; y < h - 1; y++) {
+        set_map_tile(tx, ty + y, WITH_BANK(T_BOX_L, bank));
+        set_map_tile(tx + w - 1, ty + y, WITH_BANK(T_BOX_R, bank));
+    }
+    set_map_tile(tx, ty, WITH_BANK(T_BOX_TL, bank));
+    set_map_tile(tx + w - 1, ty, WITH_BANK(T_BOX_TR, bank));
+    set_map_tile(tx, ty + h - 1, WITH_BANK(T_BOX_BL, bank));
+    set_map_tile(tx + w - 1, ty + h - 1, WITH_BANK(T_BOX_BR, bank));
+}
+
+/* gameOverTiles, blitted where the cartridge blits it: nametable (4,12),
+ * which is the middle of the playfield (gameOver1pPPUAddr1 = $2184,
+ * gameOver1pColsRows1 = 6 columns by 4 rows, gameOverAttrs = palette 3). */
+#define GAMEOVER_TX (FIELD_TX + 2)
+#define GAMEOVER_TY 4
+
+static void draw_game_over(void) {
+    for (int y = 0; y < SCREEN_1P_GAMEOVER_H; y++)
+        for (int x = 0; x < SCREEN_1P_GAMEOVER_W; x++)
+            set_map_tile(GAMEOVER_TX + x, GAMEOVER_TY + y,
+                          WITH_BANK(kGameOverTiles[y][x], BANK_PAUSE));
 }
 
 static void clear_region(int tx, int ty, int w, int h) {
@@ -512,6 +554,29 @@ static void draw_next_piece(int tx, int ty) {
     }
 }
 
+/* WHAT THE RIGHT-HAND BOX SHOWS.
+ *
+ * The cartridge's play screen has a vertical TETRIS banner between its two
+ * halves, and thirty columns cannot hold that AND two boxes wide enough to be
+ * useful. So it is a choice the player makes: L+R together — the two buttons
+ * a NES pad never had and this game therefore never uses — swaps the right
+ * box between the piece histogram and the banner. */
+static bool g_show_banner;
+
+/* The banner's own tiles and palettes, extracted on their own because the
+ * reflow no longer carries NES columns 14-17. Eighteen rows, which is what
+ * the right-hand box has under NEXT — the one place the arithmetic comes out
+ * even. */
+#define BANNER_TX (BOX_R_TX + 2)
+#define BANNER_TY 1
+
+static void draw_banner(void) {
+    for (int y = 0; y < SCREEN_1P_BANNER_H; y++)
+        for (int x = 0; x < SCREEN_1P_BANNER_W; x++)
+            set_map_tile(BANNER_TX + x, BANNER_TY + y,
+                          WITH_BANK(kBannerTiles[y][x], kBannerBanks[y][x]));
+}
+
 /* ----------------------------------------------------------------------- *
  * The piece histogram
  *
@@ -524,8 +589,6 @@ static void draw_next_piece(int tx, int ty) {
  *   row       = base - (count >> 3)    -> every eighth piece moves up a row
  *
  * so after N pieces the bar is N/8 solid tiles with an N%8 partial on top.
- * Drawing numbers here instead — which is what this port did — throws away
- * the one part of the score panel a player actually reads at a glance.
  *
  * The ROM stops at 144 (`cmp #$90 / bcs`), which is exactly the 18 rows its
  * panel is tall. This box is shorter, so the same rule caps lower; the count
@@ -533,7 +596,7 @@ static void draw_next_piece(int tx, int ty) {
  * ----------------------------------------------------------------------- */
 #define STATS_TX (BOX_R_TX + 1)          /* seven columns inside an eight-wide box */
 #define STATS_ICON_TY 17                 /* the icons sit on the floor of the box */
-#define STATS_TOP_TY 7                   /* ...and the bars may reach this row */
+#define STATS_TOP_TY 8                   /* ...and the bars may reach this row */
 #define STATS_BAR_FULL (SCREEN_1P_STATS_BAR_TILE + 7)
 #define STATS_MAX_ROWS (STATS_ICON_TY - STATS_TOP_TY)
 #define BANK_STATS SCREEN_1P_STATS_BAR_BANK
@@ -562,68 +625,68 @@ static void draw_stats(const TengenPlayerState *p) {
     }
 }
 
+/* One counter in its own box: label on the first row inside, value on the
+ * second. Four rows tall, the full width of the panel. */
+static void draw_counter(int ty, const uint8_t *label, int label_len,
+                          uint32_t value, int digits, int value_indent) {
+    draw_box(BOX_L_TX, ty, BOX_W, 4, BANK_VALUE);
+    draw_tiles(BOX_L_TX + 1, ty + 1, label, label_len, BANK_LABEL);
+    draw_number(BOX_L_TX + 1 + value_indent, ty + 2, value, digits, BANK_VALUE);
+}
+
 static void draw_panel(void) {
     const TengenPlayerState *p = &g_session.game.player[g_view];
     if (p->score > g_high_score) g_high_score = p->score;
 
-    /* Each box is closed top and bottom with the ROM's own rule tiles, so it
-     * reads as a panel rather than as text floating against the screen edge.
-     * The braid on the inner side and these two rules are its frame; the
-     * outer side is the edge of the screen, which is the one boundary the
-     * thirty columns cannot afford to draw. */
-    draw_rule(BOX_L_TX, 0, BOX_W, BANK_VALUE);
-    draw_rule(BOX_L_TX, 19, BOX_W, BANK_VALUE);
-    draw_rule(BOX_R_TX, 0, BOX_W, BANK_VALUE);
-    draw_rule(BOX_R_TX, 19, BOX_W, BANK_VALUE);
-
-    /* LEFT BOX: the counters, in the cartridge's own multi-tile lettering,
-     * each under a rule the way the ROM's header strip has them. */
-    draw_tiles(BOX_L_TX + 1, 1, kLabelScore, 6, BANK_LABEL);
-    draw_number(BOX_L_TX + 1, 2, p->score, 6, BANK_VALUE);
-    draw_rule(BOX_L_TX, 3, BOX_W, BANK_VALUE);
-
-    draw_tiles(BOX_L_TX + 1, 4, kLabelLines, 6, BANK_LABEL);
-    draw_number(BOX_L_TX + 2, 5, p->lines, 4, BANK_VALUE);
-    draw_rule(BOX_L_TX, 6, BOX_W, BANK_VALUE);
-
-    draw_tiles(BOX_L_TX + 1, 7, kLabelLevel, 6, BANK_LABEL);
-    draw_number(BOX_L_TX + 3, 8, p->level, 2, BANK_VALUE);
-    draw_rule(BOX_L_TX, 9, BOX_W, BANK_VALUE);
+    /* LEFT BOX: one framed counter each, in the cartridge's own multi-tile
+     * lettering and its own frame. */
+    draw_counter(0, kLabelScore, 6, p->score, 6, 0);
+    draw_counter(4, kLabelLines, 6, p->lines, 4, 1);
+    draw_counter(8, kLabelLevel, 6, p->level, 2, 2);
 
     if (g_session.game.two_player) {
-        /* A race wants the other board's numbers where the histogram would
-         * be — which the ROM does not keep in 2P anyway, so nothing is lost. */
+        /* A race wants the other board's numbers where the high score would
+         * be. The ROM keeps no piece histogram in 2P either, so nothing of
+         * the cartridge's is being displaced. */
         const TengenPlayerState *o = &g_session.game.player[g_view ^ 1];
-        draw_text(BOX_L_TX + 1, 11, "RIVAL", BANK_LABEL);
-        draw_number(BOX_L_TX + 1, 12, o->score, 6, BANK_VALUE);
-        draw_text(BOX_L_TX + 1, 14, "LN", BANK_LABEL);
-        draw_number(BOX_L_TX + 3, 14, o->lines, 4, BANK_VALUE);
-        draw_text(BOX_L_TX + 1, 15, "LV", BANK_LABEL);
-        draw_number(BOX_L_TX + 4, 15, o->level, 2, BANK_VALUE);
-        if (!o->game_active) draw_text(BOX_L_TX + 2, 17, "OUT", BANK_LABEL);
-        else clear_region(BOX_L_TX + 2, 17, 4, 1);
-
+        draw_box(BOX_L_TX, 12, BOX_W, 8, BANK_VALUE);
+        draw_text(BOX_L_TX + 2, 13, "RIVAL", BANK_LABEL);
+        draw_number(BOX_L_TX + 1, 14, o->score, 6, BANK_VALUE);
+        draw_text(BOX_L_TX + 1, 16, "LN", BANK_LABEL);
+        draw_number(BOX_L_TX + 3, 16, o->lines, 4, BANK_VALUE);
+        draw_text(BOX_L_TX + 1, 17, "LV", BANK_LABEL);
+        draw_number(BOX_L_TX + 4, 17, o->level, 2, BANK_VALUE);
+        if (!o->game_active) draw_text(BOX_L_TX + 2, 18, "OUT", BANK_LABEL);
+        else clear_region(BOX_L_TX + 2, 18, 4, 1);
     } else {
         /* The cartridge's own 1P panel carries a HIGH SCORE beside the score
          * — "HIGH" and "SCORE" in plain ASCII at nametable row 2, and
          * highScoreHundredThousands is the seventh entry of
-         * statsDataAddresses (main.asm.txt:4100-4107). It is kept for the
-         * session rather than saved: this cartridge has no battery, and the
-         * ROM's own high score does not survive a power cycle either. */
-        draw_text(BOX_L_TX + 1, 11, "HIGH", BANK_LABEL);
-        draw_text(BOX_L_TX + 1, 12, "SCORE", BANK_LABEL);
-        draw_number(BOX_L_TX + 1, 13, g_high_score, 6, BANK_VALUE);
+         * statsDataAddresses (main.asm.txt:4100-4107). Kept for the session
+         * rather than saved: this cartridge has no battery either. */
+        draw_box(BOX_L_TX, 12, BOX_W, 5, BANK_VALUE);
+        draw_text(BOX_L_TX + 2, 13, "HIGH", BANK_LABEL);
+        draw_number(BOX_L_TX + 1, 14, g_high_score, 6, BANK_VALUE);
+        clear_region(BOX_L_TX, 17, BOX_W, 3);
     }
 
-    if (!p->game_active) draw_text(BOX_L_TX + 2, 18, "OVER", BANK_LABEL);
-    else clear_region(BOX_L_TX + 2, 18, 4, 1);
+    /* RIGHT BOX: the next piece and the histogram, or the banner instead. */
+    if (!g_show_banner) {
+        draw_box(BOX_R_TX, 0, BOX_W, 6, BANK_VALUE);
+        draw_tiles(BOX_R_TX + 2, 1, kLabelNext, 4, BANK_LABEL);
+        draw_next_piece(BOX_R_TX + 2, 2);
+    }
 
-    /* RIGHT BOX: the next piece, which is the one thing a player looks at
-     * while a piece is falling, and under it the histogram. */
-    draw_tiles(BOX_R_TX + 2, 1, kLabelNext, 4, BANK_LABEL);
-    draw_next_piece(BOX_R_TX + 2, 3);
-    draw_rule(BOX_R_TX, 6, BOX_W, BANK_VALUE);
-    if (!g_session.game.two_player) draw_stats(p);
+    if (g_show_banner) {
+        /* The banner takes the whole column, NEXT included — it is 18 rows and
+         * the screen is 20, which is exactly how the cartridge has it. */
+        clear_region(BOX_R_TX, 0, BOX_W, SCREEN_TH);
+        draw_banner();
+    } else {
+        draw_box(BOX_R_TX, 6, BOX_W, 14, BANK_VALUE);
+        if (!g_session.game.two_player) draw_stats(p);
+        else clear_region(BOX_R_TX + 1, 7, BOX_W - 2, 12);
+    }
 }
 
 static void draw_field(void) {
@@ -736,11 +799,16 @@ static void clear_screen(void) {
 /* The cartridge's own title art, whole: the level selector has its own
  * screen after this one, the way the ROM's menus work. */
 static void draw_title(void) {
+    /* Centred: the composition is 28 columns wide (see TITLE_KEEP_COLS —
+     * the brick border's jewels are a two-column motif and half of one is
+     * worse than none), so it sits one column in from each edge. */
+    const int pad = (SCREEN_TW - SCREEN_TITLE_W) / 2;
     for (int ty = 0; ty < SCREEN_TITLE_H_TILES; ty++) {
         for (int tx = 0; tx < SCREEN_TITLE_W; tx++) {
             int i = ty * SCREEN_TITLE_W + tx;
             uint16_t tile = TITLE_TILE_BASE + kScreenTitleTiles[i];
-            set_map_tile(tx, ty, WITH_BANK(tile, PAL_TITLE_BASE + kScreenTitlePalettes[i]));
+            set_map_tile(pad + tx, ty,
+                          WITH_BANK(tile, PAL_TITLE_BASE + kScreenTitlePalettes[i]));
         }
     }
 }
@@ -771,7 +839,14 @@ static void draw_game_select(uint8_t choice) {
     for (int i = 0; i < GAME_COUNT; i++)
         draw_text(11, 11 + i * 2, kGameNames[i],
                    i == choice ? BANK_HILITE : PAL_MENU_BASE + 3);
-    draw_text(6, 17, "2 PLAYER NEEDS A CABLE", PAL_MENU_BASE + 3);
+    /* The credit the cartridge never printed. Tengen's title screen carries
+     * "(C)1987 ACADEMYSOFT-ELORG" — the Soviet institute, not the man — and
+     * the licensing fight that followed is the reason this cartridge was
+     * pulled from shelves. The port's title has no room for either line any
+     * more (the cathedral took it), so the credit lands here instead, and
+     * says who actually wrote the game. */
+    draw_text(2, 15, "TETRIS BY ALEXEY PAJITNOV", PAL_MENU_BASE + 3);
+    draw_text(4, 17, "2 PLAYER USES A CABLE", PAL_MENU_BASE + 3);
 }
 
 /* What the lobby is doing, while it does it. Two consoles reach this screen
@@ -1022,7 +1097,8 @@ static void draw_match(bool *sweeping) {
         *sweeping = false;
     }
 
-    /* Last, so it sits over whatever was just drawn. */
+    /* Last, so they sit over whatever was just drawn. */
+    if (!g_session.game.player[g_view].game_active) draw_game_over();
     if (g_session.game.paused) draw_pause_box();
 
     /* And the sound engine afterwards, out of the blank, where it costs
@@ -1267,6 +1343,13 @@ int main(void) {
             }
             nes_audio_frame();
             continue;
+        }
+
+        /* L+R swaps the right-hand box between the piece histogram and the
+         * cartridge's vertical TETRIS banner. */
+        if (screen == SCREEN_PLAYING && shoulder_chord()) {
+            g_show_banner = !g_show_banner;
+            nes_audio_play(NES_SOUND_SCREEN_SWITCH);
         }
 
         if (match_running) {

@@ -693,6 +693,74 @@ static uint8_t scripted_buttons(int player, int frame) {
     return kMoves[(frame * (player ? 5 : 3) + player * 2) & 7];
 }
 
+static void test_the_walls_reach_above_the_visible_field(void) {
+    /* The bug this exists for: a piece could be walked sideways INTO the wall
+     * column while it was still above the field, because only the twenty
+     * visible rows were checked and everything above them counted as open.
+     * The first row it then descended into blocked it, so it came to rest at
+     * y=5 — one short of TENGEN_TOPOUT_ROW — and the game ended. Four pieces
+     * into an empty board, with nothing on screen to explain it.
+     *
+     * The ROM has no such gap: L89C3 (main.asm.txt:1481-1503) writes the
+     * $F0/$0F wall nibbles into every row of the buffer, spawn rows included. */
+    TengenGame game;
+    tengen_new_game(&game, 1, 0, false, false);
+    for (int row = 0; row < TENGEN_PF_HEIGHT; row++)
+        for (int col = 1; col < TENGEN_PF_WIDTH - 1; col++)
+            game.field[0].cell[row][col] = TENGEN_CELL_EMPTY;
+
+    /* x = 2 puts the T's leftmost cell in the wall column. It must be refused
+     * at every row, not just the ones inside the field. */
+    for (int y = 0; y <= 8; y++) {
+        game.player[0].piece.current = TT_T;
+        game.player[0].piece.orientation = 0;
+        game.player[0].piece.x = 2;
+        game.player[0].piece.y = (int8_t)y;
+        CHECK(!tengen_position_valid(&game, TENGEN_PLAYER_1));
+    }
+    /* ...and one column further in is fine at every row, so the fix did not
+     * simply wall off the spawn area. */
+    for (int y = 0; y <= 8; y++) {
+        game.player[0].piece.x = 3;
+        game.player[0].piece.y = (int8_t)y;
+        CHECK(tengen_position_valid(&game, TENGEN_PLAYER_1));
+    }
+}
+
+/* Random play must never end a game while the board is nearly empty. This is
+ * the check that would have caught the wall bug on the day it was written:
+ * the rule it tests is not a ROM detail, it is "a game does not end for no
+ * reason", which is exactly what a player notices and a unit test of any one
+ * routine does not. */
+static void test_random_play_never_tops_out_on_a_nearly_empty_board(void) {
+    unsigned state = 12345u;
+    for (unsigned seed = 1; seed < 300; seed++) {
+        TengenGame game;
+        tengen_new_game(&game, (uint16_t)seed, 0, false, false);
+        uint8_t held = 0;
+        for (int frame = 0; frame < 3000; frame++) {
+            state = state * 1664525u + 1013904223u;
+            unsigned r = state >> 16;
+            if ((r & 15) == 0) held = (uint8_t)((r >> 4) & 0xFF);
+            held = (uint8_t)(held & ~TENGEN_BTN_START);   /* never pause */
+            TengenStepResult step = tengen_step(&game, TENGEN_PLAYER_1, held);
+            if (!step.topped_out) continue;
+
+            int cells = 0;
+            for (int row = 0; row < TENGEN_PF_HEIGHT; row++)
+                for (int col = 1; col < TENGEN_PF_WIDTH - 1; col++)
+                    if (game.field[0].cell[row][col]) cells++;
+            if (cells < 24) {
+                printf("FAIL %s:%d: semilla %u termino en el frame %d con solo "
+                        "%d celdas ocupadas\n", __FILE__, __LINE__, seed, frame, cells);
+                g_failures++;
+                return;
+            }
+            break;
+        }
+    }
+}
+
 static void test_two_linked_machines_stay_identical(void) {
     /* THE point of lockstep: both consoles simulate both players, so after
      * any number of frames their game state must match byte for byte. If
@@ -923,7 +991,12 @@ static void test_das_charges_before_repeating(void) {
     TengenGame game;
     tengen_new_game(&game, 9, 0, false, false);
     game.player[0].piece.current = TT_O;
-    game.player[0].piece.x = 5;
+    /* Far enough right that three repeats still have room. This used to start
+     * at 5 and the third repeat reached column 2 — which is the wall, and only
+     * "worked" because the walls did not yet exist above the visible field.
+     * The test was quietly encoding that bug; see
+     * test_the_walls_reach_above_the_visible_field. */
+    game.player[0].piece.x = 8;
     game.player[0].piece.y = 0;
 
     int8_t start_x = game.player[0].piece.x;
@@ -1297,6 +1370,8 @@ int main(void) {
     test_undo_is_disarmed_by_a_line_clear();
     test_a_wrong_button_restarts_the_code();
     test_codes_share_one_cursor_the_way_the_rom_does();
+    test_the_walls_reach_above_the_visible_field();
+    test_random_play_never_tops_out_on_a_nearly_empty_board();
     test_two_linked_machines_stay_identical();
     test_a_lost_transfer_stops_the_link_rather_than_drifting();
     test_the_lobby_agrees_on_a_game_and_both_leave_together();

@@ -148,35 +148,35 @@ DANCER_SOLO_COUNT = 6
 # St Basil's Cathedral, drawn in all four of bgPalette0's palettes.
 # How the 32x30 title is composed down to the GBA's 30x20.
 #
-# The screen is a framed PICTURE and has to stay one: a two-tile brick-and-
-# jewel border, a two-tile braid inside it, then 24x22 of artwork. An earlier
-# pass here bought its ten rows by throwing away the top and bottom of the
-# frame, which left the lettering running off the top edge and cut the
-# "(C)1988 TENGEN" line off the bottom — the picture stopped being framed at
-# all, which is the one thing about this screen that has to survive.
+# The screen is a framed PICTURE of St Basil's Cathedral under TENGEN TETRIS,
+# and what has to survive is the cathedral WHOLE — its spire, its domes and
+# its bodies, at 1:1, with the frame closed on all four sides.
 #
-# So the frame is kept on all four sides and the ten rows come out of the
-# ARTWORK instead, at the three places where a dropped row costs least:
+# COLUMNS. The border is a two-column brick-and-jewel pattern outside a
+# two-column braid. The jewels are a 2x2 motif, so keeping one of their two
+# columns cuts every one of them in half — which is exactly what "the gems
+# are bugged" looked like. There is no room for both brick columns on each
+# side, so the brick goes and the braid stays: 2 + 24 + 2 = 28 columns, drawn
+# one column in from each edge.
 #
-#   rows 0-1, 28-29   the outer brick border. The braid inside it still reads
-#                     as a complete frame, and it is what the columns keep too.
-#   rows 12-14        the tall thin spire above the cathedral's tent roof —
-#                     one or two tiles per row, the emptiest artwork on the
-#                     screen. The roof itself, and every dome finial, stays.
-#   rows 19, 21, 23   three rows out of the cathedral's brick bodies, which are
-#                     a repeating texture. The building comes out squatter; no
-#                     silhouette is broken and no seam shows.
+# ROWS. Twenty of thirty, and the cathedral needs twelve of them. What goes:
 #
-# Columns keep one of the two brick columns and both braid columns each side,
-# which is 1 + 2 + 24 + 2 + 1 = 30 with the picture whole and centred.
-TITLE_KEEP_COLS = (1, 31)
+#   rows 0-2, 27-29   the brick border and one of the two braid rows. A single
+#                     row of braid still reads as a frame.
+#   rows 6-7          "PRESENTS" and "THE SOVIET MIND GAME". Two rows of
+#                     subtitle against two rows of cathedral is not a close
+#                     call.
+#   rows 24-25        the two copyright lines. They are not lost: the credit
+#                     moves to GAME SELECT, where it can also say who wrote
+#                     the game.
+#
+# What stays is TENGEN, the TETRIS logo, and rows 12-23 — every row of the
+# cathedral, none of them dropped, none of them squashed.
+TITLE_KEEP_COLS = (2, 30)
 TITLE_ROW_BLOCKS = (
-    (2, 4),    # the braid frame's top
-    (4, 12),   # TENGEN / PRESENTS / THE SOVIET MIND GAME / the TETRIS logo
-    (15, 19),  # dome finials, the tent roof, the tops of the towers
-    (20, 21),  # \
-    (22, 23),  #  } the bodies, every other row
-    (24, 28),  # / the two copyright lines, then the braid frame's bottom
+    (3, 6),     # the braid's inner row, then TENGEN
+    (8, 24),    # the TETRIS logo, then the whole cathedral
+    (26, 27),   # the braid again at the bottom
 )
 
 # The menu screen the ROM uses for its selection screens: a decorative frame
@@ -184,7 +184,13 @@ TITLE_ROW_BLOCKS = (
 # borders are what the level selector is framed with here.
 # 30 columns: both side borders intact, the two the GBA lacks taken from the
 # empty middle where they cost nothing.
-MENU_COL_BLOCKS = ((0, 15), (17, 32))
+# WHICH TWO COLUMNS THE MENU LOSES. Its horizontal TETRIS logo lives at rows
+# 10-12, columns 4-27: six letters of exactly four columns each. Taking the two
+# spare columns out of the middle (15 and 16) cut the third letter's last
+# column and the fourth's first, which mashed the T and the R together — the
+# logo has no empty middle to borrow from. The blank padding at columns 2 and
+# 29 does, and costs nothing.
+MENU_COL_BLOCKS = ((0, 2), (3, 29), (30, 32))
 # 20 rows: the top and bottom borders plus 16 rows of the empty middle. The
 # ROM's SCORE/LINES/LEVEL header (rows 2-7) is skipped — this is a menu.
 MENU_ROW_BLOCKS = ((0, 2), (8, 24), (28, 30))
@@ -567,9 +573,57 @@ def emit_tiles_header(name, guard, tiles, source):
 # The cap is the ROM's too: `cmp #$90 / bcs` stops drawing at 144, which is the
 # 18 rows its panel is tall. The port's box is shorter, so it caps at whatever
 # it has room for — same rule, less room.
+# The GAME OVER plaque, and the thin frame the port borrows from it.
+#
+# `gameOverTiles` ($C800, main.asm.txt:8064-8067) is six columns by four rows,
+# blitted at nametable (4,12) in 1P — the middle of the playfield — by
+# `gameOver1pColsRows1` ($86,$04) and `gameOver1pPPUAddr1` ($2184), in
+# background palette 3 (`gameOverAttrs` = $FF,$33). It reads:
+#
+#     29 2A 2A 2A 2A 2B        a box top
+#     2C 47 41 4D 45 2F        | G  A  M  E |
+#     2C 4F 56 45 52 2F        | O  V  E  R |
+#     3A 3B 3B 3B 3B 3C        a box bottom
+#
+# so the cartridge's own thin frame is in there: corners 29/2B/3A/3C, a
+# horizontal edge 2A on top and 3B underneath, and sides 2C and 2F. The port
+# draws its HUD panels with those, which is how the panels get to be boxes
+# without anything being invented. What it had before was tile $79 used as a
+# right-hand cap for the header strip's rules — and $79 is not a cap, it is an
+# unrelated block, which is what those grey stubs beside SCORE / LINES / LEVEL
+# were.
+# The vertical TETRIS banner, NES columns 14-17 of rows 10-27: six letters on
+# their own grey plaques, three rows each. The reflow does not carry it (the
+# port's play screen has no room for it beside two usable boxes), so it is
+# emitted on its own and the port draws it into the right-hand box when the
+# player asks for it with L+R.
+BANNER_COLS = (14, 18)
+BANNER_ROWS = (10, 28)
+
+GAMEOVER_TILES_ADDR = 0xC800
+GAMEOVER_COLS = 6
+GAMEOVER_ROWS = 4
+
 STATS_ICON_ROWS = (26, 28)
 STATS_ICON_COLS = (21, 28)      # seven pieces, I T O J L S Z
 STATS_BAR_TILE = 0x21           # $21 + (count & 7); $28 is a full tile
+
+
+def read_banner(nametable, attributes):
+    """The vertical TETRIS banner as (tiles, palette banks), row-major."""
+    tiles, banks = [], []
+    for r in range(*BANNER_ROWS):
+        tiles.append([nametable[r * 32 + c] for c in range(*BANNER_COLS)])
+        banks.append([attribute_palette(attributes, c, r)
+                      for c in range(*BANNER_COLS)])
+    return tiles, banks
+
+
+def read_gameover_tiles(rom):
+    """gameOverTiles as GAMEOVER_ROWS rows of GAMEOVER_COLS tile ids."""
+    raw = rom.at(GAMEOVER_TILES_ADDR, GAMEOVER_COLS * GAMEOVER_ROWS)
+    return [list(raw[r * GAMEOVER_COLS:(r + 1) * GAMEOVER_COLS])
+            for r in range(GAMEOVER_ROWS)]
 
 
 def read_stats_icons(nametable, attributes):
@@ -641,7 +695,7 @@ def emit_screen_header(tiles, palettes, keep_cols, source, stats):
         f"#define SCREEN_1P_STATS_BAR_TILE 0x{STATS_BAR_TILE:02X}",
         "static const uint8_t kStatsIcons[2][SCREEN_1P_STATS_PIECES] = {",
     ]
-    icons, icon_banks, bar_bank = stats
+    icons, icon_banks, bar_bank, gameover, banner = stats
     for row in icons:
         lines.append("    { " + ", ".join(f"0x{t:02X}" for t in row) + " },")
     lines += [
@@ -652,6 +706,42 @@ def emit_screen_header(tiles, palettes, keep_cols, source, stats):
         "static const uint8_t kStatsIconBanks[SCREEN_1P_STATS_PIECES] = { "
         + ", ".join(str(b) for b in icon_banks) + " };",
         f"#define SCREEN_1P_STATS_BAR_BANK {bar_bank}",
+        "",
+        "/* gameOverTiles: the plaque, six by four, and with it the cartridge's",
+        " * own thin box frame — see the note in tools/extract_assets.py. */",
+        f"#define SCREEN_1P_GAMEOVER_W {GAMEOVER_COLS}",
+        f"#define SCREEN_1P_GAMEOVER_H {GAMEOVER_ROWS}",
+        "static const uint8_t kGameOverTiles[SCREEN_1P_GAMEOVER_H]"
+        "[SCREEN_1P_GAMEOVER_W] = {",
+    ] + [
+        "    { " + ", ".join(f"0x{v:02X}" for v in gameover[r]) + " },"
+        for r in range(GAMEOVER_ROWS)
+    ] + [
+        "};",
+        "",
+        "/* The vertical TETRIS banner, NES columns 14-17 rows 10-27. */",
+        f"#define SCREEN_1P_BANNER_W {BANNER_COLS[1] - BANNER_COLS[0]}",
+        f"#define SCREEN_1P_BANNER_H {BANNER_ROWS[1] - BANNER_ROWS[0]}",
+        "static const uint8_t kBannerTiles[SCREEN_1P_BANNER_H][SCREEN_1P_BANNER_W] = {",
+    ] + [
+        "    { " + ", ".join(f"0x{v:02X}" for v in row) + " }," for row in banner[0]
+    ] + [
+        "};",
+        "static const uint8_t kBannerBanks[SCREEN_1P_BANNER_H][SCREEN_1P_BANNER_W] = {",
+    ] + [
+        "    { " + ", ".join(str(v) for v in row) + " }," for row in banner[1]
+    ] + [
+        "};",
+        "",
+        "/* The same frame, named for what each piece does. */",
+        f"#define T_BOX_TL 0x{gameover[0][0]:02X}",
+        f"#define T_BOX_TOP 0x{gameover[0][1]:02X}",
+        f"#define T_BOX_TR 0x{gameover[0][GAMEOVER_COLS - 1]:02X}",
+        f"#define T_BOX_L 0x{gameover[1][0]:02X}",
+        f"#define T_BOX_R 0x{gameover[1][GAMEOVER_COLS - 1]:02X}",
+        f"#define T_BOX_BL 0x{gameover[3][0]:02X}",
+        f"#define T_BOX_BOTTOM 0x{gameover[3][1]:02X}",
+        f"#define T_BOX_BR 0x{gameover[3][GAMEOVER_COLS - 1]:02X}",
         "",
         "#endif /* SCREEN_1P_H */",
         "",
@@ -667,7 +757,7 @@ def compose_title(nametable, attributes):
     scaling or from cutting artwork: see TITLE_ROW_BLOCKS.
     """
     cols = list(range(*TITLE_KEEP_COLS))
-    assert len(cols) == 30, f"title needs 30 columns, got {len(cols)}"
+    assert len(cols) <= 30, f"title asks for {len(cols)} columns, screen has 30"
 
     rows = []
     for start, end in TITLE_ROW_BLOCKS:
@@ -746,18 +836,19 @@ def emit_title_header(tiles, banks, source):
         "",
         "#include <stdint.h>",
         "",
-        "#define SCREEN_TITLE_W 30",
+        f"#define SCREEN_TITLE_W {TITLE_KEEP_COLS[1] - TITLE_KEEP_COLS[0]}",
         "#define SCREEN_TITLE_H_TILES 20",
         "",
-        "static const uint8_t kScreenTitleTiles[600] = {",
+        f"static const uint8_t kScreenTitleTiles[{len(tiles)}] = {{",
     ]
-    for i in range(0, len(tiles), 30):
-        lines.append("    " + ", ".join(f"0x{t:02X}" for t in tiles[i:i + 30]) + ",")
+    width = TITLE_KEEP_COLS[1] - TITLE_KEEP_COLS[0]
+    for i in range(0, len(tiles), width):
+        lines.append("    " + ", ".join(f"0x{t:02X}" for t in tiles[i:i + width]) + ",")
     lines += ["};", "",
               "/* Which of bgPalette0's four palettes each tile uses. */",
-              "static const uint8_t kScreenTitlePalettes[600] = {"]
-    for i in range(0, len(banks), 30):
-        lines.append("    " + ", ".join(str(b) for b in banks[i:i + 30]) + ",")
+              f"static const uint8_t kScreenTitlePalettes[{len(banks)}] = {{"]
+    for i in range(0, len(banks), width):
+        lines.append("    " + ", ".join(str(b) for b in banks[i:i + width]) + ",")
     lines += ["};", "", "#endif /* SCREEN_TITLE_H */", ""]
     return "\n".join(lines)
 
@@ -934,8 +1025,12 @@ def self_test() -> int:
 
     # The title composition must keep 30x20 and must not reorder columns.
     title, title_banks = compose_title(bytes(range(256)) * 4, bytes(64))
-    if len(title) != 600 or len(title_banks) != 600:
-        failures.append(f"la composicion del titulo dio {len(title)} tiles, esperado 600")
+    title_w = TITLE_KEEP_COLS[1] - TITLE_KEEP_COLS[0]
+    if len(title) != title_w * 20 or len(title_banks) != len(title):
+        failures.append(f"la composicion del titulo dio {len(title)} tiles, "
+                        f"esperado {title_w * 20}")
+    if title_w > 30:
+        failures.append(f"el titulo pide {title_w} columnas y la pantalla tiene 30")
     rows_kept = sum(end - start for start, end in TITLE_ROW_BLOCKS)
     if rows_kept != 20:
         failures.append(f"los bloques de filas del titulo suman {rows_kept}, esperado 20")
@@ -1019,7 +1114,9 @@ def main() -> int:
         "tiles_dancers.h": emit_tiles_header(
             "kDancerTiles", "TILES_DANCERS", convert_tiles(rom.chr_bank(1)), f"{src} [dancers]"),
         "screen_1p.h": emit_screen_header(tiles, palettes, keep_cols, src,
-                                           read_stats_icons(nametable, attributes)),
+                                           read_stats_icons(nametable, attributes)
+                                           + (read_gameover_tiles(rom),
+                                              read_banner(nametable, attributes))),
         "palettes_rom.h": emit_palette_header(palette_sets, piece_palettes, src),
     }
 

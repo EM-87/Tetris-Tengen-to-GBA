@@ -138,10 +138,32 @@ static bool position_valid_ex(const TengenGame *game, TengenPlayerSlot slot,
                 hit = true; /* past the buffer's padding nibbles entirely */
             } else {
                 int visible_row = rom_row - TENGEN_ROM_ROW_ORIGIN;
-                /* Above the visible field is open space the piece spawns in. */
-                if (visible_row >= 0 &&
-                    field->cell[visible_row][storage_col] != TT_NONE) {
-                    hit = true; /* a locked block, or a TT_WALL sentinel */
+                if (visible_row >= 0) {
+                    if (field->cell[visible_row][storage_col] != TT_NONE) {
+                        hit = true; /* a locked block, or a TT_WALL sentinel */
+                    }
+                } else if (!game->coop &&
+                           (storage_col == 0 ||
+                            storage_col == TENGEN_PF_WIDTH - 1)) {
+                    /* THE WALLS DO NOT STOP AT THE TOP OF THE VISIBLE FIELD.
+                     *
+                     * The ROM's playfield is one flat array of 8-byte rows
+                     * starting at row 0, and `L89C3` (main.asm.txt:1481-1503)
+                     * writes the $F0/$0F wall nibbles into EVERY row it
+                     * builds — the two rows a piece spawns in included. Only
+                     * coop leaves them clear, which is the `bit playMode`
+                     * there and is what widens its field to twelve.
+                     *
+                     * This core only stores the twenty VISIBLE rows, so the
+                     * spawn rows have to say so themselves. Treating them as
+                     * open space instead was a real bug and a nasty one: a
+                     * piece could be walked sideways into the wall column
+                     * while it was still above the field, and then the first
+                     * row it descended into blocked it — resting at y=5, one
+                     * short of TENGEN_TOPOUT_ROW, which ends the game. Four
+                     * pieces into an empty board, GAME OVER, and nothing on
+                     * screen to explain it. */
+                    hit = true;
                 }
             }
 
