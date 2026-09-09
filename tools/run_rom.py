@@ -780,10 +780,10 @@ def link_check(rom_path):
     tap("START")                      # title -> game select
     if "GAME SELECT" not in tilemap_text(core, 8):
         failures.append("no aparece GAME SELECT tras el titulo")
-    if "2 PLAYER" not in tilemap_text(core, 13):
+    if "2 PLAYER" not in tilemap_text(core, 12):
         failures.append("GAME SELECT no ofrece 2 PLAYER")
 
-    if "PAJITNOV" not in tilemap_text(core, 15):
+    if "PAJITNOV" not in tilemap_text(core, 17):
         failures.append("falta el credito a Pajitnov en GAME SELECT")
 
     tap("DOWN")                       # 1 PLAYER -> 2 PLAYER

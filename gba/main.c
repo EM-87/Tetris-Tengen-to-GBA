@@ -181,12 +181,30 @@
  * stage goes in the middle of the right-hand box instead — same size, same
  * rows, and the box's own contents are put back when the show ends. */
 #define DANCER_STAGE_TX (BOX_R_TX + 2)
-#define DANCER_STAGE_TY 2
+#define DANCER_STAGE_TY 1
 #define DANCER_STAGE_TW DANCER_STAGE_COLS
 #define DANCER_STAGE_TH DANCER_STAGE_ROWS
+
+/* THE SIXTH DANCER STANDS ON THE SCREEN'S BOTTOM BORDER, NOT ON A LEDGE.
+ *
+ * The blit lays five ledges (kDancerStage, rows 3/6/9/12/15 of eighteen from
+ * nametable row 10), so on the cartridge the ledges are at NES y 104, 128,
+ * 152, 176 and 200 — and kDancerStartY puts six pairs of feet at 104, 128,
+ * 152, 176, 200 and 224. The last has no ledge because at NES y 224 it is
+ * standing on the border tiles at the bottom of the screen.
+ *
+ * The port's window is NES nametable rows 8-27, which stops one row short of
+ * that border, so the sixth dancer was left treading air at the bottom edge.
+ * Two things fix it and neither touches the ROM's 24-pixel spacing: the show
+ * moves up one tile row, and the sixth ledge is drawn explicitly below the
+ * blit — the same $9D the other five are made of, in the place the cartridge's
+ * border occupies. */
+#define DANCER_LIFT 8                     /* one tile row up; see above */
+#define DANCER_FLOOR_TY (DANCER_STAGE_TY + DANCER_STAGE_TH)
+
 /* The ROM's sprite coordinates are NES screen pixels; this window starts at
  * nametable row 8, so a NES y of 64 is this screen's 0. */
-#define DANCER_Y_ORIGIN (SCREEN_1P_FIELD_TY * 8)
+#define DANCER_Y_ORIGIN (SCREEN_1P_FIELD_TY * 8 + DANCER_LIFT)
 /* $70 - $61 on the cartridge: how far left of its stage a dancer starts. */
 #define DANCER_START_OFFSET 15
 
@@ -466,6 +484,11 @@ static void draw_dancer_stage(void) {
         for (int x = 0; x < DANCER_STAGE_TW; x++)
             set_map_tile(DANCER_STAGE_TX + x, DANCER_STAGE_TY + y,
                           WITH_BANK(kDancerStage[y][x], 1));
+    /* The sixth ledge, standing in for the screen border the cartridge's
+     * bottom dancer uses; see the note beside DANCER_LIFT. */
+    for (int x = 0; x < DANCER_STAGE_TW; x++)
+        set_map_tile(DANCER_STAGE_TX + x, DANCER_FLOOR_TY,
+                      WITH_BANK(kDancerStage[3][0], 1));
 }
 
 static void draw_tiles(int tx, int ty, const uint8_t *tiles, int count, int bank) {
@@ -483,6 +506,11 @@ static void draw_number(int tx, int ty, uint32_t value, int digits, int bank) {
     }
 }
 
+static void clear_region(int tx, int ty, int w, int h) {
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++) set_map_tile(tx + x, ty + y, T_BLANK);
+}
+
 /* A panel, in the cartridge's own thin frame.
  *
  * The tiles are the ones the GAME OVER plaque is built from — corners, a top
@@ -493,7 +521,13 @@ static void draw_number(int tx, int ty, uint32_t value, int digits, int bank) {
  * run the width of the screen and are junctions of a grid this port has no
  * room for; boxes are the honest substitute, and they are made of the ROM's
  * own frame. */
+/* The interior is cleared with the frame: a box is a box, not a border laid
+ * over whatever the last frame left there. Without this, swapping the left
+ * column from HIGH SCORE (six digits, columns 1-6) to NEXT (a four-column
+ * preview at columns 2-5) left the first and last digit of the old score
+ * sitting either side of the piece. */
 static void draw_box(int tx, int ty, int w, int h, int bank) {
+    clear_region(tx + 1, ty + 1, w - 2, h - 2);
     for (int x = 1; x < w - 1; x++) {
         set_map_tile(tx + x, ty, WITH_BANK(T_BOX_TOP, bank));
         set_map_tile(tx + x, ty + h - 1, WITH_BANK(T_BOX_BOTTOM, bank));
@@ -519,11 +553,6 @@ static void draw_game_over(void) {
         for (int x = 0; x < SCREEN_1P_GAMEOVER_W; x++)
             set_map_tile(GAMEOVER_TX + x, GAMEOVER_TY + y,
                           WITH_BANK(kGameOverTiles[y][x], BANK_PAUSE));
-}
-
-static void clear_region(int tx, int ty, int w, int h) {
-    for (int y = 0; y < h; y++)
-        for (int x = 0; x < w; x++) set_map_tile(tx + x, ty + y, T_BLANK);
 }
 
 /* The cartridge draws its whole header strip — SCORE, LINES, LEVEL, NEXT,
@@ -594,9 +623,19 @@ static void draw_banner(void) {
  * panel is tall. This box is shorter, so the same rule caps lower; the count
  * itself keeps going, only the bar stops growing.
  * ----------------------------------------------------------------------- */
-#define STATS_TX (BOX_R_TX + 1)          /* seven columns inside an eight-wide box */
-#define STATS_ICON_TY 17                 /* the icons sit on the floor of the box */
-#define STATS_TOP_TY 8                   /* ...and the bars may reach this row */
+/* SEVEN COLUMNS DO NOT FIT INSIDE AN EIGHT-WIDE BOX. A bordered box leaves a
+ * six-column interior, and there are seven pieces — so the histogram is not
+ * boxed; it is headed, the way the cartridge heads it. On the NES 1P screen
+ * (nametable rows 8-10 of SCREEN_1P) the word STATS sits between two grey
+ * rules, the icons stand on the frame's own bottom edge, and there is nothing
+ * else in the column. That is what this reproduces: rule, heading, rule, then
+ * open black down to the icons. An earlier pass drew the top rule alone at row
+ * 6, immediately under the NEXT box's own bottom edge, which read as two
+ * borders stacked and as a grey bar belonging to nothing. */
+#define STATS_TX BOX_R_TX                /* seven columns, one spare at the end */
+#define STATS_HEAD_TY 6                  /* rule / STATS / rule */
+#define STATS_ICON_TY 17                 /* the icons stand on the floor */
+#define STATS_TOP_TY 9                   /* ...and the bars may reach this row */
 #define STATS_BAR_FULL (SCREEN_1P_STATS_BAR_TILE + 7)
 #define STATS_MAX_ROWS (STATS_ICON_TY - STATS_TOP_TY)
 #define BANK_STATS SCREEN_1P_STATS_BAR_BANK
@@ -623,6 +662,20 @@ static void draw_stats(const TengenPlayerState *p) {
             set_map_tile(tx, ty, WITH_BANK(tile, BANK_STATS));
         }
     }
+}
+
+/* WHERE NEXT GOES WHEN SOMETHING ELSE WANTS THE RIGHT COLUMN.
+ *
+ * Two things claim the whole right-hand column: the vertical TETRIS banner
+ * (eighteen rows) and the between-levels dancers (whose stage is the blit the
+ * cartridge paints over its own banner). Both push NEXT into the left column
+ * rather than taking it off the screen — a Tetris you cannot see the next
+ * piece in is not a trade anybody wants to make for a decoration. */
+static void draw_next_in_left_box(void) {
+    draw_box(BOX_L_TX, 12, BOX_W, 6, BANK_VALUE);
+    draw_tiles(BOX_L_TX + 2, 13, kLabelNext, 4, BANK_LABEL);
+    draw_next_piece(BOX_L_TX + 2, 14);
+    clear_region(BOX_L_TX, 18, BOX_W, 2);
 }
 
 /* One counter in its own box: label on the first row inside, value on the
@@ -664,28 +717,45 @@ static void draw_panel(void) {
          * highScoreHundredThousands is the seventh entry of
          * statsDataAddresses (main.asm.txt:4100-4107). Kept for the session
          * rather than saved: this cartridge has no battery either. */
-        draw_box(BOX_L_TX, 12, BOX_W, 5, BANK_VALUE);
-        draw_text(BOX_L_TX + 2, 13, "HIGH", BANK_LABEL);
-        draw_number(BOX_L_TX + 1, 14, g_high_score, 6, BANK_VALUE);
-        clear_region(BOX_L_TX, 17, BOX_W, 3);
+        if (!g_show_banner) {
+            draw_box(BOX_L_TX, 12, BOX_W, 5, BANK_VALUE);
+            draw_text(BOX_L_TX + 2, 13, "HIGH", BANK_LABEL);
+            draw_number(BOX_L_TX + 1, 14, g_high_score, 6, BANK_VALUE);
+            clear_region(BOX_L_TX, 17, BOX_W, 3);
+        }
     }
 
-    /* RIGHT BOX: the next piece and the histogram, or the banner instead. */
-    if (!g_show_banner) {
+    /* NEXT: in the right-hand box normally, in the left-hand one while the
+     * banner has the right column. */
+    if (g_show_banner) {
+        draw_next_in_left_box();
+    } else {
         draw_box(BOX_R_TX, 0, BOX_W, 6, BANK_VALUE);
         draw_tiles(BOX_R_TX + 2, 1, kLabelNext, 4, BANK_LABEL);
         draw_next_piece(BOX_R_TX + 2, 2);
     }
 
     if (g_show_banner) {
-        /* The banner takes the whole column, NEXT included — it is 18 rows and
-         * the screen is 20, which is exactly how the cartridge has it. */
+        /* The banner is eighteen rows, which is the whole column: NEXT moves
+         * into the left-hand box for the duration rather than disappearing,
+         * because a Tetris you cannot see the next piece in is not a trade
+         * anybody wants to make for a decoration. */
         clear_region(BOX_R_TX, 0, BOX_W, SCREEN_TH);
         draw_banner();
+    } else if (!g_session.game.two_player) {
+        /* Headed, not boxed; see the note beside STATS_TX. */
+        for (int x = 0; x < BOX_W; x++) {
+            set_map_tile(BOX_R_TX + x, STATS_HEAD_TY,
+                          WITH_BANK(T_BOX_TOP, BANK_VALUE));
+            set_map_tile(BOX_R_TX + x, STATS_HEAD_TY + 2,
+                          WITH_BANK(T_BOX_TOP, BANK_VALUE));
+        }
+        clear_region(BOX_R_TX, STATS_HEAD_TY + 1, BOX_W, 1);
+        draw_text(BOX_R_TX + 1, STATS_HEAD_TY + 1, "STATS", BANK_LABEL);
+        clear_region(BOX_R_TX, 19, BOX_W, 1);
+        draw_stats(p);
     } else {
-        draw_box(BOX_R_TX, 6, BOX_W, 14, BANK_VALUE);
-        if (!g_session.game.two_player) draw_stats(p);
-        else clear_region(BOX_R_TX + 1, 7, BOX_W - 2, 12);
+        clear_region(BOX_R_TX, 6, BOX_W, 14);
     }
 }
 
@@ -837,7 +907,7 @@ static void draw_game_select(uint8_t choice) {
     draw_menu_frame();
     draw_text(10, 8, "GAME SELECT", PAL_MENU_BASE + 3);
     for (int i = 0; i < GAME_COUNT; i++)
-        draw_text(11, 11 + i * 2, kGameNames[i],
+        draw_text(11, 10 + i * 2, kGameNames[i],
                    i == choice ? BANK_HILITE : PAL_MENU_BASE + 3);
     /* The credit the cartridge never printed. Tengen's title screen carries
      * "(C)1987 ACADEMYSOFT-ELORG" — the Soviet institute, not the man — and
@@ -845,8 +915,11 @@ static void draw_game_select(uint8_t choice) {
      * pulled from shelves. The port's title has no room for either line any
      * more (the cathedral took it), so the credit lands here instead, and
      * says who actually wrote the game. */
-    draw_text(2, 15, "TETRIS BY ALEXEY PAJITNOV", PAL_MENU_BASE + 3);
-    draw_text(4, 17, "2 PLAYER USES A CABLE", PAL_MENU_BASE + 3);
+    draw_text(4, 14, "2 PLAYER USES A CABLE", PAL_MENU_BASE + 3);
+    /* The menu frame's black interior is columns 3-26 — twenty-four of them —
+     * so the full "TETRIS BY ALEXEY PAJITNOV" (twenty-five) ran over the braid
+     * at both ends. The word TETRIS is already six tiles tall above this. */
+    draw_text(6, 17, "BY ALEXEY PAJITNOV", PAL_MENU_BASE + 3);
 }
 
 /* What the lobby is doing, while it does it. Two consoles reach this screen
@@ -893,13 +966,13 @@ static void draw_level_select(uint8_t start_level, uint8_t music) {
         draw_number(6 + level * 2, 10, (uint32_t)level, 1,
                      level == start_level ? BANK_HILITE : PAL_MENU_BASE + 3);
     }
-    draw_text(6, 12, "LEFT RIGHT TO SET", PAL_MENU_BASE + 3);
+    draw_text(6, 11, "LEFT RIGHT TO SET", PAL_MENU_BASE + 3);
 
     draw_text(12, 14, "MUSIC", PAL_MENU_BASE + 3);
     clear_region(4, 15, 22, 1);
     draw_text(15 - (int)(music_name_len(music) / 2), 15,
                kMusicNames[music], BANK_HILITE);
-    draw_text(7, 17, "UP DOWN TO PICK", PAL_MENU_BASE + 3);
+    draw_text(7, 16, "UP DOWN TO PICK", PAL_MENU_BASE + 3);
 }
 
 
@@ -1338,7 +1411,14 @@ int main(void) {
                 draw_static_screen();
                 nes_audio_play(kMusicTracks[g_music]);
             } else {
+                /* The stage gets the WHOLE column, the way the cartridge's
+                 * level-up blit gets the whole banner. Painting only the
+                 * stage's own tiles left the NEXT box behind it — with a
+                 * dancer standing inside it — and half of the STATS heading
+                 * showing between the ledges. */
+                clear_region(BOX_R_TX, 0, BOX_W, SCREEN_TH);
                 draw_dancer_stage();
+                draw_next_in_left_box();
                 draw_dancers(g_dancer_elapsed);
             }
             nes_audio_frame();

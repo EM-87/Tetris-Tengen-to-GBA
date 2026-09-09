@@ -229,6 +229,14 @@ third (bank 2) — which is why the row is not seven identical shapes. The ROM
 caps the bar at 144 (`cmp #$90 / bcs`), exactly the 18 rows its panel is
 tall; the port's box is shorter so the same rule caps lower.
 
+The column is HEADED, not boxed. On the NES 1P screen the word STATS sits
+between two grey rules and the icons stand on the frame's own bottom edge,
+with nothing else in the column — and seven bars do not fit inside the
+six-column interior a bordered box would leave. An earlier pass drew a single
+rule immediately under the NEXT box's own bottom edge, which read as two
+borders stacked and as a grey bar belonging to nothing; that is the same
+complaint the header strip's rules drew before them.
+
 ### How long the dancers dance
 
 Not a number to guess at. `checkLevelUp` (`main.asm.txt:1956-1979`) reuses
@@ -246,6 +254,21 @@ frames (`lda frameCounterLow / and #$0F / bne`):
 A button does not cut it short, it fast-forwards: L9035 computes
 `$7C - timer - 5`, clamps it to at least `$F5`, and you still get the three
 seconds of wind-down.
+
+### The sixth dancer stands on the border, not on a ledge
+
+The level-up blit lays FIVE ledges (`kDancerStage`, tile `$9D` at rows 3, 6,
+9, 12 and 15 of the eighteen it writes from nametable row 10), so their tops
+are at NES y 104, 128, 152, 176 and 200. `kDancerStartY` puts SIX dancers at
+y 208, 184, 160, 136, 112 and 88, each sprite 16px tall, so their feet land at
+224, 200, 176, 152, 128 and 104. Five of those are ledges; the sixth, at 224,
+is the border tiles across the bottom of the NES screen.
+
+The port's window is NES nametable rows 8-27 and stops one row short of that
+border, which left the bottom dancer treading air on the screen edge. The show
+therefore starts one tile row higher (`DANCER_LIFT`) and the port draws a
+sixth ledge of the same `$9D` below the blit. The 24-pixel spacing that ties
+the two ROM tables together is untouched; only the whole column moves.
 
 ### Where the PAUSE plaque goes
 

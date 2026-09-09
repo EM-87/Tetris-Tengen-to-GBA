@@ -349,4 +349,18 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    code = main()
+    # TWO CORES CANNOT BE LET GO OF NORMALLY. mgba/gba.py's GBA.__del__ frees
+    # the core, and with two of them plus a Python GBASIODriver still attached
+    # to both, the interpreter's shutdown collection frees a core out from
+    # under the other's cable and segfaults — *after* every check above has
+    # already printed its result. It is a teardown bug in the bindings and
+    # nothing to do with the ROM, but it still handed `make gba-check` a
+    # non-zero status and made the whole gate meaningless.
+    #
+    # So the process ends before finalization runs. os._exit skips __del__ and
+    # atexit both, which is exactly what is wanted here: everything this script
+    # produces is on stdout, and the flush below is the only cleanup it owes.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(code)
