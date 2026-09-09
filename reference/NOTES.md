@@ -444,6 +444,40 @@ to guess: a dump without the expected first row is rejected with a reason
 rather than converted into 1024 bytes of noise, and the port then builds with
 `SCREEN_PROTO_AVAILABLE 0` and L/R simply have nothing to switch to.
 
+## Korobeiniki is not on this cartridge
+
+Worth stating plainly, because it is the one thing in this port that is not
+the ROM's. Tengen's four tunes are Loginska, Bradinsky, Karinka and Troika
+(`constants.asm.txt:39-42`). Korobeiniki — the pedlars' song from the 1860s
+that most people call "the Tetris theme", because Nintendo's Game Boy version
+used it — is not among them, and there is no arrangement of it anywhere in
+this ROM to extract.
+
+So it is entered by hand, in `gba/korobeiniki.c`, as a fifth tune hidden
+behind L+R on the selection screen. Three consequences, all deliberate:
+
+* **It does not go through the cartridge's engine.** Feeding it one would mean
+  writing new data in a music format nobody has documented and patching it
+  into the ROM image. That is exactly the kind of thing this project does not
+  do, so the file is a small sequencer of its own writing the GBA's PSG.
+* **It shares, it does not replace.** Choosing it tells the cartridge's engine
+  to play `MUSIC_SILENCE` and leaves it running, so every sound EFFECT is
+  still the ROM's — and, exactly as on the cartridge, an effect briefly steals
+  a pulse channel from the music and the next note takes it back.
+* **PAUSE needs its own stop.** `MUSIC_SUSPEND` only reaches the cartridge's
+  engine. `make gba-check --korobeiniki` measures the sound registers to prove
+  the pause is real, that the tune actually changes pitch rather than sitting
+  on one note, and that the ROM's engine is still sounding underneath it.
+
+The note table is not typed by ear either: a GBA pulse channel runs at
+`f = 131072 / (2048 - R)`, so `R = 2048 - 131072/f`, and the table is that
+formula evaluated for equal temperament with A4 = 440 Hz. Any row of it can be
+checked with a calculator.
+
+The unlock travels over the link cable, because the lobby already exchanges
+the tune and only the master's survives the handshake — so a linked player who
+never found the code still hears it.
+
 ## Two players over a link cable
 
 The cartridge's 2P is a RACE: two independent 10-wide playfields, and nothing

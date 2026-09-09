@@ -587,6 +587,7 @@ REG_SOUND2CNT_L = 0x04000068     # bits 12-15 of these
 REG_SOUND3CNT_L = 0x04000070     # bit 7 is the wave channel's own on/off
 REG_SOUND4CNT_L = 0x04000078
 REG_SOUNDCNT_X  = 0x04000084     # bits 0-3: which channels are sounding
+REG_SOUND1CNT_X = 0x04000064     # ...and channel 1's pitch, in bits 0-10
 
 
 def sound_state(core):
@@ -966,6 +967,139 @@ def skin_check(rom_path):
     return 0
 
 
+# ---------------------------------------------------------------------------
+# The fifth tune.
+#
+# Korobeiniki is not on this cartridge — Tengen's four are Loginska, Bradinsky,
+# Karinka and Troika — so it is entered by hand in gba/korobeiniki.c and hidden
+# behind L+R on the selection screen. That makes it the one piece of content in
+# the port that was not extracted from the ROM, and the one piece of sound that
+# does not come out of the cartridge's own engine, so it is worth checking
+# rather than assuming:
+#
+#   * the menu offers four tunes until the code is entered, and five after;
+#   * choosing it actually produces notes, and DIFFERENT notes over time (a
+#     stuck channel would still read as "sounding");
+#   * PAUSE silences it, which needs its own stop because MUSIC_SUSPEND only
+#     reaches the cartridge's engine;
+#   * and the cartridge's engine is still running underneath, because the
+#     sound effects are still meant to be the ROM's.
+# ---------------------------------------------------------------------------
+MUSIC_ROW = 15                  # where draw_level_select writes the tune's name
+
+
+def korobeiniki_check(rom_path):
+    core, screen = load(rom_path)   # `screen` must stay alive; see load()
+    failures = []
+
+    def tap(key, settle=8):
+        core.set_keys(key)
+        run(core, 4)
+        core.set_keys()
+        run(core, settle)
+
+    run(core, 8)
+    press_start(core)               # title -> game select
+    press_start(core)               # game select -> level select
+    run(core, 8)
+
+    # Four tunes, and no fifth on offer.
+    seen = set()
+    for _ in range(8):
+        seen.add(tilemap_text(core, MUSIC_ROW))
+        tap(KEYS["DOWN"])
+    if any("KOROBEINIKI" in row for row in seen):
+        failures.append("la quinta cancion se ofrece sin haber metido el codigo")
+    if len(seen) != 4:
+        failures.append(f"el menu ofrece {len(seen)} canciones, no 4: {sorted(seen)}")
+    else:
+        print(f"  antes del codigo: {len(seen)} canciones, {sorted(seen)}")
+
+    # L+R together, the two buttons a NES pad never had.
+    core.set_keys(KEYS["L"], KEYS["R"])
+    run(core, 4)
+    core.set_keys()
+    run(core, 10)
+    # The row carries the menu frame's border tiles either side of the name,
+    # so this looks for the name IN it, the way the other menu checks do.
+    if "KOROBEINIKI" not in tilemap_text(core, MUSIC_ROW):
+        failures.append("L+R no descubre KOROBEINIKI ni la deja elegida")
+        print(f"       la fila dice {tilemap_text(core, MUSIC_ROW)!r}")
+    else:
+        print("  L+R descubre KOROBEINIKI y la deja elegida")
+
+    unlocked = set()
+    for _ in range(10):
+        unlocked.add(tilemap_text(core, MUSIC_ROW))
+        tap(KEYS["DOWN"])
+    if len(unlocked) != 5:
+        failures.append(f"tras el codigo el menu ofrece {len(unlocked)}, no 5")
+    else:
+        print(f"  tras el codigo: {len(unlocked)} canciones")
+
+    # Back onto it, then into a game.
+    for _ in range(10):
+        if "KOROBEINIKI" in tilemap_text(core, MUSIC_ROW):
+            break
+        tap(KEYS["DOWN"])
+    press_start(core)
+    run(core, 10)
+
+    # It has to make notes, and they have to move. The pulse channels are the
+    # two it drives; the frequency register is what a tune changes.
+    io = core._native.memory.io
+
+    def reg(addr):
+        return io[(addr - 0x04000000) >> 1]
+
+    pitches, volumes = set(), set()
+    for _ in range(400):
+        core.run_frame()
+        pitches.add(reg(REG_SOUND1CNT_X) & 0x7FF)
+        volumes.add((reg(REG_SOUND1CNT_H) >> 12) & 0xF)
+    if max(volumes) == 0:
+        failures.append("KOROBEINIKI no suena: el pulso 1 queda a volumen cero")
+    elif len(pitches) < 6:
+        failures.append(f"KOROBEINIKI no cambia de nota: {len(pitches)} tono(s)")
+    else:
+        print(f"  suena y se mueve: {len(pitches)} tonos distintos en 400 frames")
+
+    # PAUSE has to reach it too.
+    tap(KEYS["START"], settle=10)
+    worst = 0
+    for _ in range(120):
+        core.run_frame()
+        for k, v in sound_state(core).items():
+            worst = max(worst, v)
+    if worst:
+        failures.append(f"en pausa la quinta cancion sigue sonando ({worst})")
+    else:
+        print("  PAUSE la silencia igual que a las del cartucho")
+
+    # ...and the cartridge's engine is still there underneath: unpause and drop
+    # a piece, which plays SOUND_DROP through the ROM's own engine.
+    # Watched over the whole drop, not sampled at the end: a sound effect is a
+    # few frames long and asking once, afterwards, mostly asks too late.
+    tap(KEYS["START"], settle=10)
+    core.set_keys(KEYS["DOWN"])
+    engine = 0
+    for _ in range(300):
+        core.run_frame()
+        engine = max(engine, sound_state(core)["activos"])
+    core.set_keys()
+    if not engine:
+        failures.append("el motor del cartucho no sigue vivo bajo la quinta cancion")
+    else:
+        print("  el motor del cartucho sigue sonando debajo (los efectos son suyos)")
+
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: la quinta cancion esta escondida, suena, y no pisa al cartucho.")
+    return 0
+
+
 def link_check(rom_path):
     core, screen = load(rom_path)   # `screen` must stay alive; see load()
     failures = []
@@ -1041,6 +1175,8 @@ def main():
                      help="check the cathedral overlay and the fireworks")
     ap.add_argument("--skin", action="store_true",
                      help="check the L/R title-skin easter egg")
+    ap.add_argument("--korobeiniki", action="store_true",
+                     help="check the hidden fifth tune")
     args = ap.parse_args()
 
     if args.selftest:
@@ -1059,6 +1195,8 @@ def main():
         sys.exit(title_check(args.rom))
     if args.skin:
         sys.exit(skin_check(args.rom))
+    if args.korobeiniki:
+        sys.exit(korobeiniki_check(args.rom))
 
     core, screen = load(args.rom)
     start_game(core)

@@ -129,13 +129,18 @@ running ROM; only the side panels need reflowing).
    `SCREEN_PROTO_AVAILABLE 0` and L/R do nothing. See reference/NOTES.md —
    both the attribute table and the palette index were traced after being
    guessed wrong first.
-16. Still to do: coop (the core already models its 12-column field), the 2P
+16. ~~Korobeiniki~~ — done, and it is THE EXCEPTION to ground rule 1: it is
+   not on this cartridge (Tengen's four are Loginska, Bradinsky, Karinka and
+   Troika), so `gba/korobeiniki.c` is the one file here entered by hand rather
+   than extracted. It runs on its own sequencer over the GBA's PSG, never
+   through the ROM's engine, and shares the chip with it so the effects stay
+   the cartridge's. Hidden behind L+R on the selection screen.
+17. Still to do: coop (the core already models its 12-column field), the 2P
    starting handicap (`initHandicapGarbage`), and the ROM's COMPUTER player
    (`computerMove`, the VS and WITH modes) — which unlike two-human 2P needs
    neither a second console nor a cable. Also unported: the attract-mode demo
    the title starts at `frameCounterHigh` = 5 (`demoStart`), the prototype
-   PIECE art (the skin is the title only), and Korobeiniki, which is not in
-   this cartridge at all.
+   PIECE art (the skin is the title only).
 
 ## Build
 

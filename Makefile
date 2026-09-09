@@ -81,7 +81,7 @@ ARMLDFLAGS := -T gba/gba.ld -nostartfiles -Wl,--gc-sections
 # checks for them and says what to do rather than failing in the compiler.
 GBA_ASSETS := gba/tiles_game.h gba/screen_1p.h gba/palettes_rom.h gba/audio_prg.h
 
-GBA_SRC  := gba/main.c gba/nes_audio.c gba/nes6502.c gba/link.c $(CORE_SRC)
+GBA_SRC  := gba/main.c gba/nes_audio.c gba/nes6502.c gba/korobeiniki.c gba/link.c $(CORE_SRC)
 GBA_ELF  := $(BUILD)/tengen.elf
 GBA_ROM  := $(BUILD)/tengen.gba
 
@@ -145,5 +145,6 @@ gba-check: $(GBA_ROM)
 	python3 tools/run_rom.py $(GBA_ROM) --pause-audio
 	python3 tools/run_rom.py $(GBA_ROM) --title
 	python3 tools/run_rom.py $(GBA_ROM) --skin
+	python3 tools/run_rom.py $(GBA_ROM) --korobeiniki
 	python3 tools/run_rom.py $(GBA_ROM) --link
 	python3 tools/run_link.py $(GBA_ROM)

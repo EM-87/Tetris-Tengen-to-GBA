@@ -36,6 +36,7 @@
 #include "gba_hw.h"
 #include "palette.h"
 #include "nes_audio.h"
+#include "korobeiniki.h"
 #include "audio_prg.h"
 #include "link.h"
 #include "../src/tengen_core.h"
@@ -872,9 +873,51 @@ static void draw_pause_box(void) {
 static const uint8_t kMusicTracks[MUSIC_COUNT] = {
     NES_MUSIC_LOGINSKA, NES_MUSIC_BRADINSKY, NES_MUSIC_KARINKA, NES_MUSIC_TROIKA
 };
-static const char *const kMusicNames[MUSIC_COUNT] = {
-    "LOGINSKA", "BRADINSKY", "KARINKA", "TROIKA"
+
+/* THE FIFTH TUNE, WHICH IS NOT ON THE CARTRIDGE.
+ *
+ * Korobeiniki is not one of Tengen's four — the game everybody hums it at is
+ * Nintendo's Game Boy version — so there is nothing to extract and it is
+ * entered by hand instead, in gba/korobeiniki.c, which is the one file here
+ * that is not the ROM's. It stays hidden until L+R together on the selection
+ * screen, and announces itself with SOUND_CHIRP the way the title's skin
+ * does; until then the menu offers the cartridge's four and nothing hints
+ * that there is a fifth.
+ *
+ * It is a fifth ENTRY, never a fifth ROM track: kMusicTracks has four, and
+ * every place that starts music goes through start_music() below. */
+#define MUSIC_KOROBEINIKI MUSIC_COUNT
+#define MUSIC_UNLOCKED_COUNT (MUSIC_COUNT + 1)
+static bool g_music_unlocked;
+
+static const char *const kMusicNames[MUSIC_UNLOCKED_COUNT] = {
+    "LOGINSKA", "BRADINSKY", "KARINKA", "TROIKA", "KOROBEINIKI"
 };
+
+static uint8_t music_choices(void) {
+    return (uint8_t)(g_music_unlocked ? MUSIC_UNLOCKED_COUNT : MUSIC_COUNT);
+}
+
+/* One frame of sound, both engines. The cartridge's runs on every frame
+ * whatever is playing, because the EFFECTS are always its; the hand-entered
+ * tune does nothing unless it is the one chosen. */
+static void audio_frame(void) {
+    nes_audio_frame();
+    korobeiniki_frame();
+}
+
+/* Starts whichever tune is chosen, on whichever engine owns it. The two never
+ * play at once: the cartridge's is told to go silent for the hand-entered one
+ * and keeps running, so the sound EFFECTS are the ROM's either way. */
+static void start_music(uint8_t music) {
+    if (music == MUSIC_KOROBEINIKI) {
+        nes_audio_play(NES_MUSIC_SILENCE);
+        korobeiniki_start();
+    } else {
+        korobeiniki_stop();
+        nes_audio_play(kMusicTracks[music < MUSIC_COUNT ? music : 0]);
+    }
+}
 
 /* The ROM has a title screen and then separate selection screens, drawn in
  * its own menu frame; this follows the same shape.
@@ -1154,7 +1197,7 @@ static void draw_link_wait(const TengenLobby *lobby) {
      * exactly what the player needs to see. */
     draw_text(10, 14, "LEVEL", PAL_MENU_BASE + 3);
     draw_number(16, 14, lobby->start_level, 2, PAL_MENU_BASE + 3);
-    draw_text(9, 16, kMusicNames[lobby->music < MUSIC_COUNT ? lobby->music : 0],
+    draw_text(9, 16, kMusicNames[lobby->music < MUSIC_UNLOCKED_COUNT ? lobby->music : 0],
                PAL_MENU_BASE + 3);
 }
 
@@ -1239,6 +1282,9 @@ static void announce_step(TengenStepResult step) {
     if (step.lines_collapsed && !step.leveled_up)
         nes_audio_play(NES_SOUND_LINECLEAR);
     if (step.leveled_up) {
+        /* The cartridge's level-up music takes over; the fifth tune stands
+         * down and start_music() puts it back when the dancers finish. */
+        korobeiniki_stop();
         nes_audio_play(NES_MUSIC_LEVELUP);
         if (!g_linked) {
             g_dancer_active = true;
@@ -1248,6 +1294,7 @@ static void announce_step(TengenStepResult step) {
         }
     }
     if (step.topped_out) {
+        korobeiniki_stop();
         nes_audio_play(NES_MUSIC_SILENCE);
         nes_audio_play(NES_MUSIC_GAMEOVER);
     }
@@ -1330,6 +1377,13 @@ static bool solo_play_frame(uint8_t buttons, uint8_t pressed) {
             /* pauseOrUnpause suspends and resumes the music
              * (main.asm.txt:7204-7211). */
             nes_audio_play(g_session.game.paused ? NES_MUSIC_SUSPEND : NES_MUSIC_RESUME);
+            /* MUSIC_SUSPEND only silences the cartridge's engine. The fifth
+             * tune has its own channels and has to be stopped and restarted
+             * with it, or PAUSE would leave it playing on its own. */
+            if (g_music == MUSIC_KOROBEINIKI) {
+                if (g_session.game.paused) korobeiniki_stop();
+                else korobeiniki_start();
+            }
             /* The plaque has to be painted over on the way out, but this runs
              * mid-frame; six hundred tiles written into VRAM while the screen
              * is being scanned out is a visible tear. Flag it and let
@@ -1382,7 +1436,7 @@ static void draw_match(bool *sweeping) {
 
     /* And the sound engine afterwards, out of the blank, where it costs
      * nothing but CPU time. */
-    nes_audio_frame();
+    audio_frame();
 }
 
 int main(void) {
@@ -1429,6 +1483,7 @@ int main(void) {
         if (screen == SCREEN_TITLE) {
             if (!title_music) {
                 /* initializeTitleScreen ends with this (main.asm.txt:4489). */
+                korobeiniki_stop();
                 nes_audio_play(NES_MUSIC_TITLESCREEN);
                 title_music = true;
             }
@@ -1440,21 +1495,21 @@ int main(void) {
                 clear_screen();
                 draw_title();
                 oam_hide_all();
-                nes_audio_frame();
+                audio_frame();
                 continue;
             }
             if (pressed & TENGEN_BTN_START) {
                 screen = SCREEN_GAME_SELECT;
                 nes_audio_play(NES_SOUND_SCREEN_SWITCH);
                 vsync();
-                nes_audio_frame();
+                audio_frame();
                 clear_screen();
                 continue;
             }
             vsync();
             draw_title();
             draw_title_sprites();
-            nes_audio_frame();
+            audio_frame();
             continue;
         }
 
@@ -1472,7 +1527,7 @@ int main(void) {
                 restart_title_sprites();
                 nes_audio_play(NES_SOUND_SCREEN_SWITCH);
                 vsync();
-                nes_audio_frame();
+                audio_frame();
                 clear_screen();
                 continue;
             }
@@ -1480,13 +1535,13 @@ int main(void) {
                 screen = SCREEN_LEVEL_SELECT;
                 nes_audio_play(NES_SOUND_SCREEN_SWITCH);
                 vsync();
-                nes_audio_frame();
+                audio_frame();
                 clear_screen();
                 continue;
             }
             vsync();
             draw_game_select(game_mode);
-            nes_audio_frame();
+            audio_frame();
             continue;
         }
 
@@ -1497,10 +1552,17 @@ int main(void) {
                 start_level = (uint8_t)((start_level + START_LEVEL_COUNT - 1) % START_LEVEL_COUNT);
             if (pressed & TENGEN_BTN_RIGHT)
                 start_level = (uint8_t)((start_level + 1) % START_LEVEL_COUNT);
+            if (!g_music_unlocked && shoulder_chord()) {
+                /* L+R together — the two buttons a NES pad never had, so the
+                 * game proper can never see this. */
+                g_music_unlocked = true;
+                g_music = MUSIC_KOROBEINIKI;
+                nes_audio_play(NES_SOUND_CHIRP);
+            }
             if (pressed & TENGEN_BTN_UP)
-                g_music = (uint8_t)((g_music + MUSIC_COUNT - 1) % MUSIC_COUNT);
+                g_music = (uint8_t)((g_music + music_choices() - 1) % music_choices());
             if (pressed & TENGEN_BTN_DOWN)
-                g_music = (uint8_t)((g_music + 1) % MUSIC_COUNT);
+                g_music = (uint8_t)((g_music + 1) % music_choices());
             if (pressed & (TENGEN_BTN_LEFT | TENGEN_BTN_RIGHT |
                             TENGEN_BTN_UP | TENGEN_BTN_DOWN))
                 nes_audio_play(NES_SOUND_MENU_SELECT);
@@ -1508,7 +1570,7 @@ int main(void) {
                 screen = SCREEN_GAME_SELECT;
                 nes_audio_play(NES_SOUND_SCREEN_SWITCH);
                 vsync();
-                nes_audio_frame();
+                audio_frame();
                 clear_screen();
                 continue;
             }
@@ -1524,7 +1586,7 @@ int main(void) {
                     link_lobby_start(&lobby, seed, start_level, g_music);
                     screen = SCREEN_LINK_WAIT;
                     vsync();
-                    nes_audio_frame();
+                    audio_frame();
                     clear_screen();
                     continue;
                 }
@@ -1539,16 +1601,16 @@ int main(void) {
                 screen = SCREEN_PLAYING;
                 match_running = true;
                 title_music = false;
-                nes_audio_play(kMusicTracks[g_music]);
+                start_music(g_music);
                 vsync();
-                nes_audio_frame();
+                audio_frame();
                 clear_screen();
                 draw_static_screen();
                 continue;
             }
             vsync();
             draw_level_select(start_level, g_music);
-            nes_audio_frame();
+            audio_frame();
             continue;
         }
 
@@ -1562,7 +1624,7 @@ int main(void) {
                 link_shutdown();
                 nes_audio_play(NES_SOUND_SCREEN_SWITCH);
                 vsync();
-                nes_audio_frame();
+                audio_frame();
                 clear_screen();
                 continue;
             }
@@ -1575,7 +1637,10 @@ int main(void) {
                 g_linked = true;
                 g_link_lost = false;
                 g_view = link_is_master() ? 0 : 1;
-                g_music = lobby.music < MUSIC_COUNT ? lobby.music : 0;
+                /* The master's choice wins, the egg included: both consoles run
+                   the same ROM, so a linked player who never found the code
+                   still hears it. */
+                g_music = lobby.music < MUSIC_UNLOCKED_COUNT ? lobby.music : 0;
                 tengen_link_start(&g_session, lobby.seed, lobby.start_level,
                                    link_is_master() ? TENGEN_PLAYER_1 : TENGEN_PLAYER_2);
                 g_shown_level = 0xFF;
@@ -1585,9 +1650,9 @@ int main(void) {
                 screen = SCREEN_PLAYING;
                 match_running = true;
                 title_music = false;
-                nes_audio_play(kMusicTracks[g_music]);
+                start_music(g_music);
                 vsync();
-                nes_audio_frame();
+                audio_frame();
                 clear_screen();
                 draw_static_screen();
                 continue;
@@ -1595,7 +1660,7 @@ int main(void) {
 
             vsync();
             draw_link_wait(&lobby);
-            nes_audio_frame();
+            audio_frame();
             continue;
         }
 
@@ -1633,7 +1698,7 @@ int main(void) {
             if (!g_dancer_active) {
                 oam_hide_all();
                 draw_static_screen();
-                nes_audio_play(kMusicTracks[g_music]);
+                start_music(g_music);
             } else {
                 /* The stage gets the WHOLE column, the way the cartridge's
                  * level-up blit gets the whole banner. Painting only the
@@ -1645,7 +1710,7 @@ int main(void) {
                 draw_next_in_left_box();
                 draw_dancers(g_dancer_elapsed);
             }
-            nes_audio_frame();
+            audio_frame();
             continue;
         }
 
@@ -1680,9 +1745,10 @@ int main(void) {
             g_view = 0;
             oam_hide_all();
             sweeping = false;
+            korobeiniki_stop();
             nes_audio_play(NES_MUSIC_SILENCE);
             vsync();
-            nes_audio_frame();
+            audio_frame();
             continue;
         }
 
