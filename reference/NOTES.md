@@ -614,6 +614,68 @@ eighteenth belonged to a spire row that is no longer there, so it has nothing
 left to overlay; `make gba-check --title` allows for that and would still
 catch a map that had gone wrong.
 
+## What the front end answers to, and it is not what a modern pad suggests
+
+`processMenuInput` (main.asm.txt:4614-4702) is short and unambiguous, and two
+of its three lines were missing from the port for a long time:
+
+| Where | Mask | What it does |
+| --- | --- | --- |
+| title, `$9FA4` | `BUTTON_SELECT+BUTTON_START` | either one goes to GAME SELECT |
+| menus, `$9FBC`/`$9FED` | `BUTTON_UP+BUTTON_DOWN+BUTTON_SELECT` | moves the cursor |
+| menus, `$A011` | `BUTTON_START` | confirms, and nothing else does |
+
+**SELECT moves the cursor the same way DOWN does**, which is not a guess:
+`LA048` (:4730) saves the buttons, sets the carry, and adds `$FE` if UP is held
+or `0` otherwise — so with the carry it is cursor−1 for UP and cursor+1 for
+everything else, SELECT included. That is the whole of "SELECT does not
+select".
+
+The cartridge has **no back button** on its menus: they are a one-way chain
+with an idle timer (`dec player1FallTimer` at `$9FB1`) that drops back to the
+title. So B here, and A as a second confirm, are the PORT'S — the only two
+buttons in `gba/main.c` that are not the ROM's, and marked as such.
+
+## The front end's music belongs to the screen
+
+The preview used to follow the player backwards: pick a tune, cancel out of
+the cable screen, back out to GAME SELECT, back out to the title, and the tune
+was still playing over the cathedral. Every transition remembered to START
+music and none remembered to put the old one back.
+
+The fix is to stop treating it as a thing transitions do. The title theme
+belongs to the title AND to GAME SELECT — on the cartridge nothing changes the
+music between them — and the level screen plays whichever tune the cursor is
+on. `front_music()` is called by each screen every frame and does nothing when
+what it is asked for is already playing, so backing out restores the theme by
+construction rather than by remembering to.
+
+The click before the tune, too: the cartridge queues `SOUND_MENU_SELECT` at
+`$9FC4` and only then calls `LA035` at `$A00A`.
+
+## The fireworks are in the audio measurement, and had to be held out of it
+
+`make gba-check --audio` compares the emulated APU against a golden recording
+frame by frame, and it started failing at frame 139 the moment the title
+screen learned to set off fireworks. Nothing was wrong with either: **every
+burst calls `setMusicOrSoundEffect` of its own** (`LACA0`, main.asm.txt:6104-
+6109), so the title's APU carries bangs the reference interpreter never made.
+
+Two things came out of chasing it:
+
+* The golden is now recorded the way the port starts a tune — `MUSIC_SILENCE`
+  and then the track, `LA035`'s order — because a recording of something the
+  ROM never does is not a reference.
+* It still has to be the TITLE theme, from a fresh engine. Recording a later
+  tune and meeting it mid-session matches nothing at all: the engine carries
+  state between tracks (envelope phases, vibrato counters), so only a track
+  started from reset can be matched against a reference started the same way.
+* The bursts are held off with the cartridge's own lever — `player2FallTimer`
+  ($6B), which `LA9DE` counts down and fires a burst at zero (:5740). The
+  harness keeps it away from zero for the duration. That is a fixture, never
+  anything the ROM knows about, the same shape as planting completed rows for
+  the line-clear check. With it, 399 of 399 frames are identical.
+
 ## Two players over a link cable
 
 The cartridge's 2P is a RACE: two independent 10-wide playfields, and nothing

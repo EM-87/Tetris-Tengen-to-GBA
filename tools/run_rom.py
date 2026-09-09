@@ -550,7 +550,9 @@ def nes6502_probe(rom_path, core):
         return None, why
     return tuple(core.memory.u16[addr + i * 2] for i in range(3)), None
 GOLDEN_PATH = "gba/audio_golden.bin"
-AUDIO_ALIGN_SEARCH = 30   # frames of ROM start-up to look through for the match
+AUDIO_ALIGN_SEARCH = 90   # frames of the ROM to look through for the match
+AUDIO_GOLDEN_SKIP = 60    # ...and of the golden, whose first frames the ROM
+                          # covers with the screen-switch effect
 
 # GBA sound registers, read back to confirm the translation reached them.
 REG_SOUNDCNT_X = 0x04000084
@@ -674,8 +676,26 @@ def audio_check(rom_path):
     apu_off = base + apu_offset - 0x03000000
     fault_off = base + fault_offset - 0x03000000
 
+    # THE FIREWORKS HAVE TO BE HELD OFF FOR THIS. Every burst calls
+    # setMusicOrSoundEffect of its own (LACA0, main.asm.txt:6104-6109), so the
+    # title's APU carries bangs the reference recording — which is a tune and
+    # nothing else — knows nothing about. That is the cartridge working
+    # correctly; it just cannot be inside the measurement.
+    #
+    # The cartridge's own lever for it is player2FallTimer ($6B): LA9DE counts
+    # it down once a frame and starts a burst when it reaches zero (:5740). The
+    # harness holds it away from zero, which is a fixture, never anything the
+    # ROM knows about — the same shape as planting completed rows for the
+    # line-clear check.
+    ram, why = game_state_address(rom_path, "g_nes_ram")
+    if ram is None:
+        print(f"SALTADO: {why}")
+        return 0
+    fireworks_timer = ram + 0x6B
+
     seen = []
     for _ in range(len(golden) + AUDIO_ALIGN_SEARCH):
+        core.memory.u8[fireworks_timer] = 200
         core.run_frame()
         seen.append(bytes(iwram[apu_off:apu_off + APU_REGS]))
 
@@ -683,22 +703,29 @@ def audio_check(rom_path):
     if iwram[fault_off]:
         failures.append("el interprete 6502 se detuvo por un opcode que no conoce")
 
-    # The ROM sets up for a few frames before the first updateAudio, so find
-    # where the two line up rather than assuming they start together.
-    start, matched = 0, 0
-    for offset in range(AUDIO_ALIGN_SEARCH):
-        n = 0
-        while n < len(golden) and offset + n < len(seen) and seen[offset + n] == golden[n]:
-            n += 1
-        if n > matched:
-            matched, start = n, offset
+    # WHERE THE TWO LINE UP, in both directions. The ROM reaches this screen
+    # through a SOUND_SCREEN_SWITCH effect that is still ringing when the tune
+    # starts, and the reference recording has no effect in it, so the first
+    # frames of the golden have no counterpart in the ROM at all — searching
+    # only for a shift in one of the two could never find the match. Skipping
+    # a few frames of each finds it, and everything after has to be identical.
+    start, gstart, matched = 0, 0, 0
+    for gskip in range(AUDIO_GOLDEN_SKIP):
+        for offset in range(AUDIO_ALIGN_SEARCH):
+            n = 0
+            while (gskip + n < len(golden) and offset + n < len(seen)
+                    and seen[offset + n] == golden[gskip + n]):
+                n += 1
+            if n > matched:
+                matched, start, gstart = n, offset, gskip
 
-    print(f"  motor de sonido alineado en el frame {start}; "
-          f"{matched} de {len(golden)} frames identicos al de referencia")
-    if matched < len(golden):
+    want = len(golden) - gstart
+    print(f"  motor de sonido alineado en el frame {start} de la ROM y el "
+          f"{gstart} del golden; {matched} de {want} frames identicos")
+    if matched < want:
         failures.append(f"el APU emulado se desvia en el frame {matched}: "
                         f"ROM {seen[start + matched].hex(' ')} "
-                        f"vs referencia {golden[matched].hex(' ')}")
+                        f"vs referencia {golden[gstart + matched].hex(' ')}")
 
     if not (core.memory.u16[REG_SOUNDCNT_X] & 0x0080):
         failures.append("el sonido del GBA nunca se encendio")
@@ -1036,16 +1063,32 @@ def leaving_title_check(rom_path):
     if ram is None:
         print(f"  (sin comprobar la musica: {why})")
     else:
-        def queued():
-            read = core.memory.u8[ram + 0x208]
-            return [core.memory.u8[ram + 0x200 + i] for i in range(8)], read
+        # setMusicOrSoundEffect stores AT the incremented write index
+        # ($0209), so that slot holds the last thing asked for and the one
+        # before it the one before that. $0208 is the READ index and says how
+        # far the engine has got, which is a different question.
+        def last_two():
+            write = core.memory.u8[ram + 0x209]
+            ring = [core.memory.u8[ram + 0x200 + i] for i in range(8)]
+            return ring[(write - 1) % 8], ring[write % 8]
+
+        # The last MUSIC request, ignoring the effects queued after it: ids
+        # below $0E are music, $0E and up are sound effects
+        # (constants.asm.txt:37-61). A screen that is already playing the right
+        # thing queues nothing, which is correct and has to read as correct.
+        def last_music():
+            write = core.memory.u8[ram + 0x209]
+            for back in range(8):
+                v = core.memory.u8[ram + 0x200 + (write - back) % 8]
+                if 0 < v < 0x0E:
+                    return v
+            return 0
 
         press_start(core)           # game select -> level select
         run(core, 12)
-        ring, read = queued()
         # Arriving at the selection screen settles the music: silence, then
         # whatever the cursor shows.
-        recent = [ring[(read - 2 + i) % 8] for i in range(2)]
+        recent = last_two()
         if recent[0] != 0x08:
             failures.append(
                 f"al entrar en la seleccion no se manda MUSIC_SILENCE (se mando ${recent[0]:02X})")
@@ -1055,18 +1098,84 @@ def leaving_title_check(rom_path):
             print(f"  al entrar en la seleccion: silencio y despues ${recent[1]:02X}")
 
         core.set_keys(KEYS["DOWN"]); run(core, 4); core.set_keys(); run(core, 10)
-        ring, read = queued()
-        moved = [ring[(read - 2 + i) % 8] for i in range(2)]
+        moved = last_two()
         if moved[0] != 0x08 or moved[1] == 0x08:
             failures.append("mover el cursor no toca la cancion nueva")
         else:
             print(f"  mover el cursor toca la cancion: silencio y despues ${moved[1]:02X}")
 
+        # AND IT HAS TO COME BACK OUT. The preview used to follow the player
+        # all the way to the title, because each transition remembered to
+        # start music and none remembered to put the old one back. The title
+        # theme belongs to the title AND to game select, so backing out of the
+        # level screen has to return to it.
+        core.set_keys(KEYS["B"]); run(core, 4); core.set_keys(); run(core, 14)
+        back = last_two()
+        if back[0] != 0x08 or back[1] != 0x09:
+            failures.append(
+                f"al volver a GAME SELECT no vuelve el tema del titulo: {back}")
+        else:
+            print("  al volver a GAME SELECT vuelve el tema del titulo")
+
+        core.set_keys(KEYS["B"]); run(core, 4); core.set_keys(); run(core, 14)
+        if last_music() != 0x09:
+            failures.append(
+                f"en el titulo no esta sonando su tema (${last_music():02X})")
+        else:
+            print("  y en el titulo sigue siendo el suyo")
+
+    # THE BUTTONS THE CARTRIDGE ANSWERS TO. processMenuInput takes SELECT as
+    # well as START on the title ($9FA4), and takes SELECT as a cursor MOVE on
+    # the menus, the same direction as DOWN ($9FBC, and LA048's carry-set add).
+    # Both were missing, which is the whole of "SELECT does not select".
+    core, screen = load(rom_path)
+    run(core, 40)
+
+    def tap(key, settle=12):
+        core.set_keys(key)
+        run(core, 4)
+        core.set_keys()
+        run(core, settle)
+
+    tap(KEYS["SELECT"])
+    if "GAME SELECT" not in tilemap_text(core, 8):
+        failures.append("SELECT no avanza desde el titulo")
+    else:
+        print("  SELECT avanza desde el titulo, como START")
+
+    # The cursor is a PALETTE change, not a text one — the chosen entry is
+    # drawn in the menu's orange instead of its white — so this compares the
+    # whole map entries, palette bits and all, rather than the text.
+    def menu_rows():
+        return [core.memory.u16[SCREENBLOCK_ADDR + (r * 32 + x) * 2]
+                for r in (10, 12) for x in range(4, 26)]
+
+    before = menu_rows()
+    tap(KEYS["SELECT"])
+    if menu_rows() == before:
+        failures.append("SELECT no mueve el cursor en GAME SELECT")
+    else:
+        print("  SELECT mueve el cursor en GAME SELECT")
+
+    tap(KEYS["A"])
+    if "LEVEL SELECT" not in tilemap_text(core, 8):
+        failures.append("A no confirma en GAME SELECT")
+    else:
+        print("  A confirma, ademas de START")
+
+    tune = tilemap_text(core, 15)
+    tap(KEYS["SELECT"])
+    if tilemap_text(core, 15) == tune:
+        failures.append("SELECT no mueve el cursor de musica")
+    else:
+        print("  SELECT mueve el cursor de musica")
+
     for f in failures:
         print(f"FALLA: {f}")
     if failures:
         return 1
-    print("OK: al salir del titulo no quedan sprites ni musica suyos.")
+    print("OK: al salir del titulo no quedan sprites ni musica suyos, y "
+          "SELECT y A hacen lo suyo.")
     return 0
 
 

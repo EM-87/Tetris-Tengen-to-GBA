@@ -241,8 +241,14 @@ AUDIO_SLICE_ALIGN = 0x100
 # reference one here. Any divergence — a mis-set flag, a wrong addressing mode
 # — shows up as a mismatched frame instead of as music that is subtly wrong in
 # a way nobody notices.
-AUDIO_GOLDEN_TRACK = 0x09       # MUSIC_TITLESCREEN, the first thing that plays
+# MUSIC_TITLESCREEN, the first thing that plays — and it has to be the first,
+# because the sound engine carries state between tracks (envelope phases,
+# vibrato counters) and only a track started from a fresh engine can be matched
+# against a reference started the same way. Recording a later tune and trying
+# to meet it mid-session matches nothing at all.
+AUDIO_GOLDEN_TRACK = 0x09
 AUDIO_GOLDEN_FRAMES = 400
+AUDIO_SILENCE_TRACK = 0x08      # MUSIC_SILENCE, constants.asm.txt:44
 
 # THE TITLE SCREEN'S SPRITES ARE RUN, NOT REIMPLEMENTED — for the same reason
 # the music is.
@@ -557,6 +563,11 @@ def record_audio_golden(rom: "Rom", track, frames):
 
     bus = Bus(prg)
     cpu = CPU(bus)
+    # LA035's order, which is the port's: MUSIC_SILENCE and then the track
+    # (main.asm.txt:4730-4735). Recording the golden without the silence made
+    # it a recording of something the ROM never does, and the two drifted
+    # apart around frame 139 — one bit of $4015, the noise channel's enable.
+    cpu.call(AUDIO_SET_TRACK_ADDR, a=AUDIO_SILENCE_TRACK)
     cpu.call(AUDIO_SET_TRACK_ADDR, a=track)
     out = bytearray()
     for _ in range(frames):

@@ -1328,6 +1328,43 @@ static bool g_repaint;           /* the static screen needs putting back */
 /* Which entry of musicSelectTable. It starts on LOGINSKA rather than on the
  * table's own first entry, which is SILENCE: a player who walks through the
  * menus pressing START should get music. */
+/* ----------------------------------------------------------------------- *
+ * WHAT THE FRONT END ANSWERS TO
+ *
+ * Straight out of processMenuInput (main.asm.txt:4614-4702), and not what a
+ * modern pad suggests:
+ *
+ *   on the TITLE      `and #BUTTON_SELECT+BUTTON_START` ($9FA4) — either one
+ *                     goes to GAME SELECT.
+ *   on a MENU         `and #BUTTON_UP+BUTTON_DOWN+BUTTON_SELECT` ($9FBC and
+ *                     $9FED) moves the cursor, and SELECT moves it the same
+ *                     way DOWN does: LA048 adds 1 with the carry set unless
+ *                     UP is held, in which case it adds -1. START, and only
+ *                     START, confirms ($A011).
+ *
+ * SELECT was missing from both, which is the whole of "SELECT does not
+ * select". The cartridge has no back button at all — its menus are a one-way
+ * chain with an idle timer that returns to the title — so B here, and A as a
+ * second confirm, are the PORT'S, added because a handheld player will try
+ * them. They are the only two buttons in this file that are not the ROM's. */
+#define MENU_ADVANCE (TENGEN_BTN_SELECT | TENGEN_BTN_START | TENGEN_BTN_A)
+#define MENU_STEP    (TENGEN_BTN_UP | TENGEN_BTN_DOWN | TENGEN_BTN_SELECT)
+#define MENU_BACKWARD (TENGEN_BTN_UP)
+#define MENU_CONFIRM (TENGEN_BTN_START | TENGEN_BTN_A)
+
+/* ----------------------------------------------------------------------- *
+ * THE FRONT END'S MUSIC BELONGS TO THE SCREEN
+ *
+ * The title theme covers the title AND game select — on the cartridge nothing
+ * changes the music between them — and the level screen plays whichever tune
+ * the cursor is on. Making that a property of the screen rather than a thing
+ * each transition remembers to do is what stops the preview following the
+ * player back out to the title, which is what it used to do.
+ * ----------------------------------------------------------------------- */
+#define FRONT_TITLE_THEME 0xFE
+#define FRONT_NOTHING     0xFF
+static uint8_t g_front_tune = FRONT_NOTHING;
+
 static uint8_t g_music = 1;
 /* The interlude's clock, which is the ROM's player1FallTimer: `active` while
  * the show is on, `timer` counting $7C..$FF at one step every sixteen frames.
@@ -1445,6 +1482,21 @@ static bool link_play_frame(void) {
     return !match_over();
 }
 
+/* Plays what this screen should be playing, and does nothing if it already
+ * is — restarting a tune every frame would be a stutter, not music. */
+static void front_music(uint8_t which) {
+    if (g_front_tune == which) return;
+    g_front_tune = which;
+    if (which == FRONT_TITLE_THEME) {
+        korobeiniki_stop();
+        /* Silence first, for the reason LA035 does; see start_music. */
+        nes_audio_play(NES_MUSIC_SILENCE);
+        nes_audio_play(NES_MUSIC_TITLESCREEN);
+    } else {
+        start_music(which);
+    }
+}
+
 /* One frame of a solo game: Start pauses, the cheat codes go in while paused
  * — both are the core's job (tengen_pause_input mirrors the ROM's own
  * pauseOrUnpause, which is where checkCodeInput lives). A code that fires
@@ -1546,7 +1598,6 @@ int main(void) {
     uint8_t game_mode = GAME_1P;
     uint8_t held_last = 0;
     bool sweeping = false;   /* true while the line-clear sweep owns the OAM */
-    bool title_music = false;
     bool match_running = false;
     TengenLobby lobby;
 
@@ -1564,12 +1615,8 @@ int main(void) {
         tengen_rng_step(&seed_source);
 
         if (screen == SCREEN_TITLE) {
-            if (!title_music) {
-                /* initializeTitleScreen ends with this (main.asm.txt:4489). */
-                korobeiniki_stop();
-                nes_audio_play(NES_MUSIC_TITLESCREEN);
-                title_music = true;
-            }
+            /* initializeTitleScreen ends with this (main.asm.txt:4489). */
+            front_music(FRONT_TITLE_THEME);
             if (TITLE_SKIN_COUNT > 1 && shoulder_either()) {
                 g_title_skin = (uint8_t)((g_title_skin + 1) % TITLE_SKIN_COUNT);
                 nes_audio_play(NES_SOUND_CHIRP);
@@ -1581,7 +1628,7 @@ int main(void) {
                 audio_frame();
                 continue;
             }
-            if (pressed & TENGEN_BTN_START) {
+            if (pressed & MENU_ADVANCE) {
                 screen = SCREEN_GAME_SELECT;
                 nes_audio_play(NES_SOUND_SCREEN_SWITCH);
                 vsync();
@@ -1603,16 +1650,19 @@ int main(void) {
         }
 
         if (screen == SCREEN_GAME_SELECT) {
-            if (pressed & TENGEN_BTN_UP)
-                game_mode = (uint8_t)((game_mode + GAME_COUNT - 1) % GAME_COUNT);
-            if (pressed & TENGEN_BTN_DOWN)
-                game_mode = (uint8_t)((game_mode + 1) % GAME_COUNT);
-            /* processMenuInput plays this on every move (main.asm.txt:4655). */
-            if (pressed & (TENGEN_BTN_UP | TENGEN_BTN_DOWN))
+            /* The title theme carries on through this screen, which is what
+             * the cartridge does — and what makes backing out of the level
+             * screen put it back. */
+            front_music(FRONT_TITLE_THEME);
+            if (pressed & MENU_STEP) {
+                game_mode = (pressed & MENU_BACKWARD)
+                    ? (uint8_t)((game_mode + GAME_COUNT - 1) % GAME_COUNT)
+                    : (uint8_t)((game_mode + 1) % GAME_COUNT);
+                /* processMenuInput plays this on every move (:4655). */
                 nes_audio_play(NES_SOUND_MENU_SELECT);
+            }
             if (pressed & TENGEN_BTN_B) {
                 screen = SCREEN_TITLE;
-            restart_title_sprites();
                 restart_title_sprites();
                 nes_audio_play(NES_SOUND_SCREEN_SWITCH);
                 vsync();
@@ -1620,14 +1670,8 @@ int main(void) {
                 clear_screen();
                 continue;
             }
-            if (pressed & TENGEN_BTN_START) {
+            if (pressed & MENU_CONFIRM) {
                 screen = SCREEN_LEVEL_SELECT;
-                /* Arriving here settles the music on whatever the cursor is
-                 * showing, so the screen tells the truth and the title theme
-                 * stops. The cartridge reaches the same place by its music
-                 * menu previewing on every cursor move; this port folds that
-                 * menu into this screen, so it also previews on arrival. */
-                start_music(g_music);
                 nes_audio_play(NES_SOUND_SCREEN_SWITCH);
                 vsync();
                 audio_frame();
@@ -1653,24 +1697,24 @@ int main(void) {
                 g_music_unlocked = true;
                 g_music = MUSIC_KOROBEINIKI;
                 nes_audio_play(NES_SOUND_CHIRP);
-                start_music(g_music);
             }
-            if (pressed & (TENGEN_BTN_UP | TENGEN_BTN_DOWN)) {
-                if (pressed & TENGEN_BTN_UP)
-                    g_music = (uint8_t)((g_music + music_choices() - 1) % music_choices());
-                else
-                    g_music = (uint8_t)((g_music + 1) % music_choices());
-                /* MOVING THE CURSOR PLAYS THE TUNE. The cartridge calls LA035
-                 * from `$A00A` on every cursor move while gameState is
-                 * GAMESTATE_MUSIC_SELECT (main.asm.txt:4694-4696), so you hear
-                 * each one as you pick it — and that, not anything explicit,
-                 * is what stops the title theme when you reach this screen.
-                 * Without it the title music simply played on for ever. */
-                start_music(g_music);
+            if (pressed & MENU_STEP) {
+                g_music = (pressed & MENU_BACKWARD)
+                    ? (uint8_t)((g_music + music_choices() - 1) % music_choices())
+                    : (uint8_t)((g_music + 1) % music_choices());
             }
-            if (pressed & (TENGEN_BTN_LEFT | TENGEN_BTN_RIGHT |
-                            TENGEN_BTN_UP | TENGEN_BTN_DOWN))
+            /* The click first and the tune after it, which is the order the
+             * cartridge queues them in: SOUND_MENU_SELECT at $9FC4, LA035 at
+             * $A00A (main.asm.txt:4655, 4696). */
+            if (pressed & (TENGEN_BTN_LEFT | TENGEN_BTN_RIGHT | MENU_STEP))
                 nes_audio_play(NES_SOUND_MENU_SELECT);
+            /* MOVING THE CURSOR PLAYS THE TUNE. The cartridge calls LA035 from
+             * `$A00A` on every cursor move while gameState is
+             * GAMESTATE_MUSIC_SELECT (main.asm.txt:4694-4696), so you hear each
+             * one as you pick it. front_music does nothing when the tune has
+             * not changed, so this also settles the music on arrival — which
+             * is what stops the title theme here. */
+            front_music(g_music);
             if (pressed & TENGEN_BTN_B) {
                 screen = SCREEN_GAME_SELECT;
                 nes_audio_play(NES_SOUND_SCREEN_SWITCH);
@@ -1679,7 +1723,7 @@ int main(void) {
                 clear_screen();
                 continue;
             }
-            if (pressed & TENGEN_BTN_START) {
+            if (pressed & MENU_CONFIRM) {
                 uint16_t seed = (uint16_t)(seed_source.lo | (seed_source.hi << 8));
                 nes_audio_play(NES_SOUND_SCREEN_SWITCH);
 
@@ -1705,7 +1749,7 @@ int main(void) {
                 set_piece_palette(g_session.game.player[0].piece.current);
                 screen = SCREEN_PLAYING;
                 match_running = true;
-                title_music = false;
+                g_front_tune = FRONT_NOTHING;
                 start_music(g_music);
                 vsync();
                 audio_frame();
@@ -1726,12 +1770,11 @@ int main(void) {
 
             if (pressed & TENGEN_BTN_B) {
                 screen = SCREEN_LEVEL_SELECT;
-                /* Arriving here settles the music on whatever the cursor is
-                 * showing, so the screen tells the truth and the title theme
-                 * stops. The cartridge reaches the same place by its music
-                 * menu previewing on every cursor move; this port folds that
-                 * menu into this screen, so it also previews on arrival. */
-                start_music(g_music);
+                /* No music call here: the level screen owns its own tune and
+                 * settles it on arrival. Playing it from the transition as
+                 * well left g_front_tune out of step with what was actually
+                 * sounding, which is how the preview used to follow the
+                 * player all the way back out to the title. */
                 link_shutdown();
                 nes_audio_play(NES_SOUND_SCREEN_SWITCH);
                 vsync();
@@ -1760,7 +1803,7 @@ int main(void) {
                 link_play_begin();
                 screen = SCREEN_PLAYING;
                 match_running = true;
-                title_music = false;
+                g_front_tune = FRONT_NOTHING;
                 start_music(g_music);
                 vsync();
                 audio_frame();
