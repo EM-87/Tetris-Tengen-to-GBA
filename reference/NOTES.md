@@ -478,6 +478,88 @@ The unlock travels over the link cable, because the lobby already exchanges
 the tune and only the master's survives the handshake — so a linked player who
 never found the code still hears it.
 
+## LA035: silence first, and the cursor plays the tune
+
+Two bugs came out of the same routine not being read closely enough.
+
+`setMusicOrSoundEffect` ($CFB1) only QUEUES a request: a ring at $0200-$0207
+with its write index at $0209 and its read index at $0208, and a full queue
+drops the request. Handing the engine a new track does NOT stop the old one —
+that is what `LA035` (main.asm.txt:4730-4735) is for:
+
+    LA035:  lda #MUSIC_SILENCE / jsr setMusicOrSoundEffect
+            ldy menuMusic / lda musicSelectTable,y / jmp setMusicOrSoundEffect
+
+**Silence, then the track, every time.** Without the silence the previous
+tune's channels keep running underneath the new one, which is exactly how the
+title theme ended up audible on top of a match's music.
+
+And `musicSelectTable` ($A043) is `$08, $04, $05, $06, $07` — the
+disassembly's own comment reads *"silence, loginska, bradinsky, karinka,
+troika"*. FIVE entries, the first of which is no music at all. The port
+offered only the four tunes for several builds, quietly dropping one of the
+cartridge's own choices.
+
+`LA035` has two callers worth knowing about:
+
+| Where | When |
+| --- | --- |
+| `$A00A` (main.asm.txt:4694-4696) | every cursor move while gameState is GAMESTATE_MUSIC_SELECT |
+| `$976C` (main.asm.txt:3428) | when a game starts |
+
+The first is the interesting one: **moving the cursor plays the tune under
+it**, and that — not anything explicit — is what stops the title theme on the
+cartridge. This port folds the ROM's separate MUSIC SELECT screen into its
+level-select screen, so it previews on cursor moves there, and once on
+arrival so the screen tells the truth about what is playing.
+
+## The title is the only screen with sprites on it
+
+The cathedral overlay and the fireworks are OAM, and nothing else in the port
+ever writes OAM — so nothing else ever cleared it, and leaving the title left
+sixty-three sprites standing in the middle of GAME SELECT and every screen
+after. `make gba-check --leave-title` now asserts both this and the music
+above, since neither would show up in any other check.
+
+## The HUD, inside the braid
+
+The blue rope beside the playfield is the same weave the cartridge borders its
+whole 1P screen with, so it has corners and horizontal runs as well as the
+vertical ones everybody notices — read straight off the border of SCREEN_1P by
+`read_braid_frame`, all of it in background palette bank 2:
+
+| Piece | Tiles |
+| --- | --- |
+| corners (2x2) | TL `60 61 / 65 66`, TR `9E 64 / 9F 69`, BL `87 88 / 8C 8D`, BR `8A 8B / 8F D1` |
+| top / bottom run | `62 / 67` and `89 / 8E`, one column, two rows |
+| left / right run | `6A 6B` and `73 74`, two columns, one row |
+
+**Two tiles thick, and that is not adjustable**: each tile is one half of the
+rope cut lengthwise (render `$6A` and `$6B` side by side and it is obvious).
+That single fact decides the whole layout. The reflow is now `10 | 10 | 10` —
+a closed rectangle of rope, the ten playable columns, another rectangle — and
+a ten-column box spends four columns on its frame, leaving **six columns and
+sixteen rows** of interior on each side.
+
+What fits, and what had to give:
+
+* **Left**: SCORE, LINES, LEVEL, HIGH SCORE and NEXT, each a label row over a
+  value row. No frame around each counter any more — the box IS the frame,
+  which is what makes the screen read as one object rather than a stack of
+  little plaques.
+* **Right**: the piece statistics. SEVEN bars do not fit in six columns, so
+  they go in TWO RANKS, four over three, with a blank row under each rank's
+  icons — without that the lower rank's bars start immediately under the upper
+  rank's icons and the whole box reads as one column of stripes. The icons,
+  the bar tiles, the palettes and the arithmetic are all still the ROM's; only
+  the arrangement is the port's, and it is forced.
+* **The banner does not fit at all.** It is six letters of three rows each,
+  eighteen rows with no padding anywhere in it, against sixteen of interior.
+  So when L+R calls for it, it takes the column instead of the box — except
+  for the two rope columns nearest the board, which are redrawn as a plain
+  strip, because the playfield keeps its own frame whatever the HUD is doing.
+  The dancers' stage is handled the same way.
+
 ## Two players over a link cable
 
 The cartridge's 2P is a RACE: two independent 10-wide playfields, and nothing

@@ -689,6 +689,50 @@ def read_banner(nametable, attributes):
     return tiles, banks
 
 
+# ---------------------------------------------------------------------------
+# THE BRAID, AS A FRAME.
+#
+# The blue rope that runs down either side of the playfield is the same weave
+# the cartridge borders its whole 1P screen with, and that border has
+# everything a closed rectangle needs: two-tile-thick runs along all four
+# sides and a 2x2 corner at each end. Every tile of it is in background
+# palette bank 2.
+#
+# TWO TILES THICK IS NOT A CHOICE. Each tile is one half of the rope cut
+# lengthwise (render tiles $6A and $6B side by side and it is obvious), so a
+# one-tile border would be half a braid. That is what fixes the arithmetic of
+# the HUD: a ten-column box spends four columns on its frame and leaves six.
+BRAID_CORNERS = {           # (column, row) of each corner's top-left tile
+    "tl": (0, 0), "tr": (30, 0), "bl": (0, 28), "br": (30, 28),
+}
+BRAID_RUNS = {              # a repeating cell of each side, and its shape
+    "top": ((10, 0), (1, 2)),      # one column, two rows
+    "bottom": ((10, 28), (1, 2)),
+    "left": ((0, 10), (2, 1)),     # two columns, one row
+    "right": ((30, 10), (2, 1)),
+}
+
+
+def read_braid_frame(nametable, attributes):
+    """The braid's corners and runs, straight off the 1P screen's border."""
+    def tile(c, r):
+        return nametable[r * 32 + c]
+
+    banks = set()
+    for c, r in list(BRAID_CORNERS.values()):
+        for dy in range(2):
+            for dx in range(2):
+                banks.add(attribute_palette(attributes, c + dx, r + dy))
+    if len(banks) != 1:
+        raise ValueError(f"the braid border spans palette banks {banks}, not one")
+
+    corners = {name: [[tile(c + dx, r + dy) for dx in range(2)] for dy in range(2)]
+               for name, (c, r) in BRAID_CORNERS.items()}
+    runs = {name: [[tile(c + dx, r + dy) for dx in range(w)] for dy in range(h)]
+            for name, ((c, r), (w, h)) in BRAID_RUNS.items()}
+    return corners, runs, banks.pop()
+
+
 def read_gameover_tiles(rom):
     """gameOverTiles as GAMEOVER_ROWS rows of GAMEOVER_COLS tile ids."""
     raw = rom.at(GAMEOVER_TILES_ADDR, GAMEOVER_COLS * GAMEOVER_ROWS)
@@ -765,7 +809,7 @@ def emit_screen_header(tiles, palettes, keep_cols, source, stats):
         f"#define SCREEN_1P_STATS_BAR_TILE 0x{STATS_BAR_TILE:02X}",
         "static const uint8_t kStatsIcons[2][SCREEN_1P_STATS_PIECES] = {",
     ]
-    icons, icon_banks, bar_bank, gameover, banner = stats
+    icons, icon_banks, bar_bank, gameover, banner, braid = stats
     for row in icons:
         lines.append("    { " + ", ".join(f"0x{t:02X}" for t in row) + " },")
     lines += [
@@ -812,6 +856,28 @@ def emit_screen_header(tiles, palettes, keep_cols, source, stats):
         f"#define T_BOX_BL 0x{gameover[3][0]:02X}",
         f"#define T_BOX_BOTTOM 0x{gameover[3][1]:02X}",
         f"#define T_BOX_BR 0x{gameover[3][GAMEOVER_COLS - 1]:02X}",
+        "",
+        "/* THE BRAID, AS A FRAME. The blue rope beside the playfield is the",
+        " * same weave the cartridge borders its whole screen with, so it has",
+        " * corners and horizontal runs as well as the vertical ones. Two tiles",
+        " * thick on every side, because each tile is half the rope cut",
+        " * lengthwise. See read_braid_frame in tools/extract_assets.py. */",
+        f"#define BRAID_BANK {braid[2]}",
+    ] + [
+        f"static const uint8_t kBraid{name.upper()}[2][2] = {{ "
+        + ", ".join("{ " + ", ".join(f"0x{v:02X}" for v in row) + " }"
+                    for row in braid[0][name]) + " };"
+        for name in ("tl", "tr", "bl", "br")
+    ] + [
+        "/* One repeating cell of each side: the top and bottom are one column",
+        " * by two rows, the sides two columns by one row. */",
+    ] + [
+        f"static const uint8_t kBraid{name.capitalize()}"
+        f"[{len(braid[1][name])}][{len(braid[1][name][0])}] = {{ "
+        + ", ".join("{ " + ", ".join(f"0x{v:02X}" for v in row) + " }"
+                    for row in braid[1][name]) + " };"
+        for name in ("top", "bottom", "left", "right")
+    ] + [
         "",
         "#endif /* SCREEN_1P_H */",
         "",
@@ -1426,7 +1492,8 @@ def main() -> int:
         "screen_1p.h": emit_screen_header(tiles, palettes, keep_cols, src,
                                            read_stats_icons(nametable, attributes)
                                            + (read_gameover_tiles(rom),
-                                              read_banner(nametable, attributes))),
+                                              read_banner(nametable, attributes),
+                                              read_braid_frame(nametable, attributes))),
         "palettes_rom.h": emit_palette_header(palette_sets, piece_palettes, src),
         "screen_proto.h": build_proto_header(args.proto),
     }

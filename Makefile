@@ -146,5 +146,6 @@ gba-check: $(GBA_ROM)
 	python3 tools/run_rom.py $(GBA_ROM) --title
 	python3 tools/run_rom.py $(GBA_ROM) --skin
 	python3 tools/run_rom.py $(GBA_ROM) --korobeiniki
+	python3 tools/run_rom.py $(GBA_ROM) --leave-title
 	python3 tools/run_rom.py $(GBA_ROM) --link
 	python3 tools/run_link.py $(GBA_ROM)

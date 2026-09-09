@@ -64,12 +64,15 @@ running ROM; only the side panels need reflowing).
 3. ~~Stand up `gba/`~~ — done. It builds with a stock `arm-none-eabi-gcc`
    (no devkitARM required), boots in mGBA, and `make gba-check` verifies it
    renders and plays rather than merely links.
-4. ~~HUD and title screen~~ — done, and laid out as `8 | 2 | 10 | 2 | 8`:
-   two boxes of equal width either side of the braided board. Left holds
-   SCORE / LINES / LEVEL / HIGH SCORE, right holds the next piece and the
-   piece histogram — BARS growing out of the cartridge's own piece icons, in
-   the cartridge's own palettes, which is what the original shows and not the
-   column of numbers this had for a while. See reference/NOTES.md.
+4. ~~HUD and title screen~~ — done, and laid out as `10 | 10 | 10`: the blue
+   braid that used to run down the board's edges as two bare strips is now
+   two CLOSED RECTANGLES of the same rope, one either side, with the HUD
+   inside them. The braid is two tiles thick and cannot be thinner, so each
+   box has a six-column, sixteen-row interior, and that fact decides
+   everything: the counters lose their individual frames (the box is the
+   frame), the seven-bar histogram goes in two ranks of four and three, and
+   the eighteen-row TETRIS banner does not fit at all and takes the column
+   instead when L+R asks for it. See reference/NOTES.md.
 5. ~~Palettes~~ — done, and these are the game's real colours rather than
    placeholders: the palette tables ARE in the disassembly even though the
    tile art isn't. Tracing them also caught a fidelity bug worth remembering:

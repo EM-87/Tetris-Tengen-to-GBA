@@ -53,17 +53,21 @@ static const uint16_t kNoteReg[NOTE_COUNT] = {
 /* One event: a pitch and how long it lasts, in sixteenth notes. */
 typedef struct { uint8_t note, len; } Event;
 
-/* THE A SECTION, played twice. Sixteenths, so a "4" is a quarter note. */
+/* THE A SECTION, played twice. Sixteenths, so a "4" is a quarter note and
+ * every line below adds up to 16 — one bar of 4/4. */
 static const Event kMelodyA[] = {
     {E5,4},{B4,2},{C5,2},{D5,4},{C5,2},{B4,2},
     {A4,4},{A4,2},{C5,2},{E5,4},{D5,2},{C5,2},
     {B4,6},{C5,2},{D5,4},{E5,4},
-    {C5,4},{A4,4},{A4,2},{REST,2},{REST,4},
+    /* The phrase ENDS on a quarter. Writing that last A4 as an eighth with a
+     * rest after it swallowed the note the ear is waiting for, which is what
+     * "it's missing a note" was. */
+    {C5,4},{A4,4},{A4,4},{REST,4},
 
     {D5,6},{F5,2},{A5,4},{G5,2},{F5,2},
     {E5,6},{C5,2},{E5,4},{D5,2},{C5,2},
     {B4,4},{B4,2},{C5,2},{D5,4},{E5,4},
-    {C5,4},{A4,4},{A4,2},{REST,2},{REST,4},
+    {C5,4},{A4,4},{A4,4},{REST,4},
 };
 
 /* THE B SECTION: the same harmony at half the speed, an octave of long
@@ -72,7 +76,7 @@ static const Event kMelodyB[] = {
     {E5,8},{C5,8},
     {D5,8},{B4,8},
     {C5,8},{A4,8},
-    {GS4,8},{B4,8},
+    {GS4,8},{B4,4},{REST,4},
     {E5,8},{C5,8},
     {D5,8},{B4,8},
     {C5,4},{E5,4},{A5,8},
@@ -107,11 +111,19 @@ static const Event kBassB[] = {
  * The sequencer
  *
  * Two voices reading their own lists, each holding a note for its length.
- * FRAMES_PER_SIXTEENTH sets the tempo: at 60Hz, 7 frames to a sixteenth is
- * 8.57 sixteenths a second, a little over 128 crotchets a minute — brisk, the
- * way this tune is usually taken.
+ *
+ * TEMPO. At 60Hz a sixteenth of N frames puts a crotchet at 900/N beats a
+ * minute, so 6 frames is 150 and 7 is 128.6. This tune is played at 150; the
+ * 7 it had was audibly a drag.
+ *
+ * ARTICULATION. Every note is cut one frame before its length runs out
+ * instead of being left to a decaying envelope. At 150bpm an eighth note is
+ * twelve frames and any envelope slow enough to sustain a quarter ran straight
+ * through the eighths, smearing them together; a hard note-off is both
+ * cleaner and independent of the tempo.
  * ----------------------------------------------------------------------- */
-#define FRAMES_PER_SIXTEENTH 7
+#define FRAMES_PER_SIXTEENTH 6
+#define NOTE_OFF_FRAMES 1
 
 /* The A section twice, then B, then round again — the shape the tune has had
  * since long before anyone put it in a video game. */
@@ -142,10 +154,10 @@ static Voice g_lead, g_bass;
 static bool g_playing;
 
 /* Duty 2 (a square wave) for the lead, duty 1 for the bass so the two are
- * told apart; a short decay envelope on each, which is what keeps repeated
- * notes from running into one another. */
-#define LEAD_ENVELOPE  ((12 << 12) | (0 << 11) | (2 << 8) | (2 << 6))
-#define BASS_ENVELOPE  ((9 << 12) | (0 << 11) | (3 << 8) | (1 << 6))
+ * told apart. Envelope step 0 means the volume does not change, which is what
+ * is wanted now that the note-off does the articulation. */
+#define LEAD_ENVELOPE  ((11 << 12) | (0 << 11) | (0 << 8) | (2 << 6))
+#define BASS_ENVELOPE  ((8 << 12) | (0 << 11) | (0 << 8) | (1 << 6))
 
 static void voice_reset(Voice *v) {
     v->section = 0;
@@ -153,11 +165,15 @@ static void voice_reset(Voice *v) {
     v->ticks = 0;
 }
 
-/* Advances one voice, returning the note to start now, or -1 to hold. */
+/* Advances one voice. Returns the note to start now, NOTE_HOLD to leave the
+ * channel alone, or NOTE_RELEASE for the gap between this note and the next. */
+#define NOTE_HOLD    (-1)
+#define NOTE_RELEASE (-2)
+
 static int voice_step(Voice *v, const Section *score) {
     if (v->ticks > 0) {
         v->ticks--;
-        return -1;
+        return v->ticks < NOTE_OFF_FRAMES ? NOTE_RELEASE : NOTE_HOLD;
     }
     if (v->index >= score[v->section].count) {
         v->index = 0;
@@ -190,23 +206,19 @@ void korobeiniki_frame(void) {
     if (!g_playing) return;
 
     int lead = voice_step(&g_lead, kMelody);
-    if (lead >= 0) {
-        if (lead == REST) {
-            REG_SOUND1CNT_H = 0;
-        } else {
-            REG_SOUND1CNT_L = 0;                 /* no sweep */
-            REG_SOUND1CNT_H = LEAD_ENVELOPE;
-            REG_SOUND1CNT_X = (uint16_t)(kNoteReg[lead] | 0x8000);
-        }
+    if (lead == NOTE_RELEASE || lead == REST) {
+        REG_SOUND1CNT_H = 0;
+    } else if (lead != NOTE_HOLD) {
+        REG_SOUND1CNT_L = 0;                     /* no sweep */
+        REG_SOUND1CNT_H = LEAD_ENVELOPE;
+        REG_SOUND1CNT_X = (uint16_t)(kNoteReg[lead] | 0x8000);
     }
 
     int bass = voice_step(&g_bass, kBass);
-    if (bass >= 0) {
-        if (bass == REST) {
-            REG_SOUND2CNT_L = 0;
-        } else {
-            REG_SOUND2CNT_L = BASS_ENVELOPE;
-            REG_SOUND2CNT_H = (uint16_t)(kNoteReg[bass] | 0x8000);
-        }
+    if (bass == NOTE_RELEASE || bass == REST) {
+        REG_SOUND2CNT_L = 0;
+    } else if (bass != NOTE_HOLD) {
+        REG_SOUND2CNT_L = BASS_ENVELOPE;
+        REG_SOUND2CNT_H = (uint16_t)(kNoteReg[bass] | 0x8000);
     }
 }

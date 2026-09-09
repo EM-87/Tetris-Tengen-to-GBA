@@ -54,13 +54,16 @@ SCREEN_TW_TILES = SCREEN_W // TILE
 # assumed.
 # The cartridge's columns are resequenced to put the playfield in the middle
 # with the HUD split either side; see SCREEN_SEGMENTS in extract_assets.py.
-# 8 | 2 | 10 | 2 | 8 — a box, the board's braid, the ten playable columns,
-# the braid again, and a box of the same width. Symmetric by construction.
-COL_BOX_L = (0, 8)        # score / lines / level
-COL_FRAME_L = (8, 10)     # the board's left frame, which is its left wall
+# 10 | 10 | 10 — a closed rectangle of the board's own blue braid, the ten
+# playable columns, and another rectangle. The braid that used to run down the
+# board's edges as two bare strips is now those boxes' inner sides, so the
+# playfield is framed exactly where it always was; the rope simply carries on
+# round the HUD. Symmetric by construction.
+COL_BOX_L = (0, 10)       # score / lines / level / high score / next
+COL_FRAME_L = (8, 10)     # the board's left frame — the box's inner side
 COL_FIELD = (10, 20)      # the ten playable columns — dead centre
-COL_FRAME_R = (20, 22)    # the board's right frame
-COL_BOX_R = (22, 30)      # next piece, and the piece histogram
+COL_FRAME_R = (20, 22)    # the board's right frame — the other box's
+COL_BOX_R = (20, 30)      # the piece statistics, in two ranks
 
 # The walls are the cartridge's own frame art, drawn once with the screen, not
 # blocks painted from the playfield buffer — see the note in gba/main.c.
@@ -988,6 +991,78 @@ def skin_check(rom_path):
 MUSIC_ROW = 15                  # where draw_level_select writes the tune's name
 
 
+# ---------------------------------------------------------------------------
+# Leaving the title: two things that were wrong for a whole build and that
+# nothing here would have caught, so they get their own check.
+#
+#   * The title is the only screen with SPRITES on it — the cathedral overlay
+#     and the fireworks. Nothing else ever writes OAM, so nothing else ever
+#     cleared it, and the cathedral's central tower stood in the middle of
+#     GAME SELECT and every screen after it.
+#
+#   * The title's music has to stop. The cartridge stops it by PREVIEWING each
+#     tune as the cursor moves over it (LA035 from $A00A), and LA035 always
+#     sends MUSIC_SILENCE before the track — handing the engine a new track
+#     without silencing the old one leaves both playing.
+# ---------------------------------------------------------------------------
+def leaving_title_check(rom_path):
+    core, screen = load(rom_path)   # `screen` must stay alive; see load()
+    failures = []
+
+    run(core, 40)
+    if not oam_visible(core, 0, 64):
+        failures.append("la pantalla de titulo no dibuja ningun sprite")
+
+    press_start(core)               # title -> game select
+    run(core, 10)
+    left = oam_visible(core, 0, 64)
+    if left:
+        failures.append(f"quedan {len(left)} sprites del titulo sobre GAME SELECT")
+    else:
+        print("  al salir del titulo no queda ni un sprite suyo por la pantalla")
+
+    # The engine's request ring: $0200-$0207 with its indices at $0208/$0209
+    # (setMusicOrSoundEffect, main.asm.txt:CFB1). Reading it says exactly what
+    # the port asked the cartridge to play, which is better than guessing from
+    # the sound registers.
+    ram, why = game_state_address(rom_path, "g_nes_ram")
+    if ram is None:
+        print(f"  (sin comprobar la musica: {why})")
+    else:
+        def queued():
+            read = core.memory.u8[ram + 0x208]
+            return [core.memory.u8[ram + 0x200 + i] for i in range(8)], read
+
+        press_start(core)           # game select -> level select
+        run(core, 12)
+        ring, read = queued()
+        # Arriving at the selection screen settles the music: silence, then
+        # whatever the cursor shows.
+        recent = [ring[(read - 2 + i) % 8] for i in range(2)]
+        if recent[0] != 0x08:
+            failures.append(
+                f"al entrar en la seleccion no se manda MUSIC_SILENCE (se mando ${recent[0]:02X})")
+        elif recent[1] == 0x08:
+            failures.append("se manda el silencio pero no la cancion detras")
+        else:
+            print(f"  al entrar en la seleccion: silencio y despues ${recent[1]:02X}")
+
+        core.set_keys(KEYS["DOWN"]); run(core, 4); core.set_keys(); run(core, 10)
+        ring, read = queued()
+        moved = [ring[(read - 2 + i) % 8] for i in range(2)]
+        if moved[0] != 0x08 or moved[1] == 0x08:
+            failures.append("mover el cursor no toca la cancion nueva")
+        else:
+            print(f"  mover el cursor toca la cancion: silencio y despues ${moved[1]:02X}")
+
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: al salir del titulo no quedan sprites ni musica suyos.")
+    return 0
+
+
 def korobeiniki_check(rom_path):
     core, screen = load(rom_path)   # `screen` must stay alive; see load()
     failures = []
@@ -1004,16 +1079,20 @@ def korobeiniki_check(rom_path):
     run(core, 8)
 
     # Four tunes, and no fifth on offer.
+    # musicSelectTable has FIVE entries and the first is silence
+    # (main.asm.txt:4741, "silence, loginska, bradinsky, karinka, troika").
     seen = set()
-    for _ in range(8):
+    for _ in range(10):
         seen.add(tilemap_text(core, MUSIC_ROW))
         tap(KEYS["DOWN"])
     if any("KOROBEINIKI" in row for row in seen):
-        failures.append("la quinta cancion se ofrece sin haber metido el codigo")
-    if len(seen) != 4:
-        failures.append(f"el menu ofrece {len(seen)} canciones, no 4: {sorted(seen)}")
+        failures.append("la cancion escondida se ofrece sin haber metido el codigo")
+    if len(seen) != 5:
+        failures.append(f"el menu ofrece {len(seen)} canciones, no 5: {sorted(seen)}")
+    elif not any("NO MUSIC" in row for row in seen):
+        failures.append("falta la primera entrada de musicSelectTable, el silencio")
     else:
-        print(f"  antes del codigo: {len(seen)} canciones, {sorted(seen)}")
+        print(f"  antes del codigo: {len(seen)} canciones, con el silencio de la ROM")
 
     # L+R together, the two buttons a NES pad never had.
     core.set_keys(KEYS["L"], KEYS["R"])
@@ -1029,11 +1108,11 @@ def korobeiniki_check(rom_path):
         print("  L+R descubre KOROBEINIKI y la deja elegida")
 
     unlocked = set()
-    for _ in range(10):
+    for _ in range(12):
         unlocked.add(tilemap_text(core, MUSIC_ROW))
         tap(KEYS["DOWN"])
-    if len(unlocked) != 5:
-        failures.append(f"tras el codigo el menu ofrece {len(unlocked)}, no 5")
+    if len(unlocked) != 6:
+        failures.append(f"tras el codigo el menu ofrece {len(unlocked)}, no 6")
     else:
         print(f"  tras el codigo: {len(unlocked)} canciones")
 
@@ -1177,6 +1256,8 @@ def main():
                      help="check the L/R title-skin easter egg")
     ap.add_argument("--korobeiniki", action="store_true",
                      help="check the hidden fifth tune")
+    ap.add_argument("--leave-title", action="store_true",
+                     help="check the title leaves no sprites or music behind")
     args = ap.parse_args()
 
     if args.selftest:
@@ -1197,6 +1278,8 @@ def main():
         sys.exit(skin_check(args.rom))
     if args.korobeiniki:
         sys.exit(korobeiniki_check(args.rom))
+    if args.leave_title:
+        sys.exit(leaving_title_check(args.rom))
 
     core, screen = load(args.rom)
     start_game(core)
