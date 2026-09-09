@@ -766,6 +766,122 @@ def tilemap_text(core, row, first=0, last=30):
     return "".join(out).strip()
 
 
+# ---------------------------------------------------------------------------
+# The title screen's sprites: the cathedral overlay and the fireworks.
+#
+# Neither is drawn by the port. Both are subroutines of the cartridge run on
+# the same 6502 interpreter as the sound engine, filling oamStaging, which
+# gba/main.c copies into OAM (see draw_title_sprites). What can be checked
+# from outside is exactly what matters: that the eighteen cathedral sprites
+# land on the picture, that bursts actually happen and animate, that the show
+# ends where the ROM ends it (frameCounterHigh = 4, about 1024 frames), that
+# entering the title again restarts it — initializeTitleScreen zeroes the
+# frame counter, so without that it would only ever play once — and that the
+# extra 6502 work still fits in a frame.
+# ---------------------------------------------------------------------------
+CATHEDRAL_SPRITES = 18
+TITLE_SHOW_FRAMES = 1024        # frameCounterHigh reaches 4
+
+
+def oam_visible(core, first, last):
+    """(x, y, tile) of every visible sprite in a range of OAM slots."""
+    out = []
+    for i in range(first, last):
+        a0 = core.memory.u16[OAM_ADDR + i * 8]
+        if (a0 & 0x0300) == 0x0200:
+            continue                        # the hidden bit
+        a1 = core.memory.u16[OAM_ADDR + i * 8 + 2]
+        a2 = core.memory.u16[OAM_ADDR + i * 8 + 4]
+        out.append((a1 & 0x1FF, a0 & 0xFF, a2 & 0x3FF))
+    return out
+
+
+def title_check(rom_path):
+    core, screen = load(rom_path)           # `screen` must stay alive; see load()
+    failures = []
+
+    run(core, 30)
+    cathedral = oam_visible(core, 0, CATHEDRAL_SPRITES)
+    if len(cathedral) != CATHEDRAL_SPRITES:
+        failures.append(
+            f"la catedral pone {len(cathedral)} de {CATHEDRAL_SPRITES} sprites")
+    off = [c for c in cathedral if not (0 <= c[0] < SCREEN_W and 0 <= c[1] < SCREEN_H)]
+    if off:
+        failures.append(f"sprites de la catedral fuera de pantalla: {off[:3]}")
+    if cathedral:
+        print(f"  catedral: {len(cathedral)} sprites, de ({cathedral[0][0]},"
+              f"{cathedral[0][1]}) a ({cathedral[-1][0]},{cathedral[-1][1]})")
+
+    # The fireworks live in slots 19 and up. Watch a while: bursts come every
+    # 8-71 frames and each lasts a few, so a couple of hundred frames sees
+    # several, and the tile ids have to CHANGE — a burst that froze on one
+    # frame of its animation would still be a lot of sprites.
+    seen_tiles, peak, bursts, was_up = set(), 0, 0, False
+    for _ in range(300):
+        core.run_frame()
+        vis = oam_visible(core, 19, 64)
+        peak = max(peak, len(vis))
+        for v in vis:
+            seen_tiles.add(v[2])
+        up = len(vis) > 0
+        if up and not was_up:
+            bursts += 1
+        was_up = up
+    if peak < 20:
+        failures.append(f"los fuegos artificiales nunca pasan de {peak} sprites")
+    if bursts < 2:
+        failures.append(f"solo {bursts} explosion(es) en 300 frames")
+    if len(seen_tiles) < 20:
+        failures.append(f"los fuegos no se animan: solo {len(seen_tiles)} tiles distintos")
+    print(f"  fuegos: {bursts} explosiones en 300 frames, hasta {peak} sprites, "
+          f"{len(seen_tiles)} tiles distintos")
+
+    # The show has to STOP, the way the ROM stops it.
+    run(core, TITLE_SHOW_FRAMES)
+    still = max(len(oam_visible(core, 19, 64)) for _ in [core.run_frame() for _ in range(120)])
+    if still:
+        failures.append("los fuegos siguen despues de que la ROM los termina")
+    else:
+        print(f"  la funcion termina sola pasados {TITLE_SHOW_FRAMES} frames, como en el cartucho")
+
+    # ...and start again on the next visit to the title.
+    for name in ("START", "B"):
+        core.set_keys(KEYS[name]); run(core, 4); core.set_keys(); run(core, 8)
+    seen = 0
+    for _ in range(300):
+        core.run_frame()
+        seen = max(seen, len(oam_visible(core, 19, 64)))
+    if seen < 20:
+        failures.append("al volver al titulo los fuegos no vuelven a empezar")
+    else:
+        print("  al volver al titulo la funcion vuelve a empezar")
+
+    # And the budget. Running two more of the ROM's subroutines on top of the
+    # sound engine, every frame, is the kind of thing that quietly costs a
+    # vblank; the symptom would be the show advancing slower than the screen.
+    # g_title_frame is the counter draw_title_sprites feeds the ROM, so if it
+    # does not go up exactly once per emulated frame, a frame was missed.
+    addr, why = game_state_address(rom_path, "g_title_frame")
+    if addr is None:
+        print(f"  (sin comprobar el presupuesto de CPU: {why})")
+    else:
+        before = core.memory.u16[addr]
+        run(core, 300)
+        advanced = (core.memory.u16[addr] - before) & 0xFFFF
+        if advanced != 300:
+            failures.append(
+                f"la pantalla de titulo avanzo {advanced} frames de 300: se pierden vblanks")
+        else:
+            print("  presupuesto de CPU: 300 frames de pantalla, 300 de la funcion")
+
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: la catedral y los fuegos son el codigo del cartucho, corriendo.")
+    return 0
+
+
 def link_check(rom_path):
     core, screen = load(rom_path)   # `screen` must stay alive; see load()
     failures = []
@@ -837,6 +953,8 @@ def main():
                      help="check that pausing actually silences the sound")
     ap.add_argument("--link", action="store_true",
                      help="check the 2-player front end with no cable attached")
+    ap.add_argument("--title", action="store_true",
+                     help="check the cathedral overlay and the fireworks")
     args = ap.parse_args()
 
     if args.selftest:
@@ -851,6 +969,8 @@ def main():
         sys.exit(pause_audio_check(args.rom))
     if args.link:
         sys.exit(link_check(args.rom))
+    if args.title:
+        sys.exit(title_check(args.rom))
 
     core, screen = load(args.rom)
     start_game(core)

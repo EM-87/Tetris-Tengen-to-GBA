@@ -117,10 +117,18 @@ running ROM; only the side panels need reflowing).
    interrupt-driven so neither console can miss a transfer or send a stale
    word. `make gba-check` runs two mGBA cores with a cable between them and
    asserts their game state matches byte for byte. See reference/NOTES.md.
-14. Still to do: coop (the core already models its 12-column field), the 2P
+14. ~~The title screen's cathedral overlay and fireworks~~ — done, and by the
+   same method as the audio: they are RUN, not reimplemented. Both are ROM
+   subroutines that fill `oamStaging` and touch nothing else, so they execute
+   on the sound engine's own 6502 interpreter — which they have to, because
+   the bursts call `setMusicOrSoundEffect`. See reference/NOTES.md.
+15. Still to do: coop (the core already models its 12-column field), the 2P
    starting handicap (`initHandicapGarbage`), and the ROM's COMPUTER player
    (`computerMove`, the VS and WITH modes) — which unlike two-human 2P needs
-   neither a second console nor a cable.
+   neither a second console nor a cable. Also unported: the attract-mode demo
+   the title starts at `frameCounterHigh` = 5 (`demoStart`), and the demo
+   cartridges' alternative frame/church art the user asked for as an easter
+   egg.
 
 ## Build
 

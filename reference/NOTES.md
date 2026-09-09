@@ -286,6 +286,83 @@ counters never count down in this game, and a port that models them gets
 nothing; what it must do instead is treat the enable bits as part of "has
 this channel changed". Measured against the running ROM, not assumed.
 
+## The title screen's sprites are the cartridge, running
+
+Two routines draw everything that moves on the title screen, and neither is
+reimplemented in the port — both are executed, on the same 6502 interpreter
+that already runs the sound engine (`gba/nes6502.c`, `gba/audio_prg.h`), and
+`gba/main.c` copies the sprites they leave in `oamStaging` ($0500) into GBA
+OAM. `make gba-check --title` asserts all of it against a running ROM.
+
+### drawCathedralSprites (`$B369`, main.asm.txt:6850)
+
+Eighteen sprites laid over the cathedral, from a table the disassembly itself
+labels *"this table is obfuscated"*. Each 4-byte entry is `tile, attr, packed,
+packed`, and the position comes out of the last two by an ASL x3 for x, then
+two `LSR`/`ROR` pairs, an `AND #$F8` and an `SBC ppuScrollYOffset` for y. Its
+own worked example is the only readable description of the encoding:
+
+    in  $02,$03,$CF,$01   ->   out y=$6F, tile=$02, attr=$03, x=$78
+
+and the port reproduces it exactly, because it runs it. The eighteen come out
+at NES x 120-160, y 111-175 — the central tower's stripes and the middle
+domes, detail the background cannot hold under the NES's one-palette-per-16px
+attribute grid.
+
+The port stages them ONCE per visit to the title rather than every frame. The
+cartridge re-runs the routine every frame only because its NMI rebuilds the
+whole OAM page every frame; the inputs are a constant table and
+`ppuScrollYOffset`, which nothing but the title's hidden both-Downs scroll
+(main.asm.txt:4470-4476) changes and this port has no scroll. Interpreting
+~500 6502 instructions to arrive at the same eighteen bytes was costing about
+one frame in fifty-five, which `--title` measures directly.
+
+### The fireworks (`$A9CE`, main.asm.txt:5730)
+
+A little bytecode, run once per frame. `addrTableAB25` ($AB25) holds four
+scripts; the title always takes the first, `relatedToFireworksTable0`, while a
+top-out during a game picks one of the four at random and plays a top-out
+sound with it. Each script entry is three bytes — the high and low halves of a
+pointer, plus a step code — naming one of nine 8x6 blocks of tile ids
+(`fireworksData00`..`08`, `$CDC0`-`$CF78`) that expand into a burst, or the
+sparkle frames built from tiles `$14`-`$17`.
+
+| Where | What |
+| --- | --- |
+| `LAA70` (:5836) | starts a burst: 45 sprites (OAM entries 19-63), y from `$50` on the title, x clamped to `$2C`..`$D4` then less `$1C`, rows 24px apart |
+| `LACA0` (:6096) | one step: a random drift of -15..+15 in x and 0..7 in y applied to all 45, and a random one of four palettes |
+| `LA9E9` (:5752) | advances the script every fourth frame (`frameCounterLow & 3`) |
+| `LA9DE` (:5740) | counts down `player2FallTimer` to the next burst — `rng & $3F + 8`, so 8 to 71 frames |
+| `LAA07` (:5772) | ON THE TITLE, stops scheduling once `frameCounterHigh` reaches 4 |
+
+That last row is why `initializeTitleScreen` zeroing the frame counter
+(main.asm.txt:4483-4485) matters: the show lasts about 1024 frames — seventeen
+seconds — per visit, and without restarting the counter it would play once and
+never again. (At `frameCounterHigh` = 5 and `frameCounterLow` = `$20` the
+cartridge starts its attract-mode demo, main.asm.txt:4154-4160. Not ported.)
+
+The bursts call `setMusicOrSoundEffect` themselves, which is why they have to
+run on the sound engine's machine and not a second one: the bang comes out of
+the same RAM the music does and mixes by the cartridge's own priority rules.
+
+### What the narrower screen costs
+
+The sprites are placed in NES screen pixels, and the port's title is a
+composition rather than a window — ten of the thirty rows are dropped (see
+TITLE_ROW_BLOCKS) — so a sprite's row goes through `kTitleRowMap`, the same
+list the artwork was cut with, and one standing on a dropped row is hidden
+rather than moved. Horizontally the port keeps NES columns 2-29, so a burst
+that `LACA0` has drifted far enough sideways clips at the edge. It clips on
+the NES too, eight pixels later.
+
+### CHR bank 3
+
+None of this draws with the dancers' tiles: the title's sprites come from CHR
+bank 3, which holds the cathedral overlay at `$02`-`$13`, the sparkles at
+`$14`-`$17` and the firework bursts filling everything from `$90` up. The port
+uploads it above the dancers' 256 tiles and installs `spritePalette1` for it,
+which is the set the title itself installs (main.asm.txt:4492-4494).
+
 ## Two players over a link cable
 
 The cartridge's 2P is a RACE: two independent 10-wide playfields, and nothing

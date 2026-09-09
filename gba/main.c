@@ -36,6 +36,7 @@
 #include "gba_hw.h"
 #include "palette.h"
 #include "nes_audio.h"
+#include "audio_prg.h"
 #include "link.h"
 #include "../src/tengen_core.h"
 #include "../src/tengen_link.h"
@@ -43,6 +44,7 @@
 /* Generated from a cartridge dump by tools/extract_assets.py. */
 #include "tiles_game.h"
 #include "tiles_dancers.h"
+#include "tiles_title_obj.h"
 #include "tiles_title.h"
 #include "screen_1p.h"
 #include "screen_title.h"
@@ -224,6 +226,8 @@
  * ----------------------------------------------------------------------- */
 #define CLEAR_HEAD_TILE 0x5B  /* $5B is the tail; $5B+4 = $5F is the head */
 #define PAL_OBJ_CLEAR 4
+#define TITLE_OBJ_TILE_BASE 256   /* CHR bank 3, above the dancers' 256 */
+#define PAL_OBJ_TITLE 5           /* banks 5-8: spritePalette1 */
 
 /* lineClearSingle..lineClearTetris (main.asm.txt:1548-1561), one character
  * per playfield column including the walls, exactly as the ROM stores them.
@@ -391,6 +395,16 @@ static void upload_sprite_tiles(void) {
      * the dancers pick among its four palettes with their own attribute bytes
      * — which is why the six are not all the same colour. */
     upload_palette_set(PAL_OBJ_DANCER, kRomPalette_obj_dancers, MEM_PALETTE_OBJ);
+
+    /* CHR bank 3, the title screen's sprite bank, above the dancers' 256:
+     * the cathedral overlay at tiles $02-$13, the sparkles at $14-$17 and the
+     * firework bursts from $90 up. The title installs spritePalette1 for them
+     * (main.asm.txt:4492-4494). */
+    vu16 *tdst = MEM_OBJ_TILES + TITLE_OBJ_TILE_BASE * 16;
+    for (unsigned i = 0; i < sizeof(kTitleObjTiles); i += 2) {
+        tdst[i / 2] = (uint16_t)(kTitleObjTiles[i] | (kTitleObjTiles[i + 1] << 8));
+    }
+    upload_palette_set(PAL_OBJ_TITLE, kRomPalette_obj_title, MEM_PALETTE_OBJ);
 
     /* piecePaletteIndexA, "Line clears" (main.asm.txt:5394-5396). */
     const uint8_t *clear = kRomPiecePalettes[10];
@@ -883,6 +897,120 @@ static void draw_title(void) {
     }
 }
 
+/* ----------------------------------------------------------------------- *
+ * THE TITLE SCREEN'S SPRITES — the cathedral overlay and the fireworks
+ *
+ * These are not drawn here. They are RUN. Both are subroutines of the
+ * cartridge that fill `oamStaging` ($0500) and touch nothing else, and the
+ * port already carries a 6502 interpreter with the ROM's own sound engine
+ * inside it (nes_audio.h, audio_prg.h) — so it calls them on that same
+ * machine, every frame, and copies the sixty-four sprites they leave behind
+ * into GBA OAM.
+ *
+ * That is not laziness, it is the only faithful reading available. The
+ * cathedral's eighteen sprites come out of a table the disassembly itself
+ * labels "this table is obfuscated": y and x are packed across two bytes and
+ * unpacked with an ASL, two LSR/ROR pairs, an AND and a SBC
+ * (main.asm.txt:6850-6890), and its only readable description is the worked
+ * example in that comment. The fireworks are a little bytecode:
+ * `relatedToFireworksTable0` names nine 8x6 tile blocks and drift/recolour
+ * steps, picks its own random offsets and palettes, ends the show once
+ * frameCounterHigh reaches 4, and fires setMusicOrSoundEffect for each burst
+ * — which is why running them on the SOUND ENGINE'S machine matters: the
+ * bangs come out of the same RAM the music does, and mix by the cartridge's
+ * own priority rules.
+ *
+ * What the port has to supply is the NMI's bookkeeping, since there is no
+ * NMI here: gameState (the routine branches on GAMESTATE_TITLE, both for
+ * which sprite table to use and for how long the show lasts), the frame
+ * counter it gates on, and the reset value of the RNG seed.
+ *
+ * Placing them needs one translation. The title art is a COMPOSITION, not a
+ * window — ten of the NES's thirty rows are dropped so twenty fit (see
+ * TITLE_ROW_BLOCKS) — so a sprite's NES row goes through kTitleRowMap, the
+ * same list the artwork was cut with, and a sprite standing on a dropped row
+ * is hidden rather than moved somewhere it does not belong.
+ * ----------------------------------------------------------------------- */
+#define TITLE_OAM_COUNT 64        /* the whole staging page: $0500-$05FF */
+/* The composition is one column in from the left (draw_title's `pad`) and
+ * starts at NES column SCREEN_TITLE_KEEP_COL0. */
+#define TITLE_X_SHIFT (((SCREEN_TW - SCREEN_TITLE_W) / 2 - SCREEN_TITLE_KEEP_COL0) * 8)
+
+static uint16_t g_title_frame;
+
+/* Once, at boot: resetContinued seeds the RNG here and clears the page
+ * (main.asm.txt:5703-5712). Zero is exactly the state the fireworks' first
+ * frame expects — it finds a null script pointer, parks all 45 sprites
+ * offscreen and schedules the first burst. The seed is deliberately NOT
+ * touched again: it is the sound engine's too. */
+static void init_title_sprites(void) {
+    uint8_t *ram = nes_rom_ram();
+    ram[NES_RAM_RNG_SEED] = NES_RAM_RNG_SEED_VALUE;
+    for (int i = 0; i < 0x100; i++) ram[NES_RAM_OAM_STAGING + i] = 0;
+    g_title_frame = 0;
+}
+
+static void restart_title_sprites(void);
+
+/* Every time the title screen starts, which is what initializeTitleScreen
+ * does with the frame counter (main.asm.txt:4483-4485) — and it matters:
+ * the show is over once frameCounterHigh reaches 4, so without this it would
+ * play only on the very first visit. The script pointer and the burst timer
+ * are left alone, because the cartridge leaves them alone too.
+ *
+ * The cathedral is staged HERE rather than per frame. The cartridge re-runs
+ * it every frame because its NMI rebuilds the whole OAM page every frame;
+ * this port does not, and the routine's only inputs are a constant table and
+ * ppuScrollYOffset — which only the title's hidden both-Downs scroll changes
+ * (main.asm.txt:4470-4476) and this port has no scroll. Its eighteen sprites
+ * are therefore the same eighteen bytes every frame, and interpreting ~500
+ * 6502 instructions to arrive at them again was costing about one frame in
+ * fifty-five. Nothing else writes staging entries 0-17: the fireworks' own
+ * loops all start at $4C, entry 19. */
+static void restart_title_sprites(void) {
+    g_title_frame = 0;
+    nes_rom_ram()[NES_RAM_GAMESTATE] = NES_GAMESTATE_TITLE;
+    nes_rom_call(NES_CATHEDRAL_ADDR, 0, 8000);
+}
+
+static void draw_title_sprites(void) {
+    uint8_t *ram = nes_rom_ram();
+    ram[NES_RAM_GAMESTATE] = NES_GAMESTATE_TITLE;
+    ram[NES_RAM_FRAME_LOW] = (uint8_t)g_title_frame;
+    ram[NES_RAM_FRAME_HIGH] = (uint8_t)(g_title_frame >> 8);
+    g_title_frame++;
+
+    /* The step limit is a hang guard, not timing: the fireworks' worst frame
+     * rewrites all 45 of their sprites twice over. */
+    nes_rom_call(NES_FIREWORKS_ADDR, 0, 12000);
+
+    const uint8_t *oam = ram + NES_RAM_OAM_STAGING;
+    for (int i = 0; i < TITLE_OAM_COUNT; i++) {
+        int ny = oam[i * 4];
+        uint8_t tile = oam[i * 4 + 1];
+        uint8_t attr = oam[i * 4 + 2];
+        int nx = oam[i * 4 + 3];
+        /* The NES hides a sprite by parking it below the visible 240 lines;
+         * this code uses $F7 for exactly that. */
+        int row = (ny >= 0 && ny < 240) ? kTitleRowMap[ny / 8] : SCREEN_TITLE_ROW_DROPPED;
+        if (row == SCREEN_TITLE_ROW_DROPPED) {
+            MEM_OAM[i * 4] = OBJ_ATTR0_HIDDEN;
+            continue;
+        }
+        int x = nx + TITLE_X_SHIFT;
+        if (x < -7 || x >= SCREEN_TW * 8) {
+            MEM_OAM[i * 4] = OBJ_ATTR0_HIDDEN;
+            continue;
+        }
+        /* Low two bits of the NES attribute byte pick one of the four
+         * palettes of the set the title installs, spritePalette1. */
+        oam_set(i, x, row * 8 + (ny & 7),
+                 (uint16_t)(TITLE_OBJ_TILE_BASE + tile), false,
+                 PAL_OBJ_TITLE + (attr & 3));
+    }
+    for (int i = TITLE_OAM_COUNT; i < 128; i++) MEM_OAM[i * 4] = OBJ_ATTR0_HIDDEN;
+}
+
 /* The level selector, inside the ROM's own menu frame. The wording matches
  * the cartridge's ("LEVEL SELECT" is one of the strings it writes into this
  * same empty middle), and the digits are its font. */
@@ -1189,6 +1317,10 @@ int main(void) {
     upload_sprite_tiles();
     oam_hide_all();
     nes_audio_init();
+    /* After nes_audio_init: this runs the cartridge's code, and the machine it
+     * runs on is the sound engine's. */
+    init_title_sprites();
+    restart_title_sprites();
 
     REG_BG0CNT = BG_4BPP | BG_SIZE_32x32 | BG_CHARBLOCK(CHARBLOCK) |
                   BG_SCREENBLOCK(SCREENBLOCK);
@@ -1232,6 +1364,7 @@ int main(void) {
             }
             vsync();
             draw_title();
+            draw_title_sprites();
             nes_audio_frame();
             continue;
         }
@@ -1246,6 +1379,8 @@ int main(void) {
                 nes_audio_play(NES_SOUND_MENU_SELECT);
             if (pressed & TENGEN_BTN_B) {
                 screen = SCREEN_TITLE;
+            restart_title_sprites();
+                restart_title_sprites();
                 nes_audio_play(NES_SOUND_SCREEN_SWITCH);
                 vsync();
                 nes_audio_frame();
@@ -1450,6 +1585,7 @@ int main(void) {
          * neither player should have to wait for the other to agree. */
         if (!match_running && (pressed & TENGEN_BTN_START)) {
             screen = SCREEN_TITLE;
+            restart_title_sprites();
             g_linked = false;
             g_link_lost = false;
             g_view = 0;

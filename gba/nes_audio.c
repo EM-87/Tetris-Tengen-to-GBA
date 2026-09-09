@@ -220,6 +220,15 @@ void nes_audio_play(uint8_t track_id) {
     nes6502_call(&g_cpu, AUDIO_SET_TRACK_ADDR, track_id, 20000);
 }
 
+/* The rest of the cartridge, for callers that are not the sound engine; see
+ * the note in nes_audio.h. One machine, one RAM — deliberately. */
+bool nes_rom_call(uint16_t addr, uint8_t a, uint32_t max_steps) {
+    if (!g_ready || nes6502_faulted(&g_cpu)) return false;
+    return nes6502_call(&g_cpu, addr, a, max_steps);
+}
+
+uint8_t *nes_rom_ram(void) { return g_nes_ram; }
+
 /* True if any of a channel's registers hold a different value than they did
  * last frame. */
 static bool changed(const uint8_t *apu, int first, int last, uint8_t enable_bit) {

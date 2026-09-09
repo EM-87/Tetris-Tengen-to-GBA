@@ -32,6 +32,7 @@
 #define NES_AUDIO_H
 
 #include <stdint.h>
+#include <stdbool.h>
 
 /* Track ids, from reference/disasm/constants.asm.txt:37-61. Passed straight
  * to the cartridge's own setMusicOrSoundEffect. */
@@ -61,5 +62,22 @@ void nes_audio_play(uint8_t track_id);
 /* Runs one frame of the engine and applies what it wrote. Call once per
  * frame, at the same rate the NES called it from its NMI. */
 void nes_audio_frame(void);
+
+/* ----------------------------------------------------------------------- *
+ * THE CARTRIDGE'S MACHINE, for the other things that run on it.
+ *
+ * The sound engine is not the only piece of the ROM the port executes rather
+ * than imitates: the title screen's cathedral overlay and its fireworks are
+ * too (see audio_prg.h, and the note beside draw_title_sprites in main.c).
+ * They are not a second emulator. They are the SAME 6502, the same PRG slice
+ * and the same 2KB of RAM, because on the cartridge they are one program —
+ * the fireworks call setMusicOrSoundEffect for their bursts, so a burst on a
+ * separate machine would be silent.
+ *
+ * These two functions are the whole interface: run one of the ROM's
+ * subroutines to its RTS, and reach the RAM it worked in.
+ * ----------------------------------------------------------------------- */
+bool nes_rom_call(uint16_t addr, uint8_t a, uint32_t max_steps);
+uint8_t *nes_rom_ram(void);
 
 #endif /* NES_AUDIO_H */
