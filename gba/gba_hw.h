@@ -19,17 +19,24 @@ typedef volatile uint32_t vu32;
 #define REG_DISPSTAT  (*(vu16 *)0x04000004)
 #define REG_VCOUNT    (*(vu16 *)0x04000006)
 #define REG_BG0CNT    (*(vu16 *)0x04000008)
+#define REG_BG1CNT    (*(vu16 *)0x0400000A)
+#define REG_BG1HOFS   (*(vu16 *)0x04000014)
+#define REG_BG1VOFS   (*(vu16 *)0x04000016)
 #define REG_KEYINPUT  (*(vu16 *)0x04000130)
 
 /* DISPCNT */
 #define DCNT_MODE0    0x0000
 #define DCNT_BG0      0x0100
+#define DCNT_BG1      0x0200
 #define DCNT_OBJ      0x1000
 #define DCNT_OBJ_1D   0x0040  /* sprite tiles laid out linearly, not in a grid */
 
 /* BGxCNT */
 #define BG_4BPP       0x0000
 #define BG_SIZE_32x32 0x0000
+/* 0 is nearest the viewer; on a tie the lower-numbered background wins, which
+ * is why anything meant to sit ON another layer needs this set explicitly. */
+#define BG_PRIORITY(n)    ((uint16_t)(n))
 #define BG_CHARBLOCK(n)   ((uint16_t)((n) << 2))
 #define BG_SCREENBLOCK(n) ((uint16_t)((n) << 8))
 

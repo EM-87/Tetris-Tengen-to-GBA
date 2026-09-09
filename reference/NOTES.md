@@ -74,7 +74,7 @@ the level-up rule were all initially plausible-looking and wrong — so treat
 | DAS timing | `main.asm.txt:96-150` (`doSomethingWithInputDuringGameplay`) | A shift fires from two sources OR'd together: the fresh press (the caller hands the edge bits in via `player1ControllerNew`, `main.asm.txt:82`) and the DAS repeat. The counter increments on **every** frame the direction is held, the press frame included — so the first repeat lands on the 11th frame *of the hold*, not 11 frames after it. On firing it reloads to **5, not 0**, which is what makes every subsequent repeat 6 frames apart. Encoded as `TENGEN_DAS_CHARGE_FIRST`/`TENGEN_DAS_CHARGE_REPEAT`. |
 | Auto-rotate | `main.asm.txt:153-183` | Holding B (`autoRotateCounterP1/2`) or A (`autoRotateClockwiseP1/2`) for 15 frames (`$0F`) starts auto-rotating. Unlike DAS, **the counter is never reloaded down** once past 15 — it fires again *every single frame* thereafter for as long as the button is held (until release resets it to 0). This is the source of Tengen's well-known "hold a button and the piece spins wildly" behavior. B increments orientation (this file calls that "clockwise"); A decrements it ("counter-clockwise") — the ROM's own variable names for these two counters are reversed from what they do, which is worth remembering if `main.asm.txt` is read again later. |
 | Wall kick | `main.asm.txt:538-575` | Traced via the actual carry-flag convention of `checkPositionAndClearFlagsOnCarrySet` (confirmed by reading `main.asm.txt:1017-1073`: the routine returns **carry SET = valid position**, via the `$2D` sentinel — `$2D` starts at `$FF`/negative and a `bmi`+`sec` path returns carry set only when no collision was ever recorded during the scan). With that convention, rotation is: try the new orientation in place → if valid, keep it; else shift one column **left** and try the same new orientation → if valid, keep both; else revert orientation and position entirely. It never tries right. This matches the wiki quote already sitting in `notes.txt.txt:160`: *"Because basic rotation can fail when a piece is against the right wall, but not when the same piece is against the left wall, this game will wallkick one square to the left if basic rotation fails."* — including the (real, faithfully reproduced) oddity that it still only ever tries left even flush against the left wall, where a left kick can't possibly help. |
-| Level-up thresholds | `main.asm.txt:1473-1478` (`bonusLinesTable`) | Bytes decode as ASCII digit pairs: 03,06,09,12,15,20,25,30,35,40,45,50,55,60,65,70,75,80,85,90,95 — i.e. every 3 lines up to level 5, then every 5 lines. Encoded in `TENGEN_LEVEL_LINE_THRESHOLDS`. |
+| Level-up thresholds | `main.asm.txt:1473-1478` (`bonusLinesTable`), **and its two readers at `:1482-1487` and `:3145-3151`** | Bytes decode as ASCII digit pairs: 03,06,09,12,15,20,25,30,...,95. **THOSE PAIRS ARE HUNDREDS-AND-TENS, NOT TENS-AND-ONES.** Both readers compare them against `player1LinesHundreds` and `player1LinesTens` — the top two digits of the line counter — so the ones digit never enters the test and "03" means the first total whose tens digit is 3: **thirty lines**. The real curve is **30, 60, 90, 120, 150, then every 50 to 950**, which is also what the ROM's own comment above the table says ("first check at X03X, then every 30 lines until X150 at which point it's every 50 lines"). Reading the pairs as tens-and-ones gives 3, 6, 9 ... 95 — a level every three lines — and that is what this port shipped with until it was caught; the table is 21 entries either way, which is why the count matched while every value was ten times too small. `TENGEN_LEVEL_LINE_THRESHOLDS` now holds the line totals and `TENGEN_LEVEL_LINE_TENS` the ROM's own pairs. |
 | **Level is recomputed, not incremented** | `main.asm.txt:3140-3186` | On every line clear the ROM walks `bonusLinesTable` from the start, counts how many thresholds the running line total has reached, and sets the level to `start_level + that count` — committing it only if it's higher than the current level. This is not equivalent to stepping the level by one per clear: a clear that crosses two thresholds at once advances two levels. The start level offsets the whole curve, and the ones digit is clamped at '7' so the result never exceeds 17. |
 | "Plant piece into playfield" on lock | `main.asm.txt:856-908` (`L8565`) | Confirms the nibble-packing scheme; reimplemented behaviorally (not bit-for-bit) in `lock_piece`. |
 | **Gravity curve** | `main.asm.txt:3970-4025` (`L9AEE`, `possibleFallTimerTable` at `$9B36`) | 18 entries, one per level 0-17: 33,28,24,20,17,14,11,9,7,6,5,5,4,4,3,4,3,3 frames per row. **Entry 15 (4) is genuinely slower than entry 14 (3)** — the ROM's bytes really do bump back up; it's not a transcription slip, and the fractional masks below depend on it. Coop uses a separate, strictly monotonic table (`L9B48` at `$9B48`): 33,28,24,20,18,17,16,15,14,13,12,11,10,9,8,7,6,5. |
@@ -91,7 +91,7 @@ the level-up rule were all initially plausible-looking and wrong — so treat
 | **Which palette set each screen uses** | `updatePalette` at `main.asm.txt:5268-5287`, tables at `:5292-5321`; callers at `:2044`, `:3308-3310`, `:4492-4494`, `:4547-4549` | `updatePalette(n)` writes 16 bytes — four palettes — from `bgPalette0 + n*16` to the background palettes for n<3 and the sprite palettes for n>=3. Title: `bgPalette0` + `spritePalette1`. Menu: `bgPalette1` + `spritePalette0`. Game: `bgPalette2` + `spritePalette0`. The level-up interlude switches sprites to `spritePalette2`, and the dancers' own attribute bytes (`$8E78`) pick among its four — which is why the six are three different colours, not one. The title screen in particular uses **all four** of its palettes; assuming one covered it is what made this port's title monochrome. |
 | **Screen layout** | `gameModeNametable1P` at `main.asm.txt:C028` onward | The 1P screen is 32x30 tiles and is built from TWO identical framed board areas side by side: braid at columns 0-1, ten playable columns at 2-11, braid at 12-13, the 4-column TETRIS banner at 14-17, then the same again — braid at 18-19, ten columns at 20-29, braid at 30-31. The playfield rows are 8-27, exactly 20. 2P puts a player in each area; 1P draws its score/stats panel over the second one, which is why that half is blank in the nametable. The header strip in rows 0-7 holds the SCORE / LINES / LEVEL / NEXT labels; those are multi-tile graphics, while "HIGH SCORE" and "STATS" are plain ASCII, because the tileset's letters and digits sit at their ASCII codes. |
 | **The playfield's tiles come from the nibble itself** | `L8544` at `main.asm.txt:829-842` | The routine that fills the screen buffer stores the playfield nibble **directly** as the nametable tile id — no lookup, no offset. So cell value 1-14 is a block tile and the wall's `$F` is tile `$0F`, which is why walls need no special case in the renderer. `$0F` is a block graphic with transparent corners, not a solid bar; a renderer that assumes a solid wall column will look wrong. |
-| **The dancers** | poses at `$C8BC-$C9FF`; positions at `$8E5C/$8E6A/$8E78`; how many, at `main.asm.txt:2085-2108`; stage blit `levelUpAnimationColsRows1` at `$B7FF` with tiles at `LC82C` ($C82C); driver `LB015` at `:6392-6499` | Sprites, four 8x8 tiles in a 2x2 each. **A 1P or 2P game shows six**, stacked in ONE column at x `$61` with y `$D0,$B8,$A0,$88,$70,$58` — 24 pixels apart; coop instead uses entries 6-13, in pairs down the two sides. How many actually appear grows with the player's bonus counters and is capped at 6 (`:2085-2108`, which also picks which range of the tables the mode uses). The level-up blit is not just clearing the TETRIS banner to make room: it **draws their stage** into it — 4 columns x 18 rows at nametable (14,10), five ledges of tile `$9D` one every three rows, i.e. 24 pixels apart, exactly under the six dancers' feet. They start just left of the banner and walk right onto it, one pixel every four frames, while the pose advances every eight. **The driver is now traced too** (`LB015`): each dancer holds a pointer into a little program (`$019A/$01A2`), advanced by one 2-byte entry every 8 frames, and what an entry MEANS is decided by comparing its value against two addresses — `>= $C8BC` is a pose (four tile ids), `>= $B14D` but below that is a jump to another program, and below `$B14D` it is a random branch: `shuffleRngSeed5x` picks one of sixteen pointers from the table the entry names. A dancer only walks while its program lies below `$B181`. **Still not wired up in the port:** the program DATA itself, so the port's dancers walk the pose table from staggered starts instead of following their own scripts. Everything else about them — art, poses, stage, positions, count, cadence — is the ROM's. |
+| **The dancers** | poses at `$C8BC-$C9FF`; positions at `$8E5C/$8E6A/$8E78`; how many, at `main.asm.txt:2085-2108`; stage blit `levelUpAnimationColsRows1` at `$B7FF` with tiles at `LC82C` ($C82C); driver `LB015` at `:6392-6499` | Sprites, four 8x8 tiles in a 2x2 each. **A 1P or 2P game shows six**, stacked in ONE column at x `$61` with y `$D0,$B8,$A0,$88,$70,$58` — 24 pixels apart; coop instead uses entries 6-13, in pairs down the two sides. How many actually appear is `L8D8B` (`:2050-2082`) and it is now ported: **one, plus one per triple and two per tetris cleared since the last level-up**, summed over the players still in the game, capped at 8 and then at **6 in 1P and 2P** — coop is the only mode that uses all eight, because it is the only one with a second column of positions. Singles and doubles buy nothing. The tally lives at `$6C-$73` (two players interleaved, `$6C`/`$6E`/`$70`/`$72` for p1 = singles/doubles/triples/tetrises), is zeroed on a new game (`:3455-3458`) and again by `finishLevelUpAnimation` (`:2476-2482`), so it is **per level, not per game**; the level-up screen also weights it x1/x4/x9/x25 (`L8E54`, `:2160`) for its bonus figures, which the port does not show. In the port it is `TengenPlayerState.clear_counts` and `tengen_dancer_count`. The level-up blit is not just clearing the TETRIS banner to make room: it **draws their stage** into it — 4 columns x 18 rows at nametable (14,10), five ledges of tile `$9D` one every three rows, i.e. 24 pixels apart, exactly under the six dancers' feet. They start just left of the banner and walk right onto it, one pixel every four frames, while the pose advances every eight. **The driver is now traced too** (`LB015`): each dancer holds a pointer into a little program (`$019A/$01A2`), advanced by one 2-byte entry every 8 frames, and what an entry MEANS is decided by comparing its value against two addresses — `>= $C8BC` is a pose (four tile ids), `>= $B14D` but below that is a jump to another program, and below `$B14D` it is a random branch: `shuffleRngSeed5x` picks one of sixteen pointers from the table the entry names. A dancer only walks while its program lies below `$B181`. **Still not wired up in the port:** the program DATA itself, so the port's dancers walk the pose table from staggered starts instead of following their own scripts. Everything else about them — art, poses, stage, positions, count, cadence — is the ROM's. |
 | **Title and menu screens** | `titleScreenNametable` at `$CA00`; `menuNametable` at `$B8A8` | The title is 32x30 with a 4-tile-thick border; its nametable carries **no** attribute table (the next thing in the ROM is `fireworksData00`), because the whole screen is drawn in one palette — bgPalette0's blues. The menu is the same decorative frame with an empty middle the game writes its wording into at runtime, which is why its selection screens all look alike. |
 | **The line-clear animation** | timer set at `main.asm.txt:1192-1197`; sprite staged by `L87FB` at `:1230-1273`; driver `stageLineClearAnimation` at `:1274-1338`; the write-back `L89E9` at `:1508-1546`; strings `lineClearSingle..lineClearTetris` at `:1548-1561`; palette `piecePaletteIndexA` at `:5394-5396` | Completing rows does **not** collapse them: the ROM marks each completed row with `$FE`, holds the game for `lineClearTimerP1` frames (`$1D` = 29 in 1P/2P, `$21` = 33 in coop) and animates them, collapsing only when the timer expires. The animation is a puff of smoke crossing each completed row left to right — five 8x8 sprites, tiles `$5B..$5F`, drawn in `piecePaletteIndexA`, which is `$0F,$0F,$0F`: **flat black**, a silhouette. Only the head is staged when the row completes; each step the sprite still sitting at the field's first column clones itself one OAM slot back with the next tile down, so the trail builds itself up to five. It advances one column **every other frame** — the driver decrements the timer every frame but acts only on odd values (`lsr a / bcc`, `:1280-1283`) — giving 14 steps for the 29-frame hold. The trailing sprite writes one character per column into the row it passes over, spelling `" SINGLE     "` / `" DOUBLE     "` / `" TRIPLE     "` / `" TETRIS     "` (12 characters, one per playfield column, walls included) chosen by `12 × rows_cleared` bytes past `lineClearTable`. The string is 12 bytes but the sweep only crosses the ten playable columns, so its last two characters are never used; the tail, starting four columns behind the head, reaches the tenth column on the last step of the hold. |
 | **Pause** | `pauseOrUnpause` at `main.asm.txt:7184-7215`; gating at `:444-446`; plaque data at `:7293-7312` and `:8027-8028`, tiles at `:8061-8063` | Start toggles `gameState` between PLAYING (0) and PAUSED (1), and is ignored from any other state — so it does nothing on the game-over screen. Pausing stops gameplay but **not** the line-clear animation, because `stageLineClearAnimation` is called from the main loop unconditionally (`:66-70`) while `branchOnActiveDemoOrGameOver` returns early unless `gameState` is 0. The plaque is an 8×2 blit of the cartridge's own tiles at nametable (12,8), coloured with background palette 3 (`pauseAttrs` = `$EF,$BF`); unpausing restores those same two rows from `gameModeNametable1P+268`. |
@@ -251,9 +251,22 @@ frames (`lda frameCounterLow / and #$0F / bne`):
 | 244 | `L9035` (:2393) starts the wind-down, forcing the timer to `$F5` |
 | wraps past 255 | `finishLevelUpAnimation` (:2465), back to play |
 
-A button does not cut it short, it fast-forwards: L9035 computes
-`$7C - timer - 5`, clamps it to at least `$F5`, and you still get the three
-seconds of wind-down.
+A button does not cut it short, it fast-forwards. `L9035` (`:2393-2411`)
+reads `player1ControllerNew | player2ControllerNew` — either pad, any newly
+pressed button, and only while the timer is still below `$F4` — then silences
+the music and computes `$7C - timer - 5` **in eight bits, compared unsigned**
+against `$F5`. That underflow is the whole behaviour: a press in the first
+few steps lands on `$FB` and a press after about the sixth on `$F5`, so what
+you buy is a wind-down of between five and eleven steps, one to three seconds,
+never an instant cut. It also does `frameCounterLow &= $F0` so the next step
+starts from a fresh sixteen.
+
+The natural end at `$F4` reaches the same `$F5` by a different door (`beq
+L9053`, taken BEFORE the silence), which is why the level-up music plays out
+when you let the show finish and stops dead when you cut it.
+
+Measured on the port: untouched the dancers are on screen 1871 frames; a
+button ends it 176 frames (2.9s) later, whenever it is pressed.
 
 ### The sixth dancer stands on the border, not on a ledge
 
@@ -536,23 +549,22 @@ vertical ones everybody notices — read straight off the border of SCREEN_1P by
 
 **Two tiles thick, and that is not adjustable**: each tile is one half of the
 rope cut lengthwise (render `$6A` and `$6B` side by side and it is obvious).
-That single fact decides the whole layout. The reflow is now `10 | 10 | 10` —
-a closed rectangle of rope, the ten playable columns, another rectangle — and
-a ten-column box spends four columns on its frame, leaving **six columns and
-sixteen rows** of interior on each side.
+That single fact decides the whole layout. The reflow is `10 | 10 | 10` — a
+box of rope, the ten playable columns, another box — and each box spends its
+frame on three sides only, opening at the screen's edge where the screen
+already ends, which buys **eight columns and sixteen rows** of interior. See
+"Eight columns, and why the panels open at the screen's edge" for why eight is
+the number that matters.
 
 What fits, and what had to give:
 
-* **Left**: SCORE, LINES, LEVEL, HIGH SCORE and NEXT, each a label row over a
-  value row. No frame around each counter any more — the box IS the frame,
-  which is what makes the screen read as one object rather than a stack of
-  little plaques.
-* **Right**: the piece statistics. SEVEN bars do not fit in six columns, so
-  they go in TWO RANKS, four over three, with a blank row under each rank's
-  icons — without that the lower rank's bars start immediately under the upper
-  rank's icons and the whole box reads as one column of stripes. The icons,
-  the bar tiles, the palettes and the arithmetic are all still the ROM's; only
-  the arrangement is the port's, and it is forced.
+* **Left**: SCORE, LINES, LEVEL and HIGH SCORE, each a label row over a value
+  row. No frame around each counter any more — the box IS the frame, which is
+  what makes the screen read as one object rather than a stack of little
+  plaques.
+* **Right**: NEXT over the piece statistics, in ONE rank of seven, which is
+  what the cartridge draws and what eight columns finally allow. The icons, the
+  bar tiles, the palettes and the arithmetic are all the ROM's.
 * **The banner does not fit at all.** It is six letters of three rows each,
   eighteen rows with no padding anywhere in it, against sixteen of interior.
   So when L+R calls for it, it takes the column instead of the box — except
@@ -560,54 +572,104 @@ What fits, and what had to give:
   strip, because the playfield keeps its own frame whatever the HUD is doing.
   The dancers' stage is handled the same way.
 
-## The title's frame is two frames, and only one fits
+### The weave has a direction, and the box has to keep it
+
+`kBraidLeft` (`6A 6B`) is the run that frames what is to its RIGHT, and
+`kBraidRight` (`73 74`) the mirror — the names are the cartridge's own columns
+8-9 and 20-21, not a description of where the port puts them. Reading them the
+other way round draws a rope that looks right on its own and reverses its
+shading the moment anything else in the cartridge's own tiles appears beside
+it: L+R swaps the right box for the banner, the banner's strip IS ROM tiles,
+and the weave visibly flipped between the two modes. The panel's board-facing
+run is `inner_right ? kBraidLeft : kBraidRight`, and the check is direct —
+the built ROM's map must read `06A 06B` at columns 8-9 and `073 074` at 20-21,
+the same as the cartridge, in both modes.
+
+### The labels carry a piece of the grid, and it comes off exactly
+
+SCORE, LINES, LEVEL and NEXT are lifted from the cartridge's own nametable
+rather than spelled in the ASCII tileset, so they are the game's lettering.
+But its 1P panel rules each counter off with a grid, and the tiles at the
+START and END of each word carry a vertical fragment of it — grey pixels
+hanging off the S and the E for no reason once the grid is gone.
+
+They come off exactly, not by redrawing: **the grid is colour 3 and the
+lettering colour 1**, so `strip_grid` zeroes colour 3 in those tiles and
+re-encodes them, and what is left is the letter alone. The cleaned words go
+into their own tile range (`HUD_LABEL_TILE_BASE`, 768 up) so the originals
+stay available.
+
+The grid itself is worth keeping, just not there: tile `$76` is four rows of
+colour 3 — the ROM's own rule — and the port lays a row of it under each
+counter's value, which is where the cartridge's grid ran anyway. Memorable,
+and now it separates the entries instead of fraying the words.
+
+## The title's frame is two frames, and the screen's shape decides which
 
 The 32x30 title has a band of gold ingots with red and green jewels set into
 it, two tiles thick, and inside that a blue braid, another two tiles thick.
-Eight tiles of frame on every side is more than a 30x20 screen can carry
-alongside the picture, so the port keeps the OUTER one — the ingots and
-jewels, whole, all the way round.
-
-An earlier pass did the opposite: it kept the braid, dropped the ingots
-entirely, and then had to buy its rows from the braid too, which is why the
-frame came out sliced along the top and bottom edges and the jewels were
-missing from the sides. Keeping ONE of the braid's two column-pairs was worse
-still: a bare blue strip down one side of the picture with nothing matching it
-on the other.
+Eight tiles of frame on every side is more than a 30x20 screen carries
+alongside the picture — VERTICALLY. Horizontally there is room for both,
+because the GBA's screen is wide and the picture is not: the port keeps the
+BRAID whole on all four sides, and the ingots and jewels in the two side bands
+the widescreen leaves over. So the picture is framed the way the cartridge
+frames it, and the bands are filled with the cartridge's own gold rather than
+with black.
 
 **Both bands are a two-tile pattern** — a jewel (tiles `00 01` / `04 05`) then
 an ingot (`08 09` / `11 12`) — so every row and column kept is kept in its
-PAIR. Take one row of a jewel and you get half a jewel, which is the same
-mistake in a different direction.
+PAIR. Take one row of a jewel and you get half a jewel.
 
 | Kept | What it is |
 | --- | --- |
-| rows 0-1, 28-29 | the ingot band, top and bottom |
-| cols 0-1, 30-31 | the same band down the sides |
+| cols 0-1, 30-31 | the ingot band, down the two side bands |
+| cols 2-3, 28-29 | the braid, framing the picture |
+| rows 2-3, 26-27 | the braid's top and bottom bands |
 | rows 4-5 | TENGEN |
 | rows 8-11 | the TETRIS logo, ™ included |
-| row 14 | the cathedral's spire tip |
-| rows 15-23 | the cathedral, whole and 1:1 |
+| rows 14-23 | the cathedral, whole and 1:1 |
 
-Twenty rows exactly, and twenty-eight columns, so the picture sits one column
-in from each edge. What it costs: PRESENTS, THE SOVIET MIND GAME, both
-copyright lines (the credit moved to GAME SELECT) and the top two rows of the
-spire — one tile wide, and the only part of the picture that can go without
-leaving a cut edge. Row 14 stays, so the tip is still there and now reaches up
-under the logo, landing between the logo's third and fourth letters.
+Twenty rows and thirty columns exactly. What it costs: the ingot band's top
+and bottom rows (rows 0-1 and 28-29 — the band survives where the screen is
+wide, which is the sides), PRESENTS, THE SOVIET MIND GAME, both copyright
+lines (the credit moved to GAME SELECT) and the top two rows of the spire.
 
-The port CANNOT lower TENGEN any further, and it is worth writing down why:
-the composition is source rows in source order, so a gap above TENGEN would
-have to be a blank source row between the ingot band and row 4 — and rows 2-3
-are the braid, a solid blue fill, not blank. Buying the gap means giving up
-the spire tip.
+### The two dropped columns come one from each side, not two from one
+
+The cartridge's picture is centred on source column 15.5: TENGEN at columns
+10-21, the cathedral at 8-23, the spire at 15-16, all with the same middle,
+inside a frame whose interior is columns 4-27. Thirty screen columns means
+dropping two of the thirty-two, and WHICH two is not free. Taking both off the
+left (which this did, dropping 4 and 5) leaves every element where it was but
+pulls the frame's right half two columns in behind them, so the whole picture
+ends up one column left of its own frame — small, and plainly visible once
+looked for. Dropping 4 and 27 instead leaves the interior at 5-26, centred on
+15.5 again: measured on the built ROM, TENGEN and the cathedral both come out
+with equal margins, and the logo is half a tile right of centre because the
+cartridge draws it that way.
+
+Neither dropped column costs anything. Inside the rows this layout keeps, both
+are blank in every one; column 27 carries the last letter of the copyright
+line, and that row is not kept either.
+
+### The spire's tip is printed over the logo
+
+Dropping source rows 12-13 takes the top of the cathedral's one-tile-wide
+spire with them — and the tip is the thing the eye misses. It goes back,
+because the TETRIS logo has a BLANK tile at row 10, column 16: right between
+its third and fourth letters, and directly above where the spire now starts.
+`TITLE_SPIRE_OVERLAY` writes source (12,16) into that hole, with the palette
+its own attribute byte gives it, so the spire runs up behind the lettering and
+comes out at the top between the T and the Я. `compose_title` asserts the cell
+it writes into really is blank first, so a change to either the composition or
+the source screen fails loudly instead of painting over a letter.
 
 ### Sprites go through the same rearrangement, in BOTH axes
 
-`kTitleRowMap` was not enough once the composition started dropping columns
-out of the MIDDLE as well: everything right of the gap moves two columns left,
-so there is a `kTitleColMap` too, and both are generated from the same lists
-the artwork is cut with. A sprite standing on a row or column the composition
+`kTitleRowMap` was not enough once the composition started dropping columns as
+well: the picture keeps its place and the frame's right half moves two columns
+left, so there is a `kTitleColMap` too, and both are generated from the same
+lists the artwork is cut with. A sprite standing on a row or column the composition
 dropped is hidden rather than moved somewhere it does not belong — which is
 why the cathedral overlay puts up seventeen of its eighteen sprites now. The
 eighteenth belonged to a spire row that is no longer there, so it has nothing
@@ -730,6 +792,30 @@ left panel's content is indented one column off the screen edge, and clearing a
 row with the panel's FULL interior width from that indented start runs one
 column past the interior and erases the rope itself, a row at a time. `BOX_L_W`
 is the interior minus that indent.
+
+### The spare column is worth three pixels, and they need a second background
+
+Seven tiles in eight columns leaves one spare, and there is nowhere honest to
+put it: the strip's own ink is inset two pixels on its left and flush on its
+right, so on the tile grid it can only ever sit 2/8 or 10/0 — visibly left of
+centre either way, which is what "las fichas de las barras de stats estan
+lijeramente descentradas a la izquierda" was. It wants to move three pixels.
+
+The art cannot move with it. The icons are one interlocked picture whose seven
+tiles carry three different palettes, so a three-pixel redraw fuses two banks
+into the tiles either side of a palette change; and the BARS above them are
+dynamic, so the same shift would have to fuse two neighbouring bars — nine fill
+levels each — into every tile they share. Neither is a table anyone can build.
+
+So the statistics ride their own background. `SCREENBLOCK_STATS` (29) holds
+just that block, `REG_BG1HOFS` is 512-3, and BG1 sits at priority 0 over BG0's
+1. Everywhere that map is not written it holds tile 0, which is transparent in
+every pixel — verified, not assumed — so the rest of the screen is BG0 exactly
+as before. Icons and bars move together, the cartridge's art is untouched, and
+the strip ends up five pixels from the rope and six from the screen edge, which
+is as centred as an odd width gets. Anything that takes the right panel over —
+the banner, the dancers' stage, a race — has to clear that map too, not just
+BG0's; `clear_stats_layer` is that call and there are four of them.
 
 ## Two players over a link cable
 

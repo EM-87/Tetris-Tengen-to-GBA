@@ -60,19 +60,25 @@ running ROM; only the side panels need reflowing).
 2. ~~Close out every PLACEHOLDER in `reference/NOTES.md`~~ — done. Gravity
    curve, fractional gravity, soft-drop ramp, scoring, level rule and the
    playfield geometry are all traced and tested; that section now reads
-   "Nothing".
+   "Nothing". One warning from that work, because it survived a long time
+   looking verified: `bonusLinesTable`'s ASCII digit pairs are HUNDREDS and
+   TENS, so the first level-up is at 30 lines and not 3. Tracing a table is
+   not enough — trace what READS it.
 3. ~~Stand up `gba/`~~ — done. It builds with a stock `arm-none-eabi-gcc`
    (no devkitARM required), boots in mGBA, and `make gba-check` verifies it
    renders and plays rather than merely links.
 4. ~~HUD and title screen~~ — done, and laid out as `10 | 10 | 10`: the blue
    braid that used to run down the board's edges as two bare strips is now
-   two CLOSED RECTANGLES of the same rope, one either side, with the HUD
-   inside them. The braid is two tiles thick and cannot be thinner, so each
-   box has a six-column, sixteen-row interior, and that fact decides
-   everything: the counters lose their individual frames (the box is the
-   frame), the seven-bar histogram goes in two ranks of four and three, and
-   the eighteen-row TETRIS banner does not fit at all and takes the column
-   instead when L+R asks for it. See reference/NOTES.md.
+   two BOXES of the same rope, one either side, with the HUD inside them. The
+   braid is two tiles thick and cannot be thinner, so each box frames three
+   sides and opens at the screen's edge — which is what buys an eight-column
+   interior, and eight is what the seven-tile statistics strip needs to stay
+   in one rank. The counters lose their individual frames (the box is the
+   frame) and are ruled off with the cartridge's own `$76`; the eighteen-row
+   TETRIS banner does not fit at all and takes the column instead when L+R
+   asks for it. The statistics ride a SECOND background scrolled three pixels,
+   because a seven-tile strip cannot be centred in eight columns any other
+   way. See reference/NOTES.md.
 5. ~~Palettes~~ — done, and these are the game's real colours rather than
    placeholders: the palette tables ARE in the disassembly even though the
    tile art isn't. Tracing them also caught a fidelity bug worth remembering:
@@ -84,20 +90,25 @@ running ROM; only the side panels need reflowing).
    generated headers stay out of version control.
 7. ~~Real-hardware boot~~ — done, via devkitPro's `gbafix` vendored in
    `tools/gbafix/`, with `tools/check_header.py` verifying the result.
-8. ~~The between-levels dancers~~ — done, with the ROM's own poses and
-   cadence, on the banner column the level-up blit clears for them. Their
+8. ~~The between-levels dancers~~ — done, with the ROM's own poses, cadence
+   and CAST: how many walk on is `L8D8B`'s one-plus-one-per-triple-plus-two-
+   per-tetris since the last level-up, capped at six. The show is a fixed 32
+   seconds and a button does not skip it, it fast-forwards to a wind-down of
+   one to three seconds — both the cartridge's, including the eight-bit
+   underflow that makes an early press end it sooner than a late one. Their
    individual choreography scripts are still untraced (noted in NOTES.md).
 9. ~~Title and menu screens~~ — done, from the cartridge's own title art and
-   menu frame. The title's frame is TWO frames and only one fits: a band of
-   gold ingots and jewels outside, a blue braid inside, two tiles each. The
-   port keeps the OUTER one, whole on all four sides — an earlier pass kept
-   the braid, then had to buy rows from it as well, and the frame came out
-   sliced along the top and bottom. Both bands are a two-tile pattern, so
-   every row and column is kept in its pair or you get half a jewel. What the
-   picture gives up in exchange: PRESENTS, THE SOVIET MIND GAME, both
-   copyright lines (the credit moved to GAME SELECT) and the top two rows of
-   the cathedral's one-tile-wide spire — its tip stays, and now sits right
-   under the TETRIS logo. See reference/NOTES.md.
+   menu frame. The title's frame is TWO frames and the screen's shape decides
+   which: the port keeps the blue BRAID whole on all four sides and fills the
+   widescreen's side bands with the outer band of gold ingots and jewels, so
+   nothing is drawn by the port and nothing is black. Both bands are a
+   two-tile pattern, so every row and column is kept in its pair or you get
+   half a jewel; the two columns the 30-wide screen has to drop come ONE FROM
+   EACH SIDE, or the picture ends up a column left of its own frame. What the
+   picture gives up: PRESENTS, THE SOVIET MIND GAME, both copyright lines (the
+   credit moved to GAME SELECT) and the top two rows of the cathedral's
+   one-tile-wide spire — its tip is printed back over the logo's blank cell
+   and comes out between the T and the Я. See reference/NOTES.md.
 10. ~~The line-clear animation~~ — done, and it turned out to be one of the
    game's signatures rather than a pause: a black puff of smoke crosses each
    completed row and leaves SINGLE / DOUBLE / TRIPLE / TETRIS written where
@@ -121,9 +132,9 @@ running ROM; only the side panels need reflowing).
    CONNECTING: 2 PLAYER goes straight to the lobby, the master reaches the
    level screen from there and the guest waits with a dancing cossack. The
    handshake parks at its greeting to allow it (`tengen_lobby_start_held` /
-   `_release`), which is free because it is stop-and-wait. which is what the cartridge's 2P wants:
-   it is a race on two independent boards with nothing crossing between them,
-   so the port runs lockstep (both consoles simulate both players from one
+   `_release`), which is free because it is stop-and-wait. Lockstep is what
+   the cartridge's 2P wants: it is a race on two independent boards with
+   nothing crossing between them, so the port runs lockstep (both consoles simulate both players from one
    seed and exchange only buttons). The rules and the handshake are in
    `src/tengen_link.c` and tested on the host; the cable is `gba/link.c`,
    interrupt-driven so neither console can miss a transfer or send a stale

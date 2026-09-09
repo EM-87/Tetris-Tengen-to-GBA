@@ -42,10 +42,34 @@ static const uint8_t kTileIds[TENGEN_TETROMINO_COUNT][4][4] = {
 
 const int8_t TENGEN_SPAWN_X[3] = { 3, 9, 7 }; /* main.asm.txt:3802 tetrominoXSpawnTable */
 
-/* main.asm.txt:1473-1478, bonusLinesTable decoded from ASCII digit pairs. */
-const uint8_t TENGEN_LEVEL_LINE_THRESHOLDS[21] = {
-    3, 6, 9, 12, 15, 20, 25, 30, 35, 40,
+/* main.asm.txt:1473-1478, bonusLinesTable — ASCII digit pairs, and WHICH TWO
+ * DIGITS decides everything about this game's pacing.
+ *
+ * The bytes are $30,$33 / $30,$36 / $30,$39 / $31,$32 / $31,$35 / $32,$30 …
+ * $39,$35: "03", "06", "09", "12", "15", "20" … "95". Read as tens-and-ones
+ * that is 3, 6, 9, 12, 15, 20 … 95 lines, and this port had exactly that —
+ * a level every three lines, which is not the game anybody remembers.
+ *
+ * They are not tens and ones. Both places that use the table compare them
+ * against player1LinesHUNDREDS and player1LinesTENS (:1482-1487 for the show,
+ * :3145-3151 for the level itself) — the hundreds and tens digits of the line
+ * counter, as a two-digit number, with the ones digit never entering it. So
+ * "03" is 03X, the first line total whose tens digit is 3: THIRTY. The
+ * cartridge's own comment above the table says so in as many words ("first
+ * check at X03X, then every 30 lines until X150 at which point it's every 50
+ * lines until X95X"), and the decoded table below is that sentence:
+ *
+ *     30 60 90 120 150, then 200 250 300 … 950
+ *
+ * Twenty-one entries, which is where the $2A (42 bytes) the ROM wraps its
+ * cursor at comes from. */
+const uint8_t TENGEN_LEVEL_LINE_TENS[21] = {
+     3,  6,  9, 12, 15, 20, 25, 30, 35, 40,
     45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95
+};
+const uint16_t TENGEN_LEVEL_LINE_THRESHOLDS[21] = {
+     30,  60,  90, 120, 150, 200, 250, 300, 350, 400,
+    450, 500, 550, 600, 650, 700, 750, 800, 850, 900, 950
 };
 
 bool tengen_piece_occupies(TengenTetromino piece, uint8_t orientation, int row, int col) {
@@ -611,6 +635,10 @@ uint8_t tengen_frames_per_row(uint8_t level, int8_t piece_y, bool coop) {
 static uint8_t level_for_lines(uint32_t lines, uint8_t start_level) {
     const unsigned count = sizeof(TENGEN_LEVEL_LINE_THRESHOLDS) /
                             sizeof(TENGEN_LEVEL_LINE_THRESHOLDS[0]);
+    /* The ROM's compare is on the hundreds and tens digits only (:3145-3151),
+     * so `lines >= T` with T already in lines is the same test as its
+     * `lines/10 >= T/10` — the ones digit cannot change the answer, because
+     * every threshold is a multiple of ten. */
     unsigned passed = 0;
     while (passed < count && lines >= TENGEN_LEVEL_LINE_THRESHOLDS[passed]) {
         passed++;
@@ -699,6 +727,32 @@ void tengen_new_game(TengenGame *game, uint16_t seed, uint8_t start_level, bool 
     }
 }
 
+/* L8D8B (main.asm.txt:2050-2082). See the header for what this is.
+ *
+ * The ROM's shape, kept: sum the two players' (tetrises*2 + triples) with the
+ * carry already set — that `sec` is the +1 that puts one cossack on stage even
+ * for a level cleared entirely with singles — cap at 8, and cap again at 6
+ * unless playMode says coop. */
+int tengen_dancer_count(const TengenGame *game) {
+    unsigned n = 1;
+    for (int i = 0; i < 2; i++) {
+        const TengenPlayerState *p = &game->player[i];
+        if (!p->game_active) continue;
+        n += (unsigned)p->clear_counts[3] * 2u + p->clear_counts[2];
+    }
+    if (n > 8) n = 8;
+    if (!game->coop && n > 6) n = 6;
+    return (int)n;
+}
+
+/* finishLevelUpAnimation's `ldx #$07 / sta $6C,x / dex / bpl`
+ * (main.asm.txt:2476-2482): the tally is this level's, so the show empties it
+ * on its way out. */
+void tengen_clear_bonus_counts(TengenGame *game) {
+    for (int i = 0; i < 2; i++)
+        for (int j = 0; j < 4; j++) game->player[i].clear_counts[j] = 0;
+}
+
 /* main.asm.txt:108-150. Two things worth spelling out, because both are easy
  * to get subtly wrong:
  *
@@ -758,6 +812,9 @@ TengenStepResult tengen_step(TengenGame *game, TengenPlayerSlot slot, uint8_t he
             int count = 0;
             for (int i = 0; i < TENGEN_PF_HEIGHT; i++) if (cleared & (1u << i)) count++;
             p->lines += (uint32_t)count;
+            /* The level's bonus tally, $6C-$73. See clear_counts. */
+            if (count >= 1 && count <= 4 && p->clear_counts[count - 1] < 255)
+                p->clear_counts[count - 1]++;
             result.lines_collapsed = true;
             result.rows_cleared_mask = cleared;
 

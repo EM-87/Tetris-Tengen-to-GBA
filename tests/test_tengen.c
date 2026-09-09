@@ -295,12 +295,26 @@ static void test_a_row_of_walls_alone_is_not_a_full_row(void) {
 }
 
 static void test_level_up_thresholds_match_rom_table(void) {
-    /* main.asm.txt:1473-1478, decoded bonusLinesTable. */
-    CHECK(TENGEN_LEVEL_LINE_THRESHOLDS[0] == 3);
-    CHECK(TENGEN_LEVEL_LINE_THRESHOLDS[1] == 6);
-    CHECK(TENGEN_LEVEL_LINE_THRESHOLDS[4] == 15);
-    CHECK(TENGEN_LEVEL_LINE_THRESHOLDS[5] == 20);  /* the table switches from +3 to +5 here */
-    CHECK(TENGEN_LEVEL_LINE_THRESHOLDS[20] == 95);
+    /* main.asm.txt:1473-1478, bonusLinesTable, held here as the ROM stores
+     * it: ASCII digit pairs "03","06",...,"95". */
+    CHECK(TENGEN_LEVEL_LINE_TENS[0] == 3);
+    CHECK(TENGEN_LEVEL_LINE_TENS[1] == 6);
+    CHECK(TENGEN_LEVEL_LINE_TENS[4] == 15);
+    CHECK(TENGEN_LEVEL_LINE_TENS[5] == 20);  /* the table switches from +3 to +5 here */
+    CHECK(TENGEN_LEVEL_LINE_TENS[20] == 95);
+
+    /* AND THOSE PAIRS ARE HUNDREDS-AND-TENS, not tens-and-ones: both readers
+     * compare them against player1LinesHundreds/player1LinesTens (:1482-1487,
+     * :3145-3151). So the first level-up is at THIRTY lines, not three, and
+     * the step widens from 30 to 50 at the sixth entry, not from 3 to 5. This
+     * is the test that would have caught the port shipping a level every
+     * three lines. */
+    for (int i = 0; i < 21; i++)
+        CHECK(TENGEN_LEVEL_LINE_THRESHOLDS[i] == TENGEN_LEVEL_LINE_TENS[i] * 10u);
+    CHECK(TENGEN_LEVEL_LINE_THRESHOLDS[0] == 30);
+    CHECK(TENGEN_LEVEL_LINE_THRESHOLDS[4] == 150);
+    CHECK(TENGEN_LEVEL_LINE_THRESHOLDS[5] == 200);
+    CHECK(TENGEN_LEVEL_LINE_THRESHOLDS[20] == 950);
 }
 
 /* Drives the game until the player has cleared at least `target_lines`.
@@ -1012,16 +1026,68 @@ static void test_level_is_recomputed_from_the_line_total(void) {
      * level offsets the whole curve. */
     TengenGame game;
     tengen_new_game(&game, 33, 5, false, false);
-    clear_lines_until(&game, 3);
-    CHECK(game.player[0].lines >= 3); /* the helper must actually have cleared lines */
-    /* Three lines is the first threshold, so exactly one level above start. */
+    clear_lines_until(&game, 29);
+    CHECK(game.player[0].lines >= 29); /* the helper must actually have cleared lines */
+    /* Twenty-nine lines is still short of the first threshold. A port that
+     * read the table as tens-and-ones was nine levels up by here. */
+    CHECK(game.player[0].level == 5);
+
+    clear_lines_until(&game, 30);
+    CHECK(game.player[0].lines >= 30);
     CHECK(game.player[0].level == 6);
+}
+
+static void test_the_dancers_cast_grows_with_triples_and_tetrises(void) {
+    /* L8D8B (main.asm.txt:2050-2082): one, plus one per triple and two per
+     * tetris since the last level-up, capped at six in 1P. Singles and
+     * doubles buy nothing at all. */
+    TengenGame game;
+    tengen_new_game(&game, 11, 0, false, false);
+    CHECK(tengen_dancer_count(&game) == 1);
+
+    game.player[0].clear_counts[0] = 9;   /* nine singles... */
+    game.player[0].clear_counts[1] = 9;   /* ...and nine doubles */
+    CHECK(tengen_dancer_count(&game) == 1);
+
+    game.player[0].clear_counts[2] = 2;   /* two triples: +2 */
+    CHECK(tengen_dancer_count(&game) == 3);
+
+    game.player[0].clear_counts[3] = 1;   /* one tetris: +2 */
+    CHECK(tengen_dancer_count(&game) == 5);
+
+    game.player[0].clear_counts[3] = 4;   /* the 1P cap is six, not eight */
+    CHECK(tengen_dancer_count(&game) == 6);
+
+    /* Coop is the mode with a second column of positions, so it uses all
+     * eight. Both players' tallies count towards it. */
+    TengenGame co;
+    tengen_new_game(&co, 11, 0, true, true);
+    co.player[0].clear_counts[3] = 2;
+    co.player[1].clear_counts[2] = 3;
+    CHECK(tengen_dancer_count(&co) == 8);
+
+    /* And the tally is this level's, not the game's. */
+    tengen_clear_bonus_counts(&game);
+    CHECK(tengen_dancer_count(&game) == 1);
+}
+
+static void test_a_clear_is_tallied_by_how_many_rows_it_took(void) {
+    TengenGame game;
+    tengen_new_game(&game, 33, 0, false, false);
+    clear_lines_until(&game, 1);
+    CHECK(game.player[0].lines >= 1);
+    /* The helper clears one row at a time, so every clear is a single. */
+    CHECK(game.player[0].clear_counts[0] >= 1);
+    CHECK(game.player[0].clear_counts[1] == 0);
+    CHECK(game.player[0].clear_counts[2] == 0);
+    CHECK(game.player[0].clear_counts[3] == 0);
+    CHECK(tengen_dancer_count(&game) == 1);
 }
 
 static void test_level_never_passes_the_rom_cap(void) {
     TengenGame game;
     tengen_new_game(&game, 37, TENGEN_MAX_LEVEL, false, false);
-    clear_lines_until(&game, 6);
+    clear_lines_until(&game, 60);
     CHECK(game.player[0].level == TENGEN_MAX_LEVEL);
 }
 
@@ -1422,6 +1488,8 @@ int main(void) {
     test_either_player_can_pause_a_linked_game();
     test_level_starts_at_the_chosen_start_level();
     test_level_is_recomputed_from_the_line_total();
+    test_the_dancers_cast_grows_with_triples_and_tetrises();
+    test_a_clear_is_tallied_by_how_many_rows_it_took();
     test_level_never_passes_the_rom_cap();
     test_locking_stores_tile_ids_not_piece_ids();
     test_piece_stats_count_dealt_pieces_in_1p_only();

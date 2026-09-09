@@ -186,10 +186,30 @@ DANCER_SOLO_COUNT = 6
 #                     one tile wide, and the only part of the picture that can
 #                     go without leaving a cut edge. Row 14 stays, so the tip
 #                     is still there, right under the TETRIS logo.
+# WHICH TWO COLUMNS THE TITLE LOSES, and it has to be ONE FROM EACH SIDE.
+# The cartridge's picture is centred on source column 15.5: TENGEN sits at
+# columns 10-21, the cathedral at 8-23 and the spire at 15-16, all with the
+# same middle, inside a frame whose interior is columns 4-27. Taking both
+# spare columns off the left (which is what this did) keeps every element
+# where it was but moves the frame two columns in behind them, so the whole
+# picture ends up one column left of its own frame — visible, and exactly the
+# "ligeramente desalineado a la izquierda" it was. Dropping 4 and 27 instead
+# leaves the interior at 5-26, centred on 15.5 again.
+#
+# Neither column costs anything: inside the rows this layout keeps, both are
+# blank in every one. Column 27 carries the last letter of the copyright line
+# at source row 24, and that row is not among the rows kept either.
 TITLE_COL_BLOCKS = (
     (0, 4),     # ingots and jewels, then the braid
-    (6, 32),    # the picture, the braid again, and the ingots
+    (5, 27),    # the picture
+    (28, 32),   # the braid again, and the ingots
 )
+# The spire tile to put back over the logo, and the logo row with a hole in it
+# to put it in. See compose_title.
+TITLE_SPIRE_OVERLAY = ((12, 16),)
+SPIRE_OVER_ROW = 10
+TITLE_BLANK_TILE = 0x1D
+
 TITLE_ROW_BLOCKS = (
     (2, 6),     # the braid's top band, then TENGEN
     (8, 12),    # the TETRIS logo
@@ -762,6 +782,70 @@ def read_braid_frame(nametable, attributes):
     return corners, runs, banks.pop()
 
 
+# ---------------------------------------------------------------------------
+# THE HEADER GRID, AND THE STUBS IT LEAVES IN THE LABELS
+#
+# The cartridge's 1P panel is a GRID: nametable rows 2-7 read label, rule,
+# value, rule, label, rule, and the rule is tile $76 — four rows of colour 3
+# across the full width of the tile. Where a vertical grid line crosses it
+# there are junction tiles ($77, $78); where one runs beside a label, the
+# label's own end tiles carry a piece of it.
+#
+# That last part is the glitch. SCORE's first tile ($6D) has the vertical line
+# in its columns 0-2 and its last ($72) has one in columns 4-6, and the port's
+# layout has no vertical grid for them to belong to — so they came out as grey
+# stubs at the start and end of every word.
+#
+# They can be removed EXACTLY, without touching a pixel of the lettering,
+# because the two are different colours: the grid is colour 3 and the letters
+# are colour 1. So the labels below are the cartridge's own tiles with colour 3
+# masked out — a subtraction, not a redrawing — and the rule they were a
+# fragment of is put back where the cartridge puts it, between the rows.
+HUD_LABELS = {
+    "SCORE": (0x6D, 0x6E, 0x6F, 0x70, 0x71, 0x72),
+    "LINES": (0x7A, 0x7B, 0x7C, 0x7D, 0x7E, 0x7F),
+    "LEVEL": (0x7A, 0x80, 0x81, 0x82, 0x83, 0x84),
+    "NEXT":  (0x91, 0x92, 0x93, 0x94),
+}
+HUD_GRID_COLOUR = 3       # what the grid is drawn in; the letters are colour 1
+HUD_RULE_TILE = 0x76      # the horizontal rule itself
+
+
+def strip_grid(chr_data, tile):
+    """One tile with every colour-3 pixel cleared, as 16 bytes of 2bpp."""
+    px = tile_2bpp_to_pixels(chr_data[tile * NES_TILE_BYTES:
+                                      (tile + 1) * NES_TILE_BYTES])
+    px = [0 if v == HUD_GRID_COLOUR else v for v in px]
+    out = bytearray(NES_TILE_BYTES)
+    for y in range(8):
+        lo = hi = 0
+        for x in range(8):
+            v = px[y * 8 + x]
+            lo = (lo << 1) | (v & 1)
+            hi = (hi << 1) | ((v >> 1) & 1)
+        out[y] = lo
+        out[y + 8] = hi
+    return bytes(out)
+
+
+def read_hud_labels(rom: "Rom"):
+    """(names in order, their tile runs, the cleaned tile data)."""
+    chr_data = rom.chr_bank(0)
+    names = list(HUD_LABELS)
+    tiles = bytearray()
+    runs = []
+    index = 0
+    for name in names:
+        runs.append((index, len(HUD_LABELS[name])))
+        for t in HUD_LABELS[name]:
+            tiles += strip_grid(chr_data, t)
+            index += 1
+    # ...and out through the same 2bpp-to-4bpp conversion every other tile
+    # block goes through. Emitting the NES bytes straight is how these came out
+    # as a scatter of faint dots: the GBA reads a tile as 32 bytes, not 16.
+    return names, runs, convert_tiles(bytes(tiles))
+
+
 def read_gameover_tiles(rom):
     """gameOverTiles as GAMEOVER_ROWS rows of GAMEOVER_COLS tile ids."""
     raw = rom.at(GAMEOVER_TILES_ADDR, GAMEOVER_COLS * GAMEOVER_ROWS)
@@ -838,7 +922,7 @@ def emit_screen_header(tiles, palettes, keep_cols, source, stats):
         f"#define SCREEN_1P_STATS_BAR_TILE 0x{STATS_BAR_TILE:02X}",
         "static const uint8_t kStatsIcons[2][SCREEN_1P_STATS_PIECES] = {",
     ]
-    icons, icon_banks, bar_bank, gameover, banner, braid = stats
+    icons, icon_banks, bar_bank, gameover, banner, braid, labels = stats
     for row in icons:
         lines.append("    { " + ", ".join(f"0x{t:02X}" for t in row) + " },")
     lines += [
@@ -892,6 +976,23 @@ def emit_screen_header(tiles, palettes, keep_cols, source, stats):
         " * thick on every side, because each tile is half the rope cut",
         " * lengthwise. See read_braid_frame in tools/extract_assets.py. */",
         f"#define BRAID_BANK {braid[2]}",
+        "",
+        "/* THE HEADER GRID'S RULE, and the labels with its stubs taken out of",
+        " * them. See read_hud_labels in tools/extract_assets.py: the grid is",
+        " * colour 3 and the lettering is colour 1, so this is a subtraction",
+        " * from the cartridge's own tiles, not a redrawing of them. */",
+        f"#define T_GRID_RULE 0x{HUD_RULE_TILE:02X}",
+        f"#define HUD_LABEL_COUNT {len(labels[0])}",
+    ] + [
+        f"#define HUD_LABEL_{name} {first}, {run}"
+        for name, (first, run) in zip(labels[0], labels[1])
+    ] + [
+        f"static const uint8_t kHudLabelTiles[{len(labels[2])}] = {{",
+    ] + [
+        "    " + ", ".join(f"0x{b:02X}" for b in labels[2][i:i + 16]) + ","
+        for i in range(0, len(labels[2]), 16)
+    ] + [
+        "};",
     ] + [
         f"static const uint8_t kBraid{name.upper()}[2][2] = {{ "
         + ", ".join("{ " + ", ".join(f"0x{v:02X}" for v in row) + " }"
@@ -931,6 +1032,24 @@ def compose_title(nametable, attributes):
 
     tiles = [nametable[r * 32 + c] for r in rows for c in cols]
     banks = [attribute_palette(attributes, c, r) for r in rows for c in cols]
+
+    # THE SPIRE'S TIP, PUT BACK OVER THE LOGO. Dropping source rows 12-13 takes
+    # the top of the cathedral's one-tile-wide spire with them, and the tip is
+    # the thing the eye misses. It can go back, because the TETRIS logo has a
+    # BLANK tile at row 10, column 16 — right between its third and fourth
+    # letters, and directly above where the spire now starts. So the tip is
+    # written there: the spire runs up behind the lettering and comes out at
+    # the top, which is what it looks like it should do anyway.
+    for src_row, src_col in TITLE_SPIRE_OVERLAY:
+        if SPIRE_OVER_ROW not in rows or src_col not in cols:
+            continue
+        if nametable[SPIRE_OVER_ROW * 32 + src_col] != TITLE_BLANK_TILE:
+            raise ValueError(
+                f"the spire's tip would land on artwork at ({src_col},"
+                f"{SPIRE_OVER_ROW})")
+        i = rows.index(SPIRE_OVER_ROW) * len(cols) + cols.index(src_col)
+        tiles[i] = nametable[src_row * 32 + src_col]
+        banks[i] = attribute_palette(attributes, src_col, src_row)
     return tiles, banks
 
 
@@ -1180,10 +1299,10 @@ def emit_menu_header(tiles, palettes, source):
 def title_col_map():
     """NES nametable column -> the column it occupies on the port's title.
 
-    The composition drops two columns out of the MIDDLE (see
+    The composition drops one column from each side of the picture (see
     TITLE_COL_BLOCKS), so a sprite's column is no longer a fixed offset from
-    the nametable's: everything right of the gap moves two columns left.
-    0xFF for a dropped column."""
+    the nametable's: the picture keeps its place, and only the frame's right
+    half moves two columns left. 0xFF for a dropped column."""
     out = [0xFF] * 32
     col = 0
     for start, end in TITLE_COL_BLOCKS:
@@ -1543,7 +1662,8 @@ def main() -> int:
                                            read_stats_icons(nametable, attributes)
                                            + (read_gameover_tiles(rom),
                                               read_banner(nametable, attributes),
-                                              read_braid_frame(nametable, attributes))),
+                                              read_braid_frame(nametable, attributes),
+                                              read_hud_labels(rom))),
         "palettes_rom.h": emit_palette_header(palette_sets, piece_palettes, src),
         "screen_proto.h": build_proto_header(args.proto),
     }

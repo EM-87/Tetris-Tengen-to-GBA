@@ -56,6 +56,17 @@
 
 #define CHARBLOCK   0
 #define SCREENBLOCK 28  /* 28 * 2KB = 56KB in, clear of the 8KB of tile data */
+/* A SECOND MAP, FOR THREE PIXELS. The piece statistics are a seven-tile strip
+ * in an eight-column box, so on the tile grid they can only ever sit two
+ * pixels from one wall and eight from the other — which is exactly the "algo
+ * descentradas a la izquierda" you can see. Redrawing the strip three pixels
+ * across is not an option: it is one interlocked picture whose tiles carry
+ * three different palettes, and the bars above it are dynamic, so the shift
+ * would have to fuse two neighbouring bars into every tile. Giving the block
+ * its own background and scrolling THAT by three pixels costs one screenblock
+ * and moves icons and bars together, with the cartridge's art untouched. */
+#define SCREENBLOCK_STATS 29
+#define STATS_SHIFT_PX 3
 
 #define MAP_W 32
 #define SCREEN_TW 30
@@ -151,6 +162,7 @@
  * both live in one charblock (512 tiles is exactly its 16KB). */
 #define TITLE_TILE_BASE 256
 #define PROTO_TILE_BASE 512   /* charblock 0 holds 1024 addressable tiles */
+#define HUD_LABEL_TILE_BASE 768   /* the labels, with the grid stubs removed */
 
 /* ----------------------------------------------------------------------- *
  * The between-levels dancers
@@ -310,10 +322,6 @@ static const uint8_t kPauseTiles[PAUSE_H][PAUSE_W] = {
 #define T_RULE_MID   0x76
 #define T_RULE_RIGHT 0x79
 
-static const uint8_t kLabelScore[6] = {0x6D, 0x6E, 0x6F, 0x70, 0x71, 0x72};
-static const uint8_t kLabelLines[6] = {0x7A, 0x7B, 0x7C, 0x7D, 0x7E, 0x7F};
-static const uint8_t kLabelLevel[6] = {0x7A, 0x80, 0x81, 0x82, 0x83, 0x84};
-static const uint8_t kLabelNext[4]  = {0x91, 0x92, 0x93, 0x94};
 
 /* The tileset's letters and digits sit at their ASCII codes, which is how the
  * ROM's own nametable spells "HIGH SCORE" and "STATS". */
@@ -460,6 +468,13 @@ static void upload_sprite_tiles(void) {
     }
     upload_palette_set(PAL_OBJ_TITLE, kRomPalette_obj_title, MEM_PALETTE_OBJ);
 
+    /* The HUD labels, with the header grid's vertical stubs masked out of
+     * them; see read_hud_labels in tools/extract_assets.py. */
+    vu16 *ldst = MEM_CHARBLOCK(CHARBLOCK) + HUD_LABEL_TILE_BASE * 16;
+    for (unsigned i = 0; i < sizeof(kHudLabelTiles); i += 2) {
+        ldst[i / 2] = (uint16_t)(kHudLabelTiles[i] | (kHudLabelTiles[i + 1] << 8));
+    }
+
     /* piecePaletteIndexA, "Line clears" (main.asm.txt:5394-5396). */
     const uint8_t *clear = kRomPiecePalettes[10];
     vu16 *cpal = MEM_PALETTE_OBJ + PAL_OBJ_CLEAR * 16;
@@ -481,11 +496,12 @@ static void oam_hide_all(void) {
 /* Places the dancers for one frame of the interlude, in the ROM's own
  * positions: one column of six, 24 pixels apart, walking right off their
  * starting mark onto the ledges. */
-static void draw_dancers(int elapsed) {
+static void draw_dancers(int elapsed, int count) {
     int pose_step = elapsed / DANCER_POSE_FRAMES;
     int walk = elapsed / DANCER_WALK_FRAMES;
 
-    for (int d = 0; d < DANCER_COUNT; d++) {
+    if (count > DANCER_COUNT) count = DANCER_COUNT;
+    for (int d = 0; d < count; d++) {
         /* Staggered starting poses so the six are not in lockstep. This is
          * the stand-in for the per-dancer script; see the note above. */
         int pose = (pose_step + d * 7) % DANCER_POSE_COUNT;
@@ -505,6 +521,10 @@ static void draw_dancers(int elapsed) {
                      PAL_OBJ_DANCER + (kDancerAttr[d] & 3));
         }
     }
+    /* L8E42-8E53 blanks the sprites the smaller cast does not use; everything
+     * else on screen during the interlude is background. */
+    for (int i = count * DANCER_SPRITES; i < 128; i++)
+        MEM_OAM[i * 4] = OBJ_ATTR0_HIDDEN;
 }
 
 
@@ -538,6 +558,14 @@ static void clear_region(int tx, int ty, int w, int h) {
         for (int x = 0; x < w; x++) set_map_tile(tx + x, ty + y, T_BLANK);
 }
 
+/* The statistics layer. Tile 0 of the cartridge's set is transparent in every
+ * pixel, so everywhere this map is not written the screen is simply the one
+ * below it. */
+static void set_stats_tile(int tx, int ty, uint16_t entry) {
+    if (tx < 0 || tx >= MAP_W || ty < 0 || ty >= 32) return;
+    MEM_SCREENBLOCK(SCREENBLOCK_STATS)[ty * MAP_W + tx] = entry;
+}
+
 /* ----------------------------------------------------------------------- *
  * A BOX OF BRAID.
  *
@@ -563,9 +591,23 @@ static void draw_field_braid(int tx, const uint8_t run[1][2]) {
             set_map_tile(tx + dx, y, WITH_BANK(run[0][dx], BRAID_BANK));
 }
 
-/* A panel of rope: the braid along the top, the bottom and the side facing
- * the board, and the screen's own edge closing it outward. `inner_right` says
- * which side the board is on.
+/* A panel of rope: the braid along the top, the bottom and the side facing the
+ * board, and the screen's own edge closing it outward. `inner_right` says
+ * which side of the panel the board is on.
+ *
+ * WHICH TILES, AND WHY THAT WAY ROUND. The rope is not symmetrical — it is
+ * woven, and the weave leans. kBraidLeft is the cartridge's LEFT screen border
+ * (tiles $6A $6B): everything it frames is to its right. kBraidRight ($73 $74)
+ * is the right border, framing what is to its left. The board is what these
+ * runs frame, so the run with the board on ITS right takes the left-border
+ * tiles, and the corners follow the same rule.
+ *
+ * That is also exactly what the cartridge's own screen has where the reflow
+ * puts these columns — $6A $6B beside the board's left edge, $73 $74 beside
+ * its right — so drawing it the other way round did not merely look odd, it
+ * overwrote the ROM's art with its own mirror image. The tell was L+R: the
+ * banner's strip is drawn from the ROM's tiles, so the weave flipped direction
+ * as the panel came and went.
  *
  * The corners are only ever drawn on the board side, because that is the only
  * side that has one — the other simply runs off the screen. */
@@ -575,11 +617,11 @@ static void draw_braid_panel(int tx, int w, bool inner_right) {
     for (int dy = 0; dy < BRAID_T; dy++) {
         for (int dx = 0; dx < BRAID_T; dx++) {
             set_map_tile(ix + dx, dy,
-                          WITH_BANK(inner_right ? kBraidTR[dy][dx]
-                                                : kBraidTL[dy][dx], BRAID_BANK));
+                          WITH_BANK(inner_right ? kBraidTL[dy][dx]
+                                                : kBraidTR[dy][dx], BRAID_BANK));
             set_map_tile(ix + dx, SCREEN_TH - BRAID_T + dy,
-                          WITH_BANK(inner_right ? kBraidBR[dy][dx]
-                                                : kBraidBL[dy][dx], BRAID_BANK));
+                          WITH_BANK(inner_right ? kBraidBL[dy][dx]
+                                                : kBraidBR[dy][dx], BRAID_BANK));
         }
     }
     for (int x = 0; x < w; x++) {
@@ -594,8 +636,8 @@ static void draw_braid_panel(int tx, int w, bool inner_right) {
     for (int y = BRAID_T; y < SCREEN_TH - BRAID_T; y++)
         for (int dx = 0; dx < BRAID_T; dx++)
             set_map_tile(ix + dx, y,
-                          WITH_BANK(inner_right ? kBraidRight[0][dx]
-                                                : kBraidLeft[0][dx], BRAID_BANK));
+                          WITH_BANK(inner_right ? kBraidLeft[0][dx]
+                                                : kBraidRight[0][dx], BRAID_BANK));
 
     clear_region(inner_right ? tx : tx + BRAID_T, BRAID_T, w - BRAID_T,
                   SCREEN_TH - 2 * BRAID_T);
@@ -614,9 +656,6 @@ static void draw_dancer_stage(void) {
                       WITH_BANK(kDancerStage[3][0], 1));
 }
 
-static void draw_tiles(int tx, int ty, const uint8_t *tiles, int count, int bank) {
-    for (int i = 0; i < count; i++) set_map_tile(tx + i, ty, WITH_BANK(tiles[i], bank));
-}
 
 static void draw_text(int tx, int ty, const char *text, int bank) {
     for (int i = 0; text[i]; i++) set_map_tile(tx + i, ty, WITH_BANK(ascii_tile(text[i]), bank));
@@ -738,9 +777,17 @@ static void draw_banner(void) {
 #define STATS_BAR_ROWS (STATS_ICON_TY - STATS_TOP_TY)   /* ten of them */
 #define STATS_BAR_FULL (SCREEN_1P_STATS_BAR_TILE + 7)
 #define BANK_STATS SCREEN_1P_STATS_BAR_BANK
-/* Seven tiles in eight columns, so one spare — at the screen edge, where the
- * strip is not the thing your eye lines up against. */
+/* Seven tiles in eight columns, so one spare. It is not left at either end:
+ * the block rides the second background, which is scrolled STATS_SHIFT_PX so
+ * that the strip's own ink — inset two pixels on its left and flush on its
+ * right — comes out five pixels from the rope and five from the screen edge.
+ * See SCREENBLOCK_STATS. */
 #define STATS_TX BOX_R_IN
+
+static void clear_stats_layer(void) {
+    for (int y = STATS_TOP_TY; y <= STATS_ICON_TY + 1; y++)
+        for (int x = 0; x < BOX_IN; x++) set_stats_tile(STATS_TX + x, y, T_BLANK);
+}
 
 static void draw_stats(const TengenPlayerState *p) {
     for (int i = 0; i < SCREEN_1P_STATS_PIECES; i++) {
@@ -748,8 +795,8 @@ static void draw_stats(const TengenPlayerState *p) {
         /* Each icon in the palette the ROM's attribute table gives it: the
          * I has its own, T/O/J/L share one, S and Z share another. */
         int icon_bank = kStatsIconBanks[i];
-        set_map_tile(tx, STATS_ICON_TY, WITH_BANK(kStatsIcons[0][i], icon_bank));
-        set_map_tile(tx, STATS_ICON_TY + 1, WITH_BANK(kStatsIcons[1][i], icon_bank));
+        set_stats_tile(tx, STATS_ICON_TY, WITH_BANK(kStatsIcons[0][i], icon_bank));
+        set_stats_tile(tx, STATS_ICON_TY + 1, WITH_BANK(kStatsIcons[1][i], icon_bank));
 
         uint16_t n = p->piece_stats[TT_I + i];
         int full = n / 8;
@@ -761,7 +808,7 @@ static void draw_stats(const TengenPlayerState *p) {
             uint16_t tile = T_BLANK;
             if (r < full) tile = STATS_BAR_FULL;
             else if (r == full && part) tile = SCREEN_1P_STATS_BAR_TILE + part - 1;
-            set_map_tile(tx, ty, WITH_BANK(tile, BANK_STATS));
+            set_stats_tile(tx, ty, WITH_BANK(tile, BANK_STATS));
         }
     }
 }
@@ -790,18 +837,37 @@ static void draw_stats(const TengenPlayerState *p) {
 #define ROW_NEXT   (BOX_TOP_IN)          /* 2 on the right, piece on 3-5 */
 
 /* A label on one row and its value on the next, both inside the left box. */
-static void draw_counter(int ty, const uint8_t *label, int label_len,
-                          uint32_t value, int digits, int value_indent) {
-    draw_tiles(BOX_L_IN, ty, label, label_len, BANK_LABEL);
-    clear_region(BOX_L_IN, ty + 1, BOX_L_W, 1);
-    draw_number(BOX_L_IN + value_indent, ty + 1, value, digits, BANK_VALUE);
+/* THE LABELS COME FROM A CLEANED COPY, not from the cartridge's tiles direct.
+ * SCORE's first and last tiles carry a piece of the header grid's VERTICAL
+ * line, and this layout has no vertical grid for it to belong to, so it read
+ * as a grey stub at the start and end of every word. read_hud_labels strips
+ * it — exactly, because the grid is colour 3 and the lettering colour 1 — and
+ * the rule it was a fragment of goes back where the cartridge puts it, between
+ * the rows. */
+static void draw_label(int tx, int ty, int first, int count) {
+    for (int i = 0; i < count; i++)
+        set_map_tile(tx + i, ty,
+                      WITH_BANK(HUD_LABEL_TILE_BASE + first + i, BANK_LABEL));
 }
 
+/* LABEL, VALUE, RULE — which is the cartridge's own shape. Its 1P panel reads
+ * label, rule, value, rule down nametable rows 2-7, and the rule is tile $76.
+ * The grey stubs that used to sit at the ends of each word were fragments of
+ * the same grid; they are gone from the lettering and the rule they belonged
+ * to is here instead. */
+static void draw_counter(int ty, int label_first, int label_count,
+                          uint32_t value, int digits, int value_indent) {
+    draw_label(BOX_L_IN, ty, label_first, label_count);
+    clear_region(BOX_L_IN, ty + 1, BOX_L_W, 1);
+    draw_number(BOX_L_IN + value_indent, ty + 1, value, digits, BANK_VALUE);
+    for (int x = 0; x < BOX_L_W; x++)
+        set_map_tile(BOX_L_IN + x, ty + 2, WITH_BANK(T_GRID_RULE, BANK_LABEL));
+}
 /* NEXT where it belongs, at the top of the right panel over the statistics —
  * and, when something else has that panel, in the left one under the
  * counters instead. */
 static void draw_next_label_and_piece(int tx, int ty) {
-    draw_tiles(tx + 2, ty, kLabelNext, 4, BANK_LABEL);
+    draw_label(tx + 2, ty, HUD_LABEL_NEXT);
     draw_next_piece(tx + 2, ty + 1);
 }
 
@@ -809,9 +875,9 @@ static void draw_panel(void) {
     const TengenPlayerState *p = &g_session.game.player[g_view];
     if (p->score > g_high_score) g_high_score = p->score;
 
-    draw_counter(ROW_SCORE, kLabelScore, 6, p->score, 6, 0);
-    draw_counter(ROW_LINES, kLabelLines, 6, p->lines, 4, 1);
-    draw_counter(ROW_LEVEL, kLabelLevel, 6, p->level, 2, 2);
+    draw_counter(ROW_SCORE, HUD_LABEL_SCORE, p->score, 6, 0);
+    draw_counter(ROW_LINES, HUD_LABEL_LINES, p->lines, 4, 1);
+    draw_counter(ROW_LEVEL, HUD_LABEL_LEVEL, p->level, 2, 2);
 
     if (g_session.game.two_player) {
         /* A race wants the other board's numbers where the high score would
@@ -819,6 +885,8 @@ static void draw_panel(void) {
          * the cartridge's is being displaced. */
         const TengenPlayerState *o = &g_session.game.player[g_view ^ 1];
         draw_text(BOX_L_IN, ROW_HIGH, "RIVAL", BANK_LABEL);
+        for (int x = 0; x < BOX_L_W; x++)
+            set_map_tile(BOX_L_IN + x, ROW_HIGH + 2, WITH_BANK(T_GRID_RULE, BANK_LABEL));
         clear_region(BOX_L_IN, ROW_HIGH + 1, BOX_L_W, 1);
         draw_number(BOX_L_IN, ROW_HIGH + 1, o->score, 6, BANK_VALUE);
     } else {
@@ -828,6 +896,8 @@ static void draw_panel(void) {
          * statsDataAddresses (main.asm.txt:4100-4107). Kept for the session
          * rather than saved: this cartridge has no battery either. */
         draw_text(BOX_L_IN + 1, ROW_HIGH, "HIGH", BANK_LABEL);
+        for (int x = 0; x < BOX_L_W; x++)
+            set_map_tile(BOX_L_IN + x, ROW_HIGH + 2, WITH_BANK(T_GRID_RULE, BANK_LABEL));
         clear_region(BOX_L_IN, ROW_HIGH + 1, BOX_L_W, 1);
         draw_number(BOX_L_IN, ROW_HIGH + 1, g_high_score, 6, BANK_VALUE);
     }
@@ -850,6 +920,7 @@ static void draw_panel(void) {
      * doing. The box comes back when the banner goes away, through g_repaint. */
     if (g_show_banner) {
         clear_region(BOX_R_TX + 2, 0, BOX_W - 2, SCREEN_TH);
+        clear_stats_layer();
         draw_field_braid(BOX_R_TX, kBraidRight);
         draw_banner();
     } else if (!g_session.game.two_player) {
@@ -857,6 +928,7 @@ static void draw_panel(void) {
         draw_stats(p);
     } else {
         clear_region(BOX_R_IN, BOX_TOP_IN, BOX_IN, BOX_BOT_IN - BOX_TOP_IN + 1);
+        clear_stats_layer();
         if (!g_session.game.player[g_view ^ 1].game_active)
             draw_text(BOX_R_IN + 1, BOX_TOP_IN, "OUT", BANK_LABEL);
     }
@@ -1037,7 +1109,10 @@ static const char *const kGameNames[GAME_COUNT] = { "1 PLAYER", "2 PLAYER" };
 
 static void clear_screen(void) {
     for (int ty = 0; ty < 32; ty++)
-        for (int tx = 0; tx < MAP_W; tx++) set_map_tile(tx, ty, T_BLANK);
+        for (int tx = 0; tx < MAP_W; tx++) {
+            set_map_tile(tx, ty, T_BLANK);
+            set_stats_tile(tx, ty, T_BLANK);
+        }
 }
 
 /* ----------------------------------------------------------------------- *
@@ -1421,6 +1496,7 @@ static bool g_dancer_active;
 static uint8_t g_dancer_timer;
 static uint16_t g_dancer_tick;   /* stands in for frameCounterLow & $0F */
 static int g_dancer_elapsed;     /* frames since the show started, for the poses */
+static int g_dancer_cast = 1;    /* how many walk on; see tengen_dancer_count */
 static uint8_t g_shown_level = 0xFF;
 static TengenTetromino g_shown_piece = TT_NONE;
 
@@ -1459,6 +1535,10 @@ static void announce_step(TengenStepResult step) {
             g_dancer_timer = DANCER_TIMER_START;
             g_dancer_tick = 0;
             g_dancer_elapsed = 0;
+            /* The cast is read HERE, before the tally is emptied: L8D8B runs
+             * at the top of showLevelBonus, and how well the level went is
+             * what decides how many cossacks come on. */
+            g_dancer_cast = tengen_dancer_count(&g_session.game);
         }
     }
     if (step.topped_out) {
@@ -1652,8 +1732,15 @@ int main(void) {
     restart_title_sprites();
 
     REG_BG0CNT = BG_4BPP | BG_SIZE_32x32 | BG_CHARBLOCK(CHARBLOCK) |
-                  BG_SCREENBLOCK(SCREENBLOCK);
-    REG_DISPCNT = DCNT_MODE0 | DCNT_BG0 | DCNT_OBJ | DCNT_OBJ_1D;
+                  BG_SCREENBLOCK(SCREENBLOCK) | BG_PRIORITY(1);
+    /* The statistics layer, three pixels to the right of the tile grid. A
+     * negative scroll is what moves the picture the other way, and the field
+     * is nine bits wide, so -3 is written as 512-3. */
+    REG_BG1CNT = BG_4BPP | BG_SIZE_32x32 | BG_CHARBLOCK(CHARBLOCK) |
+                  BG_SCREENBLOCK(SCREENBLOCK_STATS) | BG_PRIORITY(0);
+    REG_BG1HOFS = (uint16_t)(512 - STATS_SHIFT_PX);
+    REG_BG1VOFS = 0;
+    REG_DISPCNT = DCNT_MODE0 | DCNT_BG0 | DCNT_BG1 | DCNT_OBJ | DCNT_OBJ_1D;
 
     Screen screen = SCREEN_TITLE;
     uint8_t start_level = 0;
@@ -1930,15 +2017,25 @@ int main(void) {
             /* One step of checkLevelUp: the timer advances every sixteenth
              * frame, a button jumps it to the wind-down, and the show ends
              * when it would pass $FF. */
-            if (pressed) {
-                int jump = DANCER_TIMER_START - g_dancer_timer - 5;
-                if (jump < DANCER_TIMER_TAIL) jump = DANCER_TIMER_TAIL;
-                if (g_dancer_timer < DANCER_TIMER_TAIL) {
-                    g_dancer_timer = (uint8_t)jump;
-                    nes_audio_play(NES_MUSIC_SILENCE);
-                }
-            } else if (g_dancer_timer == DANCER_TIMER_WINDDOWN) {
+            if (g_dancer_timer == DANCER_TIMER_WINDDOWN) {
+                /* L9053, reached by `beq` BEFORE the silence: the natural end
+                 * of the show does not cut the level-up music, a button does. */
                 g_dancer_timer = DANCER_TIMER_TAIL;
+                g_dancer_tick = 0;
+            } else if (g_dancer_timer < DANCER_TIMER_WINDDOWN && pressed) {
+                /* EIGHT-BIT ARITHMETIC, and the comparison is unsigned — that
+                 * is the whole behaviour. `lda #$7C / sec / sbc timer / sbc #5`
+                 * underflows, so an early press lands on $FB and a late one on
+                 * $F5, and the clamp only catches what wrapped past it. Doing
+                 * this in an int made every press give $F5, which is twice the
+                 * wind-down the cartridge gives you for pressing at once. */
+                uint8_t jump =
+                    (uint8_t)(DANCER_TIMER_START - g_dancer_timer - 5);
+                if (jump < DANCER_TIMER_TAIL) jump = DANCER_TIMER_TAIL;
+                g_dancer_timer = jump;
+                /* `and #$F0` on frameCounterLow: the next step starts fresh. */
+                g_dancer_tick = 0;
+                nes_audio_play(NES_MUSIC_SILENCE);
             }
 
             if (++g_dancer_tick >= DANCER_TICK_FRAMES) {
@@ -1954,6 +2051,10 @@ int main(void) {
             vsync();
             if (!g_dancer_active) {
                 oam_hide_all();
+                /* finishLevelUpAnimation empties the level's bonus tally on
+                 * its way back to play (main.asm.txt:2476-2482), so the next
+                 * level's cast is counted from zero. */
+                tengen_clear_bonus_counts(&g_session.game);
                 draw_static_screen();
                 start_music(g_music);
             } else {
@@ -1963,10 +2064,11 @@ int main(void) {
                  * dancer standing inside it — and half of the STATS heading
                  * showing between the ledges. */
                 clear_region(BOX_R_TX + 2, 0, BOX_W - 2, SCREEN_TH);
+                clear_stats_layer();
                 draw_field_braid(BOX_R_TX, kBraidRight);
                 draw_dancer_stage();
                 draw_next_label_and_piece(BOX_L_IN, BOX_TOP_IN + 12);
-                draw_dancers(g_dancer_elapsed);
+                draw_dancers(g_dancer_elapsed, g_dancer_cast);
             }
             audio_frame();
             continue;

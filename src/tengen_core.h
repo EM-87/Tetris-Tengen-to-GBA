@@ -196,6 +196,15 @@ typedef struct {
     uint8_t line_clear_timer;
     uint32_t clearing_rows;   /* bit i set => row i is completed and waiting */
 
+    /* THIS LEVEL'S TALLY: how many singles, doubles, triples and tetrises
+     * since the last level-up. The ROM keeps them at $6C-$73, two players
+     * interleaved (p1 at $6C,$6E,$70,$72), zeroes them on a new game
+     * (main.asm.txt:3455-3458) and again the moment the level-up show ends
+     * (:2476-2482) — so they are per level, not per game. The show weights
+     * them x1/x4/x9/x25 (L8E54, :2160) for its bonus figures, and decides how
+     * many dancers walk on; see tengen_dancer_count. */
+    uint8_t clear_counts[4];  /* [0] single, [1] double, [2] triple, [3] tetris */
+
     /* Cheat-code entry, mirroring $01B6-$01BB. See TENGEN_CHEAT_* below. */
     uint8_t code_input_y;       /* codeInputYPlayer1: offset into the code table */
     uint8_t long_bar_code_used; /* longBarCodeUsedP1: cleared on every level-up */
@@ -333,13 +342,24 @@ extern const int8_t TENGEN_SPAWN_X[3];
  * visible field is a top-out (main.asm.txt:588-590, `cmp #$06`). */
 #define TENGEN_TOPOUT_ROW TENGEN_ROM_ROW_ORIGIN
 
-/* Cumulative lines needed to be AT level (start_level + i) for i in 0..20.
- * VERIFIED, main.asm.txt:1473-1478 (bonusLinesTable, decoded from ASCII digit
- * pairs "03","06","09","12","15","20","25",...,"95"). Beyond the last entry
- * the ROM's own start-level-relative indexing hasn't been traced yet (see
- * reference/NOTES.md); this core keeps adding +5 lines per level past 95,
- * which matches the visible pattern but is NOT yet confirmed against the ROM. */
-extern const uint8_t TENGEN_LEVEL_LINE_THRESHOLDS[21];
+/* Cumulative lines needed to be AT level (start_level + i) for i in 0..20:
+ * 30, 60, 90, 120, 150, then 200, 250 ... 950.
+ *
+ * VERIFIED, main.asm.txt:1473-1478 (bonusLinesTable) together with its two
+ * readers at :1482-1487 and :3145-3151, WHICH ARE THE HALF THAT MATTERS. The
+ * table is ASCII digit pairs "03","06","09","12","15","20",...,"95" and both
+ * readers compare them against player1LinesHUNDREDS and player1LinesTENS — so
+ * a pair is the top two digits of the line count, not the bottom two, and
+ * "03" means thirty lines. Reading it as tens-and-ones gives 3, 6, 9 ... 95,
+ * a level every three lines; that is what this port shipped with, and it is
+ * wrong. TENGEN_LEVEL_LINE_TENS below is the table as the ROM stores it, for
+ * anyone checking these against the bytes.
+ *
+ * Past the last entry there is nothing to trace: the ROM's cursor stops at
+ * $2A (:3157), which is the end of these 21, and the level caps at 17 well
+ * before that anyway. */
+extern const uint16_t TENGEN_LEVEL_LINE_THRESHOLDS[21];
+extern const uint8_t TENGEN_LEVEL_LINE_TENS[21];
 
 /* ----------------------------------------------------------------------- *
  * DAS / auto-rotate timing constants (VERIFIED, main.asm.txt:96-183)
@@ -373,6 +393,25 @@ uint8_t tengen_frames_per_row(uint8_t level, int8_t piece_y, bool coop);
  * Game lifecycle
  * ----------------------------------------------------------------------- */
 void tengen_new_game(TengenGame *game, uint16_t seed, uint8_t start_level, bool two_player, bool coop);
+
+/* ----------------------------------------------------------------------- *
+ * The level-up show's cast (VERIFIED, main.asm.txt:2050-2082, L8D8B)
+ *
+ * How LONG the dancers dance does not depend on anything — it is a fixed 120
+ * steps of sixteen frames. HOW MANY of them come on does:
+ *
+ *     one + two per tetris + one per triple, since the last level-up
+ *
+ * summed over the players still in the game (`sec` before the add is where
+ * the lone opening cossack comes from), capped at eight and then at SIX in 1P
+ * and 2P — coop is the only mode that uses all eight, because it is the only
+ * one with a second column of positions to put them in ($8E5C/$8E6A entries
+ * 6-13). Doubles and singles buy nothing.
+ *
+ * Call this when the show starts; `tengen_clear_bonus_counts` afterwards, the
+ * way finishLevelUpAnimation zeroes $6C-$73 on its way back to play. */
+int tengen_dancer_count(const TengenGame *game);
+void tengen_clear_bonus_counts(TengenGame *game);
 
 /* pauseOrUnpause (main.asm.txt:7184-7215) and the cheat-code entry it wraps
  * (checkCodeInput, :7025-7182). Call ONCE per frame, BEFORE stepping the
