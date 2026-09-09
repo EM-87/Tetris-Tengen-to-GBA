@@ -839,6 +839,206 @@ def compose_title(nametable, attributes):
     return tiles, banks
 
 
+# ---------------------------------------------------------------------------
+# THE PROTOTYPE'S TITLE SCREEN — the easter egg skin.
+#
+# Tengen's prototype cartridges carry a DIFFERENT title: "TENGEN PRESENTS /
+# TETRIS" over another cathedral entirely — more spires, a different
+# silhouette — inside a green fret border instead of the release's blue braid.
+# This pulls it out of a prototype dump so the port can offer it.
+#
+# Getting at it needed none of the release's machinery, because these builds
+# are EARLIER and simpler: the release RLE-compresses its nametables and has
+# to be run to unpack them (see read_screen), while the prototype's upload
+# routine is a flat 4-page copy —
+#
+#     sta $3C / lda TABLE,y / sta $3D / bit PPUSTATUS
+#     lda #$20 / sta PPUADDR / lda #$00 / sta PPUADDR
+#     tay / ldx #$04
+#   @page:
+#     lda ($3C),y / sta PPUDATA / iny / bne @page / inc $3D / dex / bne @page
+#
+# — so the screen is 1024 plain bytes in the ROM: 960 of nametable and 64 of
+# attributes. The address below is one of the five in that routine's own
+# pointer table, identified by rendering all five and looking.
+#
+# ONLY THIS PROTOTYPE. The other two dumps do not store their title flat and
+# their pointer tables are a different shape; finding those would need a
+# disassembly of each, which does not exist. The check below refuses to guess:
+# a dump that does not have the expected bytes at the expected place is
+# rejected rather than converted into 1024 bytes of noise.
+PROTO_TITLE_ADDR = 0xA3C4
+# THE ATTRIBUTES ARE NOT IN THAT BLOB. The copy above moves four pages to
+# $2000, so it does write over the attribute table at $23C0 — but the routine
+# at $904D then uploads the real attributes there, RLE-encoded as (count,
+# value) pairs and terminated by a zero count. Taking the blob's last 64 bytes
+# for attributes gives sixty-four bytes of PROGRAM, which is what put the
+# prototype's cathedral in stripes the first time this ran.
+PROTO_ATTR_TABLE = 0x907D       # 4-byte entries: PPU addr lo/hi, data lo/hi
+# ...and which palette, which screen and which attributes go together is not a
+# judgement call either. Each screen's setup does the same three things with
+# the SAME index (the title's is 0, at $8C7C-$8C92):
+#
+#     lda #0 / jsr $91C0     palettes: $91E5 + index*16 -> $3F00
+#     lda #0 / jsr $93D9     nametable: the index'th pointer in the table
+#     lda #0 / jsr $904D     attributes: the index'th entry of $907D
+#
+# An earlier pass picked $9205 by rendering all four sets and keeping the one
+# that looked best. It looked best and it was wrong: it is index 2, another
+# screen's. Index 3 is not a background set at all — $91E1,y makes it the only
+# one that goes to $3F10, the sprite palettes.
+PROTO_TITLE_INDEX = 0
+PROTO_PALETTE_TABLE = 0x91E5
+PROTO_TITLE_PALETTE_ADDR = PROTO_PALETTE_TABLE + PROTO_TITLE_INDEX * 16
+PROTO_TITLE_CHR_BANK = 1
+PROTO_PRG_BASE = 0x8000         # two 16K banks, like the release
+# The first row of the title's nametable: a corner tile and a run of the top
+# border. Cheap, and specific enough that no other screen in the dump matches.
+PROTO_SIGNATURE = bytes([0x01] + [0x03] * 30 + [0x05])
+
+# Its frame is TWO columns each side — a thin outer rule and the fret inside
+# it — so the two columns the GBA lacks come off the outer rule and the
+# decoration survives whole. Thirty columns, no padding.
+PROTO_KEEP_COLS = (1, 31)
+# And its ten spare rows, in the same spirit: the thin outer rule top and
+# bottom (0 and 29 — the same rule the two spare columns come off, so the
+# frame loses the same thing on all four sides), the five genuinely blank rows
+# under the cathedral (23-27), and three of the four rows of thin spires
+# (9-11), which is the trade the release's own composition makes with its
+# spire. The blank row between PRESENTS and the logo (5) is NOT one of them:
+# buying it left the big letters' ascenders sitting in the word above.
+PROTO_ROW_BLOCKS = ((1, 9), (12, 23), (28, 29))
+
+
+def read_proto_title(rom: "Rom"):
+    """(nametable, attributes) of the prototype's title, or a reason it isn't."""
+    prg = rom.data[rom.prg_off:rom.prg_off + rom.prg_banks * 16384]
+    off = PROTO_TITLE_ADDR - PROTO_PRG_BASE
+    if rom.prg_banks != 2 or off + 1024 > len(prg):
+        return None, (f"esta ROM tiene {rom.prg_banks} banco(s) de PRG; el "
+                      "prototipo que este port conoce tiene 2")
+    nametable = prg[off:off + 960]
+    if nametable[:32] != PROTO_SIGNATURE:
+        return None, (f"en ${PROTO_TITLE_ADDR:04X} no esta la pantalla de titulo "
+                      "del prototipo (la primera fila no es su marco)")
+
+    # The attribute table, unpacked from its own RLE; see PROTO_ATTR_TABLE.
+    entry = PROTO_ATTR_TABLE - PROTO_PRG_BASE + PROTO_TITLE_INDEX * 4
+    ppu = prg[entry] | (prg[entry + 1] << 8)
+    if ppu != 0x23C0:
+        return None, (f"la entrada {PROTO_TITLE_INDEX} de ${PROTO_ATTR_TABLE:04X} "
+                      f"no apunta a la tabla de atributos sino a ${ppu:04X}")
+    src = (prg[entry + 2] | (prg[entry + 3] << 8)) - PROTO_PRG_BASE
+    attributes = bytearray()
+    while len(attributes) < 64:
+        count = prg[src]
+        if count == 0:
+            break
+        attributes += bytes([prg[src + 1]]) * count
+        src += 2
+    if len(attributes) != 64:
+        return None, ("los atributos RLE del titulo dan "
+                      f"{len(attributes)} bytes, no 64")
+    return (nametable, bytes(attributes)), None
+
+
+def compose_proto_title(nametable, attributes):
+    """The prototype's title, composed to 30x20. See PROTO_KEEP_COLS."""
+    cols = list(range(*PROTO_KEEP_COLS))
+    rows = [r for start, end in PROTO_ROW_BLOCKS for r in range(start, end)]
+    assert len(cols) == 30 and len(rows) == 20, \
+        f"the prototype title needs 30x20, got {len(cols)}x{len(rows)}"
+    tiles = [nametable[r * 32 + c] for r in rows for c in cols]
+    banks = [attribute_palette(attributes, c, r) for r in rows for c in cols]
+    return tiles, banks
+
+
+def emit_proto_header(tiles, banks, palette, chr_tiles, source):
+    lines = [
+        "/*",
+        " * screen_proto.h — the PROTOTYPE cartridge's title screen.",
+        " *",
+        " * GENERATED by tools/extract_assets.py — do not edit by hand.",
+        f" * Source: {source}",
+        " *",
+        " * An easter egg: L or R on the title swaps to the build Tengen made",
+        " * while it still had a Nintendo licence, which has another cathedral,",
+        " * another logo and a green fret where the release has a blue braid.",
+        " * Its own tiles and its own palettes come with it.",
+        " */",
+        "#ifndef SCREEN_PROTO_H",
+        "#define SCREEN_PROTO_H",
+        "",
+        "#include <stdint.h>",
+        "",
+        "#define SCREEN_PROTO_AVAILABLE 1",
+        "#define SCREEN_PROTO_W 30",
+        "#define SCREEN_PROTO_H_TILES 20",
+        "",
+        f"static const uint8_t kRomPalette_bg_proto[16] = {{",
+        "    " + ", ".join(f"0x{b:02X}" for b in palette) + ",",
+        "};",
+        "",
+        "static const uint8_t kScreenProtoTiles[600] = {",
+    ]
+    for i in range(0, len(tiles), 30):
+        lines.append("    " + ", ".join(f"0x{t:02X}" for t in tiles[i:i + 30]) + ",")
+    lines += ["};", "", "static const uint8_t kScreenProtoPalettes[600] = {"]
+    for i in range(0, len(banks), 30):
+        lines.append("    " + ", ".join(str(b) for b in banks[i:i + 30]) + ",")
+    lines += ["};", "",
+              f"#define TILES_PROTO_BYTES {len(chr_tiles)}",
+              f"static const uint8_t kProtoTiles[{len(chr_tiles)}] = {{"]
+    for i in range(0, len(chr_tiles), 16):
+        lines.append("    " + ", ".join(f"0x{b:02X}" for b in chr_tiles[i:i + 16]) + ",")
+    lines += ["};", "", "#endif /* SCREEN_PROTO_H */", ""]
+    return "\n".join(lines)
+
+
+def emit_proto_absent_header(why):
+    return "\n".join([
+        "/*",
+        " * screen_proto.h — the prototype title skin is NOT in this build.",
+        " *",
+        " * GENERATED by tools/extract_assets.py — do not edit by hand.",
+        " *",
+        f" * {why}",
+        " *",
+        " * Rebuild with a prototype dump to get it:",
+        " *     make assets ROM=/path/to/tetris.nes PROTO=/path/to/prototype.nes",
+        " *",
+        " * The port compiles either way; without it, L and R on the title",
+        " * simply have nothing to switch to.",
+        " */",
+        "#ifndef SCREEN_PROTO_H",
+        "#define SCREEN_PROTO_H",
+        "",
+        "#define SCREEN_PROTO_AVAILABLE 0",
+        "",
+        "#endif /* SCREEN_PROTO_H */",
+        "",
+    ])
+
+
+def build_proto_header(path):
+    """The prototype skin's header, or one that says why there isn't a skin."""
+    if not path:
+        return emit_proto_absent_header(
+            "No se paso ninguna ROM de prototipo (PROTO=...).")
+    try:
+        proto = Rom(open(path, "rb").read())
+    except (OSError, ValueError) as exc:
+        return emit_proto_absent_header(f"No pude leer {path}: {exc}")
+    screen, why = read_proto_title(proto)
+    if screen is None:
+        return emit_proto_absent_header(f"{path}: {why}")
+    nametable, attributes = screen
+    tiles, banks = compose_proto_title(nametable, attributes)
+    palette = proto.data[proto.prg_off + PROTO_TITLE_PALETTE_ADDR - PROTO_PRG_BASE:][:16]
+    chr_tiles = convert_tiles(proto.chr_bank(PROTO_TITLE_CHR_BANK))
+    return emit_proto_header(tiles, banks, palette, chr_tiles, path)
+
+
 def compose_menu(nametable, attributes):
     """The menu frame, composed to 30x20 with its borders intact."""
     cols = [c for start, end in MENU_COL_BLOCKS for c in range(start, end)]
@@ -1154,6 +1354,7 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("rom", nargs="?", help="iNES cartridge dump")
     ap.add_argument("-o", "--outdir", default="gba", help="where to write the headers")
+    ap.add_argument("--proto", help="a prototype dump, for the title-skin easter egg")
     ap.add_argument("--self-test", action="store_true")
     args = ap.parse_args()
 
@@ -1227,6 +1428,7 @@ def main() -> int:
                                            + (read_gameover_tiles(rom),
                                               read_banner(nametable, attributes))),
         "palettes_rom.h": emit_palette_header(palette_sets, piece_palettes, src),
+        "screen_proto.h": build_proto_header(args.proto),
     }
 
     for filename, content in outputs.items():

@@ -47,6 +47,11 @@
 #define NES_MUSIC_GAMEOVER     0x0A
 #define NES_MUSIC_LEVELUP      0x0D
 #define NES_SOUND_DROP         0x0E
+/* The cartridge's own sound engine can play these and the cartridge never
+ * asks it to — constants.asm.txt marks $0F-$12 "maybe unused". The title's
+ * skin easter egg uses CHIRP, so the egg has a voice nothing else in the game
+ * uses, and it is still the ROM's voice. */
+#define NES_SOUND_CHIRP        0x10
 #define NES_SOUND_LINECLEAR    0x13
 #define NES_SOUND_MENU_SELECT  0x14
 #define NES_SOUND_SCREEN_SWITCH 0x15

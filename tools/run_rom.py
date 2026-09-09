@@ -433,7 +433,11 @@ PAUSE_ROW0 = [0x10, 0x11, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0x12]  # main.asm.txt:80
 PAUSE_ROW1 = [0x13, 0x14, 0xD7, 0xD8, 0xD9, 0xDA, 0xDB, 0x15]
 
 KEYS = {"A": 0, "B": 1, "SELECT": 2, "START": 3,
-        "RIGHT": 4, "LEFT": 5, "UP": 6, "DOWN": 7}
+        "RIGHT": 4, "LEFT": 5, "UP": 6, "DOWN": 7,
+        # The GBA's two extra buttons. The game proper never reads them —
+        # they have no NES equivalent — so they are the port's own switches:
+        # L or R swaps the title skin, L+R together the right-hand HUD box.
+        "R": 8, "L": 9}
 CODE_LEVEL_UP = "UP DOWN UP DOWN LEFT RIGHT B B A".split()
 CODE_LONG_BAR = "DOWN DOWN LEFT RIGHT LEFT RIGHT B A".split()
 
@@ -882,6 +886,86 @@ def title_check(rom_path):
     return 0
 
 
+# ---------------------------------------------------------------------------
+# The title-skin easter egg: L or R swaps the release's title screen for the
+# prototype cartridge's, which has another cathedral, another logo and a green
+# fret instead of the blue braid.
+#
+# A ROM built without a prototype dump has only one skin, and this says so
+# rather than failing — SCREEN_PROTO_AVAILABLE is 0 and L/R do nothing.
+# ---------------------------------------------------------------------------
+
+
+def skin_check(rom_path):
+    core, screen = load(rom_path)           # `screen` must stay alive; see load()
+    failures = []
+
+    # WHAT TELLS THE TWO SCREENS APART. Not whole frames: the release title has
+    # fireworks on it, so two frames of it are rarely identical and comparing
+    # pixels would call an unchanged screen "changed" every time. The
+    # structural difference is the edges — the prototype's frame is thirty
+    # columns and reaches both, the release's composition is twenty-eight and
+    # leaves a black column either side — and the edges do not animate.
+    def edge_lit(img):
+        return sum(1 for y in range(SCREEN_H)
+                   if img[y][0] != (0, 0, 0) or img[y][SCREEN_W - 1] != (0, 0, 0))
+
+    def tap(key, settle=12):
+        core.set_keys(key)
+        run(core, 4)
+        core.set_keys()
+        run(core, settle)
+
+    run(core, 40)
+    if edge_lit(pixels(screen)) > 8:
+        failures.append("la pantalla del release ya llega a los bordes")
+
+    tap(KEYS["L"])
+    lit = edge_lit(pixels(screen))
+    if lit < SCREEN_H // 2:
+        print("  esta ROM se construyo sin prototipo: L y R no tienen skin que poner")
+        tap(KEYS["R"])
+        if edge_lit(pixels(screen)) >= SCREEN_H // 2:
+            print("FALLA: R cambio algo que L no habia cambiado")
+            return 1
+        print("OK: sin skin de prototipo, y el titulo no se rompe por pulsar L o R.")
+        return 0
+    print(f"  la skin del prototipo llena las 30 columnas "
+          f"({lit} filas tocan ambos bordes)")
+
+    # The release's fireworks and cathedral overlay belong to the release
+    # picture; on the prototype's they must be gone.
+    if oam_visible(core, 0, 64):
+        failures.append("los sprites del release siguen encima de la skin")
+    else:
+        print("  los sprites del release (catedral y fuegos) se retiran con ella")
+
+    # Comparing whole frames would be wrong here: the release screen has
+    # fireworks on it, so two frames of it are rarely identical. The edges are
+    # the structural difference and they do not animate.
+    tap(KEYS["R"])
+    if edge_lit(pixels(screen)) > 8:
+        failures.append("R no devuelve la pantalla del release")
+    else:
+        print("  R vuelve al titulo del release")
+
+    # ...and the choice must survive leaving the title and coming back.
+    tap(KEYS["L"])
+    for name in ("START", "B"):
+        core.set_keys(KEYS[name]); run(core, 4); core.set_keys(); run(core, 10)
+    if edge_lit(pixels(screen)) < SCREEN_H // 2:
+        failures.append("la skin se pierde al salir del titulo y volver")
+    else:
+        print("  la skin se mantiene al salir del titulo y volver")
+
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: L y R cambian entre el titulo del release y el del prototipo.")
+    return 0
+
+
 def link_check(rom_path):
     core, screen = load(rom_path)   # `screen` must stay alive; see load()
     failures = []
@@ -955,6 +1039,8 @@ def main():
                      help="check the 2-player front end with no cable attached")
     ap.add_argument("--title", action="store_true",
                      help="check the cathedral overlay and the fireworks")
+    ap.add_argument("--skin", action="store_true",
+                     help="check the L/R title-skin easter egg")
     args = ap.parse_args()
 
     if args.selftest:
@@ -971,6 +1057,8 @@ def main():
         sys.exit(link_check(args.rom))
     if args.title:
         sys.exit(title_check(args.rom))
+    if args.skin:
+        sys.exit(skin_check(args.rom))
 
     core, screen = load(args.rom)
     start_game(core)

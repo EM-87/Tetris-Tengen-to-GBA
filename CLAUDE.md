@@ -122,20 +122,29 @@ running ROM; only the side panels need reflowing).
    subroutines that fill `oamStaging` and touch nothing else, so they execute
    on the sound engine's own 6502 interpreter — which they have to, because
    the bursts call `setMusicOrSoundEffect`. See reference/NOTES.md.
-15. Still to do: coop (the core already models its 12-column field), the 2P
+15. ~~The prototype title skin~~ — done, from a prototype dump: L or R on the
+   title swaps the release's screen for the Nintendo-licensed build's, with
+   its own cathedral, logo, fret border, tiles and palettes. Optional:
+   `make assets ROM=... PROTO=...`; without it the port builds with
+   `SCREEN_PROTO_AVAILABLE 0` and L/R do nothing. See reference/NOTES.md —
+   both the attribute table and the palette index were traced after being
+   guessed wrong first.
+16. Still to do: coop (the core already models its 12-column field), the 2P
    starting handicap (`initHandicapGarbage`), and the ROM's COMPUTER player
    (`computerMove`, the VS and WITH modes) — which unlike two-human 2P needs
    neither a second console nor a cable. Also unported: the attract-mode demo
-   the title starts at `frameCounterHigh` = 5 (`demoStart`), and the demo
-   cartridges' alternative frame/church art the user asked for as an easter
-   egg.
+   the title starts at `frameCounterHigh` = 5 (`demoStart`), the prototype
+   PIECE art (the skin is the title only), and Korobeiniki, which is not in
+   this cartridge at all.
 
 ## Build
 
 - `make test` — native core tests, gcc only. The everyday loop.
 - `make gba` — cross-compiles `build/tengen.gba`.
-- `make assets ROM=/path/to/tetris.nes` — regenerates the graphics headers
-  from a cartridge dump. Required once before `make gba` on a fresh clone.
+- `make assets ROM=/path/to/tetris.nes [PROTO=/path/to/prototype.nes]` —
+  regenerates the graphics headers from a cartridge dump. Required once before
+  `make gba` on a fresh clone. `PROTO` is optional and adds the title-skin
+  easter egg; without it the port builds and runs the same, minus that.
 - `make assets-check` — verifies the asset conversion without needing a ROM.
 - `make gba-check` — boots the ROM headlessly in mGBA and asserts it draws
   the field where the resolution mapping says it should, that a piece

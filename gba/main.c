@@ -48,6 +48,7 @@
 #include "tiles_title.h"
 #include "screen_1p.h"
 #include "screen_title.h"
+#include "screen_proto.h"
 #include "screen_menu.h"
 #include "palettes_rom.h"
 #include "dancer_poses.h"
@@ -118,6 +119,7 @@
 /* The title screen has its own 256-tile set, uploaded above the game's so
  * both live in one charblock (512 tiles is exactly its 16KB). */
 #define TITLE_TILE_BASE 256
+#define PROTO_TILE_BASE 512   /* charblock 0 holds 1024 addressable tiles */
 
 /* ----------------------------------------------------------------------- *
  * The between-levels dancers
@@ -332,6 +334,18 @@ static bool shoulder_chord(void) {
     return pressed;
 }
 
+/* ...and EITHER of them, for the title's skin switch — the user asked for
+ * "L or R", and on the title there is no other use for them. Its own held
+ * state, so a chord elsewhere cannot swallow this one's press. */
+static bool shoulder_either(void) {
+    static bool was_held;
+    uint16_t keys = (uint16_t)(~REG_KEYINPUT & KEY_MASK);
+    bool held = (keys & (KEY_L | KEY_R)) != 0;
+    bool pressed = held && !was_held;
+    was_held = held;
+    return pressed;
+}
+
 static void upload_tiles(void) {
     vu16 *dst = MEM_CHARBLOCK(CHARBLOCK);
     const uint8_t *src = kGameTiles;
@@ -381,6 +395,15 @@ static void upload_title_tiles(void) {
     for (unsigned i = 0; i < sizeof(kTitleTiles); i += 2) {
         dst[i / 2] = (uint16_t)(kTitleTiles[i] | (kTitleTiles[i + 1] << 8));
     }
+#if SCREEN_PROTO_AVAILABLE
+    /* The prototype's own bank, above the release's. Tile ids in a text-mode
+     * background are ten bits, so 512-767 is still addressable from
+     * charblock 0, and screenblock 28 starts well past it. */
+    vu16 *pdst = MEM_CHARBLOCK(CHARBLOCK) + PROTO_TILE_BASE * 16;
+    for (unsigned i = 0; i < sizeof(kProtoTiles); i += 2) {
+        pdst[i / 2] = (uint16_t)(kProtoTiles[i] | (kProtoTiles[i + 1] << 8));
+    }
+#endif
 }
 
 /* The cartridge's whole sprite bank, uploaded once. Both the dancers and the
@@ -880,9 +903,60 @@ static void clear_screen(void) {
         for (int tx = 0; tx < MAP_W; tx++) set_map_tile(tx, ty, T_BLANK);
 }
 
-/* The cartridge's own title art, whole: the level selector has its own
- * screen after this one, the way the ROM's menus work. */
+/* ----------------------------------------------------------------------- *
+ * THE TITLE, AND THE SKIN L/R SWITCHES TO
+ *
+ * Tengen shipped this game twice. The prototype cartridges — made while the
+ * licence was still Nintendo's — carry a different title screen: another
+ * cathedral, another logo, and a green fret where the release has its blue
+ * braid. Both are the cartridges' own art, so L or R on the title swaps
+ * between them, with SOUND_CHIRP for a doorbell — one of the four effects
+ * constants.asm.txt marks "maybe unused", so the egg is announced in the
+ * game's own voice by a sound the game itself never plays.
+ *
+ * The skin is only ever the PICTURE. The cathedral overlay and the fireworks
+ * stay on the release screen and are hidden on the prototype's, because they
+ * are the release's: their sprites are placed in NES pixels over the release
+ * cathedral, and the prototype's composition has neither the same rows nor
+ * an empty sky to burst in. Putting them there would be inventing something
+ * neither cartridge does.
+ *
+ * If the port was built without a prototype dump, SCREEN_PROTO_AVAILABLE is 0
+ * and L/R have nothing to switch to. See tools/extract_assets.py.
+ * ----------------------------------------------------------------------- */
+#define TITLE_SKIN_COUNT (SCREEN_PROTO_AVAILABLE ? 2 : 1)
+
+static uint8_t g_title_skin;
+
+/* The two screens are never up at once, so the prototype's palettes go in the
+ * title's own four banks rather than asking for four more. */
+static void install_title_palette(void) {
+#if SCREEN_PROTO_AVAILABLE
+    upload_palette_set(PAL_TITLE_BASE,
+                        g_title_skin ? kRomPalette_bg_proto : kRomPalette_bg_title,
+                        MEM_PALETTE);
+#else
+    upload_palette_set(PAL_TITLE_BASE, kRomPalette_bg_title, MEM_PALETTE);
+#endif
+}
+
 static void draw_title(void) {
+#if SCREEN_PROTO_AVAILABLE
+    if (g_title_skin) {
+        /* Thirty columns, no padding: the prototype's frame is two columns a
+         * side — a thin outer rule and the fret inside it — and the two the
+         * GBA lacks come off the rule, so the decoration survives whole. */
+        for (int ty = 0; ty < SCREEN_PROTO_H_TILES; ty++) {
+            for (int tx = 0; tx < SCREEN_PROTO_W; tx++) {
+                int i = ty * SCREEN_PROTO_W + tx;
+                set_map_tile(tx, ty,
+                              WITH_BANK(PROTO_TILE_BASE + kScreenProtoTiles[i],
+                                        PAL_TITLE_BASE + kScreenProtoPalettes[i]));
+            }
+        }
+        return;
+    }
+#endif
     /* Centred: the composition is 28 columns wide (see TITLE_KEEP_COLS —
      * the brick border's jewels are a two-column motif and half of one is
      * worse than none), so it sits one column in from each edge. */
@@ -974,6 +1048,10 @@ static void restart_title_sprites(void) {
 }
 
 static void draw_title_sprites(void) {
+    if (g_title_skin) {          /* see the note above draw_title */
+        oam_hide_all();
+        return;
+    }
     uint8_t *ram = nes_rom_ram();
     ram[NES_RAM_GAMESTATE] = NES_GAMESTATE_TITLE;
     ram[NES_RAM_FRAME_LOW] = (uint8_t)g_title_frame;
@@ -1353,6 +1431,17 @@ int main(void) {
                 /* initializeTitleScreen ends with this (main.asm.txt:4489). */
                 nes_audio_play(NES_MUSIC_TITLESCREEN);
                 title_music = true;
+            }
+            if (TITLE_SKIN_COUNT > 1 && shoulder_either()) {
+                g_title_skin = (uint8_t)((g_title_skin + 1) % TITLE_SKIN_COUNT);
+                nes_audio_play(NES_SOUND_CHIRP);
+                vsync();
+                install_title_palette();
+                clear_screen();
+                draw_title();
+                oam_hide_all();
+                nes_audio_frame();
+                continue;
             }
             if (pressed & TENGEN_BTN_START) {
                 screen = SCREEN_GAME_SELECT;

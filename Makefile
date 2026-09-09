@@ -121,8 +121,8 @@ $(GBA_ROM): $(GBA_ELF) $(GBAFIX)
 #   make assets ROM=/path/to/tetris.nes
 .PHONY: assets
 assets:
-	@test -n "$(ROM)" || { echo "usage: make assets ROM=/path/to/tetris.nes"; exit 1; }
-	python3 tools/extract_assets.py "$(ROM)" -o gba/
+	@test -n "$(ROM)" || { echo "usage: make assets ROM=/path/to/tetris.nes [PROTO=/path/to/prototype.nes]"; exit 1; }
+	python3 tools/extract_assets.py "$(ROM)" $(if $(PROTO),--proto "$(PROTO)") -o gba/
 
 # Verifies the asset conversion's format handling without needing a ROM.
 .PHONY: assets-check
@@ -144,5 +144,6 @@ gba-check: $(GBA_ROM)
 	python3 tools/run_rom.py $(GBA_ROM) --audio
 	python3 tools/run_rom.py $(GBA_ROM) --pause-audio
 	python3 tools/run_rom.py $(GBA_ROM) --title
+	python3 tools/run_rom.py $(GBA_ROM) --skin
 	python3 tools/run_rom.py $(GBA_ROM) --link
 	python3 tools/run_link.py $(GBA_ROM)

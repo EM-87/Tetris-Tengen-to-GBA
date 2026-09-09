@@ -363,6 +363,87 @@ bank 3, which holds the cathedral overlay at `$02`-`$13`, the sparkles at
 uploads it above the dancers' 256 tiles and installs `spritePalette1` for it,
 which is the set the title itself installs (main.asm.txt:4492-4494).
 
+## The prototype's title screen, and how it was found
+
+Tengen made this game twice: the prototype cartridges, from while the licence
+was still Nintendo's, carry a different title — "TENGEN PRESENTS / TETRIS"
+over another cathedral, gold-and-blue onion domes instead of gold-and-red, and
+a green fret border where the release has its blue braid. The port offers it
+as a skin: L or R on the title swaps between them, announced with
+`SOUND_CHIRP` ($10), one of the four effects `constants.asm.txt` marks "maybe
+unused" — so the egg speaks in the game's own voice with a sound the game
+itself never plays.
+
+### These builds are simpler than the release
+
+The release RLE-compresses its nametables and has to be RUN to unpack them
+(see the note on `sendNametableToPPU`). The prototype's upload routine is a
+flat four-page copy:
+
+    sta $3C / lda TABLE,y / sta $3D / bit PPUSTATUS
+    lda #$20 / sta PPUADDR / lda #$00 / sta PPUADDR
+    tay / ldx #$04
+  @page:
+    lda ($3C),y / sta PPUDATA / iny / bne @page / inc $3D / dex / bne @page
+
+so each screen is 960 plain bytes of nametable in the ROM. The routine's own
+pointer table holds five; rendering all five identified the title at `$A3C4`.
+
+### Everything else about it was traced, after being guessed wrong once
+
+Two things looked settled and were not, and both showed up as a picture that
+was merely *plausible* rather than right:
+
+**The attributes are not in the blob.** The copy moves four pages, so it does
+write over the attribute table at `$23C0` — but `$904D` then uploads the real
+attributes there, RLE'd as (count, value) pairs terminated by a zero count,
+from its own table at `$907D`. Taking the blob's last 64 bytes for attributes
+gives sixty-four bytes of PROGRAM, which is what put the cathedral in green
+and red stripes the first time this ran.
+
+**The palette was picked by eye, and the eye was wrong.** There are four
+16-byte sets at `$91E5`; an earlier pass rendered the title under all four and
+kept the one that looked best. It looked best and it was `$9205`, index 2 —
+another screen's. The real answer is not a judgement call at all, because each
+screen's setup does the same three things with the SAME index (the title's is
+0, at `$8C7C`-`$8C92`):
+
+| Call | What it loads |
+| --- | --- |
+| `lda #0 / jsr $91C0` | palettes: `$91E5 + index*16` -> `$3F00` |
+| `lda #0 / jsr $93D9` | nametable: the index'th pointer in the table at `$9403` |
+| `lda #0 / jsr $904D` | attributes: the index'th entry of `$907D`, RLE |
+
+Index 3 is not a background set at all: `$91E1,y` supplies the destination
+low byte, and only index 3's is `$10`, making it the sprite palettes at
+`$3F10`.
+
+### What the port does and does not carry over
+
+The skin is only ever the PICTURE. The cathedral overlay and the fireworks
+stay on the release screen and are hidden on the prototype's, because they
+ARE the release's — their sprites are placed in NES pixels over the release
+cathedral, and the prototype's composition has neither the same rows nor an
+empty sky to burst in. Putting them there would be inventing something neither
+cartridge does.
+
+Its frame is two columns and two rows on every side — a thin outer rule with
+the fret inside it — so the two columns and ten rows the GBA lacks come off
+the outer rule (all four sides, symmetrically), the five blank rows under the
+cathedral, and three of the four rows of thin spires. The blank row between
+PRESENTS and the logo is deliberately NOT one of them: buying it left the big
+letters' ascenders sitting inside the word above.
+
+### Only this prototype
+
+Of the three dumps, only one stores its title flat at a findable address.
+The other two have differently shaped pointer tables and a brute-force scan of
+every 1024-byte window in both turned up no title screen, so getting theirs
+would need a disassembly of each, and none exists. `read_proto_title` refuses
+to guess: a dump without the expected first row is rejected with a reason
+rather than converted into 1024 bytes of noise, and the port then builds with
+`SCREEN_PROTO_AVAILABLE 0` and L/R simply have nothing to switch to.
+
 ## Two players over a link cable
 
 The cartridge's 2P is a RACE: two independent 10-wide playfields, and nothing
