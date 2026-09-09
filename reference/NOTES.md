@@ -560,6 +560,60 @@ What fits, and what had to give:
   strip, because the playfield keeps its own frame whatever the HUD is doing.
   The dancers' stage is handled the same way.
 
+## The title's frame is two frames, and only one fits
+
+The 32x30 title has a band of gold ingots with red and green jewels set into
+it, two tiles thick, and inside that a blue braid, another two tiles thick.
+Eight tiles of frame on every side is more than a 30x20 screen can carry
+alongside the picture, so the port keeps the OUTER one — the ingots and
+jewels, whole, all the way round.
+
+An earlier pass did the opposite: it kept the braid, dropped the ingots
+entirely, and then had to buy its rows from the braid too, which is why the
+frame came out sliced along the top and bottom edges and the jewels were
+missing from the sides. Keeping ONE of the braid's two column-pairs was worse
+still: a bare blue strip down one side of the picture with nothing matching it
+on the other.
+
+**Both bands are a two-tile pattern** — a jewel (tiles `00 01` / `04 05`) then
+an ingot (`08 09` / `11 12`) — so every row and column kept is kept in its
+PAIR. Take one row of a jewel and you get half a jewel, which is the same
+mistake in a different direction.
+
+| Kept | What it is |
+| --- | --- |
+| rows 0-1, 28-29 | the ingot band, top and bottom |
+| cols 0-1, 30-31 | the same band down the sides |
+| rows 4-5 | TENGEN |
+| rows 8-11 | the TETRIS logo, ™ included |
+| row 14 | the cathedral's spire tip |
+| rows 15-23 | the cathedral, whole and 1:1 |
+
+Twenty rows exactly, and twenty-eight columns, so the picture sits one column
+in from each edge. What it costs: PRESENTS, THE SOVIET MIND GAME, both
+copyright lines (the credit moved to GAME SELECT) and the top two rows of the
+spire — one tile wide, and the only part of the picture that can go without
+leaving a cut edge. Row 14 stays, so the tip is still there and now reaches up
+under the logo, landing between the logo's third and fourth letters.
+
+The port CANNOT lower TENGEN any further, and it is worth writing down why:
+the composition is source rows in source order, so a gap above TENGEN would
+have to be a blank source row between the ingot band and row 4 — and rows 2-3
+are the braid, a solid blue fill, not blank. Buying the gap means giving up
+the spire tip.
+
+### Sprites go through the same rearrangement, in BOTH axes
+
+`kTitleRowMap` was not enough once the composition started dropping columns
+out of the MIDDLE as well: everything right of the gap moves two columns left,
+so there is a `kTitleColMap` too, and both are generated from the same lists
+the artwork is cut with. A sprite standing on a row or column the composition
+dropped is hidden rather than moved somewhere it does not belong — which is
+why the cathedral overlay puts up seventeen of its eighteen sprites now. The
+eighteenth belonged to a spire row that is no longer there, so it has nothing
+left to overlay; `make gba-check --title` allows for that and would still
+catch a map that had gone wrong.
+
 ## Two players over a link cable
 
 The cartridge's 2P is a RACE: two independent 10-wide playfields, and nothing

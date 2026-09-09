@@ -88,11 +88,16 @@ running ROM; only the side panels need reflowing).
    cadence, on the banner column the level-up blit clears for them. Their
    individual choreography scripts are still untraced (noted in NOTES.md).
 9. ~~Title and menu screens~~ — done, from the cartridge's own title art and
-   menu frame. The title stays a FRAMED PICTURE: its ten spare rows come out
-   of the artwork (the thin spire above the tent roof, three rows of the
-   cathedral's brick bodies) rather than out of the frame, because an earlier
-   pass bought them from the frame and left the lettering running off the top
-   edge with the second copyright line cut off the bottom.
+   menu frame. The title's frame is TWO frames and only one fits: a band of
+   gold ingots and jewels outside, a blue braid inside, two tiles each. The
+   port keeps the OUTER one, whole on all four sides — an earlier pass kept
+   the braid, then had to buy rows from it as well, and the frame came out
+   sliced along the top and bottom. Both bands are a two-tile pattern, so
+   every row and column is kept in its pair or you get half a jewel. What the
+   picture gives up in exchange: PRESENTS, THE SOVIET MIND GAME, both
+   copyright lines (the credit moved to GAME SELECT) and the top two rows of
+   the cathedral's one-tile-wide spire — its tip stays, and now sits right
+   under the TETRIS logo. See reference/NOTES.md.
 10. ~~The line-clear animation~~ — done, and it turned out to be one of the
    game's signatures rather than a pause: a black puff of smoke crosses each
    completed row and leaves SINGLE / DOUBLE / TRIPLE / TETRIS written where

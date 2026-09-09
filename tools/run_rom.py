@@ -809,8 +809,15 @@ def title_check(rom_path):
     failures = []
 
     run(core, 30)
+    # NOT ALL EIGHTEEN HAVE TO SHOW. The overlay is placed in NES screen
+    # pixels over NES rows the composition may not carry: it drops the top of
+    # the cathedral's thin spire (see TITLE_ROW_BLOCKS), and a sprite whose row
+    # went with it has nothing left to overlay, so kTitleRowMap hides it rather
+    # than dropping it somewhere it does not belong. Two is the most the
+    # current composition can account for; more than that means the map is
+    # wrong, not that the artwork was recut.
     cathedral = oam_visible(core, 0, CATHEDRAL_SPRITES)
-    if len(cathedral) != CATHEDRAL_SPRITES:
+    if len(cathedral) < CATHEDRAL_SPRITES - 2:
         failures.append(
             f"la catedral pone {len(cathedral)} de {CATHEDRAL_SPRITES} sprites")
     off = [c for c in cathedral if not (0 <= c[0] < SCREEN_W and 0 <= c[1] < SCREEN_H)]
@@ -1196,7 +1203,7 @@ def link_check(rom_path):
     if "2 PLAYER" not in tilemap_text(core, 12):
         failures.append("GAME SELECT no ofrece 2 PLAYER")
 
-    if "PAJITNOV" not in tilemap_text(core, 17):
+    if "PAJITNOV" not in tilemap_text(core, 15):
         failures.append("falta el credito a Pajitnov en GAME SELECT")
 
     tap("DOWN")                       # 1 PLAYER -> 2 PLAYER

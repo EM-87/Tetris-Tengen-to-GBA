@@ -1117,9 +1117,9 @@ static void draw_title(void) {
  * is hidden rather than moved somewhere it does not belong.
  * ----------------------------------------------------------------------- */
 #define TITLE_OAM_COUNT 64        /* the whole staging page: $0500-$05FF */
-/* The composition is one column in from the left (draw_title's `pad`) and
- * starts at NES column SCREEN_TITLE_KEEP_COL0. */
-#define TITLE_X_SHIFT (((SCREEN_TW - SCREEN_TITLE_W) / 2 - SCREEN_TITLE_KEEP_COL0) * 8)
+/* Columns go through their own map for the same reason rows do: the two the
+ * composition drops come out of the middle, so a sprite right of the gap is
+ * two columns left of where its NES x says. */
 
 static uint16_t g_title_frame;
 
@@ -1186,8 +1186,15 @@ static void draw_title_sprites(void) {
             MEM_OAM[i * 4] = OBJ_ATTR0_HIDDEN;
             continue;
         }
-        int x = nx + TITLE_X_SHIFT;
-        if (x < -7 || x >= SCREEN_TW * 8) {
+        int col = (nx >= 0 && nx < 256) ? kTitleColMap[nx / 8]
+                                        : SCREEN_TITLE_ROW_DROPPED;
+        if (col == SCREEN_TITLE_ROW_DROPPED) {
+            MEM_OAM[i * 4] = OBJ_ATTR0_HIDDEN;
+            continue;
+        }
+        /* ...and then the same one-column pad draw_title centres with. */
+        int x = ((SCREEN_TW - SCREEN_TITLE_W) / 2 + col) * 8 + (nx & 7);
+        if (x >= SCREEN_TW * 8) {
             MEM_OAM[i * 4] = OBJ_ATTR0_HIDDEN;
             continue;
         }
@@ -1231,12 +1238,17 @@ static void draw_game_select(uint8_t choice) {
      * the licensing fight that followed is the reason this cartridge was
      * pulled from shelves. The port's title has no room for either line any
      * more (the cathedral took it), so the credit lands here instead, and
-     * says who actually wrote the game. */
-    draw_text(4, 14, "2 PLAYER USES A CABLE", PAL_MENU_BASE + 3);
-    /* The menu frame's black interior is columns 3-26 — twenty-four of them —
+     * says who actually wrote the game.
+     *
+     * It sits closer to the two entries now, and alone: the line about the
+     * cable that used to be between them said nothing the player could act
+     * on — choosing 2 PLAYER leads to a screen that says so itself, and says
+     * it when it matters.
+     *
+     * The menu frame's black interior is columns 3-26 — twenty-four of them —
      * so the full "TETRIS BY ALEXEY PAJITNOV" (twenty-five) ran over the braid
      * at both ends. The word TETRIS is already six tiles tall above this. */
-    draw_text(6, 17, "BY ALEXEY PAJITNOV", PAL_MENU_BASE + 3);
+    draw_text(6, 15, "BY ALEXEY PAJITNOV", PAL_MENU_BASE + 3);
 }
 
 /* What the lobby is doing, while it does it. Two consoles reach this screen

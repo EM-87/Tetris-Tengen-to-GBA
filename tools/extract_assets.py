@@ -150,33 +150,55 @@ DANCER_SOLO_COUNT = 6
 #
 # The screen is a framed PICTURE of St Basil's Cathedral under TENGEN TETRIS,
 # and what has to survive is the cathedral WHOLE — its spire, its domes and
-# its bodies, at 1:1, with the frame closed on all four sides.
+# its bodies, at 1:1 — inside a frame that is closed on all four sides.
 #
-# COLUMNS. The border is a two-column brick-and-jewel pattern outside a
-# two-column braid. The jewels are a 2x2 motif, so keeping one of their two
-# columns cuts every one of them in half — which is exactly what "the gems
-# are bugged" looked like. There is no room for both brick columns on each
-# side, so the brick goes and the braid stays: 2 + 24 + 2 = 28 columns, drawn
-# one column in from each edge.
+# THE FRAME IS TWO FRAMES, and only one of them fits. Outside there is a band
+# of gold ingots with red and green jewels set into it, two tiles thick;
+# inside that, a blue braid, another two tiles thick. Eight tiles of frame on
+# every side is more than a 30x20 screen can carry alongside the picture, so
+# the port keeps the OUTER one: the ingots and jewels, whole, all the way
+# round. An earlier pass kept the braid instead and dropped the ingots
+# entirely, and then had to buy its rows from the braid as well, which is why
+# the frame came out sliced along the top and bottom edges.
 #
-# ROWS. Twenty of thirty, and the cathedral needs twelve of them. What goes:
+# BOTH BANDS ARE A TWO-TILE PATTERN — a jewel (tiles 00 01 / 04 05) then an
+# ingot (08 09 / 11 12) — so every row and column kept below is kept in its
+# PAIR. Take one row of a jewel and you get half a jewel, which is the same
+# mistake in a different direction.
 #
-#   rows 0-2, 27-29   the brick border and one of the two braid rows. A single
-#                     row of braid still reads as a frame.
-#   rows 6-7          "PRESENTS" and "THE SOVIET MIND GAME". Two rows of
-#                     subtitle against two rows of cathedral is not a close
-#                     call.
+# COLUMNS: the ingots at 0-1 and 30-31, and the twenty-four between the two
+# braids. Both braid pairs go — 2-3 and 28-29 — because keeping one of them
+# leaves a bare blue strip running down one side of the picture with nothing
+# matching it on the other, which is what it looked like when only the left
+# pair was dropped. That makes the composition 28 columns, so it sits one
+# column in from each edge of the GBA's thirty, the way it did before.
+#
+# ROWS. Twenty of thirty, four of them frame, sixteen for the picture. The
+# picture wants TENGEN (2) + the TETRIS logo (4) + the cathedral (12) = 18, so
+# two rows have to come out of it. What goes, in the order the cartridge's
+# owner allowed:
+#
+#   rows 2-3, 26-27   the blue braid, top and bottom, with its side columns.
+#   rows 6-7          "PRESENTS" and "THE SOVIET MIND GAME".
 #   rows 24-25        the two copyright lines. They are not lost: the credit
 #                     moves to GAME SELECT, where it can also say who wrote
 #                     the game.
-#
-# What stays is TENGEN, the TETRIS logo, and rows 12-23 — every row of the
-# cathedral, none of them dropped, none of them squashed.
-TITLE_KEEP_COLS = (2, 30)
+#   rows 12-13        the top two rows of the cathedral's thin central spire —
+#                     one tile wide, and the only part of the picture that can
+#                     go without leaving a cut edge. Row 14 stays, so the tip
+#                     is still there and now sits right up under the TETRIS
+#                     logo, which is where it was asked to go.
+TITLE_COL_BLOCKS = (
+    (0, 2),     # the ingots and jewels, left
+    (4, 28),    # the picture
+    (30, 32),   # the ingots and jewels, right
+)
 TITLE_ROW_BLOCKS = (
-    (3, 6),     # the braid's inner row, then TENGEN
-    (8, 24),    # the TETRIS logo, then the whole cathedral
-    (26, 27),   # the braid again at the bottom
+    (0, 2),     # the ingot band, top
+    (4, 6),     # TENGEN
+    (8, 12),    # the TETRIS logo
+    (14, 24),   # the spire's tip, and the whole cathedral under it
+    (28, 30),   # the ingot band, bottom
 )
 
 # The menu screen the ROM uses for its selection screens: a decorative frame
@@ -892,7 +914,7 @@ def compose_title(nametable, attributes):
     comes from dropping the thick top and bottom borders rather than from
     scaling or from cutting artwork: see TITLE_ROW_BLOCKS.
     """
-    cols = list(range(*TITLE_KEEP_COLS))
+    cols = [c for start, end in TITLE_COL_BLOCKS for c in range(start, end)]
     assert len(cols) <= 30, f"title asks for {len(cols)} columns, screen has 30"
 
     rows = []
@@ -1148,6 +1170,22 @@ def emit_menu_header(tiles, palettes, source):
     return "\n".join(lines)
 
 
+def title_col_map():
+    """NES nametable column -> the column it occupies on the port's title.
+
+    The composition drops two columns out of the MIDDLE (see
+    TITLE_COL_BLOCKS), so a sprite's column is no longer a fixed offset from
+    the nametable's: everything right of the gap moves two columns left.
+    0xFF for a dropped column."""
+    out = [0xFF] * 32
+    col = 0
+    for start, end in TITLE_COL_BLOCKS:
+        for src in range(start, end):
+            out[src] = col
+            col += 1
+    return out
+
+
 def title_row_map():
     """NES nametable row -> the row it occupies on the port's title screen.
 
@@ -1187,9 +1225,9 @@ def emit_title_header(tiles, banks, source):
         "",
         "#include <stdint.h>",
         "",
-        f"#define SCREEN_TITLE_W {TITLE_KEEP_COLS[1] - TITLE_KEEP_COLS[0]}",
+        f"#define SCREEN_TITLE_W {sum(e - s for s, e in TITLE_COL_BLOCKS)}",
         "#define SCREEN_TITLE_H_TILES 20",
-        f"#define SCREEN_TITLE_KEEP_COL0 {TITLE_KEEP_COLS[0]}",
+        f"#define SCREEN_TITLE_KEEP_COL0 {TITLE_COL_BLOCKS[0][0]}",
         "",
         "/* WHERE A NES SPRITE LANDS ON THIS SCREEN.",
         " *",
@@ -1205,10 +1243,15 @@ def emit_title_header(tiles, banks, source):
         "static const uint8_t kTitleRowMap[30] = {",
         "    " + ", ".join(f"0x{v:02X}" for v in title_row_map()) + ",",
         "};",
+        "/* ...and the same for columns, because the two the composition drops",
+        " * come out of the MIDDLE: everything right of the gap moves left. */",
+        "static const uint8_t kTitleColMap[32] = {",
+        "    " + ", ".join(f"0x{v:02X}" for v in title_col_map()) + ",",
+        "};",
         "",
         f"static const uint8_t kScreenTitleTiles[{len(tiles)}] = {{",
     ]
-    width = TITLE_KEEP_COLS[1] - TITLE_KEEP_COLS[0]
+    width = sum(e - s for s, e in TITLE_COL_BLOCKS)
     for i in range(0, len(tiles), width):
         lines.append("    " + ", ".join(f"0x{t:02X}" for t in tiles[i:i + width]) + ",")
     lines += ["};", "",
@@ -1392,7 +1435,7 @@ def self_test() -> int:
 
     # The title composition must keep 30x20 and must not reorder columns.
     title, title_banks = compose_title(bytes(range(256)) * 4, bytes(64))
-    title_w = TITLE_KEEP_COLS[1] - TITLE_KEEP_COLS[0]
+    title_w = sum(e - s for s, e in TITLE_COL_BLOCKS)
     if len(title) != title_w * 20 or len(title_banks) != len(title):
         failures.append(f"la composicion del titulo dio {len(title)} tiles, "
                         f"esperado {title_w * 20}")
