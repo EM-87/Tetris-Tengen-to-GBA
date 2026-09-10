@@ -617,13 +617,25 @@ with nothing generated and nothing drawn by hand. Which arrow per screen is
 the same table: right for the player-1 column (it sits left of its digits),
 left for player 2's, because the two lists are mirrored about the centre.
 
-**What it does NOT have is parentheses.** "HANDICAP (L-R TO SET)" cannot be
-written: `$28` and `$29`, where ASCII puts `(` and `)`, hold pieces of the
-game's border art here, and printing them drops two blocks of border into the
-middle of the label. What parentheses were wanted for is separating a note
-from its label, and a PALETTE does that at least as well — bank 2's first
-colour is the menu's pale cyan `$31` against bank 3's white — so the note is
-drawn in it instead. `BANK_NOTE`.
+**What it does NOT have is parentheses.** `$28` and `$29`, where ASCII puts
+`(` and `)`, hold pieces of the game's border art in this tile set, so a label
+like "HANDICAP (L-R TO SET)" prints two blocks of border in the middle of
+itself. What parentheses are wanted for is separating a note from its label,
+and a PALETTE does that at least as well — bank 2's first colour is the menu's
+pale cyan `$31` against bank 3's white. `BANK_NOTE` carries what is left of
+that: the handicap's depth line and the one at the foot.
+
+**The control hints are gone.** They were three of the six lines on the page,
+and with a cursor sitting beside the chosen row and values that change under
+left and right, none of them was telling anybody anything they had not already
+worked out. What is left is a two-column table — labels in one column, values
+in another, the block centred — and START TO PLAY under it.
+
+**The last row with air under it is 16.** The frame's bottom braid begins at
+y=145, so a line on row 17 ends one pixel short of touching it.
+`make gba-check --menu` finds the braid by looking for the first scanline the
+frame fills right across, rather than trusting a constant, and fails if the
+text comes within four pixels of it.
 
 ## The level-up show, and who gets to see it
 
@@ -648,6 +660,20 @@ counts — and the six of them are what it pays back.
 while the music is suspended was the one part of the screen that had not
 noticed the game had stopped; `paused` freezes him now, the same way a dead
 board does.
+
+## The preview's cell closes where its content does
+
+In HUD BANNER the NEXT block sits in the four rows the statistics give up, and
+half a tile of offset-layer scroll centres its 23 pixels of ink in their 32.
+In HUD STATS that trick is not available: the offset layer is carrying the
+statistics, and its scroll is one number for the whole layer.
+
+It does not need to be. At orientation 0 every one of the seven pieces is two
+rows tall — `kOrientationBitmap`'s second byte is `$00` for all of them — so a
+label over a piece is 23 pixels, and a cell of THREE rows fits it exactly with
+nothing to centre. Moving the rule up one row is the whole fix, and it gives
+the box the same rhythm the counters opposite have: three pixels of air above
+the label, two below the last of the ink, then the rule.
 
 ## Two bugs that hid inside "it looks right"
 

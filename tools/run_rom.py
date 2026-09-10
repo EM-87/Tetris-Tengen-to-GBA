@@ -1301,6 +1301,58 @@ def next_palette_check(rom_path):
     return 0
 
 
+def menu_check(rom_path):
+    """LEVEL SETTINGS: three fields, and nothing touching the braid.
+
+    The frame's bottom run starts at y=145, so a line on tile row 17 ends one
+    pixel short of it — which is what "START TO PLAY pisa la greca" was. The
+    last row with air under it is 16, and this measures that rather than
+    trusting a constant.
+    """
+    core, screen = load(rom_path)   # `screen` must stay alive; see load()
+    run(core, 8)
+    press_start(core)               # title -> game select
+    press_start(core)               # -> LEVEL SETTINGS
+    run(core, 20)
+
+    failures = []
+    for row, want in ((LEVEL_ROW, "LEVEL"), (HANDICAP_ROW, "HANDICAP"),
+                       (MUSIC_ROW, "MUSIC")):
+        if want not in tilemap_text(core, row):
+            failures.append(f"la fila {row} no dice {want}: "
+                             f"{tilemap_text(core, row)!r}")
+
+    # Where the braid's bottom run actually begins, found by looking for the
+    # first scanline the frame fills right across the interior.
+    rows = pixels(screen)
+    braid_y = None
+    for y in range(120, 160):
+        if all(rows[y][x] != (0, 0, 0) for x in range(24, 216)):
+            braid_y = y
+            break
+    if braid_y is None:
+        failures.append("no se encuentra la greca de abajo")
+    else:
+        last = max((y for y in range(100, braid_y)
+                    if any(rows[y][x] != (0, 0, 0) for x in range(24, 216))),
+                   default=None)
+        if last is None:
+            failures.append("no hay texto en la mitad de abajo de la pantalla")
+        elif braid_y - last < 4:
+            failures.append(f"el texto llega a y={last} y la greca empieza en "
+                             f"y={braid_y}: se tocan")
+        else:
+            print(f"  la ultima linea acaba en y={last}, la greca empieza en "
+                   f"y={braid_y}: {braid_y - last - 1} pixeles de aire")
+
+    for f in failures:
+        print("FALLA:", f)
+    if failures:
+        return 1
+    print("OK: LEVEL SETTINGS trae sus tres campos y no pisa la greca.")
+    return 0
+
+
 def braid_check(rom_path):
     core, screen = load(rom_path)
     start_game(core)
@@ -1569,11 +1621,15 @@ def leaving_title_check(rom_path):
     # On through the cartridge's three setup screens to the one SELECT is
     # being asked about.
     # SELECT moves the CURSOR down the settings, the way DOWN does ($9FBC).
-    before = [core.memory.u16[SCREENBLOCK_ADDR + (r * 32 + 2) * 2]
-              for r in (8, 11, 14)]
+    # The cursor is an arrow tile a couple of columns left of the labels; read
+    # the whole gutter so moving the column does not silently break this.
+    def cursor_gutter():
+        return [core.memory.u16[SCREENBLOCK_ADDR + (r * 32 + x) * 2]
+                for r in (8, 11, 14) for x in range(2, 6)]
+
+    before = cursor_gutter()
     tap(KEYS["SELECT"])
-    if [core.memory.u16[SCREENBLOCK_ADDR + (r * 32 + 2) * 2]
-        for r in (8, 11, 14)] == before:
+    if cursor_gutter() == before:
         failures.append("SELECT no mueve el cursor en LEVEL SETTINGS")
     else:
         print("  SELECT mueve el cursor en LEVEL SETTINGS")
@@ -1796,6 +1852,8 @@ def main():
                      help="check the four counters share one headroom")
     ap.add_argument("--next-palette", action="store_true",
                      help="check NEXT wears the next piece's colours")
+    ap.add_argument("--menu", action="store_true",
+                     help="check LEVEL SETTINGS fits inside its frame")
     args = ap.parse_args()
 
     if args.selftest:
@@ -1826,6 +1884,8 @@ def main():
         sys.exit(panel_check(args.rom))
     if args.next_palette:
         sys.exit(next_palette_check(args.rom))
+    if args.menu:
+        sys.exit(menu_check(args.rom))
 
     core, screen = load(args.rom)
     start_game(core)

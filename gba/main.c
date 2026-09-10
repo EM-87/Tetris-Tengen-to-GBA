@@ -1239,7 +1239,17 @@ static void draw_next_label_and_piece(int tx, int ty, bool ruled, bool offset) {
     }
     draw_next_piece(tx + (BOX_IN - NEXT_CELL_W) / 2, ty + 1);
     g_next_all_offset = false;
-    if (ruled) draw_rule(tx, ty + 4);
+    /* THE RULE CLOSES THE CELL WHERE THE CONTENT ENDS, three rows down and
+     * not four. The block is a label over a piece: at orientation 0 every one
+     * of the seven is two rows tall — kOrientationBitmap's second byte is $00
+     * for all of them — so the content is 23 pixels and a four-row cell left
+     * ten of empty under it, which is what "NEXT esta muy arriba en su caja"
+     * is. Three rows fits it exactly, and gives the same rhythm the counters
+     * in the other box have: three pixels of air above the label, two below
+     * the last of the ink. Centring it inside the taller cell instead would
+     * want half a tile, and the offset layer is not free here — it is
+     * carrying the statistics. */
+    if (ruled) draw_rule(tx, ty + 3);
 }
 
 static void draw_panel(void) {
@@ -2117,11 +2127,20 @@ static void draw_link_wait(const TengenLobby *lobby, int elapsed) {
 #define MENU_BODY_H  11
 
 /* Three fields, three rows apart, so each has two blank rows to itself — the
- * whole point of the exercise. */
+ * whole point of the exercise. Row 16 is the last one with air under it: the
+ * frame's bottom braid starts at y=145, so a line on row 17 ends one pixel
+ * short of it. */
 #define MENU_FIELD_TY(f) (8 + (f) * 3)
-#define MENU_CURSOR_TX MENU_IN_TX
-#define MENU_LABEL_TX  (MENU_IN_TX + 2)
-#define MENU_VALUE_END (MENU_IN_TX + MENU_IN_W - 1)   /* values right-align here */
+#define MENU_FOOT_TY 16
+
+/* A CENTRED COLUMN, not two lines pinned to the walls. Labels start at one
+ * column and values at another, both fixed, and the block those two make is
+ * centred in the frame: eight for the longest label, three of gap, eleven for
+ * the longest tune name is twenty-two of the interior's twenty-six. The
+ * cursor sits two columns left of the labels, in the two that are left over. */
+#define MENU_LABEL_TX  (MENU_IN_TX + 3)
+#define MENU_VALUE_TX  (MENU_LABEL_TX + 11)
+#define MENU_CURSOR_TX (MENU_LABEL_TX - 2)
 
 /* Appends a number with no leading zeroes. Returns the new length. */
 static unsigned append_number(char *row, unsigned n, unsigned value) {
@@ -2130,35 +2149,25 @@ static unsigned append_number(char *row, unsigned n, unsigned value) {
     return n;
 }
 
-/* THE CARTRIDGE HAS NO PARENTHESES. "HANDICAP (L-R TO SET)" was the ask and
- * it cannot be written: $28 and $29 — where ASCII puts '(' and ')' — hold
- * pieces of the game's own border art in this tile set, and printing them
- * puts two blocks of border in the middle of the word. What parentheses were
- * for, though, is separating a note from the label it hangs off, and a
- * PALETTE does that at least as well: bank 2's first colour is the menu's
- * pale cyan ($31) against bank 3's white, so the note reads as a note. */
+/* Anything the screen says rather than offers: the handicap's depth, and the
+ * line at the foot. Bank 2's first colour is the menu's pale cyan against
+ * bank 3's white, so it reads as a note and not as another choice. */
 #define BANK_NOTE (PAL_MENU_BASE + 2)
 
-/* One field: the cursor if it is the chosen one, the label with its note, and
- * the value right-aligned against the far wall so the three values line up. */
+/* One field: the cursor if it is the chosen one, then the label and the value
+ * in their columns. */
 static void draw_field_row(int field, int chosen, const char *label,
-                            const char *note, const char *value) {
+                            const char *value) {
     int ty = MENU_FIELD_TY(field);
     clear_both(MENU_IN_TX, ty, MENU_IN_W, 1);
     if (field == chosen)
         set_map_tile(MENU_CURSOR_TX, ty,
                       WITH_BANK(ascii_tile(MENU_ARROW_R), BANK_HILITE));
-    int tx = MENU_LABEL_TX;
-    for (int i = 0; label[i]; i++, tx++)
-        set_map_tile(tx, ty, WITH_BANK(ascii_tile(label[i]), PAL_MENU_BASE + 3));
-    if (note) {
-        tx++;
-        for (int i = 0; note[i]; i++, tx++)
-            set_map_tile(tx, ty, WITH_BANK(ascii_tile(note[i]), BANK_NOTE));
-    }
-    int len = (int)text_len(value);
-    for (int i = 0; i < len; i++)
-        set_map_tile(MENU_VALUE_END - len + 1 + i, ty,
+    for (int i = 0; label[i]; i++)
+        set_map_tile(MENU_LABEL_TX + i, ty,
+                      WITH_BANK(ascii_tile(label[i]), PAL_MENU_BASE + 3));
+    for (int i = 0; value[i]; i++)
+        set_map_tile(MENU_VALUE_TX + i, ty,
                       WITH_BANK(ascii_tile(value[i]), BANK_HILITE));
 }
 
@@ -2174,24 +2183,22 @@ static void draw_level_settings(int chosen, uint8_t start_level, uint8_t music,
 
     n = append_number(value, 0, start_level);
     value[n] = '\0';
-    draw_field_row(MENU_FIELD_LEVEL, chosen, "LEVEL", NULL, value);
+    draw_field_row(MENU_FIELD_LEVEL, chosen, "LEVEL", value);
 
     /* THE STARTING HANDICAP, the cartridge's own menuPlayer1Handicap /
      * menuPlayer2Handicap (main.asm.txt:3536-3546): how many three-row bands
-     * of garbage a player starts buried under, nought to four. The shoulder
-     * on a player's side of the pad sets that player's, which is what the
-     * parenthesis in the label is for — and in one player there is only one
-     * value, so both shoulders and the pad all reach it. */
+     * of garbage a player starts buried under, nought to four. In two players
+     * there are two of them, and the shoulder on a player's side of the pad
+     * is what sets that player's. */
     n = append_number(value, 0, handicap[0]);
     if (two_player) {
         value[n++] = ' ';
         n = append_number(value, n, handicap[1]);
     }
     value[n] = '\0';
-    draw_field_row(MENU_FIELD_HANDICAP, chosen, "HANDICAP",
-                    two_player ? "L=1P R=2P" : "L-R TO SET", value);
+    draw_field_row(MENU_FIELD_HANDICAP, chosen, "HANDICAP", value);
 
-    draw_field_row(MENU_FIELD_MUSIC, chosen, "MUSIC", NULL, kMusicNames[music]);
+    draw_field_row(MENU_FIELD_MUSIC, chosen, "MUSIC", kMusicNames[music]);
 
     /* What the handicap actually costs you, because "2" says nothing until
      * you know it is two of the three-row bands garbageHeightData lays down.
@@ -2211,23 +2218,10 @@ static void draw_level_settings(int chosen, uint8_t start_level, uint8_t music,
         const char *tail = " ROWS";
         while (*tail) row[m++] = *tail++;
         row[m] = '\0';
-        draw_text_centred(MENU_FIELD_TY(MENU_FIELD_HANDICAP) + 1, row,
-                           PAL_MENU_BASE + 3);
+        draw_text_centred(MENU_FIELD_TY(MENU_FIELD_HANDICAP) + 1, row, BANK_NOTE);
     }
 
-    {
-        /* "UP DOWN PICK  ← → SET", in the cartridge's arrows. */
-        char hint[32];
-        unsigned m = 0;
-        const char *a = "UP DOWN PICK  ";
-        while (*a) hint[m++] = *a++;
-        hint[m++] = MENU_ARROW_L; hint[m++] = ' '; hint[m++] = MENU_ARROW_R;
-        const char *b = " SET";
-        while (*b) hint[m++] = *b++;
-        hint[m] = '\0';
-        draw_text_centred(16, hint, BANK_NOTE);
-    }
-    draw_text_centred(17, "START TO PLAY", BANK_NOTE);
+    draw_text_centred(MENU_FOOT_TY, "START TO PLAY", BANK_NOTE);
 }
 
 
