@@ -76,9 +76,10 @@ running ROM; only the side panels need reflowing).
    in one rank. The counters lose their individual frames (the box is the
    frame) and are ruled off with the cartridge's own `$76`; the eighteen-row
    TETRIS banner does not fit at all and takes the column instead when L+R
-   asks for it. The statistics ride a SECOND background scrolled three pixels,
-   because a seven-tile strip cannot be centred in eight columns any other
-   way. See reference/NOTES.md.
+   asks for it. A SECOND BACKGROUND, scrolled a few pixels, carries everything
+   that is centred on the tile grid but whose ink is not centred inside its
+   tiles: the seven-tile statistics strip, the odd-width NEXT previews, and on
+   the title the words TENGEN and TETRIS. See reference/NOTES.md.
 5. ~~Palettes~~ — done, and these are the game's real colours rather than
    placeholders: the palette tables ARE in the disassembly even though the
    tile art isn't. Tracing them also caught a fidelity bug worth remembering:
@@ -119,7 +120,12 @@ running ROM; only the side panels need reflowing).
    where their odd behaviours come from (a broken sequence swallows the press
    that broke it; a completed code re-fires on its last button); all of it is
    reproduced and tested rather than tidied up.
-12. ~~Audio~~ — done, and not the way the roadmap assumed. The port doesn't
+12. ~~Audio~~ — done, and not the way the roadmap assumed. One thing about it
+   is worth knowing before touching any of it: **MUSIC_SILENCE ($08) does not
+   silence anything.** It is `musicSelectTable`'s "no tune chosen" entry and
+   it resets the engine so the next track starts clean; the track already
+   playing carries on. The stop is MUSIC_SUSPEND, and RESUME is not free when
+   nothing was suspended. See reference/NOTES.md. The port doesn't
    reimplement the sound engine, it RUNS it: `gba/nes6502.c` is a small 6502
    interpreter and `gba/audio_prg.h` is the slice of the cartridge holding
    the engine and its music. That was the only way to get the music, the
@@ -177,7 +183,9 @@ running ROM; only the side panels need reflowing).
 - `make gba-check` — boots the ROM headlessly in mGBA and asserts it draws
   the field where the resolution mapping says it should, that a piece
   actually falls, that the line-clear sweep crosses the row and writes the
-  right word, that Start pauses and the cheat codes respond, and that the
+  right word, that Start pauses and the cheat codes respond, that the blue
+  braid keeps its weave when L+R swaps the right-hand box, that the title's
+  theme actually stops when you leave it, and that the
   emulated sound engine matches a golden recording of the reference
   interpreter frame for frame while still leaving the game running at full
   speed. The line-clear check plants completed rows straight into the game's

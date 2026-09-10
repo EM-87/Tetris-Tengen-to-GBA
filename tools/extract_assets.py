@@ -204,10 +204,28 @@ TITLE_COL_BLOCKS = (
     (5, 27),    # the picture
     (28, 32),   # the braid again, and the ingots
 )
-# The spire tile to put back over the logo, and the logo row with a hole in it
-# to put it in. See compose_title.
-TITLE_SPIRE_OVERLAY = ((12, 16),)
-SPIRE_OVER_ROW = 10
+# THE TWO SPIRE TILES PUT BACK OVER THE LOGO, and the logo rows they go in.
+# Each entry is (source row, source column, the row it is printed into, the
+# tile that row must already hold). That last field is the guard: these two
+# cells are the only places in the logo where a whole tile can be replaced
+# without losing lettering, so a different dump has to fail loudly rather than
+# quietly paint over a letter. See compose_title.
+#
+#   (12,16) $7C  the finial: a thin pole with its base flaring at the bottom
+#   (13,16) $7E  the ball under it, which is what JOINS the finial to the tent
+#
+# Printing only the first left the finial floating eight pixels above the roof
+# with black in between — the gap that read as a graphical glitch. Row 11's
+# $73 at column 16 is three pixels of two letters' bottom serif and nothing
+# else, so the ball fits there and the spire comes out whole: finial, ball,
+# tent, on three consecutive rows exactly as the cartridge stacks them.
+#
+# Its left neighbour, $7D at (13,15), is ONE pixel of the ball's left edge and
+# it does not come: row 11 column 15 is a solid bar of lettering.
+TITLE_SPIRE_OVERLAY = (
+    (12, 16, 10, 0x1D),
+    (13, 16, 11, 0x73),
+)
 TITLE_BLANK_TILE = 0x1D
 
 TITLE_ROW_BLOCKS = (
@@ -987,6 +1005,11 @@ def emit_screen_header(tiles, palettes, keep_cols, source, stats):
         f"#define HUD_LABEL_{name} {first}, {run}"
         for name, (first, run) in zip(labels[0], labels[1])
     ] + [
+        # ...and the width on its own, for the callers that centre a label
+        # rather than just placing it: the pair above cannot be indexed.
+        f"#define HUD_LABEL_{name}_W {run}"
+        for name, (first, run) in zip(labels[0], labels[1])
+    ] + [
         f"static const uint8_t kHudLabelTiles[{len(labels[2])}] = {{",
     ] + [
         "    " + ", ".join(f"0x{b:02X}" for b in labels[2][i:i + 16]) + ","
@@ -1033,21 +1056,21 @@ def compose_title(nametable, attributes):
     tiles = [nametable[r * 32 + c] for r in rows for c in cols]
     banks = [attribute_palette(attributes, c, r) for r in rows for c in cols]
 
-    # THE SPIRE'S TIP, PUT BACK OVER THE LOGO. Dropping source rows 12-13 takes
-    # the top of the cathedral's one-tile-wide spire with them, and the tip is
-    # the thing the eye misses. It can go back, because the TETRIS logo has a
-    # BLANK tile at row 10, column 16 — right between its third and fourth
-    # letters, and directly above where the spire now starts. So the tip is
-    # written there: the spire runs up behind the lettering and comes out at
-    # the top, which is what it looks like it should do anyway.
-    for src_row, src_col in TITLE_SPIRE_OVERLAY:
-        if SPIRE_OVER_ROW not in rows or src_col not in cols:
+    # THE SPIRE, PUT BACK OVER THE LOGO. Dropping source rows 12-13 takes the
+    # top of the cathedral's one-tile-wide spire with them, and the tip is the
+    # thing the eye misses. Both tiles go back into the logo — see
+    # TITLE_SPIRE_OVERLAY for which cells will take them and why — so the
+    # spire runs up behind the lettering and comes out at the top whole,
+    # rather than as a finial floating over a gap.
+    for src_row, src_col, dst_row, expect in TITLE_SPIRE_OVERLAY:
+        if dst_row not in rows or src_col not in cols:
             continue
-        if nametable[SPIRE_OVER_ROW * 32 + src_col] != TITLE_BLANK_TILE:
+        if nametable[dst_row * 32 + src_col] != expect:
             raise ValueError(
-                f"the spire's tip would land on artwork at ({src_col},"
-                f"{SPIRE_OVER_ROW})")
-        i = rows.index(SPIRE_OVER_ROW) * len(cols) + cols.index(src_col)
+                f"the spire would land on unexpected artwork at ({src_col},"
+                f"{dst_row}): tile {nametable[dst_row * 32 + src_col]:#04x}, "
+                f"expected {expect:#04x}")
+        i = rows.index(dst_row) * len(cols) + cols.index(src_col)
         tiles[i] = nametable[src_row * 32 + src_col]
         banks[i] = attribute_palette(attributes, src_col, src_row)
     return tiles, banks

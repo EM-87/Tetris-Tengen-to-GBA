@@ -68,6 +68,41 @@
 #define SCREENBLOCK_STATS 29
 #define STATS_SHIFT_PX 3
 
+/* THE SAME LAYER, LENT TO THE TITLE, for the same kind of reason.
+ *
+ * The cartridge's lettering is not centred inside its own tiles: measured on
+ * the built ROM, TENGEN's ink sits one pixel left of the middle of the twelve
+ * tiles it occupies and TETRIS's two, while the cathedral under them is dead
+ * centre. On the tile grid there is nothing to move — the tiles ARE centred —
+ * so the words read very slightly left of the picture and no amount of
+ * recomposing changes it.
+ *
+ * Two pixels puts all three within half a pixel of each other, so the two
+ * words are drawn on the offset layer with its scroll set to that while the
+ * title is up. The layer is idle here (the statistics are a play-screen
+ * thing), and the scroll goes back to STATS_SHIFT_PX on the way into a game.
+ *
+ * The spire's two borrowed cells are the exception and stay on the main
+ * layer: the rest of the spire is down in the cathedral, which does not move.
+ * Where a letter's shifted edge now covers a pixel of the ball, that is the
+ * spire passing behind the lettering, which is what it should look like. */
+#define TITLE_LOGO_SHIFT_PX 2
+#define TITLE_LOGO_TY0 2         /* TENGEN */
+#define TITLE_LOGO_TY1 7         /* ...through the bottom of the TETRIS logo */
+/* THE PICTURE ONLY. The frame is in these rows too and it must not move: two
+ * pixels of braid sliding out from under the ingots is a great deal more
+ * visible than two pixels of lettering ever were. */
+#define TITLE_LOGO_TX0 4
+#define TITLE_LOGO_TX1 25
+#define TITLE_SPIRE_TX 15        /* source column 16, after the composition */
+#define TITLE_SPIRE_TY0 6        /* finial on row 6, ball on row 7 */
+
+/* The offset layer's scroll. A negative scroll moves the picture the other
+ * way and the field is nine bits wide, so -n is written as 512-n. */
+static void set_offset_layer(int px) {
+    REG_BG1HOFS = (uint16_t)(512 - px);
+}
+
 #define MAP_W 32
 #define SCREEN_TW 30
 #define SCREEN_TH 20
@@ -584,7 +619,12 @@ static void set_stats_tile(int tx, int ty, uint16_t entry) {
 /* The two columns of rope that frame the playfield, as a plain strip from top
  * to bottom. Used when the banner or the dancers take the rest of the column:
  * clearing around the box leaves its corners dangling, and the cartridge's own
- * screen has a plain strip here anyway. */
+ * screen has a plain strip here anyway.
+ *
+ * THE RUN MUST BE THE PANEL'S OWN. This strip replaces the right panel's left
+ * side, so it is kBraidLeft — the same tile draw_braid_panel puts there. Hand
+ * it the other one and the weave changes direction every time L+R is pressed,
+ * which is exactly what it used to do. */
 static void draw_field_braid(int tx, const uint8_t run[1][2]) {
     for (int y = 0; y < SCREEN_TH; y++)
         for (int dx = 0; dx < BRAID_T; dx++)
@@ -595,19 +635,25 @@ static void draw_field_braid(int tx, const uint8_t run[1][2]) {
  * board, and the screen's own edge closing it outward. `inner_right` says
  * which side of the panel the board is on.
  *
- * WHICH TILES, AND WHY THAT WAY ROUND. The rope is not symmetrical — it is
- * woven, and the weave leans. kBraidLeft is the cartridge's LEFT screen border
- * (tiles $6A $6B): everything it frames is to its right. kBraidRight ($73 $74)
- * is the right border, framing what is to its left. The board is what these
- * runs frame, so the run with the board on ITS right takes the left-border
- * tiles, and the corners follow the same rule.
+ * WHICH TILES, AND WHY THAT WAY ROUND. The rope is woven and the weave leans,
+ * so its four runs and four corners only fit each other one way. THE PANEL IS
+ * A BOX, and the tile is chosen by which side OF THE BOX it is on, not by
+ * which side of the board:
  *
- * That is also exactly what the cartridge's own screen has where the reflow
- * puts these columns — $6A $6B beside the board's left edge, $73 $74 beside
- * its right — so drawing it the other way round did not merely look odd, it
- * overwrote the ROM's art with its own mirror image. The tell was L+R: the
- * banner's strip is drawn from the ROM's tiles, so the weave flipped direction
- * as the panel came and went.
+ *   left panel  (cols 0-9)   rope on its RIGHT side  -> kBraidRight, TR / BR
+ *   right panel (cols 20-29) rope on its LEFT side   -> kBraidLeft,  TL / BL
+ *
+ * Choosing by the board instead — the run beside the board's left edge taking
+ * the cartridge's own left-border tiles — puts each vertical run back where
+ * the ROM has it, but then the corners it meets are the mirror of it and the
+ * weave visibly breaks at every one of them. The box wins: it is a box now,
+ * and its own four pieces have to agree with each other.
+ *
+ * What that costs is one thing, and it is paid where nobody looks: the rope
+ * beside the playfield is the mirror of the cartridge's. What it must NOT
+ * cost is the weave changing direction when the HUD does, so anything that
+ * redraws these columns as a plain strip has to use the panel's own tile —
+ * see draw_field_braid's callers.
  *
  * The corners are only ever drawn on the board side, because that is the only
  * side that has one — the other simply runs off the screen. */
@@ -617,11 +663,11 @@ static void draw_braid_panel(int tx, int w, bool inner_right) {
     for (int dy = 0; dy < BRAID_T; dy++) {
         for (int dx = 0; dx < BRAID_T; dx++) {
             set_map_tile(ix + dx, dy,
-                          WITH_BANK(inner_right ? kBraidTL[dy][dx]
-                                                : kBraidTR[dy][dx], BRAID_BANK));
+                          WITH_BANK(inner_right ? kBraidTR[dy][dx]
+                                                : kBraidTL[dy][dx], BRAID_BANK));
             set_map_tile(ix + dx, SCREEN_TH - BRAID_T + dy,
-                          WITH_BANK(inner_right ? kBraidBL[dy][dx]
-                                                : kBraidBR[dy][dx], BRAID_BANK));
+                          WITH_BANK(inner_right ? kBraidBR[dy][dx]
+                                                : kBraidBL[dy][dx], BRAID_BANK));
         }
     }
     for (int x = 0; x < w; x++) {
@@ -636,8 +682,8 @@ static void draw_braid_panel(int tx, int w, bool inner_right) {
     for (int y = BRAID_T; y < SCREEN_TH - BRAID_T; y++)
         for (int dx = 0; dx < BRAID_T; dx++)
             set_map_tile(ix + dx, y,
-                          WITH_BANK(inner_right ? kBraidLeft[0][dx]
-                                                : kBraidRight[0][dx], BRAID_BANK));
+                          WITH_BANK(inner_right ? kBraidRight[0][dx]
+                                                : kBraidLeft[0][dx], BRAID_BANK));
 
     clear_region(inner_right ? tx : tx + BRAID_T, BRAID_T, w - BRAID_T,
                   SCREEN_TH - 2 * BRAID_T);
@@ -684,6 +730,8 @@ static void draw_static_screen(void) {
     }
     draw_braid_panel(BOX_L_TX, BOX_W, true);
     draw_braid_panel(BOX_R_TX, BOX_W, false);
+    /* Back from whatever the title lent it; see set_offset_layer. */
+    set_offset_layer(STATS_SHIFT_PX);
 }
 
 /* gameOverTiles, blitted where the cartridge blits it: nametable (4,12),
@@ -710,10 +758,50 @@ static void draw_game_over(void) {
  * what marks the chosen entry. */
 #define BANK_HILITE (PAL_MENU_BASE + 1)
 
+#define NEXT_CELL_W 4
+
+/* CENTRED IN ITS CELL, and the last three pixels of it come from the same
+ * place the statistics' do.
+ *
+ * The orientation bitmaps put each piece where the PLAYFIELD wants it — an O
+ * at columns 0-1, an I across all four — so drawing them at their bitmap
+ * column left everything but the I against the left wall of a box that is the
+ * port's own, under a NEXT that is centred. Squaring the bounding box up in
+ * the four-tile cell fixes the two-tile part of that.
+ *
+ * What it cannot fix is the half tile. The block art has a one-pixel inset on
+ * its left, so a piece w tiles wide is 8w-1 pixels of ink, and centring that
+ * in the panel's 64 wants its first tile at (65-8w)/16 - an EVEN number of
+ * tiles for an even w, and half a tile out for an odd one. Two tiles wide and
+ * four tiles wide land within half a pixel of centre; three tiles wide - the
+ * T, J, L, S and Z, so five pieces of seven - lands three and a half pixels
+ * left, which is what "alineadas a la izquierda" still was after the columns
+ * were right.
+ *
+ * Those pieces are drawn on the STATISTICS LAYER instead, which is already
+ * scrolled three pixels for its own reasons (see SCREENBLOCK_STATS) and puts
+ * them half a pixel the other side of centre. No new layer, no new art, and
+ * the even widths stay on the main one where they are already right. */
 static void draw_next_piece(int tx, int ty) {
-    clear_region(tx, ty, 4, 3);
+    clear_region(tx, ty, NEXT_CELL_W, 3);
+    for (int y = 0; y < 3; y++)
+        for (int x = 0; x < NEXT_CELL_W; x++) set_stats_tile(tx + x, ty + y, T_BLANK);
+
     TengenTetromino next = g_session.game.player[g_view].piece.next;
     if (next <= TT_NONE || next >= TENGEN_TETROMINO_COUNT) return;
+
+    int first = NEXT_CELL_W, last = -1;
+    for (int c = 0; c < 4; c++)
+        for (int r = 0; r < 4; r++)
+            if (tengen_piece_occupies(next, 0, r, c)) {
+                if (c < first) first = c;
+                if (c > last) last = c;
+            }
+    if (last < first) return;
+    int width = last - first + 1;
+    int shift = (NEXT_CELL_W - width) / 2 - first;
+    bool offset_layer = (width & 1) != 0;
+
     /* Drawn from the same orientation bitmap and tile table the game logic
      * uses, so the preview cannot drift out of sync with what spawns. */
     int occupied = 0;
@@ -722,7 +810,10 @@ static void draw_next_piece(int tx, int ty) {
             if (!tengen_piece_occupies(next, 0, r, c)) continue;
             uint8_t tile = tengen_tile_id_for_cell(next, 0, occupied);
             occupied++;
-            if (r < 3) set_map_tile(tx + c, ty + r, WITH_BANK(tile, PAL_PIECE_BANK));
+            if (r >= 3) continue;
+            uint16_t entry = WITH_BANK(tile, PAL_PIECE_BANK);
+            if (offset_layer) set_stats_tile(tx + c + shift, ty + r, entry);
+            else              set_map_tile(tx + c + shift, ty + r, entry);
         }
     }
 }
@@ -773,7 +864,9 @@ static void draw_banner(void) {
  * this is the only arrangement that shows them at all without cutting the
  * strip up. The bars grow up out of them, by the ROM's own arithmetic. */
 #define STATS_ICON_TY (BOX_BOT_IN - 1)                  /* rows 16-17 */
-#define STATS_TOP_TY (BOX_TOP_IN + 4)                   /* bars from row 6 */
+/* One row later than the bars would otherwise start: row 6 is NEXT's rule,
+ * which is what closes the top of the histogram's half of the box. */
+#define STATS_TOP_TY (BOX_TOP_IN + 5)                   /* bars from row 7 */
 #define STATS_BAR_ROWS (STATS_ICON_TY - STATS_TOP_TY)   /* ten of them */
 #define STATS_BAR_FULL (SCREEN_1P_STATS_BAR_TILE + 7)
 #define BANK_STATS SCREEN_1P_STATS_BAR_BANK
@@ -784,8 +877,11 @@ static void draw_banner(void) {
  * See SCREENBLOCK_STATS. */
 #define STATS_TX BOX_R_IN
 
+/* The WHOLE right interior, not just the bars: NEXT's preview borrows this
+ * layer too when its piece is an odd number of tiles wide, and it sits above
+ * the statistics. Anything that takes the panel over has to take both. */
 static void clear_stats_layer(void) {
-    for (int y = STATS_TOP_TY; y <= STATS_ICON_TY + 1; y++)
+    for (int y = BOX_TOP_IN; y <= BOX_BOT_IN; y++)
         for (int x = 0; x < BOX_IN; x++) set_stats_tile(STATS_TX + x, y, T_BLANK);
 }
 
@@ -855,20 +951,35 @@ static void draw_label(int tx, int ty, int first, int count) {
  * The grey stubs that used to sit at the ends of each word were fragments of
  * the same grid; they are gone from the lettering and the rule they belonged
  * to is here instead. */
+/* THE RULE RUNS WALL TO WALL, and that is the point of it. The cartridge's
+ * grid ruled the full width of its panel; a rule stopping one column short of
+ * the screen's edge left the counters floating instead of sitting in
+ * something. So its span is the panel's INTERIOR — eight columns from the
+ * screen edge to the rope — which is one wider than the CONTENT's, because
+ * the content is indented off the edge and the rule is not. */
+static void draw_rule(int tx, int ty) {
+    for (int x = 0; x < BOX_IN; x++)
+        set_map_tile(tx + x, ty, WITH_BANK(T_GRID_RULE, BANK_LABEL));
+}
+
 static void draw_counter(int ty, int label_first, int label_count,
                           uint32_t value, int digits, int value_indent) {
     draw_label(BOX_L_IN, ty, label_first, label_count);
     clear_region(BOX_L_IN, ty + 1, BOX_L_W, 1);
     draw_number(BOX_L_IN + value_indent, ty + 1, value, digits, BANK_VALUE);
-    for (int x = 0; x < BOX_L_W; x++)
-        set_map_tile(BOX_L_IN + x, ty + 2, WITH_BANK(T_GRID_RULE, BANK_LABEL));
+    draw_rule(BOX_L_TX, ty + 2);
 }
+
 /* NEXT where it belongs, at the top of the right panel over the statistics —
  * and, when something else has that panel, in the left one under the
- * counters instead. */
-static void draw_next_label_and_piece(int tx, int ty) {
-    draw_label(tx + 2, ty, HUD_LABEL_NEXT);
-    draw_next_piece(tx + 2, ty + 1);
+ * counters instead. `tx` is the panel's INTERIOR left column, so both the
+ * word and the piece are centred in the same eight columns the rules span
+ * rather than measured off the indented content column, which is what left
+ * them sitting left of centre in either box. */
+static void draw_next_label_and_piece(int tx, int ty, bool ruled) {
+    draw_label(tx + (BOX_IN - HUD_LABEL_NEXT_W) / 2, ty, HUD_LABEL_NEXT);
+    draw_next_piece(tx + (BOX_IN - NEXT_CELL_W) / 2, ty + 1);
+    if (ruled) draw_rule(tx, ty + 4);
 }
 
 static void draw_panel(void) {
@@ -885,8 +996,7 @@ static void draw_panel(void) {
          * the cartridge's is being displaced. */
         const TengenPlayerState *o = &g_session.game.player[g_view ^ 1];
         draw_text(BOX_L_IN, ROW_HIGH, "RIVAL", BANK_LABEL);
-        for (int x = 0; x < BOX_L_W; x++)
-            set_map_tile(BOX_L_IN + x, ROW_HIGH + 2, WITH_BANK(T_GRID_RULE, BANK_LABEL));
+        draw_rule(BOX_L_TX, ROW_HIGH + 2);
         clear_region(BOX_L_IN, ROW_HIGH + 1, BOX_L_W, 1);
         draw_number(BOX_L_IN, ROW_HIGH + 1, o->score, 6, BANK_VALUE);
     } else {
@@ -896,8 +1006,7 @@ static void draw_panel(void) {
          * statsDataAddresses (main.asm.txt:4100-4107). Kept for the session
          * rather than saved: this cartridge has no battery either. */
         draw_text(BOX_L_IN + 1, ROW_HIGH, "HIGH", BANK_LABEL);
-        for (int x = 0; x < BOX_L_W; x++)
-            set_map_tile(BOX_L_IN + x, ROW_HIGH + 2, WITH_BANK(T_GRID_RULE, BANK_LABEL));
+        draw_rule(BOX_L_TX, ROW_HIGH + 2);
         clear_region(BOX_L_IN, ROW_HIGH + 1, BOX_L_W, 1);
         draw_number(BOX_L_IN, ROW_HIGH + 1, g_high_score, 6, BANK_VALUE);
     }
@@ -905,7 +1014,7 @@ static void draw_panel(void) {
     /* Rows 14-17 of the left panel: NEXT lodges here only when the right one
      * is taken, and is blank otherwise. */
     clear_region(BOX_L_IN, BOX_TOP_IN + 12, BOX_L_W, 4);
-    if (g_show_banner) draw_next_label_and_piece(BOX_L_IN, BOX_TOP_IN + 12);
+    if (g_show_banner) draw_next_label_and_piece(BOX_L_TX, BOX_TOP_IN + 12, false);
 
     /* The right box: the banner, the statistics, or — in a race, where the
      * cartridge keeps no statistics either — nothing.
@@ -921,10 +1030,10 @@ static void draw_panel(void) {
     if (g_show_banner) {
         clear_region(BOX_R_TX + 2, 0, BOX_W - 2, SCREEN_TH);
         clear_stats_layer();
-        draw_field_braid(BOX_R_TX, kBraidRight);
+        draw_field_braid(BOX_R_TX, kBraidLeft);
         draw_banner();
     } else if (!g_session.game.two_player) {
-        draw_next_label_and_piece(BOX_R_IN, ROW_NEXT);
+        draw_next_label_and_piece(BOX_R_IN, ROW_NEXT, true);
         draw_stats(p);
     } else {
         clear_region(BOX_R_IN, BOX_TOP_IN, BOX_IN, BOX_BOT_IN - BOX_TOP_IN + 1);
@@ -1069,6 +1178,42 @@ static void play_after_silence(uint8_t music) {
     if (track != NES_MUSIC_SILENCE) nes_audio_play(track);
 }
 
+/* MUSIC_SILENCE IS NOT A STOP, AND THE ENGINE HAS NO OTHER ONE.
+ *
+ * `$08` is an entry in musicSelectTable — "no tune chosen" — and handing it
+ * to setMusicOrSoundEffect resets the engine's state so the NEXT track starts
+ * clean. It does not stop what is already playing. Measured on the reference
+ * interpreter (tools/nes_cpu.py) as well as here: 300 frames after a silence,
+ * $4015 is still flipping bits and the title theme is still going. That is
+ * the whole reason the theme kept escaping into GAME SELECT — the port was
+ * asking it to stop with a word that does not mean stop.
+ *
+ * What does stop it is MUSIC_SUSPEND ($01), the half of pauseOrUnpause's pair
+ * (main.asm.txt:7204-7211). It silences every channel and holds them there
+ * until MUSIC_RESUME ($02) — and it is not a mute: SOUND EFFECTS QUEUED AFTER
+ * IT STILL PLAY, so the screen-switch blip is heard in full and the music is
+ * gone underneath it, which is exactly what leaving a screen should sound
+ * like.
+ *
+ * The catch is that RESUME is NOT free when nothing is suspended: on a cold
+ * engine it costs the first frame of the tune and the two recordings drift
+ * apart from there. So the port tracks what it did rather than firing one
+ * hopefully. */
+static bool g_music_suspended;
+
+static void stop_music(void) {
+    korobeiniki_stop();
+    if (g_music_suspended) return;
+    g_music_suspended = true;
+    nes_audio_play(NES_MUSIC_SUSPEND);
+}
+
+static void resume_music(void) {
+    if (!g_music_suspended) return;
+    g_music_suspended = false;
+    nes_audio_play(NES_MUSIC_RESUME);
+}
+
 static void start_music(uint8_t music) {
     /* SILENCE FIRST, ALWAYS. This is `LA035` (main.asm.txt:4730-4735), which
      * is the cartridge's own way of starting a tune:
@@ -1081,6 +1226,7 @@ static void start_music(uint8_t music) {
      * engine a new track without silencing the old one leaves the old one's
      * channels running underneath, which is why the title theme could still
      * be heard on top of a match's music. */
+    resume_music();
     nes_audio_play(NES_MUSIC_SILENCE);
     play_after_silence(music);
 }
@@ -1107,12 +1253,16 @@ typedef enum {
 #define GAME_COUNT 2
 static const char *const kGameNames[GAME_COUNT] = { "1 PLAYER", "2 PLAYER" };
 
+/* Set whenever the maps are wiped, so the title knows its tiles are gone. */
+static bool g_title_dirty = true;
+
 static void clear_screen(void) {
     for (int ty = 0; ty < 32; ty++)
         for (int tx = 0; tx < MAP_W; tx++) {
             set_map_tile(tx, ty, T_BLANK);
             set_stats_tile(tx, ty, T_BLANK);
         }
+    g_title_dirty = true;
 }
 
 /* ----------------------------------------------------------------------- *
@@ -1152,7 +1302,15 @@ static void install_title_palette(void) {
 #endif
 }
 
+/* ONCE PER VISIT, not once per frame. The title's tiles never change while it
+ * is up — the cathedral and the fireworks on top of them are sprites — and
+ * since the two words moved to the offset layer this writes 1200 map entries,
+ * which on top of the cartridge's own code running under it was enough to
+ * miss a vblank every sixty frames. clear_screen arms it again, and every
+ * path that reaches the title goes through one. */
 static void draw_title(void) {
+    if (!g_title_dirty) return;
+    g_title_dirty = false;
 #if SCREEN_PROTO_AVAILABLE
     if (g_title_skin) {
         /* Thirty columns, no padding: the prototype's frame is two columns a
@@ -1177,8 +1335,16 @@ static void draw_title(void) {
         for (int tx = 0; tx < SCREEN_TITLE_W; tx++) {
             int i = ty * SCREEN_TITLE_W + tx;
             uint16_t tile = TITLE_TILE_BASE + kScreenTitleTiles[i];
-            set_map_tile(pad + tx, ty,
-                          WITH_BANK(tile, PAL_TITLE_BASE + kScreenTitlePalettes[i]));
+            uint16_t entry =
+                WITH_BANK(tile, PAL_TITLE_BASE + kScreenTitlePalettes[i]);
+            /* THE TWO WORDS RIDE THE OFFSET LAYER; see TITLE_LOGO_SHIFT_PX.
+             * Everything else, the spire's two borrowed cells included, stays
+             * on the main one so it keeps the cathedral's alignment. */
+            bool shifted = ty >= TITLE_LOGO_TY0 && ty <= TITLE_LOGO_TY1 &&
+                            tx >= TITLE_LOGO_TX0 && tx <= TITLE_LOGO_TX1 &&
+                            !(tx == TITLE_SPIRE_TX && ty >= TITLE_SPIRE_TY0);
+            set_map_tile(pad + tx, ty, shifted ? T_BLANK : entry);
+            set_stats_tile(pad + tx, ty, shifted ? entry : T_BLANK);
         }
     }
 }
@@ -1543,6 +1709,7 @@ static void announce_step(TengenStepResult step) {
     }
     if (step.topped_out) {
         korobeiniki_stop();
+        resume_music();          /* free unless a pause left it suspended */
         nes_audio_play(NES_MUSIC_SILENCE);
         nes_audio_play(NES_MUSIC_GAMEOVER);
     }
@@ -1627,14 +1794,23 @@ static bool link_play_frame(void) {
 static void front_music(uint8_t which) {
     if (g_front_tune == which) return;
     g_front_tune = which;
+    /* A SCREEN THAT WANTS QUIET HAS TO SUSPEND, not silence. See stop_music:
+     * MUSIC_SILENCE resets the engine for the next track and leaves the
+     * current one playing, which is why the title theme used to follow the
+     * player all the way to GAME SELECT. Suspending also takes the fireworks'
+     * bangs down with it — they queue effects of their own on their way out —
+     * while still letting the screen-switch blip that was queued a frame ago
+     * be heard in full. */
+    if (which == FRONT_SILENCE) {
+        stop_music();
+        return;
+    }
     korobeiniki_stop();
-    /* Silence first, always, for the reason LA035 does; see start_music. It
-     * is also what stops the fireworks' bangs dead when the title is left:
-     * they queue sound effects of their own, and only a silence clears them. */
-    nes_audio_play(NES_MUSIC_SILENCE);
+    resume_music();
+    nes_audio_play(NES_MUSIC_SILENCE);   /* LA035's order; see start_music */
     if (which == FRONT_TITLE_THEME) {
         nes_audio_play(NES_MUSIC_TITLESCREEN);
-    } else if (which != FRONT_SILENCE) {
+    } else {
         play_after_silence(which);
     }
 }
@@ -1652,8 +1828,10 @@ static bool solo_play_frame(uint8_t buttons, uint8_t pressed) {
         tengen_pause_input(&g_session.game, presses, cheat);
         if (was_paused != g_session.game.paused) {
             /* pauseOrUnpause suspends and resumes the music
-             * (main.asm.txt:7204-7211). */
-            nes_audio_play(g_session.game.paused ? NES_MUSIC_SUSPEND : NES_MUSIC_RESUME);
+             * (main.asm.txt:7204-7211) — the same pair the front end uses to
+             * go quiet, through the same two helpers so the port never loses
+             * track of which state the engine is actually in. */
+            if (g_session.game.paused) stop_music(); else resume_music();
             /* MUSIC_SUSPEND only silences the cartridge's engine. The fifth
              * tune has its own channels and has to be stopped and restarted
              * with it, or PAUSE would leave it playing on its own. */
@@ -1738,7 +1916,7 @@ int main(void) {
      * is nine bits wide, so -3 is written as 512-3. */
     REG_BG1CNT = BG_4BPP | BG_SIZE_32x32 | BG_CHARBLOCK(CHARBLOCK) |
                   BG_SCREENBLOCK(SCREENBLOCK_STATS) | BG_PRIORITY(0);
-    REG_BG1HOFS = (uint16_t)(512 - STATS_SHIFT_PX);
+    set_offset_layer(STATS_SHIFT_PX);
     REG_BG1VOFS = 0;
     REG_DISPCNT = DCNT_MODE0 | DCNT_BG0 | DCNT_BG1 | DCNT_OBJ | DCNT_OBJ_1D;
 
@@ -1767,6 +1945,7 @@ int main(void) {
         if (screen == SCREEN_TITLE) {
             /* initializeTitleScreen ends with this (main.asm.txt:4489). */
             front_music(FRONT_TITLE_THEME);
+            set_offset_layer(TITLE_LOGO_SHIFT_PX);
             if (TITLE_SKIN_COUNT > 1 && shoulder_either()) {
                 g_title_skin = (uint8_t)((g_title_skin + 1) % TITLE_SKIN_COUNT);
                 nes_audio_play(NES_SOUND_CHIRP);
@@ -2065,9 +2244,9 @@ int main(void) {
                  * showing between the ledges. */
                 clear_region(BOX_R_TX + 2, 0, BOX_W - 2, SCREEN_TH);
                 clear_stats_layer();
-                draw_field_braid(BOX_R_TX, kBraidRight);
+                draw_field_braid(BOX_R_TX, kBraidLeft);
                 draw_dancer_stage();
-                draw_next_label_and_piece(BOX_L_IN, BOX_TOP_IN + 12);
+                draw_next_label_and_piece(BOX_L_TX, BOX_TOP_IN + 12, false);
                 draw_dancers(g_dancer_elapsed, g_dancer_cast);
             }
             audio_frame();
@@ -2110,8 +2289,15 @@ int main(void) {
             g_view = 0;
             oam_hide_all();
             sweeping = false;
-            korobeiniki_stop();
-            nes_audio_play(NES_MUSIC_SILENCE);
+            stop_music();
+            /* THE TITLE HAS TO BE ASKED FOR AGAIN. Coming back here left the
+             * match's screen underneath — including the statistics, which
+             * live on their own background and so survived even a redraw of
+             * the title's tiles and printed themselves over the cathedral.
+             * And g_front_tune still held whatever the last menu chose, so
+             * the title's own theme could decide it was already playing. */
+            clear_screen();
+            g_front_tune = FRONT_NOTHING;
             vsync();
             audio_frame();
             continue;

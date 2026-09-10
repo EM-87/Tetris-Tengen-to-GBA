@@ -268,6 +268,26 @@ when you let the show finish and stops dead when you cut it.
 Measured on the port: untouched the dancers are on screen 1871 frames; a
 button ends it 176 frames (2.9s) later, whenever it is pressed.
 
+### Pausing hides nothing
+
+`stageCurrentAndNextSprites` (`main.asm.txt:1687-1693`) is the only thing that
+decides whether the falling piece and the preview are on screen, and it reads
+`gameState`:
+
+    cmp #GAMESTATE_GAMEOVER ($F9)  -> draw
+    cmp #GAMESTATE_DEMO     ($FB)  -> draw
+    cmp #GAMESTATE_LEVELUP  ($03)  -> bcs: skip
+    otherwise                      -> draw
+
+`GAMESTATE_PAUSED` is `$01`, below `$03`, so it falls through to the drawing
+path: **the falling piece and the next piece both stay on screen while
+paused**, and so does the settled field — pausing only patches the PAUSE
+plaque into the background (`updateGameBackground`, `:7217`) and leaves the
+rest of the nametable alone. Only the level-up interlude ($03 and up) takes
+the pieces down. The port matches; the one difference is that its falling
+piece is a background tile rather than a sprite, so the plaque covers it
+instead of the other way round on the two rows they share.
+
 ### The sixth dancer stands on the border, not on a ledge
 
 The level-up blit lays FIVE ledges (`kDancerStage`, tile `$9D` at rows 3, 6,
@@ -572,18 +592,39 @@ What fits, and what had to give:
   strip, because the playfield keeps its own frame whatever the HUD is doing.
   The dancers' stage is handled the same way.
 
-### The weave has a direction, and the box has to keep it
+### The weave has a direction, and it is the BOX's direction
 
-`kBraidLeft` (`6A 6B`) is the run that frames what is to its RIGHT, and
-`kBraidRight` (`73 74`) the mirror — the names are the cartridge's own columns
-8-9 and 20-21, not a description of where the port puts them. Reading them the
-other way round draws a rope that looks right on its own and reverses its
-shading the moment anything else in the cartridge's own tiles appears beside
-it: L+R swaps the right box for the banner, the banner's strip IS ROM tiles,
-and the weave visibly flipped between the two modes. The panel's board-facing
-run is `inner_right ? kBraidLeft : kBraidRight`, and the check is direct —
-the built ROM's map must read `06A 06B` at columns 8-9 and `073 074` at 20-21,
-the same as the cartridge, in both modes.
+`kBraidLeft` (`6A 6B`) and `kBraidRight` (`73 74`) are the cartridge's own
+columns 8-9 and 20-21 — the two sides of ITS border — and they are mirrors of
+each other, as are the four corners. They only fit each other one way, and
+this has now been got wrong in both directions, so it is worth writing down
+which way and why.
+
+**The tile is chosen by which side OF THE PANEL it is on**, not by which side
+of the board:
+
+| Panel | Its rope | Run | Corners |
+| --- | --- | --- | --- |
+| left, cols 0-9 | on its RIGHT | `kBraidRight` | TR / BR |
+| right, cols 20-29 | on its LEFT | `kBraidLeft` | TL / BL |
+
+Choosing by the board instead — the run beside the board's left edge taking
+the cartridge's own left-border tiles, so each vertical run sits exactly where
+the ROM has it — is tempting and wrong: the corners it then meets are its
+mirror, and the weave breaks at all four of them. The box wins. These are
+boxes now, and a box's own four pieces have to agree with each other before
+they agree with anything else. What it costs is paid where nobody looks: the
+rope beside the playfield is the mirror of the cartridge's.
+
+**What it must never cost is the weave changing direction when the HUD does.**
+L+R hands the right column to the banner, which redraws those two columns as a
+plain strip, and the strip has to use the panel's own tile or the weave flips
+as the box comes and goes — which is what "cambia la greca de sentido" was.
+`make gba-check --braid` asks exactly that, off the SCREEN rather than the map
+so a mismatched palette bank cannot slip through: the sixteen pixels beside
+the board must be identical in both modes, the two panels' runs must be
+mirrors of each other, and coming back from the banner must restore what was
+there.
 
 ### The labels carry a piece of the grid, and it comes off exactly
 
@@ -603,6 +644,35 @@ The grid itself is worth keeping, just not there: tile `$76` is four rows of
 colour 3 — the ROM's own rule — and the port lays a row of it under each
 counter's value, which is where the cartridge's grid ran anyway. Memorable,
 and now it separates the entries instead of fraying the words.
+
+## MUSIC_SILENCE does not silence anything
+
+`$08` is an entry in `musicSelectTable` — "no tune chosen". Handing it to
+`setMusicOrSoundEffect` resets the engine's state so the NEXT track starts
+clean, which is why `LA035` sends it before every tune and why the port does
+too. It does NOT stop what is already playing. Measured both on the port and
+on the reference interpreter in `tools/nes_cpu.py`: three hundred frames after
+a silence, `$4015` is still flipping bits and the title theme is still going.
+That is the whole of "la musica se sigue escapando" — the port was asking it
+to stop with a word that does not mean stop, and the check that was supposed
+to catch it only looked at the REQUEST.
+
+What stops it is **`MUSIC_SUSPEND` ($01)**, the half of `pauseOrUnpause`'s
+pair (`main.asm.txt:7204-7211`). It silences every channel and holds them
+there until `MUSIC_RESUME` ($02). Two things about it make it the right tool
+for leaving a screen as well as for pausing:
+
+* **Sound effects queued after it still play.** So the screen-switch blip is
+  heard in full — all twelve frames of it — with the music gone underneath.
+* **RESUME is not free when nothing is suspended.** On a cold engine an extra
+  RESUME costs the first frame of the tune and the recordings drift from
+  there, so the port tracks whether it suspended rather than firing one
+  hopefully. `stop_music` / `resume_music` in `gba/main.c` are that pair, and
+  pause, the front end and the way back to the title all go through them.
+
+The cartridge never needs any of this: its front end is a one-way chain and
+its title theme is *meant* to carry on into the menus. This port can walk
+back, so it needs a way to stop.
 
 ## The title's frame is two frames, and the screen's shape decides which
 
@@ -652,17 +722,31 @@ Neither dropped column costs anything. Inside the rows this layout keeps, both
 are blank in every one; column 27 carries the last letter of the copyright
 line, and that row is not kept either.
 
-### The spire's tip is printed over the logo
+### The spire is printed over the logo, and it takes TWO tiles
 
 Dropping source rows 12-13 takes the top of the cathedral's one-tile-wide
-spire with them — and the tip is the thing the eye misses. It goes back,
-because the TETRIS logo has a BLANK tile at row 10, column 16: right between
-its third and fourth letters, and directly above where the spire now starts.
-`TITLE_SPIRE_OVERLAY` writes source (12,16) into that hole, with the palette
-its own attribute byte gives it, so the spire runs up behind the lettering and
-comes out at the top between the T and the Я. `compose_title` asserts the cell
-it writes into really is blank first, so a change to either the composition or
-the source screen fails loudly instead of painting over a letter.
+spire with them — and the tip is the thing the eye misses. It goes back into
+the logo, and the spire is three tiles stacked, so both of the dropped ones
+have to come or the join shows:
+
+| Source | Tile | What it is | Goes into |
+| --- | --- | --- | --- |
+| (12,16) | `$7C` | the finial: a thin pole flaring at its base | row 10, col 16 (`$1D`, blank) |
+| (13,16) | `$7E` | the gold ball, which JOINS finial to roof | row 11, col 16 (`$73`) |
+| (14,16) | `$7F` | the top of the red tent — already kept | — |
+
+Printing only the finial is what "la punta de la catedral tiene un glitch
+grafico" was: it floated eight pixels above the roof with black in between.
+Row 10 column 16 is a genuine hole in the logo, right between its third and
+fourth letters; row 11 column 16 is `$73`, which is three pixels of two
+letters' bottom serif and nothing else, so the ball fits there and the spire
+comes out whole on three consecutive rows exactly as the cartridge stacks
+them. The ball's left neighbour, `$7D` at (13,15), is ONE pixel of its left
+edge and does not come — row 11 column 15 is a solid bar of lettering.
+
+Each overlay entry carries the tile its destination must already hold, and
+`compose_title` checks it, so a different dump or a changed composition fails
+loudly instead of quietly painting over a letter.
 
 ### Sprites go through the same rearrangement, in BOTH axes
 
@@ -809,13 +893,57 @@ levels each — into every tile they share. Neither is a table anyone can build.
 
 So the statistics ride their own background. `SCREENBLOCK_STATS` (29) holds
 just that block, `REG_BG1HOFS` is 512-3, and BG1 sits at priority 0 over BG0's
-1. Everywhere that map is not written it holds tile 0, which is transparent in
+1. Two other things ended up needing the same half-pixel and now share it —
+see "What else rides the offset layer" below. Everywhere that map is not written it holds tile 0, which is transparent in
 every pixel — verified, not assumed — so the rest of the screen is BG0 exactly
 as before. Icons and bars move together, the cartridge's art is untouched, and
 the strip ends up five pixels from the rope and six from the screen edge, which
 is as centred as an odd width gets. Anything that takes the right panel over —
 the banner, the dancers' stage, a race — has to clear that map too, not just
 BG0's; `clear_stats_layer` is that call and there are four of them.
+
+### What else rides the offset layer
+
+The same trick, twice more, because the same arithmetic keeps coming up: art
+that is centred on the TILE grid but whose INK is not centred inside its
+tiles.
+
+**The NEXT preview.** The block art has a one-pixel inset on its left, so a
+piece `w` tiles wide is `8w-1` pixels of ink and centring that in the panel's
+64 wants its first tile at `(65-8w)/16` — a whole number of tiles when `w` is
+even, half a tile out when it is odd. The O (2 tiles) and the I (4) land
+within half a pixel of centre on the main layer; the T, J, L, S and Z (3
+tiles, so five pieces of seven) land three and a half pixels left, which is
+what "la siguiente ficha esta alineada a la izquierda" still was after the
+columns were squared up. Those five are drawn on the offset layer instead and
+come out half a pixel the other side. Measured on the built ROM, all seven now
+sit at 31.0 or 32.0 against an ideal of 31.5.
+
+**The title's two words.** The cartridge's lettering is not centred inside its
+own tiles either: TENGEN's ink sits one pixel left of the middle of its twelve
+tiles and TETRIS's two, while the cathedral under them is dead centre. On the
+title the offset layer is idle, so its scroll is set to two pixels there and
+the two words are drawn on it — which puts all three within a pixel of each
+other (TENGEN 120.5, TETRIS 119.5, cathedral 120.0, ideal 119.5) instead of
+spread over two and a half with everything leaning left. `set_offset_layer`
+switches the scroll between the title's two pixels and the game's three.
+
+Two things stay OFF it: the frame, because two pixels of braid sliding out
+from under the ingots is far more visible than two pixels of lettering ever
+were; and the spire's two borrowed cells, because the rest of the spire is
+down in the cathedral and does not move. Where a shifted letter now covers a
+pixel of the spire's ball, that is the spire passing behind the lettering,
+which is what it should look like anyway.
+
+### Drawing the title once per visit, not once per frame
+
+Moving the words to a second layer doubled what `draw_title` writes — 1200 map
+entries — and on top of the cartridge's own cathedral and fireworks code
+running under it that was enough to miss a vblank every sixty frames, which
+`make gba-check --title` caught. Nothing in those tiles changes while the
+title is up (everything that moves there is a sprite), so it draws once and
+`clear_screen` arms it again. Every path that reaches the title goes through
+one.
 
 ## Two players over a link cable
 

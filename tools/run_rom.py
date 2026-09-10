@@ -1034,6 +1034,76 @@ MUSIC_ROW = 15                  # where draw_level_select writes the tune's name
 #     sends MUSIC_SILENCE before the track — handing the engine a new track
 #     without silencing the old one leaves both playing.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# THE BRAID HAS A DIRECTION, AND IT MUST NOT CHANGE WITH THE HUD.
+#
+# The rope is woven and the weave leans, so its runs and its corners only fit
+# each other one way round. This has now been got wrong in both directions:
+# once with the corners right and the runs mirrored against the cartridge's,
+# once the other way, and each time the tell was L+R — the banner redraws the
+# two columns beside the board as a plain strip, and if that strip is not the
+# same tile the panel puts there, the weave visibly flips as the box comes and
+# goes.
+#
+# So this asks the only question that matters: are those two columns THE SAME
+# PIXELS in both modes? It reads them off the screen rather than off the map,
+# because a matching map with a mismatched palette bank would still look wrong.
+# ---------------------------------------------------------------------------
+def braid_check(rom_path):
+    core, screen = load(rom_path)
+    start_game(core)
+    run(core, 20)
+
+    def frame_columns(x0, x1):
+        px = pixels(screen)
+        return [tuple(px[y][x] for x in range(x0, x1)) for y in range(160)]
+
+    LEFT_FRAME = (64, 80)     # the board's left rope: the left panel's own side
+    RIGHT_FRAME = (160, 176)  # ...and its right, which is the right panel's
+
+    box = frame_columns(*RIGHT_FRAME)
+    box_left = frame_columns(*LEFT_FRAME)
+
+    core.set_keys(KEYS["L"], KEYS["R"]); run(core, 4); core.set_keys(); run(core, 12)
+    banner = frame_columns(*RIGHT_FRAME)
+
+    failures = []
+    # The banner takes the whole column, so its top and bottom rows are rope
+    # where the box has its lid and floor. Everything BETWEEN them is the same
+    # vertical run in both modes and has to match pixel for pixel.
+    body = range(16, 144)
+    diff = sum(1 for y in body if box[y] != banner[y])
+    if diff:
+        failures.append(
+            f"la greca del campo cambia entre caja y banner: {diff} filas distintas")
+    else:
+        print("  la greca junto al campo es identica con caja y con banner")
+
+    # And the two panels frame the board from opposite sides, so their runs
+    # must be MIRRORS of each other, not copies — that is what makes the pair
+    # read as two boxes rather than two copies of the same edge.
+    same = sum(1 for y in body if box_left[y] == box[y])
+    if same > len(list(body)) // 2:
+        failures.append(
+            "las dos grecas del campo son iguales; deberian ser espejo la una de la otra")
+    else:
+        print("  las dos grecas son espejo la una de la otra, como en el cartucho")
+
+    core.set_keys(KEYS["L"], KEYS["R"]); run(core, 4); core.set_keys(); run(core, 12)
+    back = frame_columns(*RIGHT_FRAME)
+    if any(box[y] != back[y] for y in body):
+        failures.append("al volver del banner la greca no queda como estaba")
+    else:
+        print("  al volver del banner la caja queda como estaba")
+
+    for f in failures:
+        print("FALLA:", f)
+    if failures:
+        return 1
+    print("OK: la greca conserva su sentido en los dos modos.")
+    return 0
+
+
 def leaving_title_check(rom_path):
     core, screen = load(rom_path)   # `screen` must stay alive; see load()
     failures = []
@@ -1099,17 +1169,33 @@ def leaving_title_check(rom_path):
         else:
             print(f"  mover el cursor toca la cancion: silencio y despues ${moved[1]:02X}")
 
-        # AND IT HAS TO STOP COMING BACK OUT WITH YOU. The preview used to
-        # follow the player all the way to the title. Every front-end screen
-        # names its tune now and GAME SELECT's name is SILENCE, so backing out
-        # of the level screen is quiet — and the cathedral's music and its
-        # fireworks stop the moment you leave it.
+        # AND IT HAS TO STOP COMING BACK OUT WITH YOU — which is a question
+        # about the SOUND, not about the request, and asking only about the
+        # request is how this passed for so long while the theme went on
+        # playing. MUSIC_SILENCE ($08) is an entry in musicSelectTable meaning
+        # "no tune chosen": it resets the engine so the next track starts
+        # clean and does NOT stop the one already running. What stops it is
+        # MUSIC_SUSPEND ($01), pauseOrUnpause's own half of the pair. So this
+        # asks for that request AND then listens: every channel's volume at
+        # zero and nothing flagged as sounding, for two whole seconds.
         core.set_keys(KEYS["B"]); run(core, 4); core.set_keys(); run(core, 14)
-        if last_music() != 0x08:
+        if last_music() != 0x01:
             failures.append(
-                f"al volver a GAME SELECT no se calla (${last_music():02X})")
+                f"al volver a GAME SELECT no se manda MUSIC_SUSPEND "
+                f"(se mando ${last_music():02X})")
         else:
-            print("  al volver a GAME SELECT se hace el silencio")
+            heard = 0
+            for _ in range(120):
+                core.run_frame()
+                st = sound_state(core)
+                heard |= st["activos"] | st["pulso 1"] | st["pulso 2"]
+                heard |= st["triangulo"] | st["ruido"]
+            if heard:
+                failures.append(
+                    "se manda el silencio pero la musica del titulo sigue "
+                    f"sonando en GAME SELECT (canales {heard:#06b})")
+            else:
+                print("  al volver a GAME SELECT se calla, y sigue callado")
 
         core.set_keys(KEYS["B"]); run(core, 4); core.set_keys(); run(core, 14)
         if last_music() != 0x09:
@@ -1374,6 +1460,8 @@ def main():
                      help="check the hidden fifth tune")
     ap.add_argument("--leave-title", action="store_true",
                      help="check the title leaves no sprites or music behind")
+    ap.add_argument("--braid", action="store_true",
+                     help="check the braid keeps its weave in both HUD modes")
     args = ap.parse_args()
 
     if args.selftest:
@@ -1396,6 +1484,8 @@ def main():
         sys.exit(korobeiniki_check(args.rom))
     if args.leave_title:
         sys.exit(leaving_title_check(args.rom))
+    if args.braid:
+        sys.exit(braid_check(args.rom))
 
     core, screen = load(args.rom)
     start_game(core)
