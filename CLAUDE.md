@@ -192,12 +192,16 @@ running ROM; only the side panels need reflowing).
    which are PRINTABLE because the tile set is ASCII-indexed. It has no
    parentheses, though — `$28`/`$29` are border art — so the handicap's note
    is separated by palette instead. Defaults: NO MUSIC and HUD Banner.
-19. ~~A third background, for two pixels~~ — done. SCORE had one pixel of
-   headroom where the other three counters had three, and it could not be
-   fixed by moving anything: BG0 carries the pixel-exact playfield and the box
-   has no spare row. The counters ride screenblock 30 scrolled two pixels
-   down, with the offset layer following so the statistics stay level. The
-   braid and the banner stay on BG0. `make gba-check --panel` measures it.
+19. ~~FOUR backgrounds, each for a scroll the others cannot share~~ — done,
+   and this is the shape to keep in mind before adding anything to the HUD: a
+   scroll is one number per background, so anything whose ink is not centred
+   in its tiles needs a layer of its own or it drags its neighbours with it.
+   BG0 is the playfield and the cartridge's art at the grid; BG1 is three
+   pixels across (odd-width previews, menu text, the title's words) and the
+   panel's two down; BG2 is the counters, two down; BG3 is the piece
+   histogram, three across and two UP so its icons clear the braid. SCORE's
+   missing headroom and the histogram touching the frame were the same bug
+   twice. `make gba-check --panel` measures both gaps off the framebuffer.
 20. Still to do: **coop** — the core already models its 12-column field and
    its garbage, but a 12-wide playfield plus a two-tile frame is sixteen
    columns of the thirty, so it needs its own HUD layout rather than the

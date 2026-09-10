@@ -89,6 +89,28 @@
 #define SCREENBLOCK_PANEL 30
 #define PANEL_SHIFT_PX 2
 
+/* A FOURTH MAP, so the histogram can stay where it was.
+ *
+ * The counters' two pixels are the panel's, and the offset layer had to ride
+ * down with them or the NEXT preview would have come apart — its label sits
+ * on the panel's map and its odd-width pieces on the offset one. But the
+ * PIECE HISTOGRAM is on that same offset layer, for its own three horizontal
+ * pixels, and it did not want the two vertical ones: the icons stand on the
+ * box's last interior row, so two pixels down put the tall I against the
+ * braid with nothing between them.
+ *
+ * A scroll is one number for a whole background, so the only way to give the
+ * histogram three pixels across and none down is to give it a background.
+ * Screenblock 31 is the last one before the sprite tiles and nothing else
+ * wanted it.
+ *
+ * Having its own scroll, it may as well use it: the icons fill their two
+ * tiles to the last pixel, so even level with the grid they end one line
+ * short of the braid. Two pixels UP gives them the three the rest of the HUD
+ * has — the same air the counters keep above their rules. */
+#define SCREENBLOCK_HISTOGRAM 31
+#define STATS_LIFT_PX 2
+
 /* THE SAME LAYER, LENT TO THE TITLE, and the two words want different things.
  *
  * Nothing on this screen is centred where the tile grid says it is. Measured
@@ -801,12 +823,18 @@ static void clear_panel_region(int tx, int ty, int w, int h) {
     g_panel_layer = was;
 }
 
-/* The statistics layer. Tile 0 of the cartridge's set is transparent in every
+/* The offset layer. Tile 0 of the cartridge's set is transparent in every
  * pixel, so everywhere this map is not written the screen is simply the one
  * below it. */
 static void set_stats_tile(int tx, int ty, uint16_t entry) {
     if (tx < 0 || tx >= MAP_W || ty < 0 || ty >= 32) return;
     MEM_SCREENBLOCK(SCREENBLOCK_STATS)[ty * MAP_W + tx] = entry;
+}
+
+/* The histogram's own. Same three pixels across, none down. */
+static void set_histogram_tile(int tx, int ty, uint16_t entry) {
+    if (tx < 0 || tx >= MAP_W || ty < 0 || ty >= 32) return;
+    MEM_SCREENBLOCK(SCREENBLOCK_HISTOGRAM)[ty * MAP_W + tx] = entry;
 }
 
 /* Wipes a rectangle off BOTH maps. Anywhere the offset layer might be holding
@@ -1118,9 +1146,14 @@ static void draw_banner(void) {
 /* The WHOLE right interior, not just the bars: NEXT's preview borrows this
  * layer too when its piece is an odd number of tiles wide, and it sits above
  * the statistics. Anything that takes the panel over has to take both. */
+/* Both of the right box's borrowed layers: the histogram's, and the offset
+ * one, which may still be holding an odd-width preview from a moment ago. */
 static void clear_stats_layer(void) {
     for (int y = BOX_TOP_IN; y <= BOX_BOT_IN; y++)
-        for (int x = 0; x < BOX_IN; x++) set_stats_tile(STATS_TX + x, y, T_BLANK);
+        for (int x = 0; x < BOX_IN; x++) {
+            set_stats_tile(STATS_TX + x, y, T_BLANK);
+            set_histogram_tile(STATS_TX + x, y, T_BLANK);
+        }
 }
 
 static void draw_stats(const TengenPlayerState *p) {
@@ -1129,8 +1162,8 @@ static void draw_stats(const TengenPlayerState *p) {
         /* Each icon in the palette the ROM's attribute table gives it: the
          * I has its own, T/O/J/L share one, S and Z share another. */
         int icon_bank = kStatsIconBanks[i];
-        set_stats_tile(tx, STATS_ICON_TY, WITH_BANK(kStatsIcons[0][i], icon_bank));
-        set_stats_tile(tx, STATS_ICON_TY + 1, WITH_BANK(kStatsIcons[1][i], icon_bank));
+        set_histogram_tile(tx, STATS_ICON_TY, WITH_BANK(kStatsIcons[0][i], icon_bank));
+        set_histogram_tile(tx, STATS_ICON_TY + 1, WITH_BANK(kStatsIcons[1][i], icon_bank));
 
         uint16_t n = p->piece_stats[TT_I + i];
         int full = n / 8;
@@ -1142,7 +1175,7 @@ static void draw_stats(const TengenPlayerState *p) {
             uint16_t tile = T_BLANK;
             if (r < full) tile = STATS_BAR_FULL;
             else if (r == full && part) tile = SCREEN_1P_STATS_BAR_TILE + part - 1;
-            set_stats_tile(tx, ty, WITH_BANK(tile, BANK_STATS));
+            set_histogram_tile(tx, ty, WITH_BANK(tile, BANK_STATS));
         }
     }
 }
@@ -1643,8 +1676,11 @@ static void clear_screen(void) {
             set_stats_tile(tx, ty, T_BLANK);
         }
     /* ...and the counters' layer with them, or a menu reached from a game
-     * would have its panel still hanging over it. */
+     * would have its panel still hanging over it. The histogram's goes the
+     * same way. */
     clear_panel_region(0, 0, MAP_W, 32);
+    for (int ty = 0; ty < 32; ty++)
+        for (int tx = 0; tx < MAP_W; tx++) set_histogram_tile(tx, ty, T_BLANK);
     g_panel_layer = was;
     g_title_dirty = true;
 }
@@ -2133,14 +2169,17 @@ static void draw_link_wait(const TengenLobby *lobby, int elapsed) {
 #define MENU_FIELD_TY(f) (8 + (f) * 3)
 #define MENU_FOOT_TY 16
 
-/* A CENTRED COLUMN, not two lines pinned to the walls. Labels start at one
- * column and values at another, both fixed, and the block those two make is
- * centred in the frame: eight for the longest label, three of gap, eleven for
- * the longest tune name is twenty-two of the interior's twenty-six. The
- * cursor sits two columns left of the labels, in the two that are left over. */
-#define MENU_LABEL_TX  (MENU_IN_TX + 3)
+/* TWO COLUMNS, centred as a block. Labels start at one column and values at
+ * another, both fixed for all three rows, so the page reads as a table rather
+ * than as three sentences: eight columns for the longest label (HANDICAP),
+ * three of gap, eleven for the longest value (KOROBEINIKI) is twenty-two of
+ * the interior's twenty-six, which leaves two either side. The cursor lives
+ * in the left margin, the way a menu arrow does. */
+#define MENU_LABEL_TX  (MENU_IN_TX + 2)
 #define MENU_VALUE_TX  (MENU_LABEL_TX + 11)
-#define MENU_CURSOR_TX (MENU_LABEL_TX - 2)
+#define MENU_CURSOR_TX MENU_IN_TX
+/* ...and anything the value trails, two columns further on. */
+#define MENU_TAIL_GAP 2
 
 /* Appends a number with no leading zeroes. Returns the new length. */
 static unsigned append_number(char *row, unsigned n, unsigned value) {
@@ -2155,9 +2194,11 @@ static unsigned append_number(char *row, unsigned n, unsigned value) {
 #define BANK_NOTE (PAL_MENU_BASE + 2)
 
 /* One field: the cursor if it is the chosen one, then the label and the value
- * in their columns. */
+ * in their columns, and whatever the value trails after it — which is only
+ * ever what the handicap costs, and is a note about the value rather than
+ * part of it, so it is drawn in the note's colour. */
 static void draw_field_row(int field, int chosen, const char *label,
-                            const char *value) {
+                            const char *value, const char *tail) {
     int ty = MENU_FIELD_TY(field);
     clear_both(MENU_IN_TX, ty, MENU_IN_W, 1);
     if (field == chosen)
@@ -2166,9 +2207,14 @@ static void draw_field_row(int field, int chosen, const char *label,
     for (int i = 0; label[i]; i++)
         set_map_tile(MENU_LABEL_TX + i, ty,
                       WITH_BANK(ascii_tile(label[i]), PAL_MENU_BASE + 3));
-    for (int i = 0; value[i]; i++)
-        set_map_tile(MENU_VALUE_TX + i, ty,
-                      WITH_BANK(ascii_tile(value[i]), BANK_HILITE));
+    int tx = MENU_VALUE_TX;
+    for (int i = 0; value[i]; i++, tx++)
+        set_map_tile(tx, ty, WITH_BANK(ascii_tile(value[i]), BANK_HILITE));
+    if (tail) {
+        tx += MENU_TAIL_GAP;
+        for (int i = 0; tail[i]; i++, tx++)
+            set_map_tile(tx, ty, WITH_BANK(ascii_tile(tail[i]), BANK_NOTE));
+    }
 }
 
 static void draw_level_settings(int chosen, uint8_t start_level, uint8_t music,
@@ -2179,42 +2225,53 @@ static void draw_level_settings(int chosen, uint8_t start_level, uint8_t music,
     clear_both(MENU_IN_TX, MENU_BODY_TY, MENU_IN_W, MENU_BODY_H);
 
     char value[16];
+    char depth[16];
     unsigned n;
 
     n = append_number(value, 0, start_level);
     value[n] = '\0';
-    draw_field_row(MENU_FIELD_LEVEL, chosen, "LEVEL", value);
+    draw_field_row(MENU_FIELD_LEVEL, chosen, "LEVEL", value, NULL);
 
     /* THE STARTING HANDICAP, the cartridge's own menuPlayer1Handicap /
      * menuPlayer2Handicap (main.asm.txt:3536-3546): how many three-row bands
      * of garbage a player starts buried under, nought to four. In two players
      * there are two of them, and the shoulder on a player's side of the pad
-     * is what sets that player's. */
+     * is what sets that player's.
+     *
+     * WHAT IT COSTS RIDES THE SAME LINE, because "2" says nothing until you
+     * know it is two of the bands garbageHeightData lays down. The word
+     * BURIES is what gets dropped to make it fit: "12 ROWS" beside the value
+     * says the same thing in seven columns. In two players there are two
+     * counts and no room for them, so those keep a line of their own — and
+     * only while the cursor is on the field, since the rest of the time the
+     * row is better empty. */
     n = append_number(value, 0, handicap[0]);
     if (two_player) {
         value[n++] = ' ';
         n = append_number(value, n, handicap[1]);
     }
     value[n] = '\0';
-    draw_field_row(MENU_FIELD_HANDICAP, chosen, "HANDICAP", value);
+    if (!two_player) {
+        unsigned d = append_number(depth, 0,
+                                    (unsigned)handicap[0] * TENGEN_HANDICAP_ROWS_PER_STEP);
+        const char *unit = " ROWS";
+        while (*unit) depth[d++] = *unit++;
+        depth[d] = '\0';
+    }
+    draw_field_row(MENU_FIELD_HANDICAP, chosen, "HANDICAP", value,
+                    two_player ? NULL : depth);
 
-    draw_field_row(MENU_FIELD_MUSIC, chosen, "MUSIC", kMusicNames[music]);
+    draw_field_row(MENU_FIELD_MUSIC, chosen, "MUSIC", kMusicNames[music], NULL);
 
-    /* What the handicap actually costs you, because "2" says nothing until
-     * you know it is two of the three-row bands garbageHeightData lays down.
-     * It only appears while the cursor is on it — the rest of the time the
-     * row is better empty. */
-    if (chosen == MENU_FIELD_HANDICAP) {
+    if (two_player && chosen == MENU_FIELD_HANDICAP) {
         char row[32];
         unsigned m = 0;
         const char *lead = "BURIES ";
         while (*lead) row[m++] = *lead++;
         m = append_number(row, m, (unsigned)handicap[0] * TENGEN_HANDICAP_ROWS_PER_STEP);
-        if (two_player) {
-            const char *mid = " AND ";
-            while (*mid) row[m++] = *mid++;
-            m = append_number(row, m, (unsigned)handicap[1] * TENGEN_HANDICAP_ROWS_PER_STEP);
-        }
+        const char *mid = " AND ";
+        while (*mid) row[m++] = *mid++;
+        m = append_number(row, m, (unsigned)handicap[1] * TENGEN_HANDICAP_ROWS_PER_STEP);
         const char *tail = " ROWS";
         while (*tail) row[m++] = *tail++;
         row[m] = '\0';
@@ -2619,7 +2676,13 @@ int main(void) {
                   BG_SCREENBLOCK(SCREENBLOCK_PANEL) | BG_PRIORITY(0);
     REG_BG2HOFS = 0;
     REG_BG2VOFS = (uint16_t)(512 - PANEL_SHIFT_PX);
-    REG_DISPCNT = DCNT_MODE0 | DCNT_BG0 | DCNT_BG1 | DCNT_BG2 |
+    /* The histogram's layer: the offset layer's three pixels across, and none
+     * of the counters' two down. See SCREENBLOCK_HISTOGRAM. */
+    REG_BG3CNT = BG_4BPP | BG_SIZE_32x32 | BG_CHARBLOCK(CHARBLOCK) |
+                  BG_SCREENBLOCK(SCREENBLOCK_HISTOGRAM) | BG_PRIORITY(0);
+    REG_BG3HOFS = (uint16_t)(512 - STATS_SHIFT_PX);
+    REG_BG3VOFS = STATS_LIFT_PX;
+    REG_DISPCNT = DCNT_MODE0 | DCNT_BG0 | DCNT_BG1 | DCNT_BG2 | DCNT_BG3 |
                    DCNT_OBJ | DCNT_OBJ_1D;
 
     Screen screen = SCREEN_TITLE;

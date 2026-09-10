@@ -21,10 +21,13 @@ typedef volatile uint32_t vu32;
 #define REG_BG0CNT    (*(vu16 *)0x04000008)
 #define REG_BG1CNT    (*(vu16 *)0x0400000A)
 #define REG_BG2CNT    (*(vu16 *)0x0400000C)
+#define REG_BG3CNT    (*(vu16 *)0x0400000E)
 #define REG_BG1HOFS   (*(vu16 *)0x04000014)
 #define REG_BG1VOFS   (*(vu16 *)0x04000016)
 #define REG_BG2HOFS   (*(vu16 *)0x04000018)
 #define REG_BG2VOFS   (*(vu16 *)0x0400001A)
+#define REG_BG3HOFS   (*(vu16 *)0x0400001C)
+#define REG_BG3VOFS   (*(vu16 *)0x0400001E)
 #define REG_KEYINPUT  (*(vu16 *)0x04000130)
 
 /* DISPCNT */
@@ -32,6 +35,7 @@ typedef volatile uint32_t vu32;
 #define DCNT_BG0      0x0100
 #define DCNT_BG1      0x0200
 #define DCNT_BG2      0x0400
+#define DCNT_BG3      0x0800
 #define DCNT_OBJ      0x1000
 #define DCNT_OBJ_1D   0x0040  /* sprite tiles laid out linearly, not in a grid */
 

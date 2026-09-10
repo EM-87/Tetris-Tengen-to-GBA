@@ -1070,8 +1070,7 @@ def skin_check(rom_path):
 # ---------------------------------------------------------------------------
 MUSIC_ROW = 14                  # the MUSIC row of LEVEL SETTINGS
 LEVEL_ROW = 8                   # ...and the LEVEL one above it
-HANDICAP_ROW = 11
-HANDICAP_DEPTH_ROW = 12         # "BURIES n ROWS", only while the cursor is there
+HANDICAP_ROW = 11               # value AND, in one player, what it buries
 
 
 def to_music_page(core, settle=10):
@@ -1137,13 +1136,14 @@ def handicap_check(rom_path):
         core.set_keys(KEYS["DOWN"]); run(core, 4); core.set_keys(); run(core, 10)
         for _ in range(steps):
             core.set_keys(KEYS["L"]); run(core, 4); core.set_keys(); run(core, 8)
+        # One line now: "HANDICAP   n   r ROWS". The word BURIES was what got
+        # dropped to make the count fit beside the value.
         row = tilemap_text(core, HANDICAP_ROW)
-        if "HANDICAP" not in row or str(steps) not in row:
-            failures.append(f"la fila de HANDICAP no dice {steps}: {row!r}")
-        depth = tilemap_text(core, HANDICAP_DEPTH_ROW)
-        if f"BURIES {expect_rows} ROWS" not in depth:
-            failures.append(f"handicap {steps}: la pantalla dice {depth!r}, "
-                             f"no BURIES {expect_rows} ROWS")
+        if "HANDICAP" not in row:
+            failures.append(f"la fila {HANDICAP_ROW} no es la del handicap: {row!r}")
+        if f"{steps}  {expect_rows} ROWS" not in row:
+            failures.append(f"handicap {steps}: la fila dice {row!r}, "
+                             f"esperaba el valor y {expect_rows} ROWS")
         press_start(core); run(core, 40)      # into the game
         # Count the rows of the playfield that came up with anything in them.
         filled = 0
@@ -1220,11 +1220,38 @@ def panel_check(rom_path):
     if not solid:
         failures.append("no se ve ni una regla en el panel")
 
+    # ...and the RIGHT box's histogram must clear the braid under it. The
+    # icons fill their two tiles to the last pixel, so on the tile grid alone
+    # they end one line short of the frame; the histogram has a background of
+    # its own precisely so it can be lifted clear (STATS_LIFT_PX).
+    core.set_keys(KEYS["L"], KEYS["R"])
+    run(core, 5)
+    core.set_keys()
+    run(core, 40)
+    rows = pixels(screen)
+    braid = next((y for y in range(140, 160)
+                  if all(rows[y][x] != (0, 0, 0) for x in range(176, 240))), None)
+    if braid is None:
+        failures.append("no se encuentra la greca de abajo del cajon derecho")
+    else:
+        last = max((y for y in range(100, braid)
+                    if any(rows[y][x] != (0, 0, 0) for x in range(176, 240))),
+                   default=None)
+        if last is None:
+            failures.append("el cajon derecho no dibuja las estadisticas")
+        elif braid - last < 3:
+            failures.append(f"las estadisticas llegan a y={last} y la greca "
+                             f"empieza en y={braid}: se tocan")
+        else:
+            print(f"  las estadisticas acaban en y={last}, la greca empieza en "
+                   f"y={braid}: {braid - last - 1} pixeles de aire")
+
     for f in failures:
         print("FALLA:", f)
     if failures:
         return 1
-    print("OK: SCORE respira igual que LINES, LEVEL y HIGH.")
+    print("OK: SCORE respira igual que LINES, LEVEL y HIGH, y las stats no "
+           "pisan la greca.")
     return 0
 
 

@@ -628,8 +628,18 @@ that: the handicap's depth line and the one at the foot.
 **The control hints are gone.** They were three of the six lines on the page,
 and with a cursor sitting beside the chosen row and values that change under
 left and right, none of them was telling anybody anything they had not already
-worked out. What is left is a two-column table — labels in one column, values
-in another, the block centred — and START TO PLAY under it.
+worked out. What is left is a two-column TABLE: labels from one column and
+values from another, both fixed for all three rows, so the eye reads two
+columns and not three sentences. Eight for the longest label plus three of gap
+plus eleven for the longest tune name is twenty-two of the interior's
+twenty-six, which centres the block with two either side; the cursor lives in
+the left margin, the way a menu arrow does. START TO PLAY goes under it.
+
+**What the handicap costs rides its own line**, two columns after the value
+and in the note's colour, because a count is a remark about the value rather
+than a second setting. The word BURIES is what got dropped to make it fit:
+"12 ROWS" says the same in seven columns. Two players have two counts and no
+room for them, so there the line below comes back.
 
 **The last row with air under it is 16.** The frame's bottom braid begins at
 y=145, so a line on row 17 ends one pixel short of touching it.
@@ -660,6 +670,28 @@ counts — and the six of them are what it pays back.
 while the music is suspended was the one part of the screen that had not
 noticed the game had stopped; `paused` freezes him now, the same way a dead
 board does.
+
+## The histogram gets a background too, for the two pixels it did not want
+
+The counters' two pixels are the panel layer's, and the offset layer had to
+ride down with them or the NEXT preview would have come apart — its label is
+on the panel's map and its odd-width pieces on the offset one. But the PIECE
+HISTOGRAM shares that offset layer, for its own three horizontal pixels, and
+it did not want the two vertical ones: its icons stand on the box's last
+interior row and fill their two tiles to the last pixel, so two pixels down
+put the tall I hard against the braid.
+
+A scroll is one number for a whole background, so the only way to give the
+histogram three pixels across and none down is to give it a background.
+Screenblock 31 is the last one before the sprite tiles and nothing else wanted
+it. Having its own scroll, it uses it: two pixels UP, which leaves the three
+of air the rest of the HUD keeps. `make gba-check --panel` measures that gap
+off the framebuffer along with the counters' four.
+
+That is four backgrounds now, and each one exists for a scroll the others
+cannot share: BG0 the playfield and the cartridge's art at the grid, BG1 three
+pixels across and the panel's two down, BG2 the panel's two down alone, BG3
+three across and two up.
 
 ## The preview's cell closes where its content does
 
