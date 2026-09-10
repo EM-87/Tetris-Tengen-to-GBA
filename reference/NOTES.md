@@ -477,6 +477,43 @@ to guess: a dump without the expected first row is rejected with a reason
 rather than converted into 1024 bytes of noise, and the port then builds with
 `SCREEN_PROTO_AVAILABLE 0` and L/R simply have nothing to switch to.
 
+## The starting handicap
+
+`endPlayfieldInit` (`main.asm.txt:3536-3546`) reads `menuPlayer1Handicap`
+(`$04F3`) — or player 2's, unless the COMPUTER is playing — and if it is not
+zero calls `initHandicapGarbage`.
+
+**How much.** `garbageHeightData` is `$B8,$A0,$88,$70` for handicaps 1-4
+against a playfield that ends at `$D0` with eight bytes to a row: **three rows
+per step**, 3 / 6 / 9 / 12, counted up from the floor.
+
+**What it looks like**, and it is not a wall with a gap:
+
+* Every empty cell in the row is filled with probability **seven in eight**
+  (`genNextPseudoRandom3x / and #$07`; zero leaves it empty). `L98AD` works a
+  BYTE at a time, high nibble then low — left to right — and skips a nibble
+  that is already occupied, so the wall columns cost no random numbers at all.
+  **Coop therefore gets twelve draws a row where 1P and 2P get ten**, because
+  its wall nibbles are `$00`. Reproducing that walk exactly is what keeps a
+  seed producing the same field it produces on the cartridge.
+* **Then**, if the row came out with seven or more cells filled,
+  `genNextPseudoRandom2x & 3` picks one of bytes 2-5 and one more draw picks
+  which of its two nibbles to clear (`$F0` keeps the high one, `$0F` the low).
+  So the guaranteed hole is always in the middle eight columns, never against
+  a wall — and no row can arrive complete, which would otherwise clear itself
+  on the first frame.
+
+The cell value written is `$F`, the same sentinel the wall columns hold, and
+that is the cartridge's own choice rather than a shortcut: `$F` is a real
+block tile in its set — a lone shaded block — so garbage draws correctly with
+no renderer change at all.
+
+In the port it is `tengen_apply_handicap`, drawing from a `garbage_rng` the
+game seeds alongside its piece RNG, so two consoles from one seed bury each
+other identically. The level screen carries the two values; over the cable
+they need a lobby stage of their own, because two handicaps of nought to four
+want six bits and CONFIG had four left.
+
 ## MUSIC MIX, and why it turns over at the level and not at the end of a tune
 
 The same L+R that uncovers Korobeiniki uncovers a sixth entry that is not a

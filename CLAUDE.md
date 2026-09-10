@@ -173,8 +173,13 @@ running ROM; only the side panels need reflowing).
    at every level-up. NOT at the end of a tune — only one of the four has a
    loop these measurements can find, so a "song length" for the rest would be
    invented. See reference/NOTES.md.
-17. Still to do: coop (the core already models its 12-column field), the 2P
-   starting handicap (`initHandicapGarbage`), and the ROM's COMPUTER player
+17. ~~The starting handicap~~ — done, `initHandicapGarbage` traced in full:
+   three rows a step, each cell filled seven times in eight, and a guaranteed
+   hole punched into the middle eight columns of any row that came out seven
+   or more full. Two values on the level screen (L for player 1, R for player
+   2), a lobby stage of their own on the cable, and the garbage drawn from a
+   per-game RNG so one seed buries both consoles identically.
+18. Still to do: coop (the core already models its 12-column field) and the ROM's COMPUTER player
    (`computerMove`, the VS and WITH modes) — which unlike two-human 2P needs
    neither a second console nor a cable. Also unported: the attract-mode demo
    the title starts at `frameCounterHigh` = 5 (`demoStart`), the prototype

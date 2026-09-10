@@ -254,6 +254,11 @@ typedef struct {
 
 typedef struct {
     TengenPlayfield field[2];       /* player1Playfield / player2Playfield; coop shares [0] */
+    /* The ROM's global rngSeed, which initHandicapGarbage seeds from
+     * savedRNGSeed and nothing else touches at that point
+     * (main.asm.txt:3556-3562). Kept per game so the garbage a seed produces
+     * is the same on both consoles of a linked match. */
+    TengenRng garbage_rng;
     TengenPlayerState player[2];
     bool coop;
     bool two_player;
@@ -393,6 +398,43 @@ uint8_t tengen_frames_per_row(uint8_t level, int8_t piece_y, bool coop);
  * Game lifecycle
  * ----------------------------------------------------------------------- */
 void tengen_new_game(TengenGame *game, uint16_t seed, uint8_t start_level, bool two_player, bool coop);
+
+/* ----------------------------------------------------------------------- *
+ * THE STARTING HANDICAP (VERIFIED, main.asm.txt:3536-3603)
+ *
+ * The cartridge's menu lets either player start buried under garbage.
+ * `endPlayfieldInit` reads menuPlayer1Handicap (or player 2's, unless the
+ * COMPUTER is playing) and, if it is not zero, calls initHandicapGarbage.
+ *
+ * HOW MUCH: `garbageHeightData` is $B8,$A0,$88,$70 for handicaps 1-4, and the
+ * playfield ends at $D0 with eight bytes to a row — so the garbage starts 3,
+ * 6, 9 or 12 rows from the bottom. THREE ROWS PER STEP.
+ *
+ * WHAT IT LOOKS LIKE, and it is not a plain wall with a gap:
+ *
+ *  - Every empty cell in the row is filled with probability SEVEN IN EIGHT
+ *    (`genNextPseudoRandom3x / and #$07`, zero leaves it empty). The nibbles
+ *    are walked high first then low, which is left to right, and a cell that
+ *    is already occupied — a wall column outside coop — is skipped without
+ *    drawing, so the draws land on exactly the playable columns.
+ *  - THEN, if the row came out with seven or more cells filled, one extra
+ *    hole is punched: `genNextPseudoRandom2x & 3` picks one of bytes 2-5 of
+ *    the row and one more draw picks which of its two nibbles to clear
+ *    ($F0 keeps the high one, $0F the low). So the guaranteed hole is always
+ *    somewhere in the middle eight columns, never against a wall.
+ *
+ * The cell value written is $F, the same sentinel the wall columns hold — and
+ * that is the cartridge's own choice, not a shortcut: $F is a real block tile
+ * in its tileset, so garbage draws as a lone shaded block.
+ * ----------------------------------------------------------------------- */
+#define TENGEN_HANDICAP_MAX 4
+#define TENGEN_HANDICAP_ROWS_PER_STEP 3
+
+/* Buries `slot` under `handicap` * 3 rows of it. Handicap 0 does nothing.
+ * Call right after tengen_new_game, the way endPlayfieldInit does; it draws
+ * from the game's own garbage RNG, so two consoles from one seed bury each
+ * other identically. */
+void tengen_apply_handicap(TengenGame *game, TengenPlayerSlot slot, uint8_t handicap);
 
 /* ----------------------------------------------------------------------- *
  * The level-up show's cast (VERIFIED, main.asm.txt:2050-2082, L8D8B)

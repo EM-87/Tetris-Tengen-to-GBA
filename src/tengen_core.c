@@ -715,6 +715,9 @@ void tengen_new_game(TengenGame *game, uint16_t seed, uint8_t start_level, bool 
 
     TengenRng shared;
     tengen_rng_seed(&shared, seed);
+    /* initHandicapGarbage's own source, seeded the same way and stepped only
+     * by it (main.asm.txt:3556-3562). */
+    game->garbage_rng = shared;
 
     for (int i = 0; i < 2; i++) {
         TengenPlayerState *p = &game->player[i];
@@ -724,6 +727,57 @@ void tengen_new_game(TengenGame *game, uint16_t seed, uint8_t start_level, bool 
         p->game_active = (i == 0) || two_player || coop;
         p->piece.next = roll_next_piece(&p->rng); /* pre-roll so spawn_piece's first "current = next" is meaningful */
         spawn_piece(game, (TengenPlayerSlot)i);
+    }
+}
+
+/* initHandicapGarbage (main.asm.txt:3545-3603) and its per-byte filler L98AD
+ * (:3602-3629). See the header for the shape of it; what follows is the loop
+ * itself, kept in the ROM's own terms.
+ *
+ * The nibble walk matters. The ROM works a BYTE at a time — high nibble then
+ * low, which is left to right — and only draws for a nibble that is currently
+ * EMPTY, so the wall columns cost no random numbers and coop, whose walls are
+ * open, gets twelve draws a row where 1P and 2P get ten. Reproducing that
+ * exactly is what keeps a seed producing the same field it produces on the
+ * cartridge. */
+static uint8_t rng_times(TengenRng *rng, int n) {
+    uint8_t v = 0;
+    while (n-- > 0) v = tengen_rng_step(rng);
+    return v;
+}
+
+void tengen_apply_handicap(TengenGame *game, TengenPlayerSlot slot,
+                            uint8_t handicap) {
+    if (handicap == 0 || handicap > TENGEN_HANDICAP_MAX) return;
+    TengenPlayfield *field = &game->field[game->coop ? 0 : (int)slot];
+    TengenRng *rng = &game->garbage_rng;
+
+    int rows = handicap * TENGEN_HANDICAP_ROWS_PER_STEP;
+    for (int row = TENGEN_PF_HEIGHT - rows; row < TENGEN_PF_HEIGHT; row++) {
+        int filled = 0;
+        /* Bytes 1..7 of the ROM's eight-byte row; byte 0 is wall either way
+         * and byte 7 is the far wall, so neither ever draws. */
+        for (int byte = 1; byte <= 7; byte++) {
+            for (int half = 0; half < 2; half++) {
+                int col = byte * 2 + half - TENGEN_ROM_COL_ORIGIN;
+                if (col < 0 || col >= TENGEN_PF_WIDTH) continue;
+                if (field->cell[row][col] != TENGEN_CELL_EMPTY) continue;
+                /* genNextPseudoRandom3x / and #$07: empty one time in eight. */
+                if ((rng_times(rng, 3) & 7) == 0) continue;
+                field->cell[row][col] = TENGEN_CELL_WALL;   /* the ROM's $F */
+                filled++;
+            }
+        }
+        /* `cmp #$07 / bcc`: a row that came out seven or more full gets one
+         * hole punched into bytes 2-5 — the middle eight columns, never
+         * against a wall. $F0 keeps the high nibble and clears the low one. */
+        if (filled >= 7) {
+            int byte = 2 + (rng_times(rng, 2) & 3);
+            int high = tengen_rng_step(rng) & 1;
+            int col = byte * 2 + (high ? 0 : 1) - TENGEN_ROM_COL_ORIGIN;
+            if (col >= 0 && col < TENGEN_PF_WIDTH)
+                field->cell[row][col] = TENGEN_CELL_EMPTY;
+        }
     }
 }
 

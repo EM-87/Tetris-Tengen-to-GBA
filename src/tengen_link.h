@@ -96,7 +96,7 @@ static inline uint16_t tengen_link_send_word(const TengenLink *link,
  *
  * Tags live in the top four bits, which is why they exist only here: once the
  * match starts the whole 16 bits carry buttons and a frame counter. The
- * largest tagged word is $5FFF, so a lobby word can no more be mistaken for
+ * largest tagged word is $6FFF, so a lobby word can no more be mistaken for
  * an absent console's $FFFF than a match word can.
  * ----------------------------------------------------------------------- */
 typedef enum {
@@ -105,7 +105,12 @@ typedef enum {
     TENGEN_LOBBY_SEED_HI = 2,
     TENGEN_LOBBY_SEED_LO = 3,
     TENGEN_LOBBY_CONFIG  = 4,   /* start level in bits 0-3, music in bits 4-7 */
-    TENGEN_LOBBY_GO      = 5
+    /* A stage of its own rather than four spare bits of CONFIG: two handicaps
+     * of nought to four need six bits and CONFIG has four left. One more
+     * stop-and-wait turn costs two transfers, which is two sixtieths of a
+     * second on a screen the player is already sitting on. */
+    TENGEN_LOBBY_HANDICAP = 5,  /* player 1 in bits 0-3, player 2 in bits 4-7 */
+    TENGEN_LOBBY_GO      = 6
 } TengenLobbyTag;
 
 #define TENGEN_LOBBY_TAG_SHIFT 12
@@ -120,6 +125,7 @@ typedef struct {
     uint16_t seed;
     uint8_t start_level;
     uint8_t music;
+    uint8_t handicap[2];   /* menuPlayer1Handicap / menuPlayer2Handicap */
     bool ready;          /* the handshake finished; the match may start */
     bool failed;         /* nothing answered for long enough to give up */
     uint8_t stage;       /* master: the tag in flight. slave: the last seen */
@@ -149,7 +155,8 @@ void tengen_lobby_start_held(TengenLobby *lobby, uint16_t seed);
 /* The master's choice, once it has one. Fills in the config and lets the
  * handshake run on to GO. Does nothing on a lobby that was not held. */
 void tengen_lobby_release(TengenLobby *lobby, uint16_t seed,
-                           uint8_t start_level, uint8_t music);
+                           uint8_t start_level, uint8_t music,
+                           const uint8_t handicap[2]);
 
 /* What this machine should put on the wire next. */
 uint16_t tengen_lobby_word(const TengenLobby *lobby, bool master);

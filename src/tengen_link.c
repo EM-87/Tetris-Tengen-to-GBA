@@ -91,10 +91,13 @@ void tengen_lobby_start_held(TengenLobby *lobby, uint16_t seed) {
 }
 
 void tengen_lobby_release(TengenLobby *lobby, uint16_t seed,
-                           uint8_t start_level, uint8_t music) {
+                           uint8_t start_level, uint8_t music,
+                           const uint8_t handicap[2]) {
     lobby->seed = seed;
     lobby->start_level = start_level;
     lobby->music = music;
+    lobby->handicap[0] = handicap ? handicap[0] : 0;
+    lobby->handicap[1] = handicap ? handicap[1] : 0;
     lobby->hold = false;
 }
 
@@ -111,6 +114,10 @@ uint16_t tengen_lobby_word(const TengenLobby *lobby, bool master) {
             return tagged(TENGEN_LOBBY_CONFIG,
                            (uint16_t)((lobby->start_level & 0x0F) |
                                       ((lobby->music & 0x0F) << 4)));
+        case TENGEN_LOBBY_HANDICAP:
+            return tagged(TENGEN_LOBBY_HANDICAP,
+                           (uint16_t)((lobby->handicap[0] & 0x0F) |
+                                      ((lobby->handicap[1] & 0x0F) << 4)));
         default:
             return tagged(TENGEN_LOBBY_GO, 0);
     }
@@ -156,6 +163,10 @@ void tengen_lobby_apply(TengenLobby *lobby, bool master, bool got,
         case TENGEN_LOBBY_CONFIG:
             lobby->start_level = (uint8_t)(payload & 0x0F);
             lobby->music = (uint8_t)((payload >> 4) & 0x0F);
+            break;
+        case TENGEN_LOBBY_HANDICAP:
+            lobby->handicap[0] = (uint8_t)(payload & 0x0F);
+            lobby->handicap[1] = (uint8_t)((payload >> 4) & 0x0F);
             break;
         case TENGEN_LOBBY_GO:
             /* NOT ready on the first GO. The master is still waiting to see

@@ -883,7 +883,8 @@ static void test_the_lobby_connects_first_and_the_master_chooses_after(void) {
     CHECK(!master.failed && !slave.failed);   /* parking must not look like silence */
     CHECK(!master.ready && !slave.ready);   /* and must not start the match either */
 
-    tengen_lobby_release(&master, 0xBEEF, 7, 2);
+    const uint8_t handicap[2] = { 1, 4 };
+    tengen_lobby_release(&master, 0xBEEF, 7, 2, handicap);
     for (int i = 0; i < 64 && !(master.ready && slave.ready); i++)
         lobby_transfer(&master, &slave, true);
 
@@ -891,6 +892,10 @@ static void test_the_lobby_connects_first_and_the_master_chooses_after(void) {
     CHECK(slave.seed == 0xBEEF);   /* the slave takes the master's seed */
     CHECK(slave.start_level == 7);   /* ...and its level */
     CHECK(slave.music == 2);   /* ...and its tune */
+    /* ...and how buried each of them starts, which needs all three bits of
+     * each value: a handicap of 4 packed into two would come back as 0. */
+    CHECK(slave.handicap[0] == 1);
+    CHECK(slave.handicap[1] == 4);
 }
 
 static void test_the_lobby_agrees_on_a_game_and_both_leave_together(void) {
@@ -916,9 +921,9 @@ static void test_the_lobby_agrees_on_a_game_and_both_leave_together(void) {
     CHECK(slave.seed == 0xBEEF);
     CHECK(slave.start_level == 7);
     CHECK(slave.music == 2);
-    /* Five stages, two transfers each, and no more: a handshake that quietly
+    /* Six stages, two transfers each, and no more: a handshake that quietly
      * took twice as long as it should would still pass every check above. */
-    CHECK(transfers == 10);
+    CHECK(transfers == 12);
 }
 
 static void test_the_lobby_survives_transfers_that_do_not_arrive(void) {
@@ -1082,6 +1087,89 @@ static void test_a_clear_is_tallied_by_how_many_rows_it_took(void) {
     CHECK(game.player[0].clear_counts[2] == 0);
     CHECK(game.player[0].clear_counts[3] == 0);
     CHECK(tengen_dancer_count(&game) == 1);
+}
+
+static int handicap_count(const TengenPlayfield *f, int row) {
+    int n = 0;
+    for (int c = 1; c <= 10; c++) if (f->cell[row][c] != TT_NONE) n++;
+    return n;
+}
+
+static void test_the_handicap_buries_three_rows_a_step(void) {
+    /* garbageHeightData is $B8,$A0,$88,$70 against a field that ends at $D0
+     * with eight bytes to a row (main.asm.txt:3597), so 3, 6, 9 and 12 rows.
+     * Nothing above the garbage is touched. */
+    for (uint8_t h = 1; h <= TENGEN_HANDICAP_MAX; h++) {
+        TengenGame game;
+        tengen_new_game(&game, 0x1234, 0, false, false);
+        tengen_apply_handicap(&game, TENGEN_PLAYER_1, h);
+        int rows = h * TENGEN_HANDICAP_ROWS_PER_STEP;
+        for (int row = 0; row < TENGEN_PF_HEIGHT; row++) {
+            int n = handicap_count(&game.field[0], row);
+            if (row < TENGEN_PF_HEIGHT - rows) CHECK(n == 0);
+            else CHECK(n > 0);
+        }
+    }
+    /* And a handicap of zero is what the ROM's `bne` skips over. */
+    TengenGame none;
+    tengen_new_game(&none, 0x1234, 0, false, false);
+    tengen_apply_handicap(&none, TENGEN_PLAYER_1, 0);
+    CHECK(handicap_count(&none.field[0], TENGEN_PF_HEIGHT - 1) == 0);
+}
+
+static void test_every_handicap_row_has_a_way_through(void) {
+    /* A row that comes out seven or more full gets one hole punched into
+     * bytes 2-5 (main.asm.txt:3676-3693). Between that and the one-in-eight
+     * skip, no row can arrive complete — a complete row would clear itself the
+     * instant the game started. Fifty seeds' worth of rows say so. */
+    int full_rows = 0, rows_seen = 0, holes = 0;
+    for (uint16_t seed = 1; seed <= 50; seed++) {
+        TengenGame game;
+        tengen_new_game(&game, (uint16_t)(seed * 977), 0, false, false);
+        tengen_apply_handicap(&game, TENGEN_PLAYER_1, TENGEN_HANDICAP_MAX);
+        for (int row = TENGEN_PF_HEIGHT - 12; row < TENGEN_PF_HEIGHT; row++) {
+            int n = handicap_count(&game.field[0], row);
+            rows_seen++;
+            holes += 10 - n;
+            if (n == 10) full_rows++;
+        }
+        CHECK(tengen_find_full_rows(&game.field[0]) == 0);
+    }
+    CHECK(full_rows == 0);
+    /* ...and it is garbage, not a wall: roughly an eighth of the cells are
+     * holes, plus the punched ones. */
+    CHECK(holes > rows_seen);
+}
+
+static void test_the_handicap_is_the_same_from_the_same_seed(void) {
+    /* Two consoles on a cable build their own boards from one seed, so this
+     * is not a nicety. */
+    TengenGame a, b;
+    tengen_new_game(&a, 0xBEEF, 0, true, false);
+    tengen_new_game(&b, 0xBEEF, 0, true, false);
+    tengen_apply_handicap(&a, TENGEN_PLAYER_2, 3);
+    tengen_apply_handicap(&b, TENGEN_PLAYER_2, 3);
+    for (int row = 0; row < TENGEN_PF_HEIGHT; row++)
+        for (int c = 0; c < TENGEN_PF_WIDTH; c++)
+            CHECK(a.field[1].cell[row][c] == b.field[1].cell[row][c]);
+    /* ...and it went to the player it was asked for. */
+    CHECK(handicap_count(&a.field[0], TENGEN_PF_HEIGHT - 1) == 0);
+    CHECK(handicap_count(&a.field[1], TENGEN_PF_HEIGHT - 1) > 0);
+}
+
+static void test_coop_garbage_fills_the_two_extra_columns(void) {
+    /* The ROM draws a byte at a time and only fills EMPTY nibbles, so coop —
+     * whose wall nibbles are $00 — gets twelve cells a row where 1P gets ten
+     * (main.asm.txt:3602-3629). */
+    TengenGame game;
+    tengen_new_game(&game, 0x0F0F, 0, true, true);
+    tengen_apply_handicap(&game, TENGEN_PLAYER_1, 2);
+    int edge = 0;
+    for (int row = TENGEN_PF_HEIGHT - 6; row < TENGEN_PF_HEIGHT; row++) {
+        if (game.field[0].cell[row][0] != TT_NONE) edge++;
+        if (game.field[0].cell[row][TENGEN_PF_WIDTH - 1] != TT_NONE) edge++;
+    }
+    CHECK(edge > 0);
 }
 
 static void test_level_never_passes_the_rom_cap(void) {
@@ -1488,6 +1576,10 @@ int main(void) {
     test_either_player_can_pause_a_linked_game();
     test_level_starts_at_the_chosen_start_level();
     test_level_is_recomputed_from_the_line_total();
+    test_the_handicap_buries_three_rows_a_step();
+    test_every_handicap_row_has_a_way_through();
+    test_the_handicap_is_the_same_from_the_same_seed();
+    test_coop_garbage_fills_the_two_extra_columns();
     test_the_dancers_cast_grows_with_triples_and_tetrises();
     test_a_clear_is_tallied_by_how_many_rows_it_took();
     test_level_never_passes_the_rom_cap();

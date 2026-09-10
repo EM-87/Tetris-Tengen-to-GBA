@@ -33,6 +33,8 @@
  *       the one deliberate rearrangement, and it is why the port keeps the
  *       original's look rather than substituting its own.
  */
+#include <stddef.h>
+
 #include "gba_hw.h"
 #include "palette.h"
 #include "nes_audio.h"
@@ -372,6 +374,22 @@ static const uint8_t kPauseTiles[PAUSE_H][PAUSE_W] = {
  * ROM's own nametable spells "HIGH SCORE" and "STATS". */
 static uint16_t ascii_tile(char c) { return (uint16_t)(unsigned char)c; }
 
+/* OFFSETS THE HEADLESS CHECKS NEED, exported so the ELF is the single place
+ * that knows them — the same reason kNes6502Probe exists in nes_audio.c, and
+ * for the same reason it was added there: a new field anywhere in TengenGame
+ * moves every one of these, and a Python constant that did not move would
+ * quietly start reading a neighbour. Adding `garbage_rng` did exactly that
+ * and the cheat-code check began failing three tests away from the change. */
+const uint16_t kGameProbe[7] = {
+    (uint16_t)offsetof(TengenGame, field),
+    (uint16_t)offsetof(TengenGame, player),
+    (uint16_t)sizeof(TengenPlayerState),
+    (uint16_t)offsetof(TengenPlayerState, piece.current),
+    (uint16_t)offsetof(TengenPlayerState, piece.y),
+    (uint16_t)offsetof(TengenPlayerState, level),
+    (uint16_t)offsetof(TengenPlayerState, piece_stats),
+};
+
 static TengenLink g_session;
 /* The best score of this session. The cartridge's own 1P panel shows one
  * (see draw_panel), and like the cartridge's it does not survive a reset. */
@@ -415,6 +433,22 @@ static bool shoulder_chord(void) {
     bool held = (keys & KEY_L) && (keys & KEY_R);
     bool pressed = held && !was_held;
     was_held = held;
+    return pressed;
+}
+
+/* ...and ONE of them on its own, for the level screen's handicap: L belongs
+ * to player 1's side of the pad and R to player 2's. Each keeps its own held
+ * state so neither can swallow the other's press, and the caller checks the
+ * chord first so reaching for the fifth tune buries nobody. */
+#define SHOULDER_L 0
+#define SHOULDER_R 1
+
+static bool pressed_shoulder(int which) {
+    static bool was_held[2];
+    uint16_t keys = (uint16_t)(~REG_KEYINPUT & KEY_MASK);
+    bool held = (keys & (which == SHOULDER_L ? KEY_L : KEY_R)) != 0;
+    bool pressed = held && !was_held[which];
+    was_held[which] = held;
     return pressed;
 }
 
@@ -1713,7 +1747,8 @@ static void draw_link_wait(const TengenLobby *lobby, int elapsed) {
     draw_guest_dancer(elapsed);
 }
 
-static void draw_level_select(uint8_t start_level, uint8_t music) {
+static void draw_level_select(uint8_t start_level, uint8_t music,
+                               const uint8_t handicap[2]) {
     draw_menu_frame();
 
     /* Rows 8-14 of this window are the space the cartridge's own selection
@@ -1728,6 +1763,25 @@ static void draw_level_select(uint8_t start_level, uint8_t music) {
                      level == start_level ? BANK_HILITE : PAL_MENU_BASE + 3);
     }
     draw_text(6, 11, "LEFT RIGHT TO SET", PAL_MENU_BASE + 3);
+
+    /* THE STARTING HANDICAP, the cartridge's own menuPlayer1Handicap /
+     * menuPlayer2Handicap (main.asm.txt:3536-3546) — how many three-row bands
+     * of garbage a player starts buried under, nought to four. Two values,
+     * because that is what makes it a handicap rather than a difficulty
+     * setting: the shoulder button on a player's side of the pad cycles that
+     * player's. In one-player there is only one to cycle and both do it. */
+    draw_text(11, 12, "HANDICAP", PAL_MENU_BASE + 3);
+    clear_region(4, 13, 22, 1);
+    if (g_session.game.two_player) {
+        draw_text(6, 13, "L", PAL_MENU_BASE + 3);
+        draw_number(8, 13, handicap[0], 1, BANK_HILITE);
+        draw_text(11, 13, "BURY", PAL_MENU_BASE + 3);
+        draw_number(18, 13, handicap[1], 1, BANK_HILITE);
+        draw_text(20, 13, "R", PAL_MENU_BASE + 3);
+    } else {
+        draw_text(6, 13, "L R TO SET", PAL_MENU_BASE + 3);
+        draw_number(19, 13, handicap[0], 1, BANK_HILITE);
+    }
 
     draw_text(12, 14, "MUSIC", PAL_MENU_BASE + 3);
     clear_region(4, 15, 22, 1);
@@ -2078,6 +2132,8 @@ int main(void) {
 
     Screen screen = SCREEN_TITLE;
     uint8_t start_level = 0;
+    /* menuPlayer1Handicap / menuPlayer2Handicap ($04F3-$04F4). */
+    uint8_t handicap[2] = { 0, 0 };
     uint8_t game_mode = GAME_1P;
     int link_wait_frames = 0;
     uint8_t held_last = 0;
@@ -2198,7 +2254,23 @@ int main(void) {
                 start_level = (uint8_t)((start_level + START_LEVEL_COUNT - 1) % START_LEVEL_COUNT);
             if (pressed & TENGEN_BTN_RIGHT)
                 start_level = (uint8_t)((start_level + 1) % START_LEVEL_COUNT);
-            if (!g_music_unlocked && shoulder_chord()) {
+            /* ONE CALL EACH, and the results kept: these are edge detectors
+             * with their own held state, so asking twice in a frame answers
+             * "yes" and then "no" — which is how the handicap's first version
+             * quietly ate the fifth tune's chord. */
+            bool chord = shoulder_chord();
+            bool tap_l = pressed_shoulder(SHOULDER_L);
+            bool tap_r = pressed_shoulder(SHOULDER_R);
+            /* One shoulder each, and only when they are NOT both down: the
+             * chord is the fifth tune's, and a player reaching for it should
+             * not be burying anybody on the way. */
+            if (!chord && (tap_l || tap_r)) {
+                int who = (tap_r && !tap_l && game_mode == GAME_2P) ? 1 : 0;
+                handicap[who] = (uint8_t)((handicap[who] + 1) %
+                                           (TENGEN_HANDICAP_MAX + 1));
+                nes_audio_play(NES_SOUND_MENU_SELECT);
+            }
+            if (!g_music_unlocked && chord) {
                 /* L+R together — the two buttons a NES pad never had, so the
                  * game proper can never see this. It uncovers TWO entries:
                  * the fifth tune and the mix that plays all of them. */
@@ -2241,7 +2313,7 @@ int main(void) {
                     /* The master has chosen. Letting the handshake go delivers
                      * the seed, the level and the tune to the other console,
                      * and both leave the lobby together. */
-                    link_lobby_release(&lobby, seed, start_level, g_music);
+                    link_lobby_release(&lobby, seed, start_level, g_music, handicap);
                     screen = SCREEN_LINK_WAIT;
                     vsync();
                     audio_frame();
@@ -2253,6 +2325,9 @@ int main(void) {
                 g_link_lost = false;
                 g_view = 0;
                 tengen_new_game(&g_session.game, seed, start_level, false, false);
+                /* endPlayfieldInit's own place for it, right after the field
+                 * is laid out (main.asm.txt:3536-3546). */
+                tengen_apply_handicap(&g_session.game, TENGEN_PLAYER_1, handicap[0]);
                 g_mix_step = 0;      /* every game opens on the same tune */
                 g_shown_level = 0xFF;
                 g_shown_piece = TT_NONE;
@@ -2268,7 +2343,7 @@ int main(void) {
                 continue;
             }
             vsync();
-            draw_level_select(start_level, g_music);
+            draw_level_select(start_level, g_music, handicap);
             audio_frame();
             continue;
         }
@@ -2324,6 +2399,13 @@ int main(void) {
                 g_music = lobby.music < MUSIC_UNLOCKED_COUNT ? lobby.music : 0;
                 tengen_link_start(&g_session, lobby.seed, lobby.start_level,
                                    link_is_master() ? TENGEN_PLAYER_1 : TENGEN_PLAYER_2);
+                /* Both consoles bury both boards from the one seed the lobby
+                 * delivered, so the two fields match without another word on
+                 * the wire. */
+                for (int i = 0; i < 2; i++)
+                    tengen_apply_handicap(&g_session.game, (TengenPlayerSlot)i,
+                                           lobby.handicap[i]);
+                g_mix_step = 0;
                 g_shown_level = 0xFF;
                 g_shown_piece = TT_NONE;
                 set_piece_palette(g_session.game.player[g_view].piece.current);

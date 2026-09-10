@@ -303,7 +303,11 @@ def game_state_address(rom_path, name="g_session"):
 
 
 def fill_rows(core, base, rows):
-    """Plant complete rows straight into the playfield."""
+    """Plant complete rows straight into the playfield.
+
+    `base` is the address of the FIELD, which is TengenGame's first member
+    today and need not stay that way — see game_offsets.
+    """
     for row in rows:
         for col in range(PF_W):
             value = CELL_WALL if col in (0, PF_W - 1) else CELL_BLOCK
@@ -353,7 +357,7 @@ def lineclear_check(rom_path, row_count):
     start_game(core)
 
     rows = list(range(PF_H - row_count, PF_H))
-    fill_rows(core, base, rows)
+    fill_rows(core, base + game_offsets(rom_path)["field"], rows)
     word = CLEAR_WORDS[row_count]
     print(f"filas {rows[0]}..{rows[-1]} completas -> deberia decir {word}")
 
@@ -448,9 +452,28 @@ CODE_LONG_BAR = "DOWN DOWN LEFT RIGHT LEFT RIGHT B A".split()
 # arm-none-eabi with the EABI's default -fshort-enums, so a TengenTetromino is
 # one byte; a mismatch would show up immediately as nonsense readings, which
 # the checks below would catch.
-OFF_CURRENT = 488
-OFF_Y = 492
-OFF_LEVEL = 504
+# THE ELF KNOWS THE OFFSETS, not this file. They used to be constants here and
+# a single new field in TengenGame moved all of them, which showed up as three
+# unrelated cheat-code checks failing. gba/main.c exports kGameProbe; this
+# reads it, the way the audio checks read kNes6502Probe.
+_GAME_PROBE_CACHE = {}
+
+
+def game_offsets(rom_path):
+    """Byte offsets into TengenGame, read out of the built ELF."""
+    if rom_path not in _GAME_PROBE_CACHE:
+        addr, why = game_state_address(rom_path, "kGameProbe")
+        if addr is None:
+            raise RuntimeError(why)
+        core, screen = load(rom_path)   # `screen` must stay alive; see load()
+        field, player, stride, cur, y, level, stats = (
+            core.memory.u16[addr + i * 2] for i in range(7))
+        _GAME_PROBE_CACHE[rom_path] = {
+            "field": field, "player": player, "stride": stride,
+            "current": player + cur, "y": player + y,
+            "level": player + level, "stats": player + stats,
+        }
+    return _GAME_PROBE_CACHE[rom_path]
 
 
 def pause_box(core, row):
@@ -467,6 +490,8 @@ def pause_check(rom_path):
     core, screen = load(rom_path)   # `screen` must stay alive; see load()
     start_game(core)
     m = core.memory
+    off = game_offsets(rom_path)
+    OFF_Y, OFF_LEVEL, OFF_CURRENT = off["y"], off["level"], off["current"]
     failures = []
 
     def tap(name):
@@ -744,7 +769,7 @@ def audio_check(rom_path):
     else:
         core.reset()
         start_game(core)
-        piece_y = game_base + 480 + 8 + 4      # player[0].piece.y
+        piece_y = game_base + game_offsets(rom_path)["y"]
         seen_y = []
         for _ in range(400):
             core.run_frame()
@@ -1049,6 +1074,63 @@ MUSIC_ROW = 15                  # where draw_level_select writes the tune's name
 # PIXELS in both modes? It reads them off the screen rather than off the map,
 # because a matching map with a mismatched palette bank would still look wrong.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# THE STARTING HANDICAP reaches the board.
+#
+# The rule itself has its own host tests; this asks the other half of the
+# question — that the menu row is there, that a shoulder button moves it, and
+# that what it says is what the playfield comes up buried under.
+# ---------------------------------------------------------------------------
+HANDICAP_ROW = 13
+
+def handicap_check(rom_path):
+    base, why = game_state_address(rom_path)
+    if base is None:
+        print(f"SALTADO: {why}")
+        return 0
+    failures = []
+    for steps, expect_rows in ((0, 0), (1, 3), (3, 9)):
+        core, screen = load(rom_path)
+        run(core, 20)
+        press_start(core); run(core, 10)      # title -> game select
+        press_start(core); run(core, 10)      # -> level select
+        for _ in range(steps):
+            core.set_keys(KEYS["L"]); run(core, 4); core.set_keys(); run(core, 8)
+        row = tilemap_text(core, HANDICAP_ROW)
+        if str(steps) not in row:
+            failures.append(f"la fila de HANDICAP no dice {steps}: {row!r}")
+        press_start(core); run(core, 40)      # into the game
+        # Count the rows of the playfield that came up with anything in them.
+        filled = 0
+        field = base + game_offsets(rom_path)["field"]
+        for y in range(20):
+            if any(core.memory.u8[field + y * PF_W + c] for c in range(1, 11)):
+                filled += 1
+        if filled != expect_rows:
+            failures.append(f"handicap {steps}: el campo empieza con {filled} "
+                             f"filas ocupadas, no {expect_rows}")
+        elif expect_rows:
+            # ...and none of them complete, or they would clear on frame one.
+            whole = 0
+            for y in range(20):
+                if all(core.memory.u8[field + y * PF_W + c] for c in range(1, 11)):
+                    whole += 1
+            if whole:
+                failures.append(f"handicap {steps}: {whole} filas llegan completas")
+            else:
+                print(f"  handicap {steps}: {filled} filas de basura, "
+                       "ninguna completa")
+        else:
+            print("  handicap 0: el campo empieza vacio")
+
+    for f in failures:
+        print("FALLA:", f)
+    if failures:
+        return 1
+    print("OK: el handicap entierra tres filas por paso y deja paso en todas.")
+    return 0
+
+
 def braid_check(rom_path):
     core, screen = load(rom_path)
     start_game(core)
@@ -1506,6 +1588,8 @@ def main():
                      help="check the title leaves no sprites or music behind")
     ap.add_argument("--braid", action="store_true",
                      help="check the braid keeps its weave in both HUD modes")
+    ap.add_argument("--handicap", action="store_true",
+                     help="check the starting handicap reaches the playfield")
     args = ap.parse_args()
 
     if args.selftest:
@@ -1530,6 +1614,8 @@ def main():
         sys.exit(leaving_title_check(args.rom))
     if args.braid:
         sys.exit(braid_check(args.rom))
+    if args.handicap:
+        sys.exit(handicap_check(args.rom))
 
     core, screen = load(args.rom)
     start_game(core)

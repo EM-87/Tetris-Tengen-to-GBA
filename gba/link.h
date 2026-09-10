@@ -127,7 +127,8 @@ void link_lobby_start_held(TengenLobby *lobby, uint16_t seed);
 
 /* The master's choice, once it has one; lets the handshake run on. */
 void link_lobby_release(TengenLobby *lobby, uint16_t seed,
-                         uint8_t start_level, uint8_t music);
+                         uint8_t start_level, uint8_t music,
+                         const uint8_t handicap[2]);
 
 /* One frame of it. Call once per frame until `ready` or `failed`. */
 void link_lobby_step(TengenLobby *lobby);
