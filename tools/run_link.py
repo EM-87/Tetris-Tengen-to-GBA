@@ -244,12 +244,10 @@ def main():
     if read_bytes(master, session_addr, game_size) != bytes(game_size):
         failures.append("el esclavo pudo arrancar la partida el solo")
 
-    # The cable put the master on the first setup screen already, so it walks
-    # the cartridge's remaining two — handicap, music — one START at a time,
-    # and the third releases the handshake.
-    for _ in range(3):
-        tap("START", who=0)
-        both(10)
+    # The cable put the master on LEVEL SETTINGS already; one START from
+    # there releases the handshake and both consoles go.
+    tap("START", who=0)
+    both(10)
 
     # The handshake is five stages of two transfers; give it far more than
     # that and then check it did not just time out.

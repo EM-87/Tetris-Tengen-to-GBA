@@ -154,20 +154,27 @@ def press_start(core):
     run(core, 6)
 
 
-def start_game(core):
+def start_game(core, tune=0):
     """Gets past the title and the selection screens into a solo game.
 
-    Five presses, matching the ROM's own shape: a title screen, then GAME
-    SELECT (whose first entry is 1 PLAYER, so START takes it), then the three
-    setup screens the cartridge walks one at a time — level, handicap, music
-    (processMenuInput, main.asm.txt:4711-4726) — and then play.
+    Three presses: a title screen, then GAME SELECT (whose first entry is
+    1 PLAYER, so START takes it), then LEVEL SETTINGS — one page carrying the
+    level, the handicap and the tune — and then play.
+
+    `tune` picks a tune on the way through. The port now opens on NO MUSIC
+    (musicSelectTable's own first entry), so a check that needs to HEAR
+    something has to ask for it: the cursor goes down to the MUSIC row and
+    RIGHT walks the list from there.
     """
     run(core, 8)
     press_start(core)   # title -> game select
-    press_start(core)   # game select (1 PLAYER) -> LEVEL
-    press_start(core)   # LEVEL -> HANDICAP
-    press_start(core)   # HANDICAP -> MUSIC
-    press_start(core)   # MUSIC -> play
+    press_start(core)   # game select (1 PLAYER) -> LEVEL SETTINGS
+    if tune:
+        for _ in range(2):      # cursor: LEVEL -> HANDICAP -> MUSIC
+            core.set_keys(KEYS["DOWN"]); run(core, 4); core.set_keys(); run(core, 8)
+        for _ in range(tune):   # NO MUSIC -> LOGINSKA -> ...
+            core.set_keys(KEYS["RIGHT"]); run(core, 4); core.set_keys(); run(core, 8)
+    press_start(core)   # LEVEL SETTINGS -> play
     run(core, 8)
 
 
@@ -469,12 +476,13 @@ def game_offsets(rom_path):
         if addr is None:
             raise RuntimeError(why)
         core, screen = load(rom_path)   # `screen` must stay alive; see load()
-        field, player, stride, cur, y, level, stats = (
-            core.memory.u16[addr + i * 2] for i in range(7))
+        (field, player, stride, cur, y, level, stats,
+         paused, held, nxt) = (core.memory.u16[addr + i * 2] for i in range(10))
         _GAME_PROBE_CACHE[rom_path] = {
             "field": field, "player": player, "stride": stride,
             "current": player + cur, "y": player + y,
             "level": player + level, "stats": player + stats,
+            "paused": paused, "held": player + held, "next": player + nxt,
         }
     return _GAME_PROBE_CACHE[rom_path]
 
@@ -640,7 +648,7 @@ def sound_state(core):
 
 def pause_audio_check(rom_path):
     core, screen = load(rom_path)    # `screen` must stay alive; see load()
-    start_game(core)
+    start_game(core, tune=1)         # LOGINSKA: a silent pause proves nothing
 
     # The music has to have got going, or a silent pause proves nothing.
     heard = set()
@@ -1060,19 +1068,22 @@ def skin_check(rom_path):
 #   * and the cartridge's engine is still running underneath, because the
 #     sound effects are still meant to be the ROM's.
 # ---------------------------------------------------------------------------
-MUSIC_ROW = 11                  # where draw_setup_page writes the tune's name
+MUSIC_ROW = 14                  # the MUSIC row of LEVEL SETTINGS
+LEVEL_ROW = 8                   # ...and the LEVEL one above it
+HANDICAP_ROW = 11
+HANDICAP_DEPTH_ROW = 12         # "BURIES n ROWS", only while the cursor is there
 
 
 def to_music_page(core, settle=10):
-    """Title -> GAME SELECT -> LEVEL -> HANDICAP -> MUSIC.
+    """Title -> GAME SELECT -> LEVEL SETTINGS, cursor on MUSIC.
 
-    The setup screens are the cartridge's three, walked one START at a time
-    (processMenuInput, main.asm.txt:4711-4726), so the tune's name is three
-    screens in from GAME SELECT rather than on it."""
+    One page carries all three settings; UP/DOWN/SELECT move the cursor
+    between them and LEFT/RIGHT change the one it is on, so reaching the tune
+    means two STARTs and then walking the cursor down to it."""
     press_start(core); run(core, settle)    # title -> game select
-    press_start(core); run(core, settle)    # -> LEVEL
-    press_start(core); run(core, settle)    # -> HANDICAP
-    press_start(core); run(core, settle)    # -> MUSIC
+    press_start(core); run(core, settle)    # -> LEVEL SETTINGS
+    for _ in range(2):                      # cursor: LEVEL -> HANDICAP -> MUSIC
+        core.set_keys(KEYS["DOWN"]); run(core, 4); core.set_keys(); run(core, settle)
 
 
 # ---------------------------------------------------------------------------
@@ -1111,11 +1122,6 @@ def to_music_page(core, settle=10):
 # question — that the menu row is there, that a shoulder button moves it, and
 # that what it says is what the playfield comes up buried under.
 # ---------------------------------------------------------------------------
-# The HANDICAP page's own two rows: the 0-4 strip and the line that says what
-# the chosen step actually buries.
-HANDICAP_ROW = 11
-HANDICAP_DEPTH_ROW = 13
-
 def handicap_check(rom_path):
     base, why = game_state_address(rom_path)
     if base is None:
@@ -1126,18 +1132,18 @@ def handicap_check(rom_path):
         core, screen = load(rom_path)
         run(core, 20)
         press_start(core); run(core, 10)      # title -> game select
-        press_start(core); run(core, 10)      # -> LEVEL
-        press_start(core); run(core, 10)      # -> HANDICAP
+        press_start(core); run(core, 10)      # -> LEVEL SETTINGS
+        # The cursor onto HANDICAP, which is what puts the depth line up.
+        core.set_keys(KEYS["DOWN"]); run(core, 4); core.set_keys(); run(core, 10)
         for _ in range(steps):
             core.set_keys(KEYS["L"]); run(core, 4); core.set_keys(); run(core, 8)
         row = tilemap_text(core, HANDICAP_ROW)
-        if "0 1 2 3 4" not in row:
-            failures.append(f"la fila de HANDICAP no trae la tira 0-4: {row!r}")
+        if "HANDICAP" not in row or str(steps) not in row:
+            failures.append(f"la fila de HANDICAP no dice {steps}: {row!r}")
         depth = tilemap_text(core, HANDICAP_DEPTH_ROW)
         if f"BURIES {expect_rows} ROWS" not in depth:
             failures.append(f"handicap {steps}: la pantalla dice {depth!r}, "
                              f"no BURIES {expect_rows} ROWS")
-        press_start(core); run(core, 10)      # -> MUSIC
         press_start(core); run(core, 40)      # into the game
         # Count the rows of the playfield that came up with anything in them.
         filled = 0
@@ -1219,6 +1225,79 @@ def panel_check(rom_path):
     if failures:
         return 1
     print("OK: SCORE respira igual que LINES, LEVEL y HIGH.")
+    return 0
+
+
+# Palette banks 12 and 13: the falling piece's colours and the preview's.
+# setPiecePalette (main.asm.txt:5338) indexes kRomPiecePalettes by PIECE ID,
+# so the two banks must differ exactly when the two pieces do.
+PAL_PIECE_BANK, PAL_NEXT_BANK = 12, 13
+
+
+def palette_bank(core, n):
+    return tuple(core.memory.u16[0x05000000 + (n * 16 + i) * 2] for i in (1, 2, 3))
+
+
+def next_palette_check(rom_path):
+    """The preview must be painted in the NEXT piece's colours.
+
+    Both were drawn out of bank 12, which setPiecePalette loads with the piece
+    IN PLAY, so the preview wore the falling piece's colours and changed under
+    you every time one locked. The bug is invisible whenever the two pieces
+    happen to share a palette, which is why this walks a whole game rather
+    than sampling once.
+    """
+    off = game_offsets(rom_path)
+    base, why = game_state_address(rom_path)
+    if base is None:
+        print(f"SALTADO: {why}")
+        return 0
+    core, screen = load(rom_path)   # `screen` must stay alive; see load()
+    start_game(core)
+    run(core, 20)
+
+    # What each piece id's colours ARE, learned from the bank the falling
+    # piece owns — so this never has to hard-code the table.
+    known = {}
+    failures = []
+    pairs = set()
+    was = None
+    for _ in range(2500):
+        core.set_keys(KEYS["DOWN"])
+        core.run_frame()
+        cur = core.memory.u8[base + off["current"]]
+        nxt = core.memory.u8[base + off["next"]]
+        stable, was = (cur, nxt) == was, (cur, nxt)
+        # mGBA hands the frame back between the port's step and its draw, so
+        # on the frame a piece locks the state has moved on and the palettes
+        # have not. Only a pair that survived a second frame is settled.
+        if not stable:
+            continue
+        if not (1 <= cur <= 7) or not (1 <= nxt <= 7):
+            continue
+        known[cur] = palette_bank(core, PAL_PIECE_BANK)
+        pairs.add((cur, nxt))
+        want = known.get(nxt)
+        if want is None:
+            continue        # this piece has not fallen yet; nothing to compare
+        got = palette_bank(core, PAL_NEXT_BANK)
+        if got != want:
+            failures.append(f"con {cur} cayendo y {nxt} en NEXT, la vista previa "
+                             f"usa {got} y no {want}")
+            break
+    core.set_keys()
+
+    mixed = sum(1 for c, n in pairs if known.get(c) != known.get(n))
+    if not mixed:
+        failures.append("no se vio ninguna pareja de piezas con paletas "
+                         "distintas: la prueba no prueba nada")
+    for f in failures:
+        print("FALLA:", f)
+    if failures:
+        return 1
+    print(f"  {len(pairs)} parejas pieza/siguiente, {mixed} de ellas con "
+           "paletas distintas")
+    print("OK: NEXT se pinta con los colores de la pieza que viene.")
     return 0
 
 
@@ -1343,11 +1422,11 @@ def leaving_title_check(rom_path):
         else:
             print(f"  al entrar en la seleccion: silencio y despues ${recent[1]:02X}")
 
-        # ...and the CURSOR that picks a tune is two pages further in, on the
-        # cartridge's own MUSIC screen.
-        press_start(core); run(core, 10)     # LEVEL -> HANDICAP
-        press_start(core); run(core, 10)     # -> MUSIC
-        core.set_keys(KEYS["DOWN"]); run(core, 4); core.set_keys(); run(core, 10)
+        # ...and the tune is picked with LEFT/RIGHT once the cursor is on the
+        # MUSIC row, two rows down.
+        for _ in range(2):
+            core.set_keys(KEYS["DOWN"]); run(core, 4); core.set_keys(); run(core, 10)
+        core.set_keys(KEYS["RIGHT"]); run(core, 4); core.set_keys(); run(core, 10)
         moved = last_two()
         if moved[0] != 0x08 or moved[1] == 0x08:
             failures.append("mover el cursor no toca la cancion nueva")
@@ -1372,10 +1451,7 @@ def leaving_title_check(rom_path):
         # request is how this passed for so long while the theme went on
         # playing. So this LISTENS for two seconds and then asks who holds the
         # voice slots, which is the question the volume could not answer.
-        # B walks the setup screens back one at a time, so leaving them takes
-        # one press per page: MUSIC -> HANDICAP -> LEVEL -> GAME SELECT.
-        for _ in range(3):
-            core.set_keys(KEYS["B"]); run(core, 4); core.set_keys(); run(core, 14)
+        core.set_keys(KEYS["B"]); run(core, 4); core.set_keys(); run(core, 14)
         heard = 0
         for _ in range(120):
             core.run_frame()
@@ -1419,7 +1495,7 @@ def leaving_title_check(rom_path):
             row = tilemap_text(core, MUSIC_ROW)
             if "NO MUSIC" not in row and "MUSIC MIX" not in row:
                 break
-            core.set_keys(KEYS["DOWN"]); run(core, 4); core.set_keys(); run(core, 12)
+            core.set_keys(KEYS["RIGHT"]); run(core, 4); core.set_keys(); run(core, 12)
         # THE TUNE HAS TO BE ALONE. This is the shape the bug actually had:
         # the theme kept its class-8 slots, the chosen tune could not take
         # them, and it played on to its END before the tune was heard.
@@ -1434,7 +1510,7 @@ def leaving_title_check(rom_path):
         for _ in range(8):
             if "NO MUSIC" in tilemap_text(core, MUSIC_ROW):
                 break
-            core.set_keys(KEYS["UP"]); run(core, 4); core.set_keys(); run(core, 12)
+            core.set_keys(KEYS["LEFT"]); run(core, 4); core.set_keys(); run(core, 12)
         run(core, 20)
         heard = 0
         for _ in range(120):
@@ -1492,15 +1568,15 @@ def leaving_title_check(rom_path):
 
     # On through the cartridge's three setup screens to the one SELECT is
     # being asked about.
-    tap(KEYS["START"]); tap(KEYS["START"])
-    if "MUSIC" not in tilemap_text(core, 8):
-        failures.append("START no recorre las tres pantallas de ajustes")
-    tune = tilemap_text(core, MUSIC_ROW)
+    # SELECT moves the CURSOR down the settings, the way DOWN does ($9FBC).
+    before = [core.memory.u16[SCREENBLOCK_ADDR + (r * 32 + 2) * 2]
+              for r in (8, 11, 14)]
     tap(KEYS["SELECT"])
-    if tilemap_text(core, MUSIC_ROW) == tune:
-        failures.append("SELECT no mueve el cursor de musica")
+    if [core.memory.u16[SCREENBLOCK_ADDR + (r * 32 + 2) * 2]
+        for r in (8, 11, 14)] == before:
+        failures.append("SELECT no mueve el cursor en LEVEL SETTINGS")
     else:
-        print("  SELECT mueve el cursor de musica")
+        print("  SELECT mueve el cursor en LEVEL SETTINGS")
 
     for f in failures:
         print(f"FALLA: {f}")
@@ -1531,7 +1607,7 @@ def korobeiniki_check(rom_path):
     seen = set()
     for _ in range(10):
         seen.add(tilemap_text(core, MUSIC_ROW))
-        tap(KEYS["DOWN"])
+        tap(KEYS["RIGHT"])
     if any("KOROBEINIKI" in row for row in seen):
         failures.append("la cancion escondida se ofrece sin haber metido el codigo")
     if len(seen) != 5:
@@ -1559,7 +1635,7 @@ def korobeiniki_check(rom_path):
     unlocked = set()
     for _ in range(14):
         unlocked.add(tilemap_text(core, MUSIC_ROW))
-        tap(KEYS["DOWN"])
+        tap(KEYS["RIGHT"])
     if len(unlocked) != 7:
         failures.append(f"tras el codigo el menu ofrece {len(unlocked)}, no 7")
     elif not any("MUSIC MIX" in row for row in unlocked):
@@ -1571,7 +1647,7 @@ def korobeiniki_check(rom_path):
     for _ in range(10):
         if "KOROBEINIKI" in tilemap_text(core, MUSIC_ROW):
             break
-        tap(KEYS["DOWN"])
+        tap(KEYS["RIGHT"])
     press_start(core)
     run(core, 10)
 
@@ -1718,6 +1794,8 @@ def main():
                      help="check the starting handicap reaches the playfield")
     ap.add_argument("--panel", action="store_true",
                      help="check the four counters share one headroom")
+    ap.add_argument("--next-palette", action="store_true",
+                     help="check NEXT wears the next piece's colours")
     args = ap.parse_args()
 
     if args.selftest:
@@ -1746,6 +1824,8 @@ def main():
         sys.exit(handicap_check(args.rom))
     if args.panel:
         sys.exit(panel_check(args.rom))
+    if args.next_palette:
+        sys.exit(next_palette_check(args.rom))
 
     core, screen = load(args.rom)
     start_game(core)

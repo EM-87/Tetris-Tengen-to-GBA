@@ -563,50 +563,121 @@ other identically. The HANDICAP screen carries the two values; over the cable
 they need a lobby stage of their own, because two handicaps of nought to four
 want six bits and CONFIG had four left.
 
-## The setup screens are THREE screens, and the ROM says how many of each
+## LEVEL SETTINGS: what the ROM's four menu screens are for, and why this
+## port has one
 
-The port used to print the level, the handicap and the tune on one page: nine
-rows of text with no gap anywhere in them. That was the port's invention.
-`processMenuInput` walks four separate gameStates, one setting each, and START
-is what moves between them (`main.asm.txt:4711-4726`):
+`processMenuInput` walks FOUR separate gameStates, one setting each, with
+START between them (`main.asm.txt:4711-4726`):
 
     GAMESTATE_GAME_TYPE    $FC --START--> initializeLevelSelectMenu   $FD
     GAMESTATE_LEVEL_SELECT $FD --START--> initializeHandicapMenu      $FE
     GAMESTATE_HANDICAP     $FE --START--> initializeMusicSelectMenu   $FF
     GAMESTATE_MUSIC_SELECT $FF --START--> initializeGameMode          (play)
 
-**How many choices each offers is a table, and it is one nobody had read.**
-The six bytes at `computerMoveSelectTable` (`$A0E3`, `main.asm.txt:4835`) are
-`$05,$0A,$0A,$05,$05,$05` and `LA048` reads them at `$A063` as the wrap-around
-limit: five game types, TEN levels for player 1 and ten for player 2, FIVE
-handicaps each — which independently confirms the nought-to-four range above —
-and five tunes, which is `musicSelectTable` exactly. The name is the
-disassembler's guess and it is wrong; only the bytes from `$A0EB` on are the
-COMPUTER player's.
+and its level list is a COLUMN of ten with a cursor arrow beside it:
+`p1levelSelectArrowPpuAddrs` (`$A0B5`) is ten PPU addresses one row apart at
+column 13, `p2levelSelectArrowPpuAddrs` (`$A0C9`) the same at column 17.
 
-**Where each arrow goes** is the companion table. `p1levelSelectArrowPpuAddrs`
-(`$A0B5`) is ten PPU addresses a row apart at column 13, and
-`p2levelSelectArrowPpuAddrs` (`$A0C9`) the same at column 17 — so the ROM's
-level screen is two VERTICAL lists of ten, one per player, with a cursor arrow
-beside the chosen one. `arrowPpuAddrOffsets` (`$A0DD`) says the handicap and
-music screens reuse the first five rows of those same columns. The four words
-the disassembly calls `computerMoveSelectTableOffsetBy18` (`$A0D9`) are simply
-the last two entries of the player-2 list, `$2291` and `$22B1`, continuing the
-column — not a table of its own.
+**This port tried both shapes and keeps neither.** One page with all three
+settings printed flat was nine rows of text with no gap in them, and it read
+as a wall. Copying the cartridge's four screens fixed the crowding and bought
+three near-empty pages plus a tune you chose two screens after you had started
+hearing it. The reason is that the ROM's shape answers a problem this port
+does not have: that console drew to a television across a room, where few
+large well-separated lines is the only thing that works, and a vertical list
+of ten is easier to read at three metres than a row of ten. A GBA is held at
+arm's length; its constraint is 240x160 of ROOM, not legibility at distance.
 
-**The arrows themselves are printable.** `menuArrowTables` (`$A0A5`,
-`main.asm.txt:4797`) is annotated "$3E = right arrow, $3F = left arrow", and
-this tile set is indexed straight off ASCII: `$3E` is `'>'` and `$3F` is
-`'?'`. So the port writes `'?'` and `'>'` and gets the cartridge's own two menu
-arrows, with nothing generated and nothing drawn by hand. Which arrow the ROM
-uses per screen is the same table: right for the player-1 column (it sits left
-of its digits) and left for player 2's, because the two lists are mirrored
-about the centre.
+So: **one page, three fields, a cursor.** UP/DOWN/SELECT move it, LEFT/RIGHT
+change the field it is on, START or A plays. `draw_level_settings`.
 
-The port's three screens are `draw_setup_page`. It keeps a horizontal strip
-rather than the ROM's vertical list — a ten-row column would fill the window
-edge to edge under the logo, which is the crowding it set out to cure — and
-LEFT/RIGHT works on it alongside the cartridge's UP/DOWN/SELECT.
+What IS kept from the cartridge is everything that is a rule rather than a
+layout, and reading that code turned up three things nobody had:
+
+**The choice counts are a table, and it is misnamed.** The six bytes at
+`computerMoveSelectTable` (`$A0E3`, `main.asm.txt:4835`) are
+`$05,$0A,$0A,$05,$05,$05`, read by `LA048` at `$A063` as the wrap-around
+limit: five game types, ten levels for player 1 and ten for player 2, FIVE
+handicaps each — which independently confirms the nought-to-four range traced
+from `garbageHeightData` — and five tunes, which is `musicSelectTable`
+exactly. Only the bytes from `$A0EB` on are the COMPUTER player's. Likewise
+the four words at `$A0D9` the disassembly calls
+`computerMoveSelectTableOffsetBy18` are the last two entries of the player-2
+arrow list, `$2291` and `$22B1`, continuing its column — not a table at all.
+
+**SELECT is a cursor button.** `$9FBC` and `$9FED` both mask
+`BUTTON_UP+BUTTON_DOWN+BUTTON_SELECT`, and inside `LA048` the add is
+carry-set unless UP is held, so SELECT moves the cursor the way DOWN does.
+
+**The cartridge's two menu arrows are printable.** `menuArrowTables`
+(`$A0A5`, `main.asm.txt:4797`) is annotated "$3E = right arrow, $3F = left
+arrow", and this tile set is indexed straight off ASCII: `$3E` is `'>'` and
+`$3F` is `'?'`. So writing those two characters prints the ROM's own arrows,
+with nothing generated and nothing drawn by hand. Which arrow per screen is
+the same table: right for the player-1 column (it sits left of its digits),
+left for player 2's, because the two lists are mirrored about the centre.
+
+**What it does NOT have is parentheses.** "HANDICAP (L-R TO SET)" cannot be
+written: `$28` and `$29`, where ASCII puts `(` and `)`, hold pieces of the
+game's border art here, and printing them drops two blocks of border into the
+middle of the label. What parentheses were wanted for is separating a note
+from its label, and a PALETTE does that at least as well — bank 2's first
+colour is the menu's pale cyan `$31` against bank 3's white — so the note is
+drawn in it instead. `BANK_NOTE`.
+
+## The level-up show, and who gets to see it
+
+The cartridge's interlude sends a troupe out onto a stage that takes the whole
+right-hand column. In this port that column is the TETRIS banner's, so the
+show can only be had by giving up the piece histogram — and switching HUD
+modes to watch a dance is a silly thing to ask of a player.
+
+So the interlude happens in both HUD modes, with its own music and its own
+traced 32 seconds, and only the DRAWING differs:
+
+* **HUD BANNER** gets the cartridge's show: the stage, the ledges, and one to
+  six dancers by `L8D8B`'s count.
+* **HUD STATS** keeps its screen exactly as it was, and the one cossack
+  already standing in the left box dances it alone (`g_idle_show`), cycling
+  the pose table at the show's own eight-frame cadence.
+
+The troupe is what HUD BANNER is FOR. It is the harder way to play — no piece
+counts — and the six of them are what it pays back.
+
+**And he stops when the game does.** A cossack swaying behind the PAUSE plaque
+while the music is suspended was the one part of the screen that had not
+noticed the game had stopped; `paused` freezes him now, the same way a dead
+board does.
+
+## Two bugs that hid inside "it looks right"
+
+**The preview wore the falling piece's colours.** `setPiecePalette`
+(`main.asm.txt:5338`) indexes `kRomPiecePalettes` by PIECE ID and writes one
+palette; the port drew BOTH the falling piece and the NEXT preview out of that
+one bank, so the preview was painted in the colours of the piece already in
+play and changed colour under you every time one locked. On the cartridge the
+preview is not a sprite at all, so there was nothing to copy — a second bank
+(`PAL_NEXT_BANK`, 13) loaded from the same table by the next piece's id is the
+cheapest thing that is right. `make gba-check --next-palette` walks a whole
+game and compares the two banks against what each piece's colours turned out
+to be, so it cannot pass by accident on a pair that happens to match.
+
+**PAUSE did not stop MUSIC MIX.** `MUSIC_SUSPEND` silences the cartridge's
+engine only; Korobeiniki runs on the GBA's own PSG and has to be stopped
+alongside it. The test was `g_music == MUSIC_KOROBEINIKI`, which misses the
+case where the tune playing is Korobeiniki because the MIX is on its turn —
+and the mix OPENS on it, so it was every first level of every mixed game.
+`current_tune()` resolves the rotation first.
+
+## The fireworks burst over the frame, and that is the cartridge's doing
+
+Measured off the ROM's own `oamStaging` while it runs: every burst is a 48x48
+box, and across a title screen they are placed from x=16 to x=232 of the NES's
+256. The title's braid leaves an interior of roughly x=40..215, so the
+leftmost burst starts twenty-four pixels inside the border and the rightmost
+ends seventeen past it. They are sprites and nothing clips them, so they burst
+over the braid and onto the outer band of ingots. The port reproduces it
+because it RUNS `LA9CE` rather than reimplementing it.
 
 ## MUSIC MIX, and why it turns over at the level and not at the end of a tune
 

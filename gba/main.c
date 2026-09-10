@@ -223,6 +223,14 @@ static void set_offset_layer(int px) {
 #define PAL_TITLE_BASE 4   /* banks 4-7: bgPalette0 */
 #define PAL_MENU_BASE  8   /* banks 8-11: bgPalette1 */
 #define PAL_PIECE_BANK 12  /* the falling piece's own colours */
+/* AND THE PREVIEW NEEDS ITS OWN. Both were drawn out of bank 12, which holds
+ * whatever setPiecePalette last wrote — the piece IN PLAY — so the NEXT
+ * preview was painted in the colours of the piece already falling and changed
+ * colour under you every time one locked. On the cartridge the preview is not
+ * a sprite at all (see draw_next_piece), so there was nothing to copy here;
+ * a second bank, loaded from the same table by the NEXT piece's id, is the
+ * cheapest thing that is right. */
+#define PAL_NEXT_BANK  13
 
 /* The title screen has its own 256-tile set, uploaded above the game's so
  * both live in one charblock (512 tiles is exactly its 16KB). */
@@ -399,7 +407,7 @@ static uint16_t ascii_tile(char c) { return (uint16_t)(unsigned char)c; }
  * moves every one of these, and a Python constant that did not move would
  * quietly start reading a neighbour. Adding `garbage_rng` did exactly that
  * and the cheat-code check began failing three tests away from the change. */
-const uint16_t kGameProbe[9] = {
+const uint16_t kGameProbe[10] = {
     (uint16_t)offsetof(TengenGame, field),
     (uint16_t)offsetof(TengenGame, player),
     (uint16_t)sizeof(TengenPlayerState),
@@ -409,6 +417,7 @@ const uint16_t kGameProbe[9] = {
     (uint16_t)offsetof(TengenPlayerState, piece_stats),
     (uint16_t)offsetof(TengenGame, paused),
     (uint16_t)offsetof(TengenPlayerState, held_last_frame),
+    (uint16_t)offsetof(TengenPlayerState, piece.next),
 };
 
 static TengenLink g_session;
@@ -508,6 +517,8 @@ static void upload_palettes(void) {
     upload_palette_set(PAL_MENU_BASE, kRomPalette_bg_menu, MEM_PALETTE);
     vu16 *piece = MEM_PALETTE + PAL_PIECE_BANK * 16;
     piece[0] = nes_colour_to_gba(TENGEN_BACKDROP_INDEX);
+    vu16 *next = MEM_PALETTE + PAL_NEXT_BANK * 16;
+    next[0] = nes_colour_to_gba(TENGEN_BACKDROP_INDEX);
 }
 
 /* setPlayfieldPaletteFromLevel (main.asm.txt:5328) recolours the settled
@@ -522,11 +533,21 @@ static void set_field_palette_for_level(uint8_t level) {
 /* setPiecePalette (main.asm.txt:5338) indexes the same table by PIECE ID and
  * writes a sprite palette, so the falling piece carries its own colours while
  * everything settled shares the level's. */
-static void set_piece_palette(TengenTetromino piece) {
+static void set_bank_from_piece(int bank_index, TengenTetromino piece) {
     if (piece <= TT_NONE || piece >= TENGEN_TETROMINO_COUNT) return;
     const uint8_t *entry = kRomPiecePalettes[piece];
-    vu16 *bank = MEM_PALETTE + PAL_PIECE_BANK * 16;
+    vu16 *bank = MEM_PALETTE + bank_index * 16;
     for (int i = 0; i < 3; i++) bank[1 + i] = nes_colour_to_gba(entry[i]);
+}
+
+static void set_piece_palette(TengenTetromino piece) {
+    set_bank_from_piece(PAL_PIECE_BANK, piece);
+}
+
+/* The preview's, from the SAME table and the same rule — only indexed by the
+ * piece that is coming rather than the one that is here. */
+static void set_next_palette(TengenTetromino piece) {
+    set_bank_from_piece(PAL_NEXT_BANK, piece);
 }
 
 static void upload_title_tiles(void) {
@@ -682,6 +703,15 @@ static const uint8_t kIdlePoses[2] = { 0, 1 };
 static uint8_t g_idle_palette;
 static int g_dance_frames;      /* frames of the reaction still to play */
 static int g_dance_length;      /* ...and how many it started with */
+/* THE LEVEL-UP SHOW, DANCED ALONE. The cartridge's interlude sends a troupe
+ * out onto a stage that takes the whole right-hand column — which is the
+ * TETRIS banner's column, so it can only be had by giving up the statistics.
+ * In HUD STATS the interlude still happens, with its own music and its own
+ * traced 32 seconds, but the screen stays exactly where it was and the one
+ * cossack who is already standing there dances it by himself. The troupe is
+ * what HUD BANNER is FOR: it is the harder way to play, since it costs you
+ * the piece histogram, and the six of them are what it pays back. */
+static bool g_idle_show;
 
 static void hide_idle_cossack(void) {
     for (int i = 0; i < DANCER_SPRITES; i++)
@@ -703,7 +733,12 @@ static void idle_cossack_celebrate(int lines) {
 static void draw_idle_cossack(int elapsed, bool running,
                                int tx, int ty, int w, int h) {
     int pose;
-    if (g_dance_frames > 0) {
+    if (g_idle_show) {
+        /* Round and round the figure for as long as the show lasts, at the
+         * show's own eight-frame cadence. */
+        int steps = DANCER_POSE_COUNT - DANCE_FIRST_POSE;
+        pose = DANCE_FIRST_POSE + (elapsed / DANCE_POSE_FRAMES) % steps;
+    } else if (g_dance_frames > 0) {
         int done = (g_dance_length - g_dance_frames) / DANCE_POSE_FRAMES;
         pose = DANCE_FIRST_POSE + done;
         if (pose >= DANCER_POSE_COUNT) pose = DANCER_POSE_COUNT - 1;
@@ -977,6 +1012,7 @@ static void draw_next_piece(int tx, int ty) {
 
     TengenTetromino next = g_session.game.player[g_view].piece.next;
     if (next <= TT_NONE || next >= TENGEN_TETROMINO_COUNT) return;
+    set_next_palette(next);
 
     int first = NEXT_CELL_W, last = -1;
     for (int c = 0; c < 4; c++)
@@ -999,7 +1035,7 @@ static void draw_next_piece(int tx, int ty) {
             uint8_t tile = tengen_tile_id_for_cell(next, 0, occupied);
             occupied++;
             if (r >= 3) continue;
-            uint16_t entry = WITH_BANK(tile, PAL_PIECE_BANK);
+            uint16_t entry = WITH_BANK(tile, PAL_NEXT_BANK);
             if (offset_layer) set_stats_tile(tx + c + shift, ty + r, entry);
             else              set_map_tile(tx + c + shift, ty + r, entry);
         }
@@ -1012,13 +1048,22 @@ static void draw_next_piece(int tx, int ty) {
  * halves, and thirty columns cannot hold that AND two boxes wide enough to be
  * useful. So it is a choice the player makes: L+R together — the two buttons
  * a NES pad never had and this game therefore never uses — swaps the right
- * box between the piece histogram and the banner. */
-static bool g_show_banner;
+ * box between the piece histogram and the banner.
+ *
+ * IT STARTS ON THE BANNER, because that is the cartridge's own screen: the
+ * vertical TETRIS is what a player who has seen this game remembers of it,
+ * and the histogram is the thing you go and ask for. It is also the harder
+ * way to play — no piece counts — which is why the level-up troupe is
+ * reserved for it (see g_idle_show). */
+static bool g_show_banner = true;
 /* Frames the play screen has been up, for the idle cossack's slow sway. */
 static int g_idle_frame;
 /* True while the level-up show owns the right column; declared here because
  * the panel has to know not to put its own cossack up against the six. */
 static bool g_dancer_active;
+/* ...and its clock, for the same reason: in HUD STATS the panel's own cossack
+ * dances the show, and he has to keep the show's time. */
+static int g_dancer_elapsed;     /* frames since the show started, for the poses */
 
 /* The banner's own tiles and palettes, extracted on their own because the
  * reflow no longer carries NES columns 14-17. Eighteen rows, which is what
@@ -1249,16 +1294,26 @@ static void draw_panel(void) {
     if (g_show_banner) {
         draw_next_label_and_piece(BOX_L_TX, BOX_TOP_IN + 12, false, true);
         hide_idle_cossack();
-    } else if (g_dancer_active) {
+    } else if (g_dancer_active && g_show_banner) {
         /* The show has the real six of them out on the ledges. */
         hide_idle_cossack();
     } else {
         /* HUD STATS: one cossack where NEXT would be. See IDLE_OAM_BASE.
-         * A dead board freezes him — nothing to celebrate and nothing to
-         * wait for. */
-        bool alive = g_session.game.player[g_view].game_active;
-        draw_idle_cossack(g_idle_frame, alive,
+         *
+         * He stops for two things and they are the same thing — there is
+         * nothing to keep time to. A dead board freezes him where he stands,
+         * and so does PAUSE: a cossack swaying behind the plaque while the
+         * music is suspended is the one part of the screen that did not
+         * notice the game had stopped. */
+        bool alive = g_session.game.player[g_view].game_active &&
+                     !g_session.game.paused;
+        /* The interlude, danced solo: see g_idle_show. It runs off the show's
+         * own clock so it lasts exactly as long as the show does. */
+        g_idle_show = g_dancer_active;
+        draw_idle_cossack(g_idle_show ? (int)g_dancer_elapsed : g_idle_frame,
+                           alive || g_idle_show,
                            BOX_L_TX, BOX_TOP_IN + 12, BOX_IN, 4);
+        g_idle_show = false;
         if (alive) g_idle_frame++;
     }
 
@@ -1439,6 +1494,7 @@ static const uint8_t kMixOrder[] = { MUSIC_KOROBEINIKI, 1, 2, 3, 4 };
 static uint8_t g_mix_step;
 
 static uint8_t mix_tune(void) { return kMixOrder[g_mix_step % MIX_COUNT]; }
+
 
 static uint8_t music_choices(void) {
     return (uint8_t)(g_music_unlocked ? MUSIC_UNLOCKED_COUNT : MUSIC_COUNT);
@@ -2012,46 +2068,60 @@ static void draw_link_wait(const TengenLobby *lobby, int elapsed) {
 }
 
 /* ----------------------------------------------------------------------- *
- * THE SETUP SCREENS, and why there are now three of them
+ * LEVEL SETTINGS — one page, three fields, a cursor
  *
- * The port used to print the level, the handicap and the tune on ONE page,
- * nine rows of text with nothing between them, and it read as a wall. That
- * was the port's invention, not the cartridge's: `processMenuInput` walks
- * FOUR separate gameStates, one setting each, and START is what moves between
- * them (main.asm.txt:4711-4726) —
+ * This screen has now been all three shapes, and the third is the one that is
+ * right for a GBA. Worth setting down why, because the middle one was an
+ * appeal to fidelity and fidelity is not what settles it.
+ *
+ * The cartridge walks FOUR separate gameStates, one setting each, with START
+ * between them (`processMenuInput`, main.asm.txt:4711-4726):
  *
  *   GAMESTATE_GAME_TYPE  $FC --START--> initializeLevelSelectMenu   $FD
  *   GAMESTATE_LEVEL_SELECT $FD --START--> initializeHandicapMenu    $FE
  *   GAMESTATE_HANDICAP   $FE --START--> initializeMusicSelectMenu   $FF
  *   GAMESTATE_MUSIC_SELECT $FF --START--> initializeGameMode        (play)
  *
- * — so the crowding was cured by doing what the ROM does. GAME SELECT is
- * already its own screen here; these are the other three. Each gets the whole
- * window, which is why they can afford blank rows between the lines.
+ * and its level list is a COLUMN of ten with a cursor arrow beside it
+ * (`p1levelSelectArrowPpuAddrs`, $A0B5: ten PPU addresses one row apart at
+ * column 13, and p2's at column 17). Both of those are answers to a problem
+ * this port does not have. That console drew to a television watched from
+ * across a room: few, large, well-separated lines. This one is held at arm's
+ * length, and its problem is the opposite — 240x160, where the constraint is
+ * ROOM, not legibility at three metres. Copying the four screens gave three
+ * pages that were nearly empty and a tune you chose two screens after you
+ * started hearing it. So: one page, the three fields on it, a cursor.
  *
- * The count of choices on each is the cartridge's too: the six bytes at
- * `computerMoveSelectTable` ($A0E3, main.asm.txt:4835) are
- * `$05,$0A,$0A,$05,$05,$05` — five game types, ten levels for each player,
- * five handicaps for each player, five tunes — read as the wrap-around limit
- * by LA048 ($A063).
- *
- * THE ARROWS ARE THE CARTRIDGE'S OWN. `menuArrowTables` (main.asm.txt:4797)
- * documents "$3E = right arrow, $3F = left arrow", and this tile set is
- * indexed straight off ASCII: $3E is '>' and $3F is '?'. So writing '?' and
- * '>' prints the ROM's two menu arrows, not punctuation.
+ * What IS kept from the ROM is everything that is a rule rather than a
+ * layout. The choice counts come from the six bytes at
+ * `computerMoveSelectTable` ($A0E3, main.asm.txt:4835) —
+ * `$05,$0A,$0A,$05,$05,$05`, read by LA048 at $A063 as the wrap-around limit:
+ * five game types, ten levels for each player, five handicaps each, five
+ * tunes. SELECT moves the cursor the way DOWN does, which is LA048's
+ * carry-set add ($9FBC). And the cursor arrow is the cartridge's own glyph:
+ * `menuArrowTables` (main.asm.txt:4797) is annotated "$3E = right arrow,
+ * $3F = left arrow", and this tile set is indexed straight off ASCII, so
+ * writing '>' prints the ROM's arrow rather than punctuation.
  * ----------------------------------------------------------------------- */
 #define MENU_ARROW_L '?'   /* tile $3F — main.asm.txt:4797 */
 #define MENU_ARROW_R '>'   /* tile $3E */
 
-#define MENU_PAGE_LEVEL    0
-#define MENU_PAGE_HANDICAP 1
-#define MENU_PAGE_MUSIC    2
-#define MENU_PAGE_COUNT    3
+#define MENU_FIELD_LEVEL    0
+#define MENU_FIELD_HANDICAP 1
+#define MENU_FIELD_MUSIC    2
+#define MENU_FIELD_COUNT    3
 
-/* The rows a setup page may write to: everything under the TETRIS logo and
- * above the frame's bottom run. */
+/* The rows the page may write to: everything under the TETRIS logo and above
+ * the frame's bottom run. */
 #define MENU_BODY_TY 7
 #define MENU_BODY_H  11
+
+/* Three fields, three rows apart, so each has two blank rows to itself — the
+ * whole point of the exercise. */
+#define MENU_FIELD_TY(f) (8 + (f) * 3)
+#define MENU_CURSOR_TX MENU_IN_TX
+#define MENU_LABEL_TX  (MENU_IN_TX + 2)
+#define MENU_VALUE_END (MENU_IN_TX + MENU_IN_W - 1)   /* values right-align here */
 
 /* Appends a number with no leading zeroes. Returns the new length. */
 static unsigned append_number(char *row, unsigned n, unsigned value) {
@@ -2060,105 +2130,104 @@ static unsigned append_number(char *row, unsigned n, unsigned value) {
     return n;
 }
 
-/* Puts one already-centred cell back in another palette. `len` decides the
- * layer the same way draw_text_centred did, so this always lands on the row
- * that was actually drawn. */
-static void restamp_centred(int ty, unsigned len, unsigned index, char c,
-                             int bank) {
-    int tx = MENU_IN_TX + ((int)MENU_IN_W - (int)len) / 2 + (int)index;
-    uint16_t entry = WITH_BANK(ascii_tile(c), bank);
-    if (len & 1u) set_stats_tile(tx, ty, entry);
-    else          set_map_tile(tx, ty, entry);
-}
+/* THE CARTRIDGE HAS NO PARENTHESES. "HANDICAP (L-R TO SET)" was the ask and
+ * it cannot be written: $28 and $29 — where ASCII puts '(' and ')' — hold
+ * pieces of the game's own border art in this tile set, and printing them
+ * puts two blocks of border in the middle of the word. What parentheses were
+ * for, though, is separating a note from the label it hangs off, and a
+ * PALETTE does that at least as well: bank 2's first colour is the menu's
+ * pale cyan ($31) against bank 3's white, so the note reads as a note. */
+#define BANK_NOTE (PAL_MENU_BASE + 2)
 
-/* `0 1 2 ... n-1` spaced out, optionally between the ROM's arrows, with the
- * chosen one picked out. `prefix` labels the row when there are two of them. */
-static void draw_choice_row(int ty, const char *prefix, int count, int chosen,
-                             bool arrows) {
-    char row[40];
-    unsigned n = 0;
-    for (const char *p = prefix; *p; p++) row[n++] = *p;
-    if (arrows) { row[n++] = MENU_ARROW_L; row[n++] = ' '; }
-    unsigned first = n;
-    for (int i = 0; i < count; i++) {
-        row[n++] = (char)('0' + i);
-        if (i + 1 < count) row[n++] = ' ';
+/* One field: the cursor if it is the chosen one, the label with its note, and
+ * the value right-aligned against the far wall so the three values line up. */
+static void draw_field_row(int field, int chosen, const char *label,
+                            const char *note, const char *value) {
+    int ty = MENU_FIELD_TY(field);
+    clear_both(MENU_IN_TX, ty, MENU_IN_W, 1);
+    if (field == chosen)
+        set_map_tile(MENU_CURSOR_TX, ty,
+                      WITH_BANK(ascii_tile(MENU_ARROW_R), BANK_HILITE));
+    int tx = MENU_LABEL_TX;
+    for (int i = 0; label[i]; i++, tx++)
+        set_map_tile(tx, ty, WITH_BANK(ascii_tile(label[i]), PAL_MENU_BASE + 3));
+    if (note) {
+        tx++;
+        for (int i = 0; note[i]; i++, tx++)
+            set_map_tile(tx, ty, WITH_BANK(ascii_tile(note[i]), BANK_NOTE));
     }
-    if (arrows) { row[n++] = ' '; row[n++] = MENU_ARROW_R; }
-    row[n] = '\0';
-    draw_text_centred(ty, row, PAL_MENU_BASE + 3);
-    restamp_centred(ty, n, first + (unsigned)chosen * 2u,
-                     (char)('0' + chosen), BANK_HILITE);
+    int len = (int)text_len(value);
+    for (int i = 0; i < len; i++)
+        set_map_tile(MENU_VALUE_END - len + 1 + i, ty,
+                      WITH_BANK(ascii_tile(value[i]), BANK_HILITE));
 }
 
-/* A single value between the arrows: the value in the highlight palette, the
- * arrows in the dim one, so the row reads as "this is what changes". */
-static void draw_arrowed_value(int ty, const char *text) {
-    char row[40];
-    unsigned n = 0;
-    row[n++] = MENU_ARROW_L; row[n++] = ' ';
-    for (const char *p = text; *p; p++) row[n++] = *p;
-    row[n++] = ' '; row[n++] = MENU_ARROW_R;
-    row[n] = '\0';
-    draw_text_centred(ty, row, BANK_HILITE);
-    restamp_centred(ty, n, 0, MENU_ARROW_L, PAL_MENU_BASE + 3);
-    restamp_centred(ty, n, n - 1, MENU_ARROW_R, PAL_MENU_BASE + 3);
-}
-
-/* THE STARTING HANDICAP, the cartridge's own menuPlayer1Handicap /
- * menuPlayer2Handicap (main.asm.txt:3536-3546): how many three-row bands of
- * garbage a player starts buried under, nought to four. Saying the row count
- * out loud is the port's, and it is worth a line — "handicap 4" means nothing
- * until you know it is twelve rows of a twenty-row well. */
-static void draw_handicap_depth(int ty, const uint8_t handicap[2],
-                                 bool two_player) {
-    char row[40];
-    unsigned n = 0;
-    const char *lead = "BURIES ";
-    while (*lead) row[n++] = *lead++;
-    n = append_number(row, n, (unsigned)handicap[0] * TENGEN_HANDICAP_ROWS_PER_STEP);
-    if (two_player) {
-        const char *mid = " AND ";
-        while (*mid) row[n++] = *mid++;
-        n = append_number(row, n, (unsigned)handicap[1] * TENGEN_HANDICAP_ROWS_PER_STEP);
-    }
-    const char *tail = " ROWS";
-    while (*tail) row[n++] = *tail++;
-    row[n] = '\0';
-    draw_text_centred(ty, row, PAL_MENU_BASE + 3);
-}
-
-static void draw_setup_page(int page, uint8_t start_level, uint8_t music,
-                             const uint8_t handicap[2], bool two_player) {
+static void draw_level_settings(int chosen, uint8_t start_level, uint8_t music,
+                                 const uint8_t handicap[2], bool two_player) {
     draw_menu_frame();
     /* draw_menu_frame only repaints BG0; the offset layer keeps whatever the
-     * page before this one left on it. */
+     * screen before this one left on it. */
     clear_both(MENU_IN_TX, MENU_BODY_TY, MENU_IN_W, MENU_BODY_H);
 
-    if (page == MENU_PAGE_LEVEL) {
-        draw_text_centred(8, "LEVEL", PAL_MENU_BASE + 3);
-        draw_choice_row(11, "", START_LEVEL_COUNT, start_level, true);
-        draw_text_centred(16, "START TO GO ON", PAL_MENU_BASE + 3);
-    } else if (page == MENU_PAGE_HANDICAP) {
-        draw_text_centred(8, "HANDICAP", PAL_MENU_BASE + 3);
-        if (two_player) {
-            /* Two values, because that is what makes it a handicap rather
-             * than a difficulty setting. The shoulder on a player's side of
-             * the pad cycles that player's, and labelling each row with its
-             * button is what saves a line of instructions. */
-            draw_choice_row(10, "L  ", TENGEN_HANDICAP_MAX + 1, handicap[0], false);
-            draw_choice_row(12, "R  ", TENGEN_HANDICAP_MAX + 1, handicap[1], false);
-            draw_handicap_depth(14, handicap, true);
-        } else {
-            draw_choice_row(11, "", TENGEN_HANDICAP_MAX + 1, handicap[0], true);
-            draw_handicap_depth(13, handicap, false);
-        }
-        draw_text_centred(16, "START TO GO ON", PAL_MENU_BASE + 3);
-    } else {
-        draw_text_centred(8, "MUSIC", PAL_MENU_BASE + 3);
-        draw_arrowed_value(11, kMusicNames[music]);
-        draw_text_centred(16, "START TO PLAY", PAL_MENU_BASE + 3);
+    char value[16];
+    unsigned n;
+
+    n = append_number(value, 0, start_level);
+    value[n] = '\0';
+    draw_field_row(MENU_FIELD_LEVEL, chosen, "LEVEL", NULL, value);
+
+    /* THE STARTING HANDICAP, the cartridge's own menuPlayer1Handicap /
+     * menuPlayer2Handicap (main.asm.txt:3536-3546): how many three-row bands
+     * of garbage a player starts buried under, nought to four. The shoulder
+     * on a player's side of the pad sets that player's, which is what the
+     * parenthesis in the label is for — and in one player there is only one
+     * value, so both shoulders and the pad all reach it. */
+    n = append_number(value, 0, handicap[0]);
+    if (two_player) {
+        value[n++] = ' ';
+        n = append_number(value, n, handicap[1]);
     }
+    value[n] = '\0';
+    draw_field_row(MENU_FIELD_HANDICAP, chosen, "HANDICAP",
+                    two_player ? "L=1P R=2P" : "L-R TO SET", value);
+
+    draw_field_row(MENU_FIELD_MUSIC, chosen, "MUSIC", NULL, kMusicNames[music]);
+
+    /* What the handicap actually costs you, because "2" says nothing until
+     * you know it is two of the three-row bands garbageHeightData lays down.
+     * It only appears while the cursor is on it — the rest of the time the
+     * row is better empty. */
+    if (chosen == MENU_FIELD_HANDICAP) {
+        char row[32];
+        unsigned m = 0;
+        const char *lead = "BURIES ";
+        while (*lead) row[m++] = *lead++;
+        m = append_number(row, m, (unsigned)handicap[0] * TENGEN_HANDICAP_ROWS_PER_STEP);
+        if (two_player) {
+            const char *mid = " AND ";
+            while (*mid) row[m++] = *mid++;
+            m = append_number(row, m, (unsigned)handicap[1] * TENGEN_HANDICAP_ROWS_PER_STEP);
+        }
+        const char *tail = " ROWS";
+        while (*tail) row[m++] = *tail++;
+        row[m] = '\0';
+        draw_text_centred(MENU_FIELD_TY(MENU_FIELD_HANDICAP) + 1, row,
+                           PAL_MENU_BASE + 3);
+    }
+
+    {
+        /* "UP DOWN PICK  ← → SET", in the cartridge's arrows. */
+        char hint[32];
+        unsigned m = 0;
+        const char *a = "UP DOWN PICK  ";
+        while (*a) hint[m++] = *a++;
+        hint[m++] = MENU_ARROW_L; hint[m++] = ' '; hint[m++] = MENU_ARROW_R;
+        const char *b = " SET";
+        while (*b) hint[m++] = *b++;
+        hint[m] = '\0';
+        draw_text_centred(16, hint, BANK_NOTE);
+    }
+    draw_text_centred(17, "START TO PLAY", BANK_NOTE);
 }
 
 
@@ -2223,13 +2292,24 @@ static bool g_repaint;           /* the static screen needs putting back */
 #define FRONT_NOTHING     0xFF   /* not a screen's choice: "ask again" */
 static uint8_t g_front_tune = FRONT_NOTHING;
 
-static uint8_t g_music = 1;
+/* NO MUSIC to start with — musicSelectTable's own first entry
+ * (main.asm.txt:4741, "silence, loginska, bradinsky, karinka, troika") and
+ * the quieter thing to hand somebody a handheld with. Anything else means a
+ * tune starts playing the moment the settings screen comes up. */
+static uint8_t g_music = 0;
+
+/* WHAT IS ACTUALLY PLAYING, which is not always what is selected: MUSIC MIX
+ * is a rotation, not a tune, so anything that has to act on the tune itself —
+ * pausing the fifth one, say — has to resolve it first. */
+static uint8_t current_tune(void) {
+    return g_music == MUSIC_MIX ? mix_tune() : g_music;
+}
+
 /* The interlude's clock, which is the ROM's player1FallTimer: `active` while
  * the show is on, `timer` counting $7C..$FF at one step every sixteen frames.
  * See the note beside DANCER_TIMER_START for why it is shaped like this. */
 static uint8_t g_dancer_timer;
 static uint16_t g_dancer_tick;   /* stands in for frameCounterLow & $0F */
-static int g_dancer_elapsed;     /* frames since the show started, for the poses */
 static int g_dancer_cast = 1;    /* how many walk on; see tengen_dancer_count */
 static uint8_t g_shown_level = 0xFF;
 static TengenTetromino g_shown_piece = TT_NONE;
@@ -2447,8 +2527,14 @@ static bool solo_play_frame(uint8_t buttons, uint8_t pressed) {
                                                   : NES_MUSIC_RESUME);
             /* MUSIC_SUSPEND only silences the cartridge's engine. The fifth
              * tune has its own channels and has to be stopped and restarted
-             * with it, or PAUSE would leave it playing on its own. */
-            if (g_music == MUSIC_KOROBEINIKI) {
+             * with it, or PAUSE would leave it playing on its own.
+             *
+             * THE MIX COUNTS. Asking `g_music == MUSIC_KOROBEINIKI` misses the
+             * case where the tune playing is Korobeiniki because the MIX is on
+             * its turn — and the mix OPENS on it, so it was every first level
+             * of every mixed game: pause, and the fifth tune played on alone
+             * over the plaque. */
+            if (current_tune() == MUSIC_KOROBEINIKI) {
                 if (g_session.game.paused) korobeiniki_stop();
                 else korobeiniki_start();
             }
@@ -2547,10 +2633,8 @@ int main(void) {
     /* menuPlayer1Handicap / menuPlayer2Handicap ($04F3-$04F4). */
     uint8_t handicap[2] = { 0, 0 };
     uint8_t game_mode = GAME_1P;
-    /* Which of the cartridge's three setup screens is showing. It is a
-     * variable rather than three Screen values because they share every line
-     * of their input handling, the cable pump included. */
-    int menu_page = MENU_PAGE_LEVEL;
+    /* Which of the three settings the cursor is on. */
+    int menu_field = MENU_FIELD_LEVEL;
     int link_wait_frames = 0;
     uint8_t held_last = 0;
     bool sweeping = false;   /* true while the line-clear sweep owns the OAM */
@@ -2644,7 +2728,7 @@ int main(void) {
                     screen = SCREEN_LINK_WAIT;
                 } else {
                     screen = SCREEN_LEVEL_SELECT;
-                    menu_page = MENU_PAGE_LEVEL;
+                    menu_field = MENU_FIELD_LEVEL;
                 }
                 nes_audio_play(NES_SOUND_SCREEN_SWITCH);
                 vsync();
@@ -2674,38 +2758,47 @@ int main(void) {
             bool tap_l = pressed_shoulder(SHOULDER_L);
             bool tap_r = pressed_shoulder(SHOULDER_R);
 
-            /* WHAT THE STEP BUTTONS DO DEPENDS ON THE PAGE, which is the
-             * point of having pages. Up/down/select is the cartridge's own
-             * cursor (LA048, main.asm.txt:4742-4763: up subtracts one, down
-             * and select add one, and the count in computerMoveSelectTable
-             * wraps it); left/right does the same thing here because these
-             * rows are laid out across rather than down. */
-            bool back = (pressed & MENU_BACKWARD) || (pressed & TENGEN_BTN_LEFT);
-            bool fwd  = (pressed & (TENGEN_BTN_DOWN | TENGEN_BTN_SELECT)) ||
-                        (pressed & TENGEN_BTN_RIGHT);
-            bool moved = back || fwd;
+            /* UP/DOWN/SELECT MOVE THE CURSOR, LEFT/RIGHT CHANGE THE FIELD.
+             * SELECT moving it the way DOWN does is the cartridge's
+             * (LA048's carry-set add, $9FBC/$A063); the split between moving
+             * and setting is the port's, and it is what lets three settings
+             * share one page. */
+            if (pressed & TENGEN_BTN_UP)
+                menu_field = (menu_field + MENU_FIELD_COUNT - 1) % MENU_FIELD_COUNT;
+            if (pressed & (TENGEN_BTN_DOWN | TENGEN_BTN_SELECT))
+                menu_field = (menu_field + 1) % MENU_FIELD_COUNT;
 
-            if (menu_page == MENU_PAGE_LEVEL && moved) {
-                start_level = (uint8_t)((start_level + (back ? START_LEVEL_COUNT - 1 : 1))
-                                         % START_LEVEL_COUNT);
-            } else if (menu_page == MENU_PAGE_HANDICAP) {
-                /* One shoulder each, and only when they are NOT both down: the
-                 * chord is the fifth tune's, and a player reaching for it should
-                 * not be burying anybody on the way. In one player there is
-                 * only one value, so the pad sets it too. */
-                if (!chord && (tap_l || tap_r)) {
-                    int who = (tap_r && !tap_l && game_mode == GAME_2P) ? 1 : 0;
-                    handicap[who] = (uint8_t)((handicap[who] + 1) %
-                                               (TENGEN_HANDICAP_MAX + 1));
-                    moved = true;
-                } else if (moved && game_mode != GAME_2P) {
+            bool back = (pressed & TENGEN_BTN_LEFT) != 0;
+            bool moved = (pressed & (TENGEN_BTN_LEFT | TENGEN_BTN_RIGHT)) != 0;
+
+            if (moved) {
+                if (menu_field == MENU_FIELD_LEVEL) {
+                    start_level = (uint8_t)((start_level +
+                                              (back ? START_LEVEL_COUNT - 1 : 1))
+                                             % START_LEVEL_COUNT);
+                } else if (menu_field == MENU_FIELD_HANDICAP) {
+                    /* In two players the pad reaches player 1's; the shoulders
+                     * below are how player 2's is set, which is what the
+                     * label says. */
                     handicap[0] = (uint8_t)((handicap[0] +
                                               (back ? TENGEN_HANDICAP_MAX : 1)) %
                                              (TENGEN_HANDICAP_MAX + 1));
+                } else {
+                    g_music = (uint8_t)((g_music + (back ? music_choices() - 1 : 1))
+                                         % music_choices());
                 }
-            } else if (menu_page == MENU_PAGE_MUSIC && moved) {
-                g_music = (uint8_t)((g_music + (back ? music_choices() - 1 : 1))
-                                     % music_choices());
+            }
+
+            /* One shoulder each, and only when they are NOT both down: the
+             * chord is the fifth tune's, and a player reaching for it should
+             * not be burying anybody on the way. They work wherever the cursor
+             * is — that is the point of naming them in the label. */
+            if (!chord && (tap_l || tap_r)) {
+                int who = (tap_r && !tap_l && game_mode == GAME_2P) ? 1 : 0;
+                handicap[who] = (uint8_t)((handicap[who] + 1) %
+                                           (TENGEN_HANDICAP_MAX + 1));
+                menu_field = MENU_FIELD_HANDICAP;   /* show what moved */
+                moved = true;
             }
 
             if (!g_music_unlocked && chord) {
@@ -2714,9 +2807,9 @@ int main(void) {
                  * the fifth tune and the mix that plays all of them. */
                 g_music_unlocked = true;
                 g_music = MUSIC_KOROBEINIKI;
-                menu_page = MENU_PAGE_MUSIC;   /* show what was uncovered */
+                menu_field = MENU_FIELD_MUSIC;   /* show what was uncovered */
                 nes_audio_play(NES_SOUND_CHIRP);
-            } else if (moved) {
+            } else if (moved || (pressed & MENU_STEP)) {
                 nes_audio_play(NES_SOUND_MENU_SELECT);
             }
 
@@ -2725,37 +2818,26 @@ int main(void) {
              * GAMESTATE_MUSIC_SELECT (main.asm.txt:4694-4696), so you hear each
              * one as you pick it. front_music does nothing when the tune has
              * not changed, so this also settles the music on arrival — which
-             * is what stops the title theme here. */
+             * is what stops the title theme here, and what keeps the screen
+             * SILENT while NO MUSIC is the choice. */
             front_music(g_music);
 
             if (pressed & TENGEN_BTN_B) {
                 /* The cartridge has no back button at all — its menus are a
-                 * one-way chain with an idle timer — so B walking the pages
-                 * backwards is the port's, for the same reason A confirms. */
+                 * one-way chain with an idle timer — so B is the port's, for
+                 * the same reason A confirms. */
                 nes_audio_play(NES_SOUND_SCREEN_SWITCH);
-                if (menu_page > MENU_PAGE_LEVEL) {
-                    menu_page--;
-                } else {
-                    screen = SCREEN_GAME_SELECT;
-                    /* Backing out of a 2P choice drops the cable with it. */
-                    if (game_mode == GAME_2P) link_shutdown();
-                }
-                vsync();
-                audio_frame();
-                clear_screen();
-                continue;
-            }
-            if ((pressed & MENU_CONFIRM) && menu_page + 1 < MENU_PAGE_COUNT) {
-                /* START, and only START, advances — $A011 — except that A is
-                 * the port's second confirm everywhere else too. */
-                menu_page++;
-                nes_audio_play(NES_SOUND_SCREEN_SWITCH);
+                screen = SCREEN_GAME_SELECT;
+                /* Backing out of a 2P choice drops the cable with it. */
+                if (game_mode == GAME_2P) link_shutdown();
                 vsync();
                 audio_frame();
                 clear_screen();
                 continue;
             }
             if (pressed & MENU_CONFIRM) {
+                /* START, and only START, confirms on the cartridge ($A011);
+                 * A is the port's second confirm, as everywhere else here. */
                 uint16_t seed = (uint16_t)(seed_source.lo | (seed_source.hi << 8));
                 nes_audio_play(NES_SOUND_SCREEN_SWITCH);
 
@@ -2797,8 +2879,8 @@ int main(void) {
                 continue;
             }
             vsync();
-            draw_setup_page(menu_page, start_level, g_music, handicap,
-                             game_mode == GAME_2P);
+            draw_level_settings(menu_field, start_level, g_music, handicap,
+                                 game_mode == GAME_2P);
             audio_frame();
             continue;
         }
@@ -2821,7 +2903,7 @@ int main(void) {
              * other console went off and started the match alone. */
             if (lobby.hold && lobby.linked && link_is_master()) {
                 screen = SCREEN_LEVEL_SELECT;
-                menu_page = MENU_PAGE_LEVEL;
+                menu_field = MENU_FIELD_LEVEL;
                 nes_audio_play(NES_SOUND_SCREEN_SWITCH);
                 vsync();
                 audio_frame();
@@ -2939,6 +3021,11 @@ int main(void) {
                 tengen_clear_bonus_counts(&g_session.game);
                 draw_static_screen();
                 start_music(g_music);
+            } else if (!g_show_banner) {
+                /* HUD STATS keeps its screen. Nothing is cleared and nothing
+                 * has to be put back; the panel redraws every frame anyway,
+                 * and the cossack standing in it takes the show. */
+                draw_panel();
             } else {
                 /* The stage gets the WHOLE column, the way the cartridge's
                  * level-up blit gets the whole banner. Painting only the
