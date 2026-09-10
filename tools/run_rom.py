@@ -157,14 +157,17 @@ def press_start(core):
 def start_game(core):
     """Gets past the title and the selection screens into a solo game.
 
-    Three presses, matching the ROM's own shape: a title screen, then GAME
-    SELECT (whose first entry is 1 PLAYER, so START takes it), then the
-    level/music screen, then play.
+    Five presses, matching the ROM's own shape: a title screen, then GAME
+    SELECT (whose first entry is 1 PLAYER, so START takes it), then the three
+    setup screens the cartridge walks one at a time — level, handicap, music
+    (processMenuInput, main.asm.txt:4711-4726) — and then play.
     """
     run(core, 8)
     press_start(core)   # title -> game select
-    press_start(core)   # game select (1 PLAYER) -> level select
-    press_start(core)   # level select -> play
+    press_start(core)   # game select (1 PLAYER) -> LEVEL
+    press_start(core)   # LEVEL -> HANDICAP
+    press_start(core)   # HANDICAP -> MUSIC
+    press_start(core)   # MUSIC -> play
     run(core, 8)
 
 
@@ -1057,7 +1060,19 @@ def skin_check(rom_path):
 #   * and the cartridge's engine is still running underneath, because the
 #     sound effects are still meant to be the ROM's.
 # ---------------------------------------------------------------------------
-MUSIC_ROW = 15                  # where draw_level_select writes the tune's name
+MUSIC_ROW = 11                  # where draw_setup_page writes the tune's name
+
+
+def to_music_page(core, settle=10):
+    """Title -> GAME SELECT -> LEVEL -> HANDICAP -> MUSIC.
+
+    The setup screens are the cartridge's three, walked one START at a time
+    (processMenuInput, main.asm.txt:4711-4726), so the tune's name is three
+    screens in from GAME SELECT rather than on it."""
+    press_start(core); run(core, settle)    # title -> game select
+    press_start(core); run(core, settle)    # -> LEVEL
+    press_start(core); run(core, settle)    # -> HANDICAP
+    press_start(core); run(core, settle)    # -> MUSIC
 
 
 # ---------------------------------------------------------------------------
@@ -1096,7 +1111,10 @@ MUSIC_ROW = 15                  # where draw_level_select writes the tune's name
 # question — that the menu row is there, that a shoulder button moves it, and
 # that what it says is what the playfield comes up buried under.
 # ---------------------------------------------------------------------------
-HANDICAP_ROW = 13
+# The HANDICAP page's own two rows: the 0-4 strip and the line that says what
+# the chosen step actually buries.
+HANDICAP_ROW = 11
+HANDICAP_DEPTH_ROW = 13
 
 def handicap_check(rom_path):
     base, why = game_state_address(rom_path)
@@ -1108,12 +1126,18 @@ def handicap_check(rom_path):
         core, screen = load(rom_path)
         run(core, 20)
         press_start(core); run(core, 10)      # title -> game select
-        press_start(core); run(core, 10)      # -> level select
+        press_start(core); run(core, 10)      # -> LEVEL
+        press_start(core); run(core, 10)      # -> HANDICAP
         for _ in range(steps):
             core.set_keys(KEYS["L"]); run(core, 4); core.set_keys(); run(core, 8)
         row = tilemap_text(core, HANDICAP_ROW)
-        if str(steps) not in row:
-            failures.append(f"la fila de HANDICAP no dice {steps}: {row!r}")
+        if "0 1 2 3 4" not in row:
+            failures.append(f"la fila de HANDICAP no trae la tira 0-4: {row!r}")
+        depth = tilemap_text(core, HANDICAP_DEPTH_ROW)
+        if f"BURIES {expect_rows} ROWS" not in depth:
+            failures.append(f"handicap {steps}: la pantalla dice {depth!r}, "
+                             f"no BURIES {expect_rows} ROWS")
+        press_start(core); run(core, 10)      # -> MUSIC
         press_start(core); run(core, 40)      # into the game
         # Count the rows of the playfield that came up with anything in them.
         filled = 0
@@ -1143,6 +1167,58 @@ def handicap_check(rom_path):
     if failures:
         return 1
     print("OK: el handicap entierra tres filas por paso y deja paso en todas.")
+    return 0
+
+
+def panel_check(rom_path):
+    """The four counters must have the SAME headroom.
+
+    SCORE used to have one pixel where LINES, LEVEL and HIGH had three, and
+    the counters cannot simply be moved: they share BG0 with a playfield whose
+    160 pixels are the whole screen. They ride their own background now,
+    scrolled two pixels down (SCREENBLOCK_PANEL in gba/main.c), which is a
+    thing that shows up as pixels or not at all — so this counts them.
+    """
+    core, screen = load(rom_path)
+    start_game(core)
+    run(core, 40)
+    rows = pixels(screen)
+
+    # The left box's interior, in pixels: eight tiles from column 2.
+    def ink(y):
+        return sum(1 for p in rows[y][16:80] if p != (0, 0, 0))
+
+    floor = min(ink(y) for y in range(14, 116))
+    solid = [y for y in range(14, 116) if ink(y) >= 60]   # braid run, or a rule
+
+    # Each counter's headroom is the run of empty scanlines between whatever
+    # is above it — the braid for SCORE, a rule for the rest — and its label.
+    gaps = []
+    for y in range(14, 112):
+        if ink(y) < 60 and ink(y - 1) >= 60:
+            n = 0
+            while ink(y + n) <= floor:
+                n += 1
+            gaps.append((y, n))
+
+    failures = []
+    if len(gaps) != 4:
+        failures.append(f"se esperaban 4 contadores, se ven {len(gaps)}: {gaps}")
+    elif len({n for _, n in gaps}) != 1:
+        failures.append("los contadores no tienen el mismo hueco por arriba: "
+                         + ", ".join(f"y={y} -> {n}px" for y, n in gaps))
+    else:
+        print(f"  los cuatro contadores abren con {gaps[0][1]} pixeles por arriba "
+               f"(en y={', '.join(str(y) for y, _ in gaps)})")
+
+    if not solid:
+        failures.append("no se ve ni una regla en el panel")
+
+    for f in failures:
+        print("FALLA:", f)
+    if failures:
+        return 1
+    print("OK: SCORE respira igual que LINES, LEVEL y HIGH.")
     return 0
 
 
@@ -1254,7 +1330,7 @@ def leaving_title_check(rom_path):
             got = recent_tracks(1)
             return got[0] if got else 0
 
-        press_start(core)           # game select -> level select
+        press_start(core)           # game select -> LEVEL, the first setup page
         run(core, 12)
         # Arriving at the selection screen settles the music: silence, then
         # whatever the cursor shows.
@@ -1267,6 +1343,10 @@ def leaving_title_check(rom_path):
         else:
             print(f"  al entrar en la seleccion: silencio y despues ${recent[1]:02X}")
 
+        # ...and the CURSOR that picks a tune is two pages further in, on the
+        # cartridge's own MUSIC screen.
+        press_start(core); run(core, 10)     # LEVEL -> HANDICAP
+        press_start(core); run(core, 10)     # -> MUSIC
         core.set_keys(KEYS["DOWN"]); run(core, 4); core.set_keys(); run(core, 10)
         moved = last_two()
         if moved[0] != 0x08 or moved[1] == 0x08:
@@ -1292,7 +1372,10 @@ def leaving_title_check(rom_path):
         # request is how this passed for so long while the theme went on
         # playing. So this LISTENS for two seconds and then asks who holds the
         # voice slots, which is the question the volume could not answer.
-        core.set_keys(KEYS["B"]); run(core, 4); core.set_keys(); run(core, 14)
+        # B walks the setup screens back one at a time, so leaving them takes
+        # one press per page: MUSIC -> HANDICAP -> LEVEL -> GAME SELECT.
+        for _ in range(3):
+            core.set_keys(KEYS["B"]); run(core, 4); core.set_keys(); run(core, 14)
         heard = 0
         for _ in range(120):
             core.run_frame()
@@ -1329,8 +1412,7 @@ def leaving_title_check(rom_path):
         # one menu choice that must leave the engine suspended rather than
         # resumed — and it is where a resumed title theme used to surface,
         # since nothing came after it to take the speaker back.
-        press_start(core); run(core, 10)     # title -> game select
-        press_start(core); run(core, 12)     # -> level select
+        to_music_page(core, 12)
         # ...onto a tune that is a tune: NO MUSIC and MUSIC MIX are both quiet
         # on this screen by design, so neither can answer the next question.
         for _ in range(8):
@@ -1403,14 +1485,19 @@ def leaving_title_check(rom_path):
     # goes to the cable instead of the level screen.
     tap(KEYS["SELECT"])
     tap(KEYS["A"])
-    if "LEVEL SELECT" not in tilemap_text(core, 8):
+    if "LEVEL" not in tilemap_text(core, 8):
         failures.append("A no confirma en GAME SELECT")
     else:
         print("  A confirma, ademas de START")
 
-    tune = tilemap_text(core, 15)
+    # On through the cartridge's three setup screens to the one SELECT is
+    # being asked about.
+    tap(KEYS["START"]); tap(KEYS["START"])
+    if "MUSIC" not in tilemap_text(core, 8):
+        failures.append("START no recorre las tres pantallas de ajustes")
+    tune = tilemap_text(core, MUSIC_ROW)
     tap(KEYS["SELECT"])
-    if tilemap_text(core, 15) == tune:
+    if tilemap_text(core, MUSIC_ROW) == tune:
         failures.append("SELECT no mueve el cursor de musica")
     else:
         print("  SELECT mueve el cursor de musica")
@@ -1435,8 +1522,7 @@ def korobeiniki_check(rom_path):
         run(core, settle)
 
     run(core, 8)
-    press_start(core)               # title -> game select
-    press_start(core)               # game select -> level select
+    to_music_page(core, 8)
     run(core, 8)
 
     # Four tunes, and no fifth on offer.
@@ -1630,6 +1716,8 @@ def main():
                      help="check the braid keeps its weave in both HUD modes")
     ap.add_argument("--handicap", action="store_true",
                      help="check the starting handicap reaches the playfield")
+    ap.add_argument("--panel", action="store_true",
+                     help="check the four counters share one headroom")
     args = ap.parse_args()
 
     if args.selftest:
@@ -1656,6 +1744,8 @@ def main():
         sys.exit(braid_check(args.rom))
     if args.handicap:
         sys.exit(handicap_check(args.rom))
+    if args.panel:
+        sys.exit(panel_check(args.rom))
 
     core, screen = load(args.rom)
     start_game(core)

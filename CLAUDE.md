@@ -178,10 +178,25 @@ running ROM; only the side panels need reflowing).
 17. ~~The starting handicap~~ — done, `initHandicapGarbage` traced in full:
    three rows a step, each cell filled seven times in eight, and a guaranteed
    hole punched into the middle eight columns of any row that came out seven
-   or more full. Two values on the level screen (L for player 1, R for player
-   2), a lobby stage of their own on the cable, and the garbage drawn from a
-   per-game RNG so one seed buries both consoles identically.
-18. Still to do: **coop** — the core already models its 12-column field and
+   or more full. Two values on the HANDICAP screen (L for player 1, R for
+   player 2), a lobby stage of their own on the cable, and the garbage drawn
+   from a per-game RNG so one seed buries both consoles identically.
+18. ~~The setup screens~~ — done, and there are THREE of them because the
+   cartridge has three: `processMenuInput` walks LEVEL, HANDICAP and MUSIC as
+   separate gameStates with START between them. Cramming all three onto one
+   page was the port's invention and it read as a wall of text. The same
+   reading turned up the table that says how many choices each offers
+   (`computerMoveSelectTable`, misnamed — only the bytes from `$A0EB` are the
+   COMPUTER's) and the fact that the cartridge's two menu arrows are
+   PRINTABLE: its tile set is ASCII-indexed, so `'?'` and `'>'` are the left
+   and right arrows. See reference/NOTES.md.
+19. ~~A third background, for two pixels~~ — done. SCORE had one pixel of
+   headroom where the other three counters had three, and it could not be
+   fixed by moving anything: BG0 carries the pixel-exact playfield and the box
+   has no spare row. The counters ride screenblock 30 scrolled two pixels
+   down, with the offset layer following so the statistics stay level. The
+   braid and the banner stay on BG0. `make gba-check --panel` measures it.
+20. Still to do: **coop** — the core already models its 12-column field and
    its garbage, but a 12-wide playfield plus a two-tile frame is sixteen
    columns of the thirty, so it needs its own HUD layout rather than the
    `10 | 10 | 10` the other modes share, and a front end. And the **COMPUTER

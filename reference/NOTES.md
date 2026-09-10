@@ -559,9 +559,54 @@ no renderer change at all.
 
 In the port it is `tengen_apply_handicap`, drawing from a `garbage_rng` the
 game seeds alongside its piece RNG, so two consoles from one seed bury each
-other identically. The level screen carries the two values; over the cable
+other identically. The HANDICAP screen carries the two values; over the cable
 they need a lobby stage of their own, because two handicaps of nought to four
 want six bits and CONFIG had four left.
+
+## The setup screens are THREE screens, and the ROM says how many of each
+
+The port used to print the level, the handicap and the tune on one page: nine
+rows of text with no gap anywhere in them. That was the port's invention.
+`processMenuInput` walks four separate gameStates, one setting each, and START
+is what moves between them (`main.asm.txt:4711-4726`):
+
+    GAMESTATE_GAME_TYPE    $FC --START--> initializeLevelSelectMenu   $FD
+    GAMESTATE_LEVEL_SELECT $FD --START--> initializeHandicapMenu      $FE
+    GAMESTATE_HANDICAP     $FE --START--> initializeMusicSelectMenu   $FF
+    GAMESTATE_MUSIC_SELECT $FF --START--> initializeGameMode          (play)
+
+**How many choices each offers is a table, and it is one nobody had read.**
+The six bytes at `computerMoveSelectTable` (`$A0E3`, `main.asm.txt:4835`) are
+`$05,$0A,$0A,$05,$05,$05` and `LA048` reads them at `$A063` as the wrap-around
+limit: five game types, TEN levels for player 1 and ten for player 2, FIVE
+handicaps each — which independently confirms the nought-to-four range above —
+and five tunes, which is `musicSelectTable` exactly. The name is the
+disassembler's guess and it is wrong; only the bytes from `$A0EB` on are the
+COMPUTER player's.
+
+**Where each arrow goes** is the companion table. `p1levelSelectArrowPpuAddrs`
+(`$A0B5`) is ten PPU addresses a row apart at column 13, and
+`p2levelSelectArrowPpuAddrs` (`$A0C9`) the same at column 17 — so the ROM's
+level screen is two VERTICAL lists of ten, one per player, with a cursor arrow
+beside the chosen one. `arrowPpuAddrOffsets` (`$A0DD`) says the handicap and
+music screens reuse the first five rows of those same columns. The four words
+the disassembly calls `computerMoveSelectTableOffsetBy18` (`$A0D9`) are simply
+the last two entries of the player-2 list, `$2291` and `$22B1`, continuing the
+column — not a table of its own.
+
+**The arrows themselves are printable.** `menuArrowTables` (`$A0A5`,
+`main.asm.txt:4797`) is annotated "$3E = right arrow, $3F = left arrow", and
+this tile set is indexed straight off ASCII: `$3E` is `'>'` and `$3F` is
+`'?'`. So the port writes `'?'` and `'>'` and gets the cartridge's own two menu
+arrows, with nothing generated and nothing drawn by hand. Which arrow the ROM
+uses per screen is the same table: right for the player-1 column (it sits left
+of its digits) and left for player 2's, because the two lists are mirrored
+about the centre.
+
+The port's three screens are `draw_setup_page`. It keeps a horizontal strip
+rather than the ROM's vertical list — a ten-row column would fill the window
+edge to edge under the logo, which is the crowding it set out to cure — and
+LEFT/RIGHT works on it alongside the cartridge's UP/DOWN/SELECT.
 
 ## MUSIC MIX, and why it turns over at the level and not at the end of a tune
 
@@ -1141,6 +1186,37 @@ cleanly out of beats a centred one that it does not.
 
 The frame stays off the layer too: four pixels of braid sliding out from under
 the ingots is far more visible than four pixels of lettering ever were.
+
+### A THIRD background, for the counters' two pixels
+
+SCORE sat one pixel below the box's braid while LINES, LEVEL and HIGH each had
+three below their rule: a rule tile carries two blank pixels under its bar and
+the label glyphs one above their ink, and the top of the box gives neither.
+
+It cannot be fixed by moving anything on the layers that already exist:
+
+* **BG0 cannot scroll.** It carries the counters AND the playfield, and the
+  playfield's 160 pixels are the entire height of the screen with nothing
+  spare at either end. Scrolling it crops the board.
+* **The box has no spare row.** Four counters of three rows each fill rows
+  2-13 and the preview takes 14-17, which is the interior exactly.
+* **The offset layer is already three pixels right**, for the statistics, and
+  a scroll is per-layer, not per-tile — so the counters cannot borrow it
+  without going three pixels sideways with it.
+
+So the counters get their own map, screenblock 30, scrolled two pixels down
+(`SCREENBLOCK_PANEL` / `PANEL_SHIFT_PX`), and the offset layer rides down with
+them so the statistics and the odd-width previews stay level with the labels.
+The braid does not move: it is drawn on BG0 and stays there, and so does the
+TETRIS banner, which is art aligned to the screen rather than a counter.
+
+It is a switch rather than a second set of drawing functions — `g_panel_layer`
+is on for the length of `draw_panel` and `set_map_tile` reads it — because the
+panel is drawn with the same `draw_text`/`draw_number`/`draw_rule` the menus
+use, and those should not have to know which background they are writing to.
+
+`make gba-check --panel` counts the four gaps off the framebuffer and fails
+unless they are equal; they are three pixels each.
 
 ### Drawing the title once per visit, not once per frame
 

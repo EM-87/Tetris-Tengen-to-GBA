@@ -866,6 +866,36 @@ static void lobby_transfer(TengenLobby *master, TengenLobby *slave,
  * keeps echoing HELLO, every transfer succeeds, and neither end's give-up
  * counter moves — which this checks by holding for longer than the timeout
  * and then completing anyway. */
+static void test_the_button_that_starts_a_match_does_not_pause_it(void) {
+    /* Over the cable the buttons travel as raw LEVELS, a transfer behind, so
+     * a START still down when the match begins arrives at the core as a fresh
+     * press and pauses it on the spot. Seeding held_last_frame with
+     * everything-held is what stops that; this pins it. */
+    TengenLink link;
+    tengen_link_start(&link, 0xACE1, 0, TENGEN_PLAYER_1);
+    for (int i = 0; i < 2; i++) link.game.player[i].held_last_frame = 0xFF;
+
+    uint16_t remote = tengen_link_pack(TENGEN_BTN_START, 0);
+    for (int f = 0; f < 4; f++) {
+        uint16_t local = tengen_link_pack(TENGEN_BTN_START,
+                                           (uint8_t)(f & TENGEN_LINK_FRAME_MASK));
+        remote = tengen_link_pack(TENGEN_BTN_START,
+                                   (uint8_t)(f & TENGEN_LINK_FRAME_MASK));
+        CHECK(tengen_link_step(&link, tengen_link_buttons(local), remote, NULL));
+        CHECK(!link.game.paused);
+    }
+    /* ...and once it HAS been let go, Start still pauses, or the fix would
+     * have broken the thing it was protecting. */
+    for (int f = 4; f < 6; f++) {
+        uint16_t w = tengen_link_pack(0, (uint8_t)(f & TENGEN_LINK_FRAME_MASK));
+        CHECK(tengen_link_step(&link, tengen_link_buttons(w), w, NULL));
+    }
+    uint16_t press = tengen_link_pack(TENGEN_BTN_START,
+                                       (uint8_t)(6 & TENGEN_LINK_FRAME_MASK));
+    CHECK(tengen_link_step(&link, tengen_link_buttons(press), press, NULL));
+    CHECK(link.game.paused);
+}
+
 static void test_the_lobby_connects_first_and_the_master_chooses_after(void) {
     TengenLobby master, slave;
     tengen_lobby_start_held(&master, 0x0000);
@@ -1566,6 +1596,7 @@ int main(void) {
     test_random_play_never_tops_out_on_a_nearly_empty_board();
     test_two_linked_machines_stay_identical();
     test_a_lost_transfer_stops_the_link_rather_than_drifting();
+    test_the_button_that_starts_a_match_does_not_pause_it();
     test_the_lobby_connects_first_and_the_master_chooses_after();
     test_the_lobby_agrees_on_a_game_and_both_leave_together();
     test_the_lobby_survives_transfers_that_do_not_arrive();

@@ -70,6 +70,25 @@
 #define SCREENBLOCK_STATS 29
 #define STATS_SHIFT_PX 3
 
+/* A THIRD MAP, FOR TWO PIXELS — the counters' own.
+ *
+ * SCORE sat one pixel under the braid while LINES, LEVEL and HIGH each had
+ * three under their rule: a rule tile carries two blank pixels below its bar
+ * and the label glyphs one above their ink, and the box's top braid gives
+ * neither. "Baja todo un pixel para que Score tenga algo de espacio por
+ * arriba" is exactly right, and two is what makes the four gaps equal.
+ *
+ * It cannot be done by moving anything. The counters share BG0 with the
+ * PLAYFIELD, and the playfield's 160 pixels are the whole of the screen's
+ * height with nothing to give at either end — scrolling BG0 would crop the
+ * board, which is the one thing this port does not do. The box has no spare
+ * tile row either: four counters of three rows each fill rows 2 to 13 and the
+ * preview takes 14 to 17. So the counters get a layer of their own, scrolled
+ * two pixels down, for the same reason and at the same price as the
+ * statistics got theirs. The braid stays on BG0 and does not move. */
+#define SCREENBLOCK_PANEL 30
+#define PANEL_SHIFT_PX 2
+
 /* THE SAME LAYER, LENT TO THE TITLE, and the two words want different things.
  *
  * Nothing on this screen is centred where the tile grid says it is. Measured
@@ -380,7 +399,7 @@ static uint16_t ascii_tile(char c) { return (uint16_t)(unsigned char)c; }
  * moves every one of these, and a Python constant that did not move would
  * quietly start reading a neighbour. Adding `garbage_rng` did exactly that
  * and the cheat-code check began failing three tests away from the change. */
-const uint16_t kGameProbe[7] = {
+const uint16_t kGameProbe[9] = {
     (uint16_t)offsetof(TengenGame, field),
     (uint16_t)offsetof(TengenGame, player),
     (uint16_t)sizeof(TengenPlayerState),
@@ -388,6 +407,8 @@ const uint16_t kGameProbe[7] = {
     (uint16_t)offsetof(TengenPlayerState, piece.y),
     (uint16_t)offsetof(TengenPlayerState, level),
     (uint16_t)offsetof(TengenPlayerState, piece_stats),
+    (uint16_t)offsetof(TengenGame, paused),
+    (uint16_t)offsetof(TengenPlayerState, held_last_frame),
 };
 
 static TengenLink g_session;
@@ -638,19 +659,64 @@ static void draw_dancers(int elapsed, int count) {
 #define IDLE_POSE_FRAMES 48        /* a slow sway, not the show's eight */
 static const uint8_t kIdlePoses[2] = { 0, 1 };
 
+/* AND HE ANSWERS THE BOARD. A clear sets him dancing for as many poses as it
+ * was worth — six a line, so a single is a beat of it and a TETRIS is the
+ * whole figure — after which he settles back into the sway.
+ *
+ * WHICH poses is the port's choice and says so. The cartridge's dancers each
+ * follow a little program (`LB015`, main.asm.txt:6392-6499) and those programs
+ * are not traced, so there is no "the tetris dance" to copy. What is the
+ * cartridge's is every pose in it: the table's first two are the standing
+ * stance, and from the third on they are the figure, so the run below is the
+ * table read in its own order at the ROM's own eight-frame cadence. */
+#define DANCE_FIRST_POSE 2
+#define DANCE_POSES_PER_LINE 6
+#define DANCE_MAX_POSES (DANCE_POSES_PER_LINE * 4)   /* a tetris */
+#define DANCE_POSE_FRAMES DANCER_POSE_FRAMES         /* eight, the show's own */
+
+/* Four palettes, which is all the difference there is between the cartridge's
+ * six: they share one pose table and pick among spritePalette2's four with
+ * their own attribute bytes ($8E78). SELECT walks them. */
+#define IDLE_PALETTE_COUNT 4
+
+static uint8_t g_idle_palette;
+static int g_dance_frames;      /* frames of the reaction still to play */
+static int g_dance_length;      /* ...and how many it started with */
+
 static void hide_idle_cossack(void) {
     for (int i = 0; i < DANCER_SPRITES; i++)
         MEM_OAM[(IDLE_OAM_BASE + i) * 4] = OBJ_ATTR0_HIDDEN;
 }
 
-static void draw_idle_cossack(int elapsed, int tx, int ty, int w, int h) {
-    int pose = kIdlePoses[(elapsed / IDLE_POSE_FRAMES) & 1];
+/* Starts the reaction. `lines` is 1-4; anything else is ignored. */
+static void idle_cossack_celebrate(int lines) {
+    if (lines < 1) return;
+    if (lines > 4) lines = 4;
+    int poses = lines * DANCE_POSES_PER_LINE;
+    if (poses > DANCE_MAX_POSES) poses = DANCE_MAX_POSES;
+    g_dance_length = poses * DANCE_POSE_FRAMES;
+    g_dance_frames = g_dance_length;
+}
+
+/* `running` false freezes him where he stands — which is what a game over
+ * should look like from the wings. */
+static void draw_idle_cossack(int elapsed, bool running,
+                               int tx, int ty, int w, int h) {
+    int pose;
+    if (g_dance_frames > 0) {
+        int done = (g_dance_length - g_dance_frames) / DANCE_POSE_FRAMES;
+        pose = DANCE_FIRST_POSE + done;
+        if (pose >= DANCER_POSE_COUNT) pose = DANCER_POSE_COUNT - 1;
+        if (running) g_dance_frames--;
+    } else {
+        pose = kIdlePoses[(elapsed / IDLE_POSE_FRAMES) & 1];
+    }
     const uint8_t *tiles = kDancerPoses[pose];
     int x = tx * 8 + (w * 8 - 16) / 2;
     int y = ty * 8 + (h * 8 - 16) / 2;
     for (int s = 0; s < DANCER_SPRITES; s++)
         oam_set(IDLE_OAM_BASE + s, x + ((s & 1) ? 8 : 0), y + ((s & 2) ? 8 : 0),
-                 tiles[s], false, PAL_OBJ_DANCER + (kDancerAttr[0] & 3));
+                 tiles[s], false, PAL_OBJ_DANCER + g_idle_palette);
 }
 
 /* The puff of smoke crossing each completed row: five sprites in a row, the
@@ -675,14 +741,29 @@ static void draw_line_clear_sweep(void) {
     for (int i = used; i < IDLE_OAM_BASE; i++) MEM_OAM[i * 4] = OBJ_ATTR0_HIDDEN;
 }
 
+/* While this is on, everything that goes through set_map_tile lands on the
+ * counters' layer instead of the main one. It is a switch rather than a
+ * second set of drawing functions because the panel is drawn with the same
+ * draw_text / draw_number / draw_rule the menus use, and those should not
+ * have to know which background they are writing to. */
+static bool g_panel_layer;
+
 static void set_map_tile(int tx, int ty, uint16_t entry) {
     if (tx < 0 || tx >= MAP_W || ty < 0 || ty >= 32) return;
-    MEM_SCREENBLOCK(SCREENBLOCK)[ty * MAP_W + tx] = entry;
+    MEM_SCREENBLOCK(g_panel_layer ? SCREENBLOCK_PANEL : SCREENBLOCK)
+        [ty * MAP_W + tx] = entry;
 }
 
 static void clear_region(int tx, int ty, int w, int h) {
     for (int y = 0; y < h; y++)
         for (int x = 0; x < w; x++) set_map_tile(tx + x, ty + y, T_BLANK);
+}
+
+static void clear_panel_region(int tx, int ty, int w, int h) {
+    bool was = g_panel_layer;
+    g_panel_layer = true;
+    clear_region(tx, ty, w, h);
+    g_panel_layer = was;
 }
 
 /* The statistics layer. Tile 0 of the cartridge's set is transparent in every
@@ -884,6 +965,11 @@ static void draw_game_over(void) {
  * scrolled three pixels for its own reasons (see SCREENBLOCK_STATS) and puts
  * them half a pixel the other side of centre. No new layer, no new art, and
  * the even widths stay on the main one where they are already right. */
+/* True while the whole NEXT block is on the offset layer — see
+ * draw_next_label_and_piece. The preview's own half-tile choice defers to it:
+ * one layer cannot be in two places. */
+static bool g_next_all_offset;
+
 static void draw_next_piece(int tx, int ty) {
     clear_region(tx, ty, NEXT_CELL_W, 3);
     for (int y = 0; y < 3; y++)
@@ -902,7 +988,7 @@ static void draw_next_piece(int tx, int ty) {
     if (last < first) return;
     int width = last - first + 1;
     int shift = (NEXT_CELL_W - width) / 2 - first;
-    bool offset_layer = (width & 1) != 0;
+    bool offset_layer = g_next_all_offset || (width & 1) != 0;
 
     /* Drawn from the same orientation bitmap and tile table the game logic
      * uses, so the preview cannot drift out of sync with what spawns. */
@@ -1083,15 +1169,42 @@ static void draw_counter(int ty, int label_first, int label_count,
  * word and the piece are centred in the same eight columns the rules span
  * rather than measured off the indented content column, which is what left
  * them sitting left of centre in either box. */
-static void draw_next_label_and_piece(int tx, int ty, bool ruled) {
-    draw_label(tx + (BOX_IN - HUD_LABEL_NEXT_W) / 2, ty, HUD_LABEL_NEXT);
+/* NEXT, AND FOUR ROWS THAT WANT THREE.
+ *
+ * The block is a label (one row) over a piece (two), and in the left panel it
+ * lives in the four rows NEXT takes over when the banner does — twenty-four
+ * pixels of content in thirty-two, so on the tile grid it can only sit at the
+ * top with eight pixels of nothing under it. Centring it wants HALF A ROW, the
+ * same half-tile problem as everything else on this screen.
+ *
+ * In HUD BANNER the offset layer is free: the statistics are not drawn and
+ * the right panel is gone, so the whole block goes on it and the layer's
+ * vertical scroll supplies the four pixels. It keeps the layer's horizontal
+ * three as well, which is what the odd-width previews were already using, so
+ * the label is centred for that offset rather than the main layer's. */
+#define NEXT_BANNER_VOFS_PX 4
+
+static void draw_next_label_and_piece(int tx, int ty, bool ruled, bool offset) {
+    g_next_all_offset = offset;
+    int label_tx = tx + (BOX_IN - HUD_LABEL_NEXT_W) / 2;
+    for (int i = 0; i < HUD_LABEL_NEXT_W; i++) {
+        uint16_t entry = WITH_BANK(HUD_LABEL_TILE_BASE + 18 + i, BANK_LABEL);
+        if (offset) set_stats_tile(label_tx + i, ty, entry);
+        else        set_map_tile(label_tx + i, ty, entry);
+    }
     draw_next_piece(tx + (BOX_IN - NEXT_CELL_W) / 2, ty + 1);
+    g_next_all_offset = false;
     if (ruled) draw_rule(tx, ty + 4);
 }
 
 static void draw_panel(void) {
     const TengenPlayerState *p = &g_session.game.player[g_view];
     if (p->score > g_high_score) g_high_score = p->score;
+
+    /* Everything from here down is the panel's, so it goes on the panel's
+     * layer — the two exceptions, the braid and the banner, say so where they
+     * are drawn. See SCREENBLOCK_PANEL. */
+    g_panel_layer = true;
 
     draw_counter(ROW_SCORE, HUD_LABEL_SCORE, p->score, 6, 0);
     draw_counter(ROW_LINES, HUD_LABEL_LINES, p->lines, 4, 1);
@@ -1127,19 +1240,27 @@ static void draw_panel(void) {
      * only for five pieces of seven, which is why it looked like it depended
      * on when you pressed L+R. */
     clear_both(BOX_L_TX, BOX_TOP_IN + 12, BOX_IN, 4);
+    /* The offset layer carries the statistics and the odd-width previews, so
+     * it rides down with the counters; the banner's NEXT block wants four
+     * pixels more on top of that, and only while it is the one thing on the
+     * layer. */
+    REG_BG1VOFS = (uint16_t)(512 - PANEL_SHIFT_PX -
+                              (g_show_banner ? NEXT_BANNER_VOFS_PX : 0));
     if (g_show_banner) {
-        draw_next_label_and_piece(BOX_L_TX, BOX_TOP_IN + 12, false);
+        draw_next_label_and_piece(BOX_L_TX, BOX_TOP_IN + 12, false, true);
         hide_idle_cossack();
-    } else if (g_dancer_active || g_session.game.two_player) {
-        /* The show has the real six; a race has neither the room nor the
-         * cartridge's blessing. */
+    } else if (g_dancer_active) {
+        /* The show has the real six of them out on the ledges. */
         hide_idle_cossack();
     } else {
-        /* HUD STATS: one cossack standing where NEXT would be. See
-         * IDLE_OAM_BASE. */
-        draw_idle_cossack(g_idle_frame, BOX_L_TX, BOX_TOP_IN + 12, BOX_IN, 4);
+        /* HUD STATS: one cossack where NEXT would be. See IDLE_OAM_BASE.
+         * A dead board freezes him — nothing to celebrate and nothing to
+         * wait for. */
+        bool alive = g_session.game.player[g_view].game_active;
+        draw_idle_cossack(g_idle_frame, alive,
+                           BOX_L_TX, BOX_TOP_IN + 12, BOX_IN, 4);
+        if (alive) g_idle_frame++;
     }
-    g_idle_frame++;
 
     /* The right box: the banner, the statistics, or — in a race, where the
      * cartridge keeps no statistics either — nothing.
@@ -1153,19 +1274,36 @@ static void draw_panel(void) {
      * playfield itself, and the playfield keeps its frame whatever the HUD is
      * doing. The box comes back when the banner goes away, through g_repaint. */
     if (g_show_banner) {
+        /* THE BANNER IS ART, NOT A COUNTER: it goes on the main map, aligned
+         * to the screen, with the braid that frames the board. Both maps get
+         * wiped first — the panel's because the statistics box was there a
+         * frame ago, the main one because the box's own tiles were. */
+        g_panel_layer = false;
         clear_region(BOX_R_TX + 2, 0, BOX_W - 2, SCREEN_TH);
+        clear_panel_region(BOX_R_TX + 2, 0, BOX_W - 2, SCREEN_TH);
         clear_stats_layer();
         draw_field_braid(BOX_R_TX, kBraidLeft);
         draw_banner();
     } else if (!g_session.game.two_player) {
-        draw_next_label_and_piece(BOX_R_IN, ROW_NEXT, true);
+        draw_next_label_and_piece(BOX_R_IN, ROW_NEXT, true, false);
         draw_stats(p);
     } else {
+        /* A race keeps no piece histogram — the cartridge keeps none in 2P
+         * either — but the PREVIEW is not statistics, it is how you plan the
+         * next piece, and a player racing without one is playing a different
+         * game from the one at the other end of the cable. It stays. */
         clear_region(BOX_R_IN, BOX_TOP_IN, BOX_IN, BOX_BOT_IN - BOX_TOP_IN + 1);
         clear_stats_layer();
+        /* No rule under it: that line is what separates NEXT from the
+         * statistics, and there are none here for it to separate. */
+        draw_next_label_and_piece(BOX_R_IN, ROW_NEXT, false, false);
+        /* The rival topping out is the only news this box has left to carry,
+         * and it goes at the bottom of it, clear of the preview. */
         if (!g_session.game.player[g_view ^ 1].game_active)
-            draw_text(BOX_R_IN + 1, BOX_TOP_IN, "OUT", BANK_LABEL);
+            draw_text(BOX_R_IN + 2, BOX_BOT_IN - 1, "OUT", BANK_LABEL);
     }
+
+    g_panel_layer = false;
 }
 
 static void draw_field(void) {
@@ -1431,11 +1569,17 @@ static const char *const kGameNames[GAME_COUNT] = { "1 PLAYER", "2 PLAYER" };
 static bool g_title_dirty = true;
 
 static void clear_screen(void) {
+    bool was = g_panel_layer;
+    g_panel_layer = false;
     for (int ty = 0; ty < 32; ty++)
         for (int tx = 0; tx < MAP_W; tx++) {
             set_map_tile(tx, ty, T_BLANK);
             set_stats_tile(tx, ty, T_BLANK);
         }
+    /* ...and the counters' layer with them, or a menu reached from a game
+     * would have its panel still hanging over it. */
+    clear_panel_region(0, 0, MAP_W, 32);
+    g_panel_layer = was;
     g_title_dirty = true;
 }
 
@@ -1828,7 +1972,10 @@ static void draw_game_select(uint8_t choice) {
  * Two-by-two tiles like the rest of them, so he is drawn as four sprites, and
  * at double size so he is a figure rather than a speck. */
 #define GUEST_DANCER_X ((SCREEN_TW * 8) / 2 - 8)
-#define GUEST_DANCER_Y 92
+/* BELOW THE LINE THAT SAYS WHO YOU ARE, not through it. Row 11 is where
+ * "YOU ARE PLAYER 2" is written and the cossack is sixteen pixels tall, so
+ * he stands on rows 13-14 with a row of air between them. */
+#define GUEST_DANCER_Y (13 * 8)
 
 static void draw_guest_dancer(int elapsed) {
     int pose = (elapsed / DANCER_POSE_FRAMES) % DANCER_POSE_COUNT;
@@ -1843,88 +1990,175 @@ static void draw_guest_dancer(int elapsed) {
 
 static void draw_link_wait(const TengenLobby *lobby, int elapsed) {
     draw_menu_frame();
-    draw_text(11, 8, "LINK CABLE", PAL_MENU_BASE + 3);
+    draw_text_centred(8, "LINK CABLE", PAL_MENU_BASE + 3);
 
-    clear_region(4, 11, 22, 5);
+    clear_both(MENU_IN_TX, 11, MENU_IN_W, 5);
     if (lobby->failed) {
         oam_hide_all();
-        draw_text(9, 11, "NO CABLE FOUND", BANK_HILITE);
-        draw_text(8, 14, "B TO GO BACK", PAL_MENU_BASE + 3);
+        draw_text_centred(11, "NO CABLE FOUND", BANK_HILITE);
+        draw_text_centred(14, "B TO GO BACK", PAL_MENU_BASE + 3);
         return;
     }
     if (!link_connected()) {
         oam_hide_all();
-        draw_text(6, 11, "WAITING FOR PLAYER 2", PAL_MENU_BASE + 3);
-        draw_text(8, 14, "B TO GO BACK", PAL_MENU_BASE + 3);
+        draw_text_centred(11, "WAITING FOR PLAYER 2", PAL_MENU_BASE + 3);
+        draw_text_centred(14, "B TO GO BACK", PAL_MENU_BASE + 3);
         return;
     }
     /* Connected. The master has gone off to choose; this console is the guest,
      * so it says who it is and lets the cossack do the waiting. */
-    draw_text(9, 11, "YOU ARE PLAYER 2", BANK_HILITE);
+    draw_text_centred(11, "YOU ARE PLAYER 2", BANK_HILITE);
     draw_guest_dancer(elapsed);
 }
 
-static void draw_level_select(uint8_t start_level, uint8_t music,
-                               const uint8_t handicap[2]) {
+/* ----------------------------------------------------------------------- *
+ * THE SETUP SCREENS, and why there are now three of them
+ *
+ * The port used to print the level, the handicap and the tune on ONE page,
+ * nine rows of text with nothing between them, and it read as a wall. That
+ * was the port's invention, not the cartridge's: `processMenuInput` walks
+ * FOUR separate gameStates, one setting each, and START is what moves between
+ * them (main.asm.txt:4711-4726) —
+ *
+ *   GAMESTATE_GAME_TYPE  $FC --START--> initializeLevelSelectMenu   $FD
+ *   GAMESTATE_LEVEL_SELECT $FD --START--> initializeHandicapMenu    $FE
+ *   GAMESTATE_HANDICAP   $FE --START--> initializeMusicSelectMenu   $FF
+ *   GAMESTATE_MUSIC_SELECT $FF --START--> initializeGameMode        (play)
+ *
+ * — so the crowding was cured by doing what the ROM does. GAME SELECT is
+ * already its own screen here; these are the other three. Each gets the whole
+ * window, which is why they can afford blank rows between the lines.
+ *
+ * The count of choices on each is the cartridge's too: the six bytes at
+ * `computerMoveSelectTable` ($A0E3, main.asm.txt:4835) are
+ * `$05,$0A,$0A,$05,$05,$05` — five game types, ten levels for each player,
+ * five handicaps for each player, five tunes — read as the wrap-around limit
+ * by LA048 ($A063).
+ *
+ * THE ARROWS ARE THE CARTRIDGE'S OWN. `menuArrowTables` (main.asm.txt:4797)
+ * documents "$3E = right arrow, $3F = left arrow", and this tile set is
+ * indexed straight off ASCII: $3E is '>' and $3F is '?'. So writing '?' and
+ * '>' prints the ROM's two menu arrows, not punctuation.
+ * ----------------------------------------------------------------------- */
+#define MENU_ARROW_L '?'   /* tile $3F — main.asm.txt:4797 */
+#define MENU_ARROW_R '>'   /* tile $3E */
+
+#define MENU_PAGE_LEVEL    0
+#define MENU_PAGE_HANDICAP 1
+#define MENU_PAGE_MUSIC    2
+#define MENU_PAGE_COUNT    3
+
+/* The rows a setup page may write to: everything under the TETRIS logo and
+ * above the frame's bottom run. */
+#define MENU_BODY_TY 7
+#define MENU_BODY_H  11
+
+/* Appends a number with no leading zeroes. Returns the new length. */
+static unsigned append_number(char *row, unsigned n, unsigned value) {
+    if (value >= 10) row[n++] = (char)('0' + value / 10);
+    row[n++] = (char)('0' + value % 10);
+    return n;
+}
+
+/* Puts one already-centred cell back in another palette. `len` decides the
+ * layer the same way draw_text_centred did, so this always lands on the row
+ * that was actually drawn. */
+static void restamp_centred(int ty, unsigned len, unsigned index, char c,
+                             int bank) {
+    int tx = MENU_IN_TX + ((int)MENU_IN_W - (int)len) / 2 + (int)index;
+    uint16_t entry = WITH_BANK(ascii_tile(c), bank);
+    if (len & 1u) set_stats_tile(tx, ty, entry);
+    else          set_map_tile(tx, ty, entry);
+}
+
+/* `0 1 2 ... n-1` spaced out, optionally between the ROM's arrows, with the
+ * chosen one picked out. `prefix` labels the row when there are two of them. */
+static void draw_choice_row(int ty, const char *prefix, int count, int chosen,
+                             bool arrows) {
+    char row[40];
+    unsigned n = 0;
+    for (const char *p = prefix; *p; p++) row[n++] = *p;
+    if (arrows) { row[n++] = MENU_ARROW_L; row[n++] = ' '; }
+    unsigned first = n;
+    for (int i = 0; i < count; i++) {
+        row[n++] = (char)('0' + i);
+        if (i + 1 < count) row[n++] = ' ';
+    }
+    if (arrows) { row[n++] = ' '; row[n++] = MENU_ARROW_R; }
+    row[n] = '\0';
+    draw_text_centred(ty, row, PAL_MENU_BASE + 3);
+    restamp_centred(ty, n, first + (unsigned)chosen * 2u,
+                     (char)('0' + chosen), BANK_HILITE);
+}
+
+/* A single value between the arrows: the value in the highlight palette, the
+ * arrows in the dim one, so the row reads as "this is what changes". */
+static void draw_arrowed_value(int ty, const char *text) {
+    char row[40];
+    unsigned n = 0;
+    row[n++] = MENU_ARROW_L; row[n++] = ' ';
+    for (const char *p = text; *p; p++) row[n++] = *p;
+    row[n++] = ' '; row[n++] = MENU_ARROW_R;
+    row[n] = '\0';
+    draw_text_centred(ty, row, BANK_HILITE);
+    restamp_centred(ty, n, 0, MENU_ARROW_L, PAL_MENU_BASE + 3);
+    restamp_centred(ty, n, n - 1, MENU_ARROW_R, PAL_MENU_BASE + 3);
+}
+
+/* THE STARTING HANDICAP, the cartridge's own menuPlayer1Handicap /
+ * menuPlayer2Handicap (main.asm.txt:3536-3546): how many three-row bands of
+ * garbage a player starts buried under, nought to four. Saying the row count
+ * out loud is the port's, and it is worth a line — "handicap 4" means nothing
+ * until you know it is twelve rows of a twenty-row well. */
+static void draw_handicap_depth(int ty, const uint8_t handicap[2],
+                                 bool two_player) {
+    char row[40];
+    unsigned n = 0;
+    const char *lead = "BURIES ";
+    while (*lead) row[n++] = *lead++;
+    n = append_number(row, n, (unsigned)handicap[0] * TENGEN_HANDICAP_ROWS_PER_STEP);
+    if (two_player) {
+        const char *mid = " AND ";
+        while (*mid) row[n++] = *mid++;
+        n = append_number(row, n, (unsigned)handicap[1] * TENGEN_HANDICAP_ROWS_PER_STEP);
+    }
+    const char *tail = " ROWS";
+    while (*tail) row[n++] = *tail++;
+    row[n] = '\0';
+    draw_text_centred(ty, row, PAL_MENU_BASE + 3);
+}
+
+static void draw_setup_page(int page, uint8_t start_level, uint8_t music,
+                             const uint8_t handicap[2], bool two_player) {
     draw_menu_frame();
+    /* draw_menu_frame only repaints BG0; the offset layer keeps whatever the
+     * page before this one left on it. */
+    clear_both(MENU_IN_TX, MENU_BODY_TY, MENU_IN_W, MENU_BODY_H);
 
-    /* Rows 8-14 of this window are the space the cartridge's own selection
-     * screens write into — its GAME SELECT list lives exactly there — so the
-     * port's selection goes in the same place rather than over the frame or
-     * the big TETRIS logo above it. */
-    draw_text_centred(8, "LEVEL SELECT", PAL_MENU_BASE + 3);
-    /* Ten digits at a pitch of two is nineteen cells — odd, so this row goes
-     * through the same centring as the words above and below it. The chosen
-     * level is picked out in a different palette, the way the ROM highlights
-     * a menu selection. */
-    {
-        char digits[START_LEVEL_COUNT * 2];
-        for (int level = 0; level < START_LEVEL_COUNT; level++) {
-            digits[level * 2] = (char)('0' + level);
-            if (level * 2 + 1 < (int)sizeof digits) digits[level * 2 + 1] = ' ';
-        }
-        digits[START_LEVEL_COUNT * 2 - 1] = '\0';
-        draw_text_centred(10, digits, PAL_MENU_BASE + 3);
-        /* ...and the chosen one again, in its own colour, on the layer the
-         * row just landed on. */
-        int tx = MENU_IN_TX + (MENU_IN_W - (START_LEVEL_COUNT * 2 - 1)) / 2;
-        set_stats_tile(tx + start_level * 2, 10,
-                        WITH_BANK(ascii_tile((char)('0' + start_level)),
-                                  BANK_HILITE));
-    }
-    draw_text_centred(11, "LEFT RIGHT TO SET", PAL_MENU_BASE + 3);
-
-    /* THE STARTING HANDICAP, the cartridge's own menuPlayer1Handicap /
-     * menuPlayer2Handicap (main.asm.txt:3536-3546) — how many three-row bands
-     * of garbage a player starts buried under, nought to four. Two values,
-     * because that is what makes it a handicap rather than a difficulty
-     * setting: the shoulder button on a player's side of the pad cycles that
-     * player's. In one-player there is only one to cycle and both do it. */
-    draw_text_centred(12, "HANDICAP", PAL_MENU_BASE + 3);
-    {
-        char row[24];
-        unsigned n = 0;
-        if (g_session.game.two_player) {
-            const char *lead = "L ";
-            while (*lead) row[n++] = *lead++;
-            row[n++] = (char)('0' + handicap[0]);
-            const char *mid = "  BURY  ";
-            while (*mid) row[n++] = *mid++;
-            row[n++] = (char)('0' + handicap[1]);
-            row[n++] = ' ';
-            row[n++] = 'R';
+    if (page == MENU_PAGE_LEVEL) {
+        draw_text_centred(8, "LEVEL", PAL_MENU_BASE + 3);
+        draw_choice_row(11, "", START_LEVEL_COUNT, start_level, true);
+        draw_text_centred(16, "START TO GO ON", PAL_MENU_BASE + 3);
+    } else if (page == MENU_PAGE_HANDICAP) {
+        draw_text_centred(8, "HANDICAP", PAL_MENU_BASE + 3);
+        if (two_player) {
+            /* Two values, because that is what makes it a handicap rather
+             * than a difficulty setting. The shoulder on a player's side of
+             * the pad cycles that player's, and labelling each row with its
+             * button is what saves a line of instructions. */
+            draw_choice_row(10, "L  ", TENGEN_HANDICAP_MAX + 1, handicap[0], false);
+            draw_choice_row(12, "R  ", TENGEN_HANDICAP_MAX + 1, handicap[1], false);
+            draw_handicap_depth(14, handicap, true);
         } else {
-            const char *lead = "L R TO SET  ";
-            while (*lead) row[n++] = *lead++;
-            row[n++] = (char)('0' + handicap[0]);
+            draw_choice_row(11, "", TENGEN_HANDICAP_MAX + 1, handicap[0], true);
+            draw_handicap_depth(13, handicap, false);
         }
-        row[n] = '\0';
-        draw_text_centred(13, row, PAL_MENU_BASE + 3);
+        draw_text_centred(16, "START TO GO ON", PAL_MENU_BASE + 3);
+    } else {
+        draw_text_centred(8, "MUSIC", PAL_MENU_BASE + 3);
+        draw_arrowed_value(11, kMusicNames[music]);
+        draw_text_centred(16, "START TO PLAY", PAL_MENU_BASE + 3);
     }
-
-    draw_text_centred(14, "MUSIC", PAL_MENU_BASE + 3);
-    draw_text_centred(15, kMusicNames[music], BANK_HILITE);
-    draw_text_centred(16, "UP DOWN TO PICK", PAL_MENU_BASE + 3);
 }
 
 
@@ -2025,6 +2259,14 @@ static void announce_step(TengenStepResult step) {
      * That is what a doubled tune sounds like. */
     if (step.lines_collapsed && !step.leveled_up)
         nes_audio_play(NES_SOUND_LINECLEAR);
+    /* THE COSSACK ANSWERS THE BOARD. Counted off the mask the core reports, so
+     * a clear that took four rows gets four times the figure. */
+    if (step.lines_collapsed) {
+        int rows = 0;
+        for (int i = 0; i < TENGEN_PF_HEIGHT; i++)
+            if (step.rows_cleared_mask & (1u << i)) rows++;
+        idle_cossack_celebrate(rows);
+    }
     if (step.leveled_up) {
         /* The cartridge's level-up music takes over; the fifth tune stands
          * down and start_music() puts it back when the dancers finish. */
@@ -2084,6 +2326,22 @@ static bool match_over(void) {
  * Returns false when the match is finished — either both boards are done, or
  * the link stopped and cannot be trusted to have kept the two simulations
  * together. */
+/* THE BUTTON THAT STARTED THE MATCH MUST NOT ALSO PAUSE IT.
+ *
+ * The core computes each player's fresh presses as `buttons & ~held_last`, and
+ * a new game starts with `held_last` at zero — so a START still physically
+ * down on the match's first frame reads as a press and pauses it on the spot.
+ * Solo never showed it because the front end's own edge detector had already
+ * eaten that press; over the cable the buttons travel as raw levels and arrive
+ * a transfer later, with nothing in between to eat anything.
+ *
+ * Pretending everything is already held is the fix: nothing can edge until it
+ * has been let go once. Both consoles do it at the same point of the same
+ * code, so the lockstep is untouched. */
+static void swallow_held_buttons(TengenGame *game) {
+    for (int i = 0; i < 2; i++) game->player[i].held_last_frame = 0xFF;
+}
+
 static bool link_play_frame(void) {
     /* The master starts one transfer per frame off its own vblank; the slave
      * has nothing to start. Either way the interrupt does the collecting. */
@@ -2273,13 +2531,26 @@ int main(void) {
                   BG_SCREENBLOCK(SCREENBLOCK_STATS) | BG_PRIORITY(0);
     set_offset_layer(STATS_SHIFT_PX);
     REG_BG1VOFS = 0;
-    REG_DISPCNT = DCNT_MODE0 | DCNT_BG0 | DCNT_BG1 | DCNT_OBJ | DCNT_OBJ_1D;
+    /* The counters' layer, two pixels below the tile grid and nothing else on
+     * it — so its scroll is set once and never touched again. It shares the
+     * offset layer's priority; the two never write the same cell, and where
+     * priorities tie the lower-numbered background wins in any case. */
+    REG_BG2CNT = BG_4BPP | BG_SIZE_32x32 | BG_CHARBLOCK(CHARBLOCK) |
+                  BG_SCREENBLOCK(SCREENBLOCK_PANEL) | BG_PRIORITY(0);
+    REG_BG2HOFS = 0;
+    REG_BG2VOFS = (uint16_t)(512 - PANEL_SHIFT_PX);
+    REG_DISPCNT = DCNT_MODE0 | DCNT_BG0 | DCNT_BG1 | DCNT_BG2 |
+                   DCNT_OBJ | DCNT_OBJ_1D;
 
     Screen screen = SCREEN_TITLE;
     uint8_t start_level = 0;
     /* menuPlayer1Handicap / menuPlayer2Handicap ($04F3-$04F4). */
     uint8_t handicap[2] = { 0, 0 };
     uint8_t game_mode = GAME_1P;
+    /* Which of the cartridge's three setup screens is showing. It is a
+     * variable rather than three Screen values because they share every line
+     * of their input handling, the cable pump included. */
+    int menu_page = MENU_PAGE_LEVEL;
     int link_wait_frames = 0;
     uint8_t held_last = 0;
     bool sweeping = false;   /* true while the line-clear sweep owns the OAM */
@@ -2373,6 +2644,7 @@ int main(void) {
                     screen = SCREEN_LINK_WAIT;
                 } else {
                     screen = SCREEN_LEVEL_SELECT;
+                    menu_page = MENU_PAGE_LEVEL;
                 }
                 nes_audio_play(NES_SOUND_SCREEN_SWITCH);
                 vsync();
@@ -2393,12 +2665,7 @@ int main(void) {
              * cable fell out, and the guest would give up after ten seconds of
              * the master thinking. */
             if (game_mode == GAME_2P) link_lobby_step(&lobby);
-            /* Left/right wrap at both ends, the range and the wrapping the
-             * ROM's own menu uses (main.asm.txt:4742-4763, 4819). */
-            if (pressed & TENGEN_BTN_LEFT)
-                start_level = (uint8_t)((start_level + START_LEVEL_COUNT - 1) % START_LEVEL_COUNT);
-            if (pressed & TENGEN_BTN_RIGHT)
-                start_level = (uint8_t)((start_level + 1) % START_LEVEL_COUNT);
+
             /* ONE CALL EACH, and the results kept: these are edge detectors
              * with their own held state, so asking twice in a frame answers
              * "yes" and then "no" — which is how the handicap's first version
@@ -2406,33 +2673,53 @@ int main(void) {
             bool chord = shoulder_chord();
             bool tap_l = pressed_shoulder(SHOULDER_L);
             bool tap_r = pressed_shoulder(SHOULDER_R);
-            /* One shoulder each, and only when they are NOT both down: the
-             * chord is the fifth tune's, and a player reaching for it should
-             * not be burying anybody on the way. */
-            if (!chord && (tap_l || tap_r)) {
-                int who = (tap_r && !tap_l && game_mode == GAME_2P) ? 1 : 0;
-                handicap[who] = (uint8_t)((handicap[who] + 1) %
-                                           (TENGEN_HANDICAP_MAX + 1));
-                nes_audio_play(NES_SOUND_MENU_SELECT);
+
+            /* WHAT THE STEP BUTTONS DO DEPENDS ON THE PAGE, which is the
+             * point of having pages. Up/down/select is the cartridge's own
+             * cursor (LA048, main.asm.txt:4742-4763: up subtracts one, down
+             * and select add one, and the count in computerMoveSelectTable
+             * wraps it); left/right does the same thing here because these
+             * rows are laid out across rather than down. */
+            bool back = (pressed & MENU_BACKWARD) || (pressed & TENGEN_BTN_LEFT);
+            bool fwd  = (pressed & (TENGEN_BTN_DOWN | TENGEN_BTN_SELECT)) ||
+                        (pressed & TENGEN_BTN_RIGHT);
+            bool moved = back || fwd;
+
+            if (menu_page == MENU_PAGE_LEVEL && moved) {
+                start_level = (uint8_t)((start_level + (back ? START_LEVEL_COUNT - 1 : 1))
+                                         % START_LEVEL_COUNT);
+            } else if (menu_page == MENU_PAGE_HANDICAP) {
+                /* One shoulder each, and only when they are NOT both down: the
+                 * chord is the fifth tune's, and a player reaching for it should
+                 * not be burying anybody on the way. In one player there is
+                 * only one value, so the pad sets it too. */
+                if (!chord && (tap_l || tap_r)) {
+                    int who = (tap_r && !tap_l && game_mode == GAME_2P) ? 1 : 0;
+                    handicap[who] = (uint8_t)((handicap[who] + 1) %
+                                               (TENGEN_HANDICAP_MAX + 1));
+                    moved = true;
+                } else if (moved && game_mode != GAME_2P) {
+                    handicap[0] = (uint8_t)((handicap[0] +
+                                              (back ? TENGEN_HANDICAP_MAX : 1)) %
+                                             (TENGEN_HANDICAP_MAX + 1));
+                }
+            } else if (menu_page == MENU_PAGE_MUSIC && moved) {
+                g_music = (uint8_t)((g_music + (back ? music_choices() - 1 : 1))
+                                     % music_choices());
             }
+
             if (!g_music_unlocked && chord) {
                 /* L+R together — the two buttons a NES pad never had, so the
                  * game proper can never see this. It uncovers TWO entries:
                  * the fifth tune and the mix that plays all of them. */
                 g_music_unlocked = true;
                 g_music = MUSIC_KOROBEINIKI;
+                menu_page = MENU_PAGE_MUSIC;   /* show what was uncovered */
                 nes_audio_play(NES_SOUND_CHIRP);
-            }
-            if (pressed & MENU_STEP) {
-                g_music = (pressed & MENU_BACKWARD)
-                    ? (uint8_t)((g_music + music_choices() - 1) % music_choices())
-                    : (uint8_t)((g_music + 1) % music_choices());
-            }
-            /* The click first and the tune after it, which is the order the
-             * cartridge queues them in: SOUND_MENU_SELECT at $9FC4, LA035 at
-             * $A00A (main.asm.txt:4655, 4696). */
-            if (pressed & (TENGEN_BTN_LEFT | TENGEN_BTN_RIGHT | MENU_STEP))
+            } else if (moved) {
                 nes_audio_play(NES_SOUND_MENU_SELECT);
+            }
+
             /* MOVING THE CURSOR PLAYS THE TUNE. The cartridge calls LA035 from
              * `$A00A` on every cursor move while gameState is
              * GAMESTATE_MUSIC_SELECT (main.asm.txt:4694-4696), so you hear each
@@ -2440,10 +2727,28 @@ int main(void) {
              * not changed, so this also settles the music on arrival — which
              * is what stops the title theme here. */
             front_music(g_music);
+
             if (pressed & TENGEN_BTN_B) {
-                screen = SCREEN_GAME_SELECT;
-                /* Backing out of a 2P choice drops the cable with it. */
-                if (game_mode == GAME_2P) link_shutdown();
+                /* The cartridge has no back button at all — its menus are a
+                 * one-way chain with an idle timer — so B walking the pages
+                 * backwards is the port's, for the same reason A confirms. */
+                nes_audio_play(NES_SOUND_SCREEN_SWITCH);
+                if (menu_page > MENU_PAGE_LEVEL) {
+                    menu_page--;
+                } else {
+                    screen = SCREEN_GAME_SELECT;
+                    /* Backing out of a 2P choice drops the cable with it. */
+                    if (game_mode == GAME_2P) link_shutdown();
+                }
+                vsync();
+                audio_frame();
+                clear_screen();
+                continue;
+            }
+            if ((pressed & MENU_CONFIRM) && menu_page + 1 < MENU_PAGE_COUNT) {
+                /* START, and only START, advances — $A011 — except that A is
+                 * the port's second confirm everywhere else too. */
+                menu_page++;
                 nes_audio_play(NES_SOUND_SCREEN_SWITCH);
                 vsync();
                 audio_frame();
@@ -2470,6 +2775,7 @@ int main(void) {
                 g_link_lost = false;
                 g_view = 0;
                 tengen_new_game(&g_session.game, seed, start_level, false, false);
+                swallow_held_buttons(&g_session.game);
                 /* endPlayfieldInit's own place for it, right after the field
                  * is laid out (main.asm.txt:3536-3546). */
                 tengen_apply_handicap(&g_session.game, TENGEN_PLAYER_1, handicap[0]);
@@ -2477,6 +2783,9 @@ int main(void) {
                 g_shown_level = 0xFF;
                 g_shown_piece = TT_NONE;
                 set_piece_palette(g_session.game.player[0].piece.current);
+                oam_hide_all();
+                g_idle_frame = 0;
+                g_dance_frames = 0;
                 screen = SCREEN_PLAYING;
                 match_running = true;
                 g_front_tune = FRONT_NOTHING;
@@ -2488,7 +2797,8 @@ int main(void) {
                 continue;
             }
             vsync();
-            draw_level_select(start_level, g_music, handicap);
+            draw_setup_page(menu_page, start_level, g_music, handicap,
+                             game_mode == GAME_2P);
             audio_frame();
             continue;
         }
@@ -2511,6 +2821,7 @@ int main(void) {
              * other console went off and started the match alone. */
             if (lobby.hold && lobby.linked && link_is_master()) {
                 screen = SCREEN_LEVEL_SELECT;
+                menu_page = MENU_PAGE_LEVEL;
                 nes_audio_play(NES_SOUND_SCREEN_SWITCH);
                 vsync();
                 audio_frame();
@@ -2544,6 +2855,7 @@ int main(void) {
                 g_music = lobby.music < MUSIC_UNLOCKED_COUNT ? lobby.music : 0;
                 tengen_link_start(&g_session, lobby.seed, lobby.start_level,
                                    link_is_master() ? TENGEN_PLAYER_1 : TENGEN_PLAYER_2);
+                swallow_held_buttons(&g_session.game);
                 /* Both consoles bury both boards from the one seed the lobby
                  * delivered, so the two fields match without another word on
                  * the wire. */
@@ -2559,6 +2871,12 @@ int main(void) {
                 match_running = true;
                 g_front_tune = FRONT_NOTHING;
                 start_music(g_music);
+                /* The lobby's cossack is four sprites nothing on the play
+                 * screen ever writes to, so nothing there would ever have
+                 * cleared him — he stood in the middle of the board. */
+                oam_hide_all();
+                g_idle_frame = 0;
+                g_dance_frames = 0;
                 vsync();
                 audio_frame();
                 clear_screen();
@@ -2631,11 +2949,20 @@ int main(void) {
                 clear_stats_layer();
                 draw_field_braid(BOX_R_TX, kBraidLeft);
                 draw_dancer_stage();
-                draw_next_label_and_piece(BOX_L_TX, BOX_TOP_IN + 12, false);
+                draw_next_label_and_piece(BOX_L_TX, BOX_TOP_IN + 12, false, true);
                 draw_dancers(g_dancer_elapsed, g_dancer_cast);
             }
             audio_frame();
             continue;
+        }
+
+        /* SELECT changes which cossack is standing in HUD STATS. The game
+         * proper never reads SELECT (the cartridge's own pause and cheat
+         * codes are on Start and the face buttons), so it is free, and the
+         * four palettes are the only thing that separates the cartridge's six
+         * dancers from each other. */
+        if (screen == SCREEN_PLAYING && (pressed & TENGEN_BTN_SELECT)) {
+            g_idle_palette = (uint8_t)((g_idle_palette + 1) % IDLE_PALETTE_COUNT);
         }
 
         /* L+R swaps the right-hand box between the piece histogram and the

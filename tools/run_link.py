@@ -76,7 +76,9 @@ IRQ_SIO = 7        # enum GBAIRQ
 ABSENT = 0xFFFF    # what a slot with no console in it reads
 
 KEYS = {"A": 0, "B": 1, "SELECT": 2, "START": 3,
-        "RIGHT": 4, "LEFT": 5, "UP": 6, "DOWN": 7}
+        "RIGHT": 4, "LEFT": 5, "UP": 6, "DOWN": 7,
+        # The GBA's own two, which the port uses for the handicap and the HUD.
+        "R": 8, "L": 9}
 
 
 class CableEnd(mgba.gba.GBASIODriver):
@@ -242,7 +244,12 @@ def main():
     if read_bytes(master, session_addr, game_size) != bytes(game_size):
         failures.append("el esclavo pudo arrancar la partida el solo")
 
-    tap("START", who=0)
+    # The cable put the master on the first setup screen already, so it walks
+    # the cartridge's remaining two — handicap, music — one START at a time,
+    # and the third releases the handshake.
+    for _ in range(3):
+        tap("START", who=0)
+        both(10)
 
     # The handshake is five stages of two transfers; give it far more than
     # that and then check it did not just time out.
