@@ -477,6 +477,35 @@ to guess: a dump without the expected first row is rejected with a reason
 rather than converted into 1024 bytes of noise, and the port then builds with
 `SCREEN_PROTO_AVAILABLE 0` and L/R simply have nothing to switch to.
 
+## MUSIC MIX, and why it turns over at the level and not at the end of a tune
+
+The same L+R that uncovers Korobeiniki uncovers a sixth entry that is not a
+tune: MUSIC MIX plays the five in turn.
+
+**When it changes is a traced decision, not a taste one.** "When the tune
+ends" needs a tune length, and these tunes loop. Correlating the melody
+registers (pulse 1 and 2, period and volume) over two hundred seconds of each
+of them, taken off `tools/nes_cpu.py`, finds a clean loop for exactly one:
+
+| Tune | Best period | Match |
+| --- | --- | --- |
+| Troika | 1969 frames (32.8 s) | 99-100% |
+| Karinka | 2560 frames (42.7 s) | 44% |
+| Loginska | 4381 frames (73.0 s) | 28% |
+| Bradinsky | 3142 frames (52.4 s) | 17% |
+
+Only Troika repeats. Hashing the engine's whole RAM alongside the APU finds no
+exact repeat in any of them inside 150 seconds, because their vibrato and RNG
+counters never come back to where they were. So a "song length" for the other
+three would be a number invented here rather than one traced from the
+cartridge — ground rule 2, and the reason the mix does not use one.
+
+The LEVEL-UP is a boundary the cartridge does define. The tune already stops
+there for the dancers and is started again when they finish, so the mix simply
+hands that restart the next entry; a linked match, which has no interlude,
+asks for it on the spot instead. It also means the music changes because you
+played well, which a timer could never manage.
+
 ## Korobeiniki is not on this cartridge
 
 Worth stating plainly, because it is the one thing in this port that is not
@@ -645,6 +674,28 @@ colour 3 — the ROM's own rule — and the port lays a row of it under each
 counter's value, which is where the cartridge's grid ran anyway. Memorable,
 and now it separates the entries instead of fraying the words.
 
+## The fireworks are one object
+
+`LAA41` (`main.asm.txt:5807-5820`) walks staging entries `$4C` upwards adding
+the same offset to every one of their Y bytes: forty-five sprites, ONE burst,
+one motion. And they are a 7x7 GRID minus its corners, forty-eight pixels
+square — the ring you see is in the TILES each cell is given, not in where the
+cells are.
+
+That matters for a composition that drops rows out of the middle of the
+picture. The cathedral's eighteen sprites are fixed artwork lining up with
+fixed background, so one of them landing on a dropped row has nothing left to
+line up with and is rightly hidden. Sending the fireworks through the same
+per-sprite map deletes whichever of the forty-five happen to be crossing a
+dropped row, and a burst forty pixels across is usually crossing one — a ring
+with a band missing out of its middle, which is what "ya no son redondos" was.
+Measured: sixteen of sixty-four sprites gone.
+
+So the burst is mapped ONCE, by the middle of its own bounding box, and every
+sprite in it moves by that one offset. Where it appears shifts by up to a
+couple of tiles from where the cartridge puts it, which a firework has no
+business minding, and it stays round.
+
 ## MUSIC_SILENCE does not silence anything
 
 `$08` is an entry in `musicSelectTable` — "no tune chosen". Handing it to
@@ -669,6 +720,20 @@ for leaving a screen as well as for pausing:
   there, so the port tracks whether it suspended rather than firing one
   hopefully. `stop_music` / `resume_music` in `gba/main.c` are that pair, and
   pause, the front end and the way back to the title all go through them.
+* **AND RESUME GOES LAST.** `updateAudio` takes exactly ONE request off the
+  ring per frame (`$CFCC-$CFDB`), so the order they are queued in is the order
+  they are heard in, a frame apart. Resuming BEFORE loading the new track —
+  which is what the first version of this did — hands the suspended track a
+  frame or two of the speaker before the silence meant to replace it arrives:
+  the title theme turning up under the tune you are choosing on the level
+  screen, and worse when the ring is busy enough to DROP the silence ($CFC3
+  drops on full). Loading the new track while the engine is still frozen and
+  only then letting it go has no such window.
+* **And a tune that is no tune never lets it go at all.** NO MUSIC is
+  `musicSelectTable`'s first entry, the silence — nothing follows it to take
+  the speaker back, so it is the one menu choice that must leave the engine
+  suspended. That is where a resumed title theme used to surface, and
+  `make gba-check --leave-title` now listens for two seconds there.
 
 The cartridge never needs any of this: its front end is a one-way chain and
 its title theme is *meant* to carry on into the menus. This port can walk
@@ -919,21 +984,35 @@ columns were squared up. Those five are drawn on the offset layer instead and
 come out half a pixel the other side. Measured on the built ROM, all seven now
 sit at 31.0 or 32.0 against an ideal of 31.5.
 
-**The title's two words.** The cartridge's lettering is not centred inside its
-own tiles either: TENGEN's ink sits one pixel left of the middle of its twelve
-tiles and TETRIS's two, while the cathedral under them is dead centre. On the
-title the offset layer is idle, so its scroll is set to two pixels there and
-the two words are drawn on it — which puts all three within a pixel of each
-other (TENGEN 120.5, TETRIS 119.5, cathedral 120.0, ideal 119.5) instead of
-spread over two and a half with everything leaning left. `set_offset_layer`
-switches the scroll between the title's two pixels and the game's three.
+**TENGEN, and only TENGEN.** Nothing on the title is centred where the tile
+grid says it is, and the reason took two passes to see. Measured on the built
+ROM as centres of MASS — ink weighted by pixel, which is what an eye reads —
+against a frame interior running 32..207 and therefore centred on 119.5:
 
-Two things stay OFF it: the frame, because two pixels of braid sliding out
-from under the ingots is far more visible than two pixels of lettering ever
-were; and the spire's two borrowed cells, because the rest of the spire is
-down in the cathedral and does not move. Where a shifted letter now covers a
-pixel of the spire's ball, that is the spire passing behind the lettering,
-which is what it should look like anyway.
+| | unshifted |
+| --- | --- |
+| cathedral | 124.0 |
+| TENGEN | 119.9 |
+| TETRIS | 118.2 |
+
+**The cathedral's own art leans four and a half pixels right of the middle of
+its own frame**, and the cathedral is the picture. So the words are not read
+against the frame at all, they are read against it — which is why TENGEN kept
+looking left however carefully the columns were squared up, and why centring
+the words on the frame (both at +2) did not settle it. TENGEN goes on the
+offset layer at FOUR pixels, putting its mass at 123.9.
+
+**TETRIS stays where the cartridge draws it**, two pixels left of the frame's
+centre, and that is a deliberate trade. The spire's finial is printed into the
+gap between its third and fourth letters while the rest of the spire is down
+in the cathedral, so the letters and the pole have to agree with each other:
+unshifted, the gap runs 118..131 and the pole stands at 123. Shift the logo
+right and the gap goes with it while the pole does not, which is the pole
+leaning against the T. A logo two pixels off centre that its own spire comes
+cleanly out of beats a centred one that it does not.
+
+The frame stays off the layer too: four pixels of braid sliding out from under
+the ingots is far more visible than four pixels of lettering ever were.
 
 ### Drawing the title once per visit, not once per frame
 

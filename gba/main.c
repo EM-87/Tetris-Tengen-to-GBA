@@ -68,34 +68,44 @@
 #define SCREENBLOCK_STATS 29
 #define STATS_SHIFT_PX 3
 
-/* THE SAME LAYER, LENT TO THE TITLE, for the same kind of reason.
+/* THE SAME LAYER, LENT TO THE TITLE, and the two words want different things.
  *
- * The cartridge's lettering is not centred inside its own tiles: measured on
- * the built ROM, TENGEN's ink sits one pixel left of the middle of the twelve
- * tiles it occupies and TETRIS's two, while the cathedral under them is dead
- * centre. On the tile grid there is nothing to move — the tiles ARE centred —
- * so the words read very slightly left of the picture and no amount of
- * recomposing changes it.
+ * Nothing on this screen is centred where the tile grid says it is. Measured
+ * on the built ROM, as centres of MASS — ink weighted by pixel, which is what
+ * an eye reads — against a frame whose interior runs 32..207 and is therefore
+ * centred on 119.5:
  *
- * Two pixels puts all three within half a pixel of each other, so the two
- * words are drawn on the offset layer with its scroll set to that while the
- * title is up. The layer is idle here (the statistics are a play-screen
- * thing), and the scroll goes back to STATS_SHIFT_PX on the way into a game.
+ *     cathedral 124.0    its own art leans right, and it is the picture
+ *     TENGEN    119.9    the cartridge's lettering, unshifted
+ *     TETRIS    118.2    likewise
  *
- * The spire's two borrowed cells are the exception and stay on the main
- * layer: the rest of the spire is down in the cathedral, which does not move.
- * Where a letter's shifted edge now covers a pixel of the ball, that is the
- * spire passing behind the lettering, which is what it should look like. */
-#define TITLE_LOGO_SHIFT_PX 2
-#define TITLE_LOGO_TY0 2         /* TENGEN */
-#define TITLE_LOGO_TY1 7         /* ...through the bottom of the TETRIS logo */
-/* THE PICTURE ONLY. The frame is in these rows too and it must not move: two
+ * So the words are not measured against the frame at all: they are measured
+ * against the cathedral, which sits four and a half pixels right of the
+ * middle of its own frame. That is why TENGEN kept reading left however
+ * carefully the columns were squared up.
+ *
+ * TENGEN goes on the offset layer at four pixels, which puts its mass at
+ * 123.9 — the cathedral's. It is the only thing on that layer here, so the
+ * scroll is simply set to what it needs and goes back to STATS_SHIFT_PX on
+ * the way into a game.
+ *
+ * TETRIS stays where the cartridge draws it, and that is deliberate. The
+ * spire's finial is printed into the gap between its third and fourth letters
+ * and the rest of the spire is down in the cathedral, so the letters and the
+ * pole have to agree: with the logo unshifted the gap runs 120-129 and the
+ * pole stands at 123, half a pixel off its middle. Shifting the logo two
+ * pixels right — as the layer once did to both words — takes the gap with it
+ * and leaves the pole leaning against the T. A logo two pixels left of centre
+ * that its own spire comes cleanly out of beats a centred one that it does
+ * not. */
+#define TITLE_LOGO_SHIFT_PX 4
+#define TITLE_LOGO_TY0 2         /* TENGEN, and TENGEN only */
+#define TITLE_LOGO_TY1 3
+/* THE PICTURE ONLY. The frame is in these rows too and it must not move: four
  * pixels of braid sliding out from under the ingots is a great deal more
- * visible than two pixels of lettering ever were. */
+ * visible than four pixels of lettering ever were. */
 #define TITLE_LOGO_TX0 4
 #define TITLE_LOGO_TX1 25
-#define TITLE_SPIRE_TX 15        /* source column 16, after the composition */
-#define TITLE_SPIRE_TY0 6        /* finial on row 6, ball on row 7 */
 
 /* The offset layer's scroll. A negative scroll moves the picture the other
  * way and the field is nine bits wide, so -n is written as 512-n. */
@@ -601,6 +611,16 @@ static void set_stats_tile(int tx, int ty, uint16_t entry) {
     MEM_SCREENBLOCK(SCREENBLOCK_STATS)[ty * MAP_W + tx] = entry;
 }
 
+/* Wipes a rectangle off BOTH maps. Anywhere the offset layer might be holding
+ * something has to be cleared this way or half a drawing survives. */
+static void clear_both(int tx, int ty, int w, int h) {
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++) {
+            set_map_tile(tx + x, ty + y, T_BLANK);
+            set_stats_tile(tx + x, ty + y, T_BLANK);
+        }
+}
+
 /* ----------------------------------------------------------------------- *
  * A BOX OF BRAID.
  *
@@ -1012,8 +1032,14 @@ static void draw_panel(void) {
     }
 
     /* Rows 14-17 of the left panel: NEXT lodges here only when the right one
-     * is taken, and is blank otherwise. */
-    clear_region(BOX_L_IN, BOX_TOP_IN + 12, BOX_L_W, 4);
+     * is taken, and is blank otherwise.
+     *
+     * BOTH MAPS. The preview borrows the offset layer whenever its piece is an
+     * odd number of tiles wide, so clearing only the main one left the piece
+     * behind while its label went — which is a NEXT in both boxes at once, and
+     * only for five pieces of seven, which is why it looked like it depended
+     * on when you pressed L+R. */
+    clear_both(BOX_L_TX, BOX_TOP_IN + 12, BOX_IN, 4);
     if (g_show_banner) draw_next_label_and_piece(BOX_L_TX, BOX_TOP_IN + 12, false);
 
     /* The right box: the banner, the statistics, or — in a race, where the
@@ -1139,12 +1165,40 @@ static const uint8_t kMusicTracks[MUSIC_COUNT] = {
  * It is a fifth ENTRY, never a fifth ROM track: kMusicTracks has four, and
  * every place that starts music goes through start_music() below. */
 #define MUSIC_KOROBEINIKI MUSIC_COUNT
-#define MUSIC_UNLOCKED_COUNT (MUSIC_COUNT + 1)
+
+/* AND A SIXTH ENTRY THAT IS NOT A TUNE. The same L+R that uncovers Korobeiniki
+ * uncovers MUSIC MIX, which plays the five in turn instead of one of them over
+ * and over — the cure for a long game spent listening to Loginska.
+ *
+ * WHEN IT CHANGES, and why it is not "when the tune ends". These tunes loop,
+ * and the loop is not something this port is willing to guess at: correlating
+ * the melody registers over two hundred seconds of each of them finds a clean
+ * loop for exactly one — Troika, 1969 frames — and nothing better than a 17%
+ * to 44% match for the others, so any "song length" for them would be a number
+ * invented here rather than one traced from the cartridge, which is the thing
+ * this project does not do (see CLAUDE.md, ground rule 2).
+ *
+ * The LEVEL-UP is a boundary the cartridge does define, and a better one
+ * musically: the tune already stops there for the dancers and is started again
+ * when they finish, so the mix simply hands that restart the next tune. It
+ * also means the music changes because you played well, which a timer could
+ * never manage. */
+#define MUSIC_MIX (MUSIC_COUNT + 1)
+#define MUSIC_UNLOCKED_COUNT (MUSIC_COUNT + 2)
 static bool g_music_unlocked;
 
 static const char *const kMusicNames[MUSIC_UNLOCKED_COUNT] = {
-    "NO MUSIC", "LOGINSKA", "BRADINSKY", "KARINKA", "TROIKA", "KOROBEINIKI"
+    "NO MUSIC", "LOGINSKA", "BRADINSKY", "KARINKA", "TROIKA", "KOROBEINIKI",
+    "MUSIC MIX"
 };
+
+/* The rotation: the cartridge's four and the hand-entered one, which has
+ * earned its place in it by the time anyone has found this. */
+static const uint8_t kMixOrder[] = { 1, 2, 3, 4, MUSIC_KOROBEINIKI };
+#define MIX_COUNT (sizeof kMixOrder / sizeof kMixOrder[0])
+static uint8_t g_mix_step;
+
+static uint8_t mix_tune(void) { return kMixOrder[g_mix_step % MIX_COUNT]; }
 
 static uint8_t music_choices(void) {
     return (uint8_t)(g_music_unlocked ? MUSIC_UNLOCKED_COUNT : MUSIC_COUNT);
@@ -1156,26 +1210,6 @@ static uint8_t music_choices(void) {
 static void audio_frame(void) {
     nes_audio_frame();
     korobeiniki_frame();
-}
-
-/* Starts whichever tune is chosen, on whichever engine owns it. The two never
- * play at once: the cartridge's is told to go silent for the hand-entered one
- * and keeps running, so the sound EFFECTS are the ROM's either way. */
-/* The track half of the pair above, on its own: whoever has just queued a
- * silence calls this. Kept separate because the queue is only eight deep and
- * DROPS what does not fit ($CFC3), so a spare silence is not free — walking
- * the menus quickly used to be able to lose the one that mattered and leave
- * two tunes layered. */
-static void play_after_silence(uint8_t music) {
-    if (music == MUSIC_KOROBEINIKI) {
-        korobeiniki_start();
-        return;
-    }
-    korobeiniki_stop();
-    uint8_t track = kMusicTracks[music < MUSIC_COUNT ? music : 0];
-    /* musicSelectTable's first entry IS the silence, and it has just been
-     * queued; asking for it twice would only cost a queue slot. */
-    if (track != NES_MUSIC_SILENCE) nes_audio_play(track);
 }
 
 /* MUSIC_SILENCE IS NOT A STOP, AND THE ENGINE HAS NO OTHER ONE.
@@ -1214,21 +1248,48 @@ static void resume_music(void) {
     nes_audio_play(NES_MUSIC_RESUME);
 }
 
+/* Starts whichever tune is chosen, on whichever engine owns it. The two never
+ * play at once: the cartridge's is suspended for the hand-entered one and
+ * keeps running underneath, so the sound EFFECTS are the ROM's either way.
+ *
+ * SILENCE FIRST, ALWAYS. This is `LA035` (main.asm.txt:4730-4735), which is
+ * the cartridge's own way of starting a tune:
+ *
+ *     lda #MUSIC_SILENCE / jsr setMusicOrSoundEffect
+ *     ldy menuMusic / lda musicSelectTable,y / jmp setMusicOrSoundEffect
+ *
+ * and it is not decoration. setMusicOrSoundEffect only QUEUES a request
+ * ($0200-$0207, a ring with its indices at $0208/$0209); handing the engine a
+ * new track without silencing the old one leaves the old one's channels
+ * running underneath.
+ *
+ * AND RESUME COMES LAST. updateAudio takes exactly ONE request off that ring
+ * per frame ($CFCC-$CFDB), so the order requests are queued in is the order
+ * they are heard in, a frame apart. Resuming first — which is what this did —
+ * hands the suspended track a frame or two of the speaker before the silence
+ * that was meant to replace it arrives: the title theme turning up under the
+ * tune you are choosing, and worse if the ring is busy enough to DROP the
+ * silence ($CFC3 drops on full). Loading the new track while the engine is
+ * still frozen and only then letting it go has no such window, and a tune
+ * that is no tune (NO MUSIC) simply never lets it go at all. */
 static void start_music(uint8_t music) {
-    /* SILENCE FIRST, ALWAYS. This is `LA035` (main.asm.txt:4730-4735), which
-     * is the cartridge's own way of starting a tune:
-     *
-     *     lda #MUSIC_SILENCE / jsr setMusicOrSoundEffect
-     *     ldy menuMusic / lda musicSelectTable,y / jmp setMusicOrSoundEffect
-     *
-     * and it is not decoration. setMusicOrSoundEffect only QUEUES a request
-     * ($0200-$0207, a ring with its indices at $0208/$0209); handing the
-     * engine a new track without silencing the old one leaves the old one's
-     * channels running underneath, which is why the title theme could still
-     * be heard on top of a match's music. */
-    resume_music();
+    if (music == MUSIC_MIX) music = mix_tune();
+    if (music == MUSIC_KOROBEINIKI) {
+        stop_music();            /* the cartridge's engine steps aside */
+        korobeiniki_start();
+        return;
+    }
+    korobeiniki_stop();
+    uint8_t track = kMusicTracks[music < MUSIC_COUNT ? music : 0];
+    if (track == NES_MUSIC_SILENCE) {
+        /* musicSelectTable's first entry is no tune at all. Asking for it
+         * would only reset the engine, not quiet it. */
+        stop_music();
+        return;
+    }
     nes_audio_play(NES_MUSIC_SILENCE);
-    play_after_silence(music);
+    nes_audio_play(track);
+    resume_music();
 }
 
 /* The ROM has a title screen and then separate selection screens, drawn in
@@ -1337,12 +1398,11 @@ static void draw_title(void) {
             uint16_t tile = TITLE_TILE_BASE + kScreenTitleTiles[i];
             uint16_t entry =
                 WITH_BANK(tile, PAL_TITLE_BASE + kScreenTitlePalettes[i]);
-            /* THE TWO WORDS RIDE THE OFFSET LAYER; see TITLE_LOGO_SHIFT_PX.
-             * Everything else, the spire's two borrowed cells included, stays
-             * on the main one so it keeps the cathedral's alignment. */
+            /* TENGEN RIDES THE OFFSET LAYER; see TITLE_LOGO_SHIFT_PX.
+             * Everything else — the frame, the TETRIS logo and the spire that
+             * comes out of it — stays on the main one. */
             bool shifted = ty >= TITLE_LOGO_TY0 && ty <= TITLE_LOGO_TY1 &&
-                            tx >= TITLE_LOGO_TX0 && tx <= TITLE_LOGO_TX1 &&
-                            !(tx == TITLE_SPIRE_TX && ty >= TITLE_SPIRE_TY0);
+                            tx >= TITLE_LOGO_TX0 && tx <= TITLE_LOGO_TX1;
             set_map_tile(pad + tx, ty, shifted ? T_BLANK : entry);
             set_stats_tile(pad + tx, ty, shifted ? entry : T_BLANK);
         }
@@ -1425,6 +1485,47 @@ static void restart_title_sprites(void) {
     nes_rom_call(NES_CATHEDRAL_ADDR, 0, 8000);
 }
 
+/* THE FIREWORKS ARE ONE OBJECT AND HAVE TO MOVE AS ONE.
+ *
+ * The per-sprite mapping above is right for the cathedral: those eighteen
+ * sprites are fixed artwork lining up with fixed background, so a sprite on a
+ * row the composition dropped has nothing left to line up with and goes.
+ *
+ * A firework is the opposite. `LAA41` (main.asm.txt:5807-5820) walks staging
+ * entries $4C upwards adding the same offset to every one of their Y bytes:
+ * forty-five sprites, ONE burst, one motion. Sending each of them through the
+ * row map individually deletes whichever of them happen to be crossing a
+ * dropped row, and since a burst is a RING about forty pixels across it is
+ * usually crossing one — which is a ring with a band missing out of its
+ * middle, and exactly what "ya no son redondos" is.
+ *
+ * So the burst is mapped ONCE, by its own centre, and every sprite in it
+ * moves by that one offset. Where the burst appears shifts by up to a couple
+ * of tiles from where the cartridge puts it; a firework has no business being
+ * anywhere in particular, and it stays round. */
+#define TITLE_FIREWORK_FIRST 19   /* oamStaging $4C, LA9F7 */
+
+/* The nearest row the composition kept, for a NES row it may have dropped. */
+static int title_row_near(int nrow) {
+    for (int d = 0; d < 32; d++) {
+        if (nrow - d >= 0 && kTitleRowMap[nrow - d] != SCREEN_TITLE_ROW_DROPPED)
+            return kTitleRowMap[nrow - d];
+        if (nrow + d < 30 && kTitleRowMap[nrow + d] != SCREEN_TITLE_ROW_DROPPED)
+            return kTitleRowMap[nrow + d];
+    }
+    return -1;
+}
+
+static int title_col_near(int ncol) {
+    for (int d = 0; d < 34; d++) {
+        if (ncol - d >= 0 && kTitleColMap[ncol - d] != SCREEN_TITLE_ROW_DROPPED)
+            return kTitleColMap[ncol - d];
+        if (ncol + d < 32 && kTitleColMap[ncol + d] != SCREEN_TITLE_ROW_DROPPED)
+            return kTitleColMap[ncol + d];
+    }
+    return -1;
+}
+
 static void draw_title_sprites(void) {
     if (g_title_skin) {          /* see the note above draw_title */
         oam_hide_all();
@@ -1441,14 +1542,57 @@ static void draw_title_sprites(void) {
     nes_rom_call(NES_FIREWORKS_ADDR, 0, 12000);
 
     const uint8_t *oam = ram + NES_RAM_OAM_STAGING;
+    const int pad = (SCREEN_TW - SCREEN_TITLE_W) / 2;
+
+    /* The burst's single offset, from the middle of its bounding box. */
+    int fw_dx = 0, fw_dy = 0;
+    bool fw_placed = false;
+    {
+        int x0 = 256, x1 = -1, y0 = 240, y1 = -1;
+        for (int i = TITLE_FIREWORK_FIRST; i < TITLE_OAM_COUNT; i++) {
+            int ny = oam[i * 4], nx = oam[i * 4 + 3];
+            if (ny >= 240) continue;          /* parked, see below */
+            if (nx < x0) x0 = nx;
+            if (nx > x1) x1 = nx;
+            if (ny < y0) y0 = ny;
+            if (ny > y1) y1 = ny;
+        }
+        if (y1 >= 0) {
+            int cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+            int col = title_col_near(cx / 8), row = title_row_near(cy / 8);
+            if (col >= 0 && row >= 0) {
+                fw_dx = (pad + col) * 8 + (cx & 7) - cx;
+                fw_dy = row * 8 + (cy & 7) - cy;
+                fw_placed = true;
+            }
+        }
+    }
+
     for (int i = 0; i < TITLE_OAM_COUNT; i++) {
         int ny = oam[i * 4];
         uint8_t tile = oam[i * 4 + 1];
         uint8_t attr = oam[i * 4 + 2];
         int nx = oam[i * 4 + 3];
+        int x, y;
         /* The NES hides a sprite by parking it below the visible 240 lines;
          * this code uses $F7 for exactly that. */
-        int row = (ny >= 0 && ny < 240) ? kTitleRowMap[ny / 8] : SCREEN_TITLE_ROW_DROPPED;
+        if (ny >= 240) {
+            MEM_OAM[i * 4] = OBJ_ATTR0_HIDDEN;
+            continue;
+        }
+        if (i >= TITLE_FIREWORK_FIRST) {
+            if (!fw_placed) { MEM_OAM[i * 4] = OBJ_ATTR0_HIDDEN; continue; }
+            x = nx + fw_dx;
+            y = ny + fw_dy;
+            if (x < 0 || x >= SCREEN_TW * 8 || y < 0 || y >= SCREEN_TH * 8) {
+                MEM_OAM[i * 4] = OBJ_ATTR0_HIDDEN;
+                continue;
+            }
+            oam_set(i, x, y, (uint16_t)(TITLE_OBJ_TILE_BASE + tile), false,
+                     PAL_OBJ_TITLE + (attr & 3));
+            continue;
+        }
+        int row = kTitleRowMap[ny / 8];
         if (row == SCREEN_TITLE_ROW_DROPPED) {
             MEM_OAM[i * 4] = OBJ_ATTR0_HIDDEN;
             continue;
@@ -1460,7 +1604,7 @@ static void draw_title_sprites(void) {
             continue;
         }
         /* ...and then the same one-column pad draw_title centres with. */
-        int x = ((SCREEN_TW - SCREEN_TITLE_W) / 2 + col) * 8 + (nx & 7);
+        x = (pad + col) * 8 + (nx & 7);
         if (x >= SCREEN_TW * 8) {
             MEM_OAM[i * 4] = OBJ_ATTR0_HIDDEN;
             continue;
@@ -1696,6 +1840,15 @@ static void announce_step(TengenStepResult step) {
          * down and start_music() puts it back when the dancers finish. */
         korobeiniki_stop();
         nes_audio_play(NES_MUSIC_LEVELUP);
+        /* MUSIC MIX turns over here, and here only. See MUSIC_MIX. */
+        if (g_music == MUSIC_MIX) {
+            g_mix_step = (uint8_t)((g_mix_step + 1) % MIX_COUNT);
+            /* A linked match has no interlude to restart the tune afterwards,
+             * so the mix's next one is asked for on the spot. The level-up
+             * jingle was queued a moment ago and the ring is read one request
+             * per frame, so it is heard first and this follows it. */
+            if (g_linked) start_music(g_music);
+        }
         if (!g_linked) {
             g_dancer_active = true;
             g_dancer_timer = DANCER_TIMER_START;
@@ -1805,14 +1958,17 @@ static void front_music(uint8_t which) {
         stop_music();
         return;
     }
-    korobeiniki_stop();
-    resume_music();
-    nes_audio_play(NES_MUSIC_SILENCE);   /* LA035's order; see start_music */
     if (which == FRONT_TITLE_THEME) {
+        /* FROM THE TOP, every time. The silence resets the engine before the
+         * theme is handed to it, so coming back to the title starts the tune
+         * again rather than picking it up wherever it was frozen. */
+        korobeiniki_stop();
+        nes_audio_play(NES_MUSIC_SILENCE);
         nes_audio_play(NES_MUSIC_TITLESCREEN);
-    } else {
-        play_after_silence(which);
+        resume_music();
+        return;
     }
+    start_music(which);
 }
 
 /* One frame of a solo game: Start pauses, the cheat codes go in while paused
@@ -2044,7 +2200,8 @@ int main(void) {
                 start_level = (uint8_t)((start_level + 1) % START_LEVEL_COUNT);
             if (!g_music_unlocked && shoulder_chord()) {
                 /* L+R together — the two buttons a NES pad never had, so the
-                 * game proper can never see this. */
+                 * game proper can never see this. It uncovers TWO entries:
+                 * the fifth tune and the mix that plays all of them. */
                 g_music_unlocked = true;
                 g_music = MUSIC_KOROBEINIKI;
                 nes_audio_play(NES_SOUND_CHIRP);
@@ -2096,6 +2253,7 @@ int main(void) {
                 g_link_lost = false;
                 g_view = 0;
                 tengen_new_game(&g_session.game, seed, start_level, false, false);
+                g_mix_step = 0;      /* every game opens on the same tune */
                 g_shown_level = 0xFF;
                 g_shown_piece = TT_NONE;
                 set_piece_palette(g_session.game.player[0].piece.current);
@@ -2254,8 +2412,10 @@ int main(void) {
         }
 
         /* L+R swaps the right-hand box between the piece histogram and the
-         * cartridge's vertical TETRIS banner. */
-        if (screen == SCREEN_PLAYING && shoulder_chord()) {
+         * cartridge's vertical TETRIS banner — while there is a match to swap
+         * it around. Once the board is dead the only thing left to press is
+         * the one that starts again. */
+        if (screen == SCREEN_PLAYING && match_running && shoulder_chord()) {
             g_show_banner = !g_show_banner;
             /* Both directions need the static screen back: going TO the
              * banner erases the braid box, and coming back from it has to
@@ -2277,11 +2437,15 @@ int main(void) {
             }
         }
 
-        /* Start goes back to the title once there is nothing left to play.
+        /* Any of the three goes back to the title once there is nothing left
+         * to play. Start is the cartridge's own, and after a game over A and
+         * B are the buttons a hand is already on.
+         *
          * In a linked match this is read straight off this console's keypad
          * rather than over the cable — by now the cable is shut down, and
          * neither player should have to wait for the other to agree. */
-        if (!match_running && (pressed & TENGEN_BTN_START)) {
+#define GAMEOVER_RESTART (TENGEN_BTN_START | TENGEN_BTN_A | TENGEN_BTN_B)
+        if (!match_running && (pressed & GAMEOVER_RESTART)) {
             screen = SCREEN_TITLE;
             restart_title_sprites();
             g_linked = false;

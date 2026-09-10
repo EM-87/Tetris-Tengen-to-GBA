@@ -1132,22 +1132,30 @@ def leaving_title_check(rom_path):
         # ($0209), so that slot holds the last thing asked for and the one
         # before it the one before that. $0208 is the READ index and says how
         # far the engine has got, which is a different question.
-        def last_two():
+        # The requests in the ring, newest last. $01 and $02 are SUSPEND and
+        # RESUME — transport, not tracks — and $0E and up are sound effects
+        # (constants.asm.txt:37-61); both are stepped over when the question
+        # is "which tune was asked for".
+        def recent_tracks(n):
             write = core.memory.u8[ram + 0x209]
-            ring = [core.memory.u8[ram + 0x200 + i] for i in range(8)]
-            return ring[(write - 1) % 8], ring[write % 8]
-
-        # The last MUSIC request, ignoring the effects queued after it: ids
-        # below $0E are music, $0E and up are sound effects
-        # (constants.asm.txt:37-61). A screen that is already playing the right
-        # thing queues nothing, which is correct and has to read as correct.
-        def last_music():
-            write = core.memory.u8[ram + 0x209]
+            out = []
             for back in range(8):
                 v = core.memory.u8[ram + 0x200 + (write - back) % 8]
-                if 0 < v < 0x0E:
-                    return v
-            return 0
+                if 0x02 < v < 0x0E:
+                    out.append(v)
+                    if len(out) == n:
+                        break
+            return tuple(reversed(out))
+
+        def last_two():
+            pair = recent_tracks(2)
+            return pair if len(pair) == 2 else (0, 0)
+
+        # A screen that is already playing the right thing queues nothing,
+        # which is correct and has to read as correct.
+        def last_music():
+            got = recent_tracks(1)
+            return got[0] if got else 0
 
         press_start(core)           # game select -> level select
         run(core, 12)
@@ -1179,10 +1187,12 @@ def leaving_title_check(rom_path):
         # asks for that request AND then listens: every channel's volume at
         # zero and nothing flagged as sounding, for two whole seconds.
         core.set_keys(KEYS["B"]); run(core, 4); core.set_keys(); run(core, 14)
-        if last_music() != 0x01:
+        write = core.memory.u8[ram + 0x209]
+        newest = core.memory.u8[ram + 0x200 + write % 8]
+        if newest != 0x01:
             failures.append(
                 f"al volver a GAME SELECT no se manda MUSIC_SUSPEND "
-                f"(se mando ${last_music():02X})")
+                f"(se mando ${newest:02X})")
         else:
             heard = 0
             for _ in range(120):
@@ -1202,7 +1212,37 @@ def leaving_title_check(rom_path):
             failures.append(
                 f"en el titulo no esta sonando su tema (${last_music():02X})")
         else:
-            print("  y en el titulo sigue siendo el suyo")
+            # ...and FROM THE TOP. The silence has to be the request before
+            # it, because that is what resets the engine; picking the theme up
+            # from wherever a suspend froze it is not coming back to a title.
+            pair = last_two()
+            if pair != (0x08, 0x09):
+                failures.append(
+                    "el tema del titulo no se reinicia al volver "
+                    f"(se pidio ${pair[0]:02X} y luego ${pair[1]:02X}, "
+                    "deberia ser $08 y $09)")
+            else:
+                print("  y en el titulo sigue siendo el suyo, desde el principio")
+
+        # NO MUSIC HAS TO BE NO MUSIC. musicSelectTable's first entry is the
+        # silence, which resets the engine without quieting it, so this is the
+        # one menu choice that must leave the engine suspended rather than
+        # resumed — and it is where a resumed title theme used to surface,
+        # since nothing came after it to take the speaker back.
+        press_start(core)                    # game select -> level select
+        run(core, 12)
+        core.set_keys(KEYS["UP"]); run(core, 4); core.set_keys(); run(core, 20)
+        heard = 0
+        for _ in range(120):
+            core.run_frame()
+            st = sound_state(core)
+            heard |= st["activos"] | st["pulso 1"] | st["pulso 2"]
+            heard |= st["triangulo"] | st["ruido"]
+        if heard:
+            failures.append(
+                f"con NO MUSIC elegido algo sigue sonando (canales {heard:#06b})")
+        else:
+            print("  NO MUSIC deja el motor callado, sin tema de titulo debajo")
 
     # THE BUTTONS THE CARTRIDGE ANSWERS TO. processMenuInput takes SELECT as
     # well as START on the title ($9FA4), and takes SELECT as a cursor MOVE on
@@ -1306,14 +1346,18 @@ def korobeiniki_check(rom_path):
     else:
         print("  L+R descubre KOROBEINIKI y la deja elegida")
 
+    # The code uncovers TWO entries, not one: the fifth tune and MUSIC MIX,
+    # which plays the five in turn and turns over at every level-up.
     unlocked = set()
-    for _ in range(12):
+    for _ in range(14):
         unlocked.add(tilemap_text(core, MUSIC_ROW))
         tap(KEYS["DOWN"])
-    if len(unlocked) != 6:
-        failures.append(f"tras el codigo el menu ofrece {len(unlocked)}, no 6")
+    if len(unlocked) != 7:
+        failures.append(f"tras el codigo el menu ofrece {len(unlocked)}, no 7")
+    elif not any("MUSIC MIX" in row for row in unlocked):
+        failures.append("el codigo no descubre MUSIC MIX")
     else:
-        print(f"  tras el codigo: {len(unlocked)} canciones")
+        print(f"  tras el codigo: {len(unlocked)} entradas, con MUSIC MIX")
 
     # Back onto it, then into a game.
     for _ in range(10):

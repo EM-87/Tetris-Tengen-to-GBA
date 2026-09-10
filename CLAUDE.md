@@ -155,15 +155,24 @@ running ROM; only the side panels need reflowing).
    title swaps the release's screen for the Nintendo-licensed build's, with
    its own cathedral, logo, fret border, tiles and palettes. Optional:
    `make assets ROM=... PROTO=...`; without it the port builds with
-   `SCREEN_PROTO_AVAILABLE 0` and L/R do nothing. See reference/NOTES.md —
+   `SCREEN_PROTO_AVAILABLE 0` and L/R do nothing. **NOT EVERY PROTOTYPE DUMP
+   HAS IT**: the screen the port knows lives at `$B000` of a TWO-bank PRG, and
+   the one-bank dumps are refused with a reason. Check
+   `SCREEN_PROTO_AVAILABLE` in the generated `gba/screen_proto.h` after
+   running `make assets` — building with the wrong dump looks exactly like
+   the feature having been broken. See reference/NOTES.md —
    both the attribute table and the palette index were traced after being
    guessed wrong first.
-16. ~~Korobeiniki~~ — done, and it is THE EXCEPTION to ground rule 1: it is
+16. ~~Korobeiniki, and MUSIC MIX~~ — done. Korobeiniki is THE EXCEPTION to ground rule 1: it is
    not on this cartridge (Tengen's four are Loginska, Bradinsky, Karinka and
    Troika), so `gba/korobeiniki.c` is the one file here entered by hand rather
    than extracted. It runs on its own sequencer over the GBA's PSG, never
    through the ROM's engine, and shares the chip with it so the effects stay
-   the cartridge's. Hidden behind L+R on the selection screen.
+   the cartridge's. Hidden behind L+R on the selection screen, which uncovers
+   a sixth entry with it: MUSIC MIX, playing the five in turn and turning over
+   at every level-up. NOT at the end of a tune — only one of the four has a
+   loop these measurements can find, so a "song length" for the rest would be
+   invented. See reference/NOTES.md.
 17. Still to do: coop (the core already models its 12-column field), the 2P
    starting handicap (`initHandicapGarbage`), and the ROM's COMPUTER player
    (`computerMove`, the VS and WITH modes) — which unlike two-human 2P needs
