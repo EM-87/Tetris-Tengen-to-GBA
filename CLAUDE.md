@@ -179,11 +179,19 @@ running ROM; only the side panels need reflowing).
    or more full. Two values on the level screen (L for player 1, R for player
    2), a lobby stage of their own on the cable, and the garbage drawn from a
    per-game RNG so one seed buries both consoles identically.
-18. Still to do: coop (the core already models its 12-column field) and the ROM's COMPUTER player
-   (`computerMove`, the VS and WITH modes) — which unlike two-human 2P needs
-   neither a second console nor a cable. Also unported: the attract-mode demo
-   the title starts at `frameCounterHigh` = 5 (`demoStart`), the prototype
-   PIECE art (the skin is the title only).
+18. Still to do: **coop** — the core already models its 12-column field and
+   its garbage, but a 12-wide playfield plus a two-tile frame is sixteen
+   columns of the thirty, so it needs its own HUD layout rather than the
+   `10 | 10 | 10` the other modes share, and a front end. And the **COMPUTER
+   player** (`computerMove`, the VS and WITH modes), which unlike two-human 2P
+   needs neither a second console nor a cable: its piece table is decoded and
+   verified in reference/NOTES.md — start there, the profile bytes are each
+   column's bottom relative to the piece's LEFTMOST column and can be
+   generated from `kOrientationBitmap` rather than transcribed. What is left
+   is the two scoring paths, the well term they share, the tie-break and the
+   driver that turns the chosen placement into button presses. Also unported:
+   the attract-mode demo the title starts at `frameCounterHigh` = 5
+   (`demoStart`), the prototype PIECE art (the skin is the title only).
 
 ## Build
 

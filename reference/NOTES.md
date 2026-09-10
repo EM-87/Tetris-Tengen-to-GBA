@@ -477,6 +477,55 @@ to guess: a dump without the expected first row is rejected with a reason
 rather than converted into 1024 bytes of noise, and the port then builds with
 `SCREEN_PROTO_AVAILABLE 0` and L/R simply have nothing to switch to.
 
+## The COMPUTER player, traced as far as its tables (NOT yet ported)
+
+`computerMove` (`main.asm.txt:4207-4307`) is what drives the cartridge's VS
+and WITH modes. It is not yet in the port; this is the trace so far, and the
+part that took the reverse-engineering is done and verified.
+
+**The height profile.** `computerMove` first walks the playfield building
+`computerScratchA`, sixteen entries — one per nibble column — each the BYTE
+OFFSET of the first non-empty cell in that column, found by stepping down in
+eights from `$28` (`:4224-4256`). Heights are therefore in byte units, eight
+to a row, which is what makes every number below a multiple of eight.
+
+**`computerMoveSelectTableOffsetBy18` ($A0D9) is the piece table**, indexed
+`piece * 16 + orientation * 4`, four bytes an entry:
+
+| Byte | Meaning |
+| --- | --- |
+| 0 | a SIGNED bonus, added to the placement's score (`:4419`) |
+| 1-3 | the piece's bottom profile, `$80`-terminated |
+
+**And the profile is each column's bottom RELATIVE TO THE PIECE'S LEFTMOST
+COLUMN**, not to its neighbour. That is the thing worth writing down, because
+both readings look plausible against half the entries. It is settled two ways.
+The code reads `height[col0] + profile[k]` and compares against `height[col
+k]` (`:4315-4319`), which is only meaningful from a fixed origin. And
+generating the profile from the port's own `kOrientationBitmap` — bottom row
+per column, minus the leftmost column's, times eight — reproduces **all 28
+entries byte for byte**, terminator included, so the table need not be
+transcribed at all when the time comes; it can be derived and asserted.
+
+Worked: the T flat side up is `1110 / 0100`, bottoms `[0,1,0]`, so from column
+zero `[+8, 0]` — and the table says `08 00`. The L is `1110 / 1000`, bottoms
+`[1,0,0]`, from column zero `[-8,-8]` — `F8 F8`. The number of profile bytes
+before the `$80` is always the piece's width minus one, for every entry.
+
+The bonuses are where its taste lives: an I standing on end is -8 and -10, a T
+flat is +9, an L in its `$10` orientation is +15.
+
+**Still to trace and port:** `possibleComputerChoosingMove` (`:4310-4357`) and
+its bumpy-fit twin at `L9DA3` (`:4358-4429`) — the first scores a placement
+that sits FLUSH on the terrain, the second one that does not and accumulates
+the mismatch; `L9E31` (`:4430-4462`), the well/edge term both of them call;
+the two-candidate tie-break with its `+$0B` bias (`:4285-4297`); the `$0C`
+and `$00` arguments that tell `L9E31` which of the two callers it is serving;
+and then the driver that turns `compTargetX` / `compTargetOrientation` into
+button presses over frames (called from `:3735` and `:3749`). After that the
+VS and WITH modes need a front end — which, unlike two-human 2P, needs
+neither a second console nor a cable.
+
 ## The starting handicap
 
 `endPlayfieldInit` (`main.asm.txt:3536-3546`) reads `menuPlayer1Handicap`
