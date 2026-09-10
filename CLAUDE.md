@@ -121,11 +121,13 @@ running ROM; only the side panels need reflowing).
    that broke it; a completed code re-fires on its last button); all of it is
    reproduced and tested rather than tidied up.
 12. ~~Audio~~ — done, and not the way the roadmap assumed. One thing about it
-   is worth knowing before touching any of it: **MUSIC_SILENCE ($08) does not
-   silence anything.** It is `musicSelectTable`'s "no tune chosen" entry and
-   it resets the engine so the next track starts clean; the track already
-   playing carries on. The stop is MUSIC_SUSPEND, and RESUME is not free when
-   nothing was suspended. See reference/NOTES.md. The port doesn't
+   is worth knowing before touching any of it: **MUSIC_SILENCE ($08) stops
+   ONE PRIORITY CLASS, and the title theme is not in it.** The engine keeps
+   eleven voice slots; the four in-game tunes hold class 7, which is what `$08`
+   frees, while the title theme and the game-over tune hold class 8 — and a
+   class-7 tune can never evict a class-8 one. The stop for those is the
+   cartridge's own `LD040` called with 8. See reference/NOTES.md, which also
+   records what was tried before that and why a mute was not a stop. The port doesn't
    reimplement the sound engine, it RUNS it: `gba/nes6502.c` is a small 6502
    interpreter and `gba/audio_prg.h` is the slice of the cartridge holding
    the engine and its music. That was the only way to get the music, the

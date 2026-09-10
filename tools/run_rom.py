@@ -816,12 +816,27 @@ LINK_MSG_ROW = 11
 LINK_TIMEOUT_FRAMES = 600   # TENGEN_LOBBY_TIMEOUT in src/tengen_link.h
 
 
+# The second map, four pixels along, which the menus use to centre their
+# odd-length lines and the play screen uses for the statistics. See
+# SCREENBLOCK_STATS in gba/main.c.
+SCREENBLOCK_OFFSET_ADDR = SCREENBLOCK_ADDR + 0x800
+
+
 def tilemap_text(core, row, first=0, last=30):
-    """The row of the tilemap as text. The tileset's letters sit at their
-    ASCII codes (see ascii_tile in gba/main.c), so a tile id IS a character."""
+    """The row of the tilemap as text, ACROSS BOTH LAYERS.
+
+    The tileset's letters sit at their ASCII codes (see ascii_tile in
+    gba/main.c), so a tile id IS a character. A menu line of odd length is
+    drawn on the offset layer instead of the main one — reading only the main
+    map would report an empty row and every menu check would quietly stop
+    checking anything.
+    """
     out = []
     for x in range(first, last):
-        tile = core.memory.u16[SCREENBLOCK_ADDR + (row * 32 + x) * 2] & 0x3FF
+        off = (row * 32 + x) * 2
+        tile = core.memory.u16[SCREENBLOCK_ADDR + off] & 0x3FF
+        if not (32 <= tile < 127):
+            tile = core.memory.u16[SCREENBLOCK_OFFSET_ADDR + off] & 0x3FF
         out.append(chr(tile) if 32 <= tile < 127 else " ")
     return "".join(out).strip()
 
@@ -1259,35 +1274,38 @@ def leaving_title_check(rom_path):
         else:
             print(f"  mover el cursor toca la cancion: silencio y despues ${moved[1]:02X}")
 
+        # WHICH SLOTS ARE HELD, which is the question underneath all of the
+        # others. The engine keeps eleven voice slots at $0292 and the top
+        # bits of each are the song's PRIORITY CLASS: 7 for the four in-game
+        # tunes, 8 for the title theme and the game-over tune, 29 and 62 for
+        # the effects. MUSIC_SILENCE only frees class 7, and a class-7 tune
+        # can never evict a class-8 one — so "is the theme still there" is not
+        # a question about volume, it is a question about who holds the slots,
+        # and asking it that way is what finally cornered this.
+        def music_classes():
+            return sorted({core.memory.u8[ram + 0x292 + y] >> 2
+                            for y in range(11)
+                            if core.memory.u8[ram + 0x292 + y]})
+
         # AND IT HAS TO STOP COMING BACK OUT WITH YOU — which is a question
         # about the SOUND, not about the request, and asking only about the
         # request is how this passed for so long while the theme went on
-        # playing. MUSIC_SILENCE ($08) is an entry in musicSelectTable meaning
-        # "no tune chosen": it resets the engine so the next track starts
-        # clean and does NOT stop the one already running. What stops it is
-        # MUSIC_SUSPEND ($01), pauseOrUnpause's own half of the pair. So this
-        # asks for that request AND then listens: every channel's volume at
-        # zero and nothing flagged as sounding, for two whole seconds.
+        # playing. So this LISTENS for two seconds and then asks who holds the
+        # voice slots, which is the question the volume could not answer.
         core.set_keys(KEYS["B"]); run(core, 4); core.set_keys(); run(core, 14)
-        write = core.memory.u8[ram + 0x209]
-        newest = core.memory.u8[ram + 0x200 + write % 8]
-        if newest != 0x01:
+        heard = 0
+        for _ in range(120):
+            core.run_frame()
+            st = sound_state(core)
+            heard |= st["activos"] | st["pulso 1"] | st["pulso 2"]
+            heard |= st["triangulo"] | st["ruido"]
+        klass = music_classes()
+        if heard or klass:
             failures.append(
-                f"al volver a GAME SELECT no se manda MUSIC_SUSPEND "
-                f"(se mando ${newest:02X})")
+                "la musica del titulo sigue en GAME SELECT "
+                f"(canales {heard:#06b}, clases {klass})")
         else:
-            heard = 0
-            for _ in range(120):
-                core.run_frame()
-                st = sound_state(core)
-                heard |= st["activos"] | st["pulso 1"] | st["pulso 2"]
-                heard |= st["triangulo"] | st["ruido"]
-            if heard:
-                failures.append(
-                    "se manda el silencio pero la musica del titulo sigue "
-                    f"sonando en GAME SELECT (canales {heard:#06b})")
-            else:
-                print("  al volver a GAME SELECT se calla, y sigue callado")
+            print("  al volver a GAME SELECT se calla, y suelta sus voces")
 
         core.set_keys(KEYS["B"]); run(core, 4); core.set_keys(); run(core, 14)
         if last_music() != 0x09:
@@ -1311,9 +1329,31 @@ def leaving_title_check(rom_path):
         # one menu choice that must leave the engine suspended rather than
         # resumed — and it is where a resumed title theme used to surface,
         # since nothing came after it to take the speaker back.
-        press_start(core)                    # game select -> level select
-        run(core, 12)
-        core.set_keys(KEYS["UP"]); run(core, 4); core.set_keys(); run(core, 20)
+        press_start(core); run(core, 10)     # title -> game select
+        press_start(core); run(core, 12)     # -> level select
+        # ...onto a tune that is a tune: NO MUSIC and MUSIC MIX are both quiet
+        # on this screen by design, so neither can answer the next question.
+        for _ in range(8):
+            row = tilemap_text(core, MUSIC_ROW)
+            if "NO MUSIC" not in row and "MUSIC MIX" not in row:
+                break
+            core.set_keys(KEYS["DOWN"]); run(core, 4); core.set_keys(); run(core, 12)
+        # THE TUNE HAS TO BE ALONE. This is the shape the bug actually had:
+        # the theme kept its class-8 slots, the chosen tune could not take
+        # them, and it played on to its END before the tune was heard.
+        klass = music_classes()
+        if klass != [7]:
+            failures.append(
+                f"en LEVEL SELECT las voces estan en las clases {klass}, "
+                "no solo en la 7: el tema del titulo sigue ocupandolas")
+        else:
+            print("  en LEVEL SELECT solo suena la clase 7, la cancion elegida")
+
+        for _ in range(8):
+            if "NO MUSIC" in tilemap_text(core, MUSIC_ROW):
+                break
+            core.set_keys(KEYS["UP"]); run(core, 4); core.set_keys(); run(core, 12)
+        run(core, 20)
         heard = 0
         for _ in range(120):
             core.run_frame()

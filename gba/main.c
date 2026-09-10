@@ -588,9 +588,14 @@ static void draw_dancers(int elapsed, int count) {
 
         int x = DANCER_STAGE_TX * 8 - DANCER_START_OFFSET + walk;
         int y = (int)kDancerStartY[d] - DANCER_Y_ORIGIN;
-        /* Once a dancer walks off the far side of the stage it stops there
-         * rather than wandering into the score panel. */
-        int limit = (DANCER_STAGE_TX + DANCER_STAGE_TW) * 8 - 16;
+        /* They walk on from the left and STOP IN THE MIDDLE OF THE LEDGE.
+         * Where the cartridge stops them is in the choreography scripts,
+         * which are not traced, so the port has to choose — and the far edge
+         * it used to choose left every one of them half hanging off its own
+         * ledge, and off the column the banner's letters occupy, which is the
+         * same four columns (DANCER_STAGE_TX == BANNER_TX, both four wide,
+         * exactly as the cartridge has them at nametable column 14). */
+        int limit = DANCER_STAGE_TX * 8 + (DANCER_STAGE_TW * 8 - 16) / 2;
         if (x > limit) x = limit;
 
         for (int s = 0; s < DANCER_SPRITES; s++) {
@@ -606,6 +611,47 @@ static void draw_dancers(int elapsed, int count) {
         MEM_OAM[i * 4] = OBJ_ATTR0_HIDDEN;
 }
 
+
+/* ----------------------------------------------------------------------- *
+ * THE HUD HAS TWO SHAPES, AND NOW THEY HAVE NAMES
+ *
+ *   HUD STATS   the default: NEXT over the piece histogram, right box.
+ *   HUD BANNER  L+R: the cartridge's vertical TETRIS takes the right column
+ *               whole, NEXT moves down into the left box, and the level-up
+ *               dancers have somewhere to come on.
+ *
+ * The trade is the whole point of the pair. HUD STATS keeps the statistics
+ * and gives up the stage; HUD BANNER gives up the statistics and gets the
+ * show — so a player who wants to see all six cossacks at a high level has a
+ * reason to switch, and one who wants the histogram is not being punished for
+ * it. What HUD STATS gets in exchange is ONE COSSACK, standing, in the cell
+ * NEXT leaves empty at the bottom of the left box.
+ *
+ * HE IS AT REST, NOT DANCING, and that distinction is honest about what is
+ * traced. The dancers' choreography scripts are not (see reference/NOTES.md),
+ * so what "idle" looks like is the port's choice — but the POSES are the
+ * cartridge's own: numbers 0 and 1 of its table are the same stance with the
+ * arms a pixel apart, so alternating them slowly reads as breathing rather
+ * than as a step. Nothing here invents artwork.
+ * ----------------------------------------------------------------------- */
+#define IDLE_OAM_BASE 124          /* four slots nothing else reaches */
+#define IDLE_POSE_FRAMES 48        /* a slow sway, not the show's eight */
+static const uint8_t kIdlePoses[2] = { 0, 1 };
+
+static void hide_idle_cossack(void) {
+    for (int i = 0; i < DANCER_SPRITES; i++)
+        MEM_OAM[(IDLE_OAM_BASE + i) * 4] = OBJ_ATTR0_HIDDEN;
+}
+
+static void draw_idle_cossack(int elapsed, int tx, int ty, int w, int h) {
+    int pose = kIdlePoses[(elapsed / IDLE_POSE_FRAMES) & 1];
+    const uint8_t *tiles = kDancerPoses[pose];
+    int x = tx * 8 + (w * 8 - 16) / 2;
+    int y = ty * 8 + (h * 8 - 16) / 2;
+    for (int s = 0; s < DANCER_SPRITES; s++)
+        oam_set(IDLE_OAM_BASE + s, x + ((s & 1) ? 8 : 0), y + ((s & 2) ? 8 : 0),
+                 tiles[s], false, PAL_OBJ_DANCER + (kDancerAttr[0] & 3));
+}
 
 /* The puff of smoke crossing each completed row: five sprites in a row, the
  * head at the column the sweep has reached and the rest trailing one column
@@ -624,7 +670,9 @@ static void draw_line_clear_sweep(void) {
                      (uint16_t)(CLEAR_HEAD_TILE + s), false, PAL_OBJ_CLEAR);
         }
     }
-    for (int i = used; i < 128; i++) MEM_OAM[i * 4] = OBJ_ATTR0_HIDDEN;
+    /* ...but not the four at the top: the idle cossack lives there and this
+     * runs after the panel has drawn him. */
+    for (int i = used; i < IDLE_OAM_BASE; i++) MEM_OAM[i * 4] = OBJ_ATTR0_HIDDEN;
 }
 
 static void set_map_tile(int tx, int ty, uint16_t entry) {
@@ -880,6 +928,11 @@ static void draw_next_piece(int tx, int ty) {
  * a NES pad never had and this game therefore never uses — swaps the right
  * box between the piece histogram and the banner. */
 static bool g_show_banner;
+/* Frames the play screen has been up, for the idle cossack's slow sway. */
+static int g_idle_frame;
+/* True while the level-up show owns the right column; declared here because
+ * the panel has to know not to put its own cossack up against the six. */
+static bool g_dancer_active;
 
 /* The banner's own tiles and palettes, extracted on their own because the
  * reflow no longer carries NES columns 14-17. Eighteen rows, which is what
@@ -1074,7 +1127,19 @@ static void draw_panel(void) {
      * only for five pieces of seven, which is why it looked like it depended
      * on when you pressed L+R. */
     clear_both(BOX_L_TX, BOX_TOP_IN + 12, BOX_IN, 4);
-    if (g_show_banner) draw_next_label_and_piece(BOX_L_TX, BOX_TOP_IN + 12, false);
+    if (g_show_banner) {
+        draw_next_label_and_piece(BOX_L_TX, BOX_TOP_IN + 12, false);
+        hide_idle_cossack();
+    } else if (g_dancer_active || g_session.game.two_player) {
+        /* The show has the real six; a race has neither the room nor the
+         * cartridge's blessing. */
+        hide_idle_cossack();
+    } else {
+        /* HUD STATS: one cossack standing where NEXT would be. See
+         * IDLE_OAM_BASE. */
+        draw_idle_cossack(g_idle_frame, BOX_L_TX, BOX_TOP_IN + 12, BOX_IN, 4);
+    }
+    g_idle_frame++;
 
     /* The right box: the banner, the statistics, or — in a race, where the
      * cartridge keeps no statistics either — nothing.
@@ -1228,7 +1293,10 @@ static const char *const kMusicNames[MUSIC_UNLOCKED_COUNT] = {
 
 /* The rotation: the cartridge's four and the hand-entered one, which has
  * earned its place in it by the time anyone has found this. */
-static const uint8_t kMixOrder[] = { 1, 2, 3, 4, MUSIC_KOROBEINIKI };
+/* KOROBEINIKI FIRST. The mix is only on offer to somebody who found the code,
+ * so the tune the code is really about opens the first level, and the
+ * cartridge's four follow it. */
+static const uint8_t kMixOrder[] = { MUSIC_KOROBEINIKI, 1, 2, 3, 4 };
 #define MIX_COUNT (sizeof kMixOrder / sizeof kMixOrder[0])
 static uint8_t g_mix_step;
 
@@ -1246,40 +1314,49 @@ static void audio_frame(void) {
     korobeiniki_frame();
 }
 
-/* MUSIC_SILENCE IS NOT A STOP, AND THE ENGINE HAS NO OTHER ONE.
+/* MUSIC_SILENCE IS A STOP FOR ONE PRIORITY CLASS, AND THE TITLE THEME IS NOT
+ * IN IT. This is the whole of a bug that took three passes to corner, so it
+ * is worth setting down exactly.
  *
- * `$08` is an entry in musicSelectTable — "no tune chosen" — and handing it
- * to setMusicOrSoundEffect resets the engine's state so the NEXT track starts
- * clean. It does not stop what is already playing. Measured on the reference
- * interpreter (tools/nes_cpu.py) as well as here: 300 frames after a silence,
- * $4015 is still flipping bits and the title theme is still going. That is
- * the whole reason the theme kept escaping into GAME SELECT — the port was
- * asking it to stop with a word that does not mean stop.
+ * The engine keeps eleven voice slots. `$0292,y` holds each one's priority,
+ * and its top bits are the song's CLASS. Measured on the reference
+ * interpreter, slot by slot:
  *
- * What does stop it is MUSIC_SUSPEND ($01), the half of pauseOrUnpause's pair
- * (main.asm.txt:7204-7211). It silences every channel and holds them there
- * until MUSIC_RESUME ($02) — and it is not a mute: SOUND EFFECTS QUEUED AFTER
- * IT STILL PLAY, so the screen-switch blip is heard in full and the music is
- * gone underneath it, which is exactly what leaving a screen should sound
- * like.
+ *     class 7   Loginska, Bradinsky, Karinka, Troika, the level-up jingle
+ *     class 8   THE TITLE THEME, and the game-over tune
+ *     class 29  the drop, the line clear, the menu click, the chirp
+ *     class 62  the screen switch, the top-out
  *
- * The catch is that RESUME is NOT free when nothing is suspended: on a cold
- * engine it costs the first frame of the tune and the two recordings drift
- * apart from there. So the port tracks what it did rather than firing one
- * hopefully. */
-static bool g_music_suspended;
+ * `MUSIC_SILENCE` ($08) is not a tune at all: it dispatches to `LD040`
+ * (`main.asm.txt:8462-8476`), which walks the slots and frees every one whose
+ * class matches `$020B` — and `$08`'s argument is SEVEN. So it stops the four
+ * in-game tunes and nothing else. Worse, `LD0E4`'s allocator refuses to evict
+ * a slot held at a higher priority (`:8637-8641`), so a class-7 tune can
+ * never displace the class-8 theme however it is asked.
+ *
+ * That is every symptom at once: the theme playing on under GAME SELECT, the
+ * theme coming back at LEVEL SELECT and running to its END before the chosen
+ * tune could take the slots, and a match started early carrying it along.
+ * Suspending only muted it; the slots were still its.
+ *
+ * The fix is the cartridge's own routine with the argument it is never given:
+ * `LD040` begins `sta $020B`, so calling it with 8 frees the title theme's
+ * class exactly the way `$08` frees the tunes'. Both together empty every
+ * music slot and `$4015` reads zero — real silence, with the effects (classes
+ * 29 and 62) untouched, so the screen-switch blip is still heard in full. */
+#define NES_AUDIO_STOP_ADDR   0xD040   /* LD040, main.asm.txt:8462 */
+#define NES_MUSIC_CLASS_GAME  7        /* what MUSIC_SILENCE frees */
+#define NES_MUSIC_CLASS_TITLE 8        /* ...and what it does not */
+#define NES_AUDIO_STOP_STEPS  4000     /* eleven slots; a hang guard, not timing */
+
+static void stop_music_class(uint8_t klass) {
+    nes_rom_call(NES_AUDIO_STOP_ADDR, klass, NES_AUDIO_STOP_STEPS);
+}
 
 static void stop_music(void) {
     korobeiniki_stop();
-    if (g_music_suspended) return;
-    g_music_suspended = true;
-    nes_audio_play(NES_MUSIC_SUSPEND);
-}
-
-static void resume_music(void) {
-    if (!g_music_suspended) return;
-    g_music_suspended = false;
-    nes_audio_play(NES_MUSIC_RESUME);
+    stop_music_class(NES_MUSIC_CLASS_TITLE);
+    stop_music_class(NES_MUSIC_CLASS_GAME);
 }
 
 /* Starts whichever tune is chosen, on whichever engine owns it. The two never
@@ -1316,14 +1393,16 @@ static void start_music(uint8_t music) {
     korobeiniki_stop();
     uint8_t track = kMusicTracks[music < MUSIC_COUNT ? music : 0];
     if (track == NES_MUSIC_SILENCE) {
-        /* musicSelectTable's first entry is no tune at all. Asking for it
-         * would only reset the engine, not quiet it. */
+        /* musicSelectTable's first entry is no tune at all. */
         stop_music();
         return;
     }
+    /* The title theme's class first, or the tune below cannot take the slots
+     * off it — see stop_music_class. Free even when nothing is playing: it is
+     * a walk of eleven bytes. */
+    stop_music_class(NES_MUSIC_CLASS_TITLE);
     nes_audio_play(NES_MUSIC_SILENCE);
     nes_audio_play(track);
-    resume_music();
 }
 
 /* The ROM has a title screen and then separate selection screens, drawn in
@@ -1655,14 +1734,52 @@ static void draw_title_sprites(void) {
 /* The level selector, inside the ROM's own menu frame. The wording matches
  * the cartridge's ("LEVEL SELECT" is one of the strings it writes into this
  * same empty middle), and the digits are its font. */
-static unsigned music_name_len(uint8_t music) {
+/* The cartridge's menu frame, which every selection screen is drawn inside. */
+/* ----------------------------------------------------------------------- *
+ * CENTRING MENU TEXT, and the half tile that stops it looking centred.
+ *
+ * The menu frame's interior is columns 2-26, twenty-six of them, so its middle
+ * is 14.5 — between two tiles. An EVEN number of characters lands on it
+ * exactly; an ODD number can only sit half a tile to one side, and since these
+ * screens stack odd and even lines on top of each other ("MUSIC" over
+ * "LOGINSKA", "LEVEL SELECT" over the ten digits) the mismatch shows as one
+ * line sitting off from the one above it. That is the whole of "ahora que miro
+ * fino igual casi todo esta descentrado".
+ *
+ * So the odd lines ride the offset layer, which is idle on these screens, with
+ * its scroll set to half a tile. Same trick as the statistics and the title's
+ * TENGEN, same reason: art centred on the tile grid whose ink is not.
+ * ----------------------------------------------------------------------- */
+#define MENU_IN_TX 2
+#define MENU_IN_W 26
+#define MENU_TEXT_SHIFT_PX 4
+
+static unsigned text_len(const char *s) {
     unsigned n = 0;
-    while (kMusicNames[music][n]) n++;
+    while (s[n]) n++;
     return n;
 }
 
-/* The cartridge's menu frame, which every selection screen is drawn inside. */
+/* Writes `text` centred in the frame, on whichever layer makes it land on the
+ * middle. Both maps are cleared first, so a name that was odd last frame and
+ * is even this one leaves nothing behind. */
+static void draw_text_centred(int ty, const char *text, int bank) {
+    unsigned len = text_len(text);
+    int tx = MENU_IN_TX + ((int)MENU_IN_W - (int)len) / 2;
+    bool offset = (len & 1u) != 0;
+    for (int x = 0; x < MENU_IN_W; x++) {
+        set_map_tile(MENU_IN_TX + x, ty, T_BLANK);
+        set_stats_tile(MENU_IN_TX + x, ty, T_BLANK);
+    }
+    for (unsigned i = 0; i < len; i++) {
+        uint16_t entry = WITH_BANK(ascii_tile(text[i]), bank);
+        if (offset) set_stats_tile(tx + (int)i, ty, entry);
+        else        set_map_tile(tx + (int)i, ty, entry);
+    }
+}
+
 static void draw_menu_frame(void) {
+    set_offset_layer(MENU_TEXT_SHIFT_PX);
     for (int ty = 0; ty < SCREEN_MENU_H_TILES; ty++) {
         for (int tx = 0; tx < SCREEN_MENU_W; tx++) {
             int i = ty * SCREEN_MENU_W + tx;
@@ -1674,10 +1791,10 @@ static void draw_menu_frame(void) {
 
 static void draw_game_select(uint8_t choice) {
     draw_menu_frame();
-    draw_text(10, 8, "GAME SELECT", PAL_MENU_BASE + 3);
+    draw_text_centred(8, "GAME SELECT", PAL_MENU_BASE + 3);
     for (int i = 0; i < GAME_COUNT; i++)
-        draw_text(11, 10 + i * 2, kGameNames[i],
-                   i == choice ? BANK_HILITE : PAL_MENU_BASE + 3);
+        draw_text_centred(10 + i * 2, kGameNames[i],
+                           i == choice ? BANK_HILITE : PAL_MENU_BASE + 3);
     /* The credit the cartridge never printed. Tengen's title screen carries
      * "(C)1987 ACADEMYSOFT-ELORG" — the Soviet institute, not the man — and
      * the licensing fight that followed is the reason this cartridge was
@@ -1693,7 +1810,7 @@ static void draw_game_select(uint8_t choice) {
      * The menu frame's black interior is columns 3-26 — twenty-four of them —
      * so the full "TETRIS BY ALEXEY PAJITNOV" (twenty-five) ran over the braid
      * at both ends. The word TETRIS is already six tiles tall above this. */
-    draw_text(6, 15, "BY ALEXEY PAJITNOV", PAL_MENU_BASE + 3);
+    draw_text_centred(15, "BY ALEXEY PAJITNOV", PAL_MENU_BASE + 3);
 }
 
 /* What the lobby is doing, while it does it. Two consoles reach this screen
@@ -1755,14 +1872,27 @@ static void draw_level_select(uint8_t start_level, uint8_t music,
      * screens write into — its GAME SELECT list lives exactly there — so the
      * port's selection goes in the same place rather than over the frame or
      * the big TETRIS logo above it. */
-    draw_text(9, 8, "LEVEL SELECT", PAL_MENU_BASE + 3);
-    for (int level = 0; level < START_LEVEL_COUNT; level++) {
-        /* The chosen level is picked out in a different palette, the way the
-         * ROM highlights a menu selection. */
-        draw_number(6 + level * 2, 10, (uint32_t)level, 1,
-                     level == start_level ? BANK_HILITE : PAL_MENU_BASE + 3);
+    draw_text_centred(8, "LEVEL SELECT", PAL_MENU_BASE + 3);
+    /* Ten digits at a pitch of two is nineteen cells — odd, so this row goes
+     * through the same centring as the words above and below it. The chosen
+     * level is picked out in a different palette, the way the ROM highlights
+     * a menu selection. */
+    {
+        char digits[START_LEVEL_COUNT * 2];
+        for (int level = 0; level < START_LEVEL_COUNT; level++) {
+            digits[level * 2] = (char)('0' + level);
+            if (level * 2 + 1 < (int)sizeof digits) digits[level * 2 + 1] = ' ';
+        }
+        digits[START_LEVEL_COUNT * 2 - 1] = '\0';
+        draw_text_centred(10, digits, PAL_MENU_BASE + 3);
+        /* ...and the chosen one again, in its own colour, on the layer the
+         * row just landed on. */
+        int tx = MENU_IN_TX + (MENU_IN_W - (START_LEVEL_COUNT * 2 - 1)) / 2;
+        set_stats_tile(tx + start_level * 2, 10,
+                        WITH_BANK(ascii_tile((char)('0' + start_level)),
+                                  BANK_HILITE));
     }
-    draw_text(6, 11, "LEFT RIGHT TO SET", PAL_MENU_BASE + 3);
+    draw_text_centred(11, "LEFT RIGHT TO SET", PAL_MENU_BASE + 3);
 
     /* THE STARTING HANDICAP, the cartridge's own menuPlayer1Handicap /
      * menuPlayer2Handicap (main.asm.txt:3536-3546) — how many three-row bands
@@ -1770,24 +1900,31 @@ static void draw_level_select(uint8_t start_level, uint8_t music,
      * because that is what makes it a handicap rather than a difficulty
      * setting: the shoulder button on a player's side of the pad cycles that
      * player's. In one-player there is only one to cycle and both do it. */
-    draw_text(11, 12, "HANDICAP", PAL_MENU_BASE + 3);
-    clear_region(4, 13, 22, 1);
-    if (g_session.game.two_player) {
-        draw_text(6, 13, "L", PAL_MENU_BASE + 3);
-        draw_number(8, 13, handicap[0], 1, BANK_HILITE);
-        draw_text(11, 13, "BURY", PAL_MENU_BASE + 3);
-        draw_number(18, 13, handicap[1], 1, BANK_HILITE);
-        draw_text(20, 13, "R", PAL_MENU_BASE + 3);
-    } else {
-        draw_text(6, 13, "L R TO SET", PAL_MENU_BASE + 3);
-        draw_number(19, 13, handicap[0], 1, BANK_HILITE);
+    draw_text_centred(12, "HANDICAP", PAL_MENU_BASE + 3);
+    {
+        char row[24];
+        unsigned n = 0;
+        if (g_session.game.two_player) {
+            const char *lead = "L ";
+            while (*lead) row[n++] = *lead++;
+            row[n++] = (char)('0' + handicap[0]);
+            const char *mid = "  BURY  ";
+            while (*mid) row[n++] = *mid++;
+            row[n++] = (char)('0' + handicap[1]);
+            row[n++] = ' ';
+            row[n++] = 'R';
+        } else {
+            const char *lead = "L R TO SET  ";
+            while (*lead) row[n++] = *lead++;
+            row[n++] = (char)('0' + handicap[0]);
+        }
+        row[n] = '\0';
+        draw_text_centred(13, row, PAL_MENU_BASE + 3);
     }
 
-    draw_text(12, 14, "MUSIC", PAL_MENU_BASE + 3);
-    clear_region(4, 15, 22, 1);
-    draw_text(15 - (int)(music_name_len(music) / 2), 15,
-               kMusicNames[music], BANK_HILITE);
-    draw_text(7, 16, "UP DOWN TO PICK", PAL_MENU_BASE + 3);
+    draw_text_centred(14, "MUSIC", PAL_MENU_BASE + 3);
+    draw_text_centred(15, kMusicNames[music], BANK_HILITE);
+    draw_text_centred(16, "UP DOWN TO PICK", PAL_MENU_BASE + 3);
 }
 
 
@@ -1856,7 +1993,6 @@ static uint8_t g_music = 1;
 /* The interlude's clock, which is the ROM's player1FallTimer: `active` while
  * the show is on, `timer` counting $7C..$FF at one step every sixteen frames.
  * See the note beside DANCER_TIMER_START for why it is shaped like this. */
-static bool g_dancer_active;
 static uint8_t g_dancer_timer;
 static uint16_t g_dancer_tick;   /* stands in for frameCounterLow & $0F */
 static int g_dancer_elapsed;     /* frames since the show started, for the poses */
@@ -1916,7 +2052,8 @@ static void announce_step(TengenStepResult step) {
     }
     if (step.topped_out) {
         korobeiniki_stop();
-        resume_music();          /* free unless a pause left it suspended */
+        /* The game-over tune is class 8 like the title's, so the in-game
+         * tune's own class has to be freed for it — which MUSIC_SILENCE does. */
         nes_audio_play(NES_MUSIC_SILENCE);
         nes_audio_play(NES_MUSIC_GAMEOVER);
     }
@@ -2013,13 +2150,20 @@ static void front_music(uint8_t which) {
         return;
     }
     if (which == FRONT_TITLE_THEME) {
-        /* FROM THE TOP, every time. The silence resets the engine before the
-         * theme is handed to it, so coming back to the title starts the tune
-         * again rather than picking it up wherever it was frozen. */
+        /* FROM THE TOP, every time — and freeing its own class is what makes
+         * that happen. LD0E4 refuses a class-8 song that is already in a slot
+         * outright (main.asm.txt:8590-8597), so without this the theme would
+         * simply carry on from wherever it was. */
         korobeiniki_stop();
+        stop_music_class(NES_MUSIC_CLASS_TITLE);
         nes_audio_play(NES_MUSIC_SILENCE);
         nes_audio_play(NES_MUSIC_TITLESCREEN);
-        resume_music();
+        return;
+    }
+    /* MUSIC MIX IS QUIET ON THE MENU, like NO MUSIC: there is no one tune to
+     * preview, and the rotation belongs to the match. */
+    if (which == MUSIC_MIX) {
+        stop_music();
         return;
     }
     start_music(which);
@@ -2041,7 +2185,8 @@ static bool solo_play_frame(uint8_t buttons, uint8_t pressed) {
              * (main.asm.txt:7204-7211) — the same pair the front end uses to
              * go quiet, through the same two helpers so the port never loses
              * track of which state the engine is actually in. */
-            if (g_session.game.paused) stop_music(); else resume_music();
+            nes_audio_play(g_session.game.paused ? NES_MUSIC_SUSPEND
+                                                  : NES_MUSIC_RESUME);
             /* MUSIC_SUSPEND only silences the cartridge's engine. The fifth
              * tune has its own channels and has to be stopped and restarted
              * with it, or PAUSE would leave it playing on its own. */

@@ -782,17 +782,59 @@ sprite in it moves by that one offset. Where it appears shifts by up to a
 couple of tiles from where the cartridge puts it, which a firework has no
 business minding, and it stays round.
 
-## MUSIC_SILENCE does not silence anything
+## MUSIC_SILENCE is a stop for ONE PRIORITY CLASS, and the title theme is not in it
 
-`$08` is an entry in `musicSelectTable` — "no tune chosen". Handing it to
-`setMusicOrSoundEffect` resets the engine's state so the NEXT track starts
-clean, which is why `LA035` sends it before every tune and why the port does
-too. It does NOT stop what is already playing. Measured both on the port and
-on the reference interpreter in `tools/nes_cpu.py`: three hundred frames after
-a silence, `$4015` is still flipping bits and the title theme is still going.
-That is the whole of "la musica se sigue escapando" — the port was asking it
-to stop with a word that does not mean stop, and the check that was supposed
-to catch it only looked at the REQUEST.
+This took three passes to corner, and each pass was a real finding sitting on
+top of the next one, so all of it is here.
+
+`$08` is not a tune. It dispatches to `LD040` (`main.asm.txt:8462-8476`),
+which walks the engine's ELEVEN VOICE SLOTS and frees every one whose PRIORITY
+CLASS matches `$020B` — and `$08`'s argument is SEVEN. The classes, measured
+slot by slot off `tools/nes_cpu.py`:
+
+| Class | Who |
+| --- | --- |
+| 7 | Loginska, Bradinsky, Karinka, Troika, the level-up jingle |
+| 8 | **the title theme, and the game-over tune** |
+| 29 | the drop, the line clear, the menu click, the chirp |
+| 62 | the screen switch, the top-out |
+
+So `MUSIC_SILENCE` stops the four in-game tunes and nothing else. And
+`LD0E4`'s allocator refuses to evict a slot held at a higher priority
+(`:8637-8641`), so a class-7 tune can never displace the class-8 theme however
+politely it is asked. `LD0E4` also refuses a class-8 song that is ALREADY in a
+slot outright (`:8590-8597`), which is why the theme would not even restart.
+
+That is every symptom at once, and it explains why each earlier fix only moved
+the problem: the theme playing on under GAME SELECT; the theme coming back at
+LEVEL SELECT and running to its END before the chosen tune could take the
+slots; a match started early carrying it along. Suspending it (see below) only
+muted it — the slots were still its.
+
+**The fix is the cartridge's own routine with the argument it is never given.**
+`LD040` begins `sta $020B`, so calling it with 8 frees the title theme's class
+exactly the way `$08` frees the tunes'. Both together empty every music slot
+and `$4015` reads zero: real silence, with the effects (classes 29 and 62)
+untouched, so the screen-switch blip is still heard in full.
+
+`make gba-check --leave-title` now asks WHO HOLDS THE SLOTS rather than how
+loud it is — GAME SELECT must hold none, LEVEL SELECT only class 7 — which is
+the question the volume could never answer.
+
+### What was tried first, and why it was not enough
+
+`MUSIC_SUSPEND` ($01), the half of `pauseOrUnpause`'s pair
+(`main.asm.txt:7204-7211`), silences every channel and holds them there until
+`MUSIC_RESUME` ($02). It is still what PAUSE uses, and two things about it are
+worth keeping written down: sound effects queued after it still play, and
+RESUME is NOT free when nothing is suspended — on a cold engine it costs the
+first frame of the tune. But it is a mute, not a stop: the theme kept its
+slots through it and came back on the RESUME.
+
+`updateAudio` also takes exactly ONE request off the ring per frame
+(`$CFCC-$CFDB`), so the order requests are queued in is the order they are
+heard in, a frame apart, and `$CFC3` DROPS on a full ring. Both matter for any
+sequence longer than two.
 
 What stops it is **`MUSIC_SUSPEND` ($01)**, the half of `pauseOrUnpause`'s
 pair (`main.asm.txt:7204-7211`). It silences every channel and holds them
