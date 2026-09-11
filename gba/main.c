@@ -2169,15 +2169,22 @@ static void draw_link_wait(const TengenLobby *lobby, int elapsed) {
 #define MENU_FIELD_TY(f) (8 + (f) * 3)
 #define MENU_FOOT_TY 16
 
-/* TWO COLUMNS, centred as a block. Labels start at one column and values at
- * another, both fixed for all three rows, so the page reads as a table rather
- * than as three sentences: eight columns for the longest label (HANDICAP),
- * three of gap, eleven for the longest value (KOROBEINIKI) is twenty-two of
- * the interior's twenty-six, which leaves two either side. The cursor lives
- * in the left margin, the way a menu arrow does. */
-#define MENU_LABEL_TX  (MENU_IN_TX + 2)
-#define MENU_VALUE_TX  (MENU_LABEL_TX + 11)
-#define MENU_CURSOR_TX MENU_IN_TX
+/* TWO COLUMNS, centred on what is USUALLY in them. Labels start at one column
+ * and values at another, both fixed for all three rows, so the page reads as a
+ * table rather than as three sentences.
+ *
+ * Where to put the two columns is not the same question as how wide to make
+ * them. Sized for the worst case — eleven columns, which only KOROBEINIKI
+ * ever needs — the block centres on paper and reads a full tile left of centre
+ * every other second, because the value there is one digit or an eight-letter
+ * tune name. Measured on the built ROM, the three rows' ink spanned x 32..190
+ * against an interior running 16..223: sixteen pixels left of its middle.
+ * So the columns are placed for a value of EIGHT or so — MUSIC's row then
+ * centres on 119.5 exactly — and the one name that is longer runs on into the
+ * right margin, where there is still a tile of air before the braid. */
+#define MENU_LABEL_TX  (MENU_IN_TX + 4)
+#define MENU_VALUE_TX  (MENU_LABEL_TX + 10)
+#define MENU_CURSOR_TX (MENU_LABEL_TX - 2)
 /* ...and anything the value trails, two columns further on. */
 #define MENU_TAIL_GAP 2
 
@@ -2251,7 +2258,11 @@ static void draw_level_settings(int chosen, uint8_t start_level, uint8_t music,
         n = append_number(value, n, handicap[1]);
     }
     value[n] = '\0';
-    if (!two_player) {
+    /* ...and only while the cursor is on the field: it is there to answer the
+     * question you are asking, and the rest of the time it is one more thing
+     * on the page. */
+    bool show_depth = !two_player && chosen == MENU_FIELD_HANDICAP;
+    if (show_depth) {
         unsigned d = append_number(depth, 0,
                                     (unsigned)handicap[0] * TENGEN_HANDICAP_ROWS_PER_STEP);
         const char *unit = " ROWS";
@@ -2259,7 +2270,7 @@ static void draw_level_settings(int chosen, uint8_t start_level, uint8_t music,
         depth[d] = '\0';
     }
     draw_field_row(MENU_FIELD_HANDICAP, chosen, "HANDICAP", value,
-                    two_player ? NULL : depth);
+                    show_depth ? depth : NULL);
 
     draw_field_row(MENU_FIELD_MUSIC, chosen, "MUSIC", kMusicNames[music], NULL);
 
@@ -2278,7 +2289,7 @@ static void draw_level_settings(int chosen, uint8_t start_level, uint8_t music,
         draw_text_centred(MENU_FIELD_TY(MENU_FIELD_HANDICAP) + 1, row, BANK_NOTE);
     }
 
-    draw_text_centred(MENU_FOOT_TY, "START TO PLAY", BANK_NOTE);
+    draw_text_centred(MENU_FOOT_TY, "PRESS START TO PLAY", BANK_NOTE);
 }
 
 

@@ -1344,7 +1344,7 @@ def menu_check(rom_path):
 
     failures = []
     for row, want in ((LEVEL_ROW, "LEVEL"), (HANDICAP_ROW, "HANDICAP"),
-                       (MUSIC_ROW, "MUSIC")):
+                       (MUSIC_ROW, "MUSIC"), (16, "PRESS START TO PLAY")):
         if want not in tilemap_text(core, row):
             failures.append(f"la fila {row} no dice {want}: "
                              f"{tilemap_text(core, row)!r}")
