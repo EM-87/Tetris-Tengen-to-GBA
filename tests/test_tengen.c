@@ -781,8 +781,8 @@ static void test_two_linked_machines_stay_identical(void) {
      * this ever fails, a linked game silently drifts into two different
      * games — which is why it is tested here and not left to a cable. */
     TengenLink master, slave;
-    tengen_link_start(&master, 0x1234, 3, TENGEN_PLAYER_1);
-    tengen_link_start(&slave, 0x1234, 3, TENGEN_PLAYER_2);
+    tengen_link_start(&master, 0x1234, 3, TENGEN_PLAYER_1, false);
+    tengen_link_start(&slave, 0x1234, 3, TENGEN_PLAYER_2, false);
 
     CHECK(master.game.two_player && !master.game.coop);
     CHECK(memcmp(&master.game, &slave.game, sizeof(master.game)) == 0);
@@ -817,7 +817,7 @@ static void test_two_linked_machines_stay_identical(void) {
 
 static void test_a_lost_transfer_stops_the_link_rather_than_drifting(void) {
     TengenLink master;
-    tengen_link_start(&master, 7, 0, TENGEN_PLAYER_1);
+    tengen_link_start(&master, 7, 0, TENGEN_PLAYER_1, false);
 
     /* A word from the right frame is accepted... */
     CHECK(tengen_link_step(&master, 0, tengen_link_pack(0, 0), 0));
@@ -872,7 +872,7 @@ static void test_the_button_that_starts_a_match_does_not_pause_it(void) {
      * press and pauses it on the spot. Seeding held_last_frame with
      * everything-held is what stops that; this pins it. */
     TengenLink link;
-    tengen_link_start(&link, 0xACE1, 0, TENGEN_PLAYER_1);
+    tengen_link_start(&link, 0xACE1, 0, TENGEN_PLAYER_1, false);
     for (int i = 0; i < 2; i++) link.game.player[i].held_last_frame = 0xFF;
 
     uint16_t remote = tengen_link_pack(TENGEN_BTN_START, 0);
@@ -914,7 +914,7 @@ static void test_the_lobby_connects_first_and_the_master_chooses_after(void) {
     CHECK(!master.ready && !slave.ready);   /* and must not start the match either */
 
     const uint8_t handicap[2] = { 1, 4 };
-    tengen_lobby_release(&master, 0xBEEF, 7, 2, handicap);
+    tengen_lobby_release(&master, 0xBEEF, 7, 2, handicap, false);
     for (int i = 0; i < 64 && !(master.ready && slave.ready); i++)
         lobby_transfer(&master, &slave, true);
 
@@ -1008,8 +1008,8 @@ static void test_a_lobby_hands_straight_over_to_a_matching_pair_of_games(void) {
     CHECK(lobby_m.ready && lobby_s.ready);
 
     TengenLink master, slave;
-    tengen_link_start(&master, lobby_m.seed, lobby_m.start_level, TENGEN_PLAYER_1);
-    tengen_link_start(&slave, lobby_s.seed, lobby_s.start_level, TENGEN_PLAYER_2);
+    tengen_link_start(&master, lobby_m.seed, lobby_m.start_level, TENGEN_PLAYER_1, false);
+    tengen_link_start(&slave, lobby_s.seed, lobby_s.start_level, TENGEN_PLAYER_2, false);
     CHECK(memcmp(&master.game, &slave.game, sizeof(master.game)) == 0);
 
     for (int frame = 0; frame < 500; frame++) {
@@ -1029,11 +1029,72 @@ static void test_a_lobby_hands_straight_over_to_a_matching_pair_of_games(void) {
     CHECK(master.game.player[1].piece.current != TT_NONE);
 }
 
+static void test_coop_is_one_twelve_wide_board_over_the_cable(void) {
+    /* COOPERATIVE is the third mode the cartridge offers and the only one
+     * where the two players share a field: initPlayer1orCoopPlayfield leaves
+     * the wall nibbles open (main.asm.txt:3480-3489) and both play into
+     * field[0]. Over a cable that is the same lockstep as a race — both
+     * consoles simulate both players — so what this checks is that the
+     * LOBBY carries the choice and that the shared board stays shared.
+     */
+    TengenLobby lobby_m, lobby_s;
+    const uint8_t handicap[2] = { 0, 0 };
+    tengen_lobby_start_held(&lobby_m, 0x0C0F);
+    tengen_lobby_start(&lobby_s, 0, 0, 0);
+    for (int i = 0; i < 40 && !lobby_m.linked; i++)
+        lobby_transfer(&lobby_m, &lobby_s, true);
+    tengen_lobby_release(&lobby_m, 0x0C0F, 2, 1, handicap, true);
+    for (int i = 0; i < 100 && !(lobby_m.ready && lobby_s.ready); i++)
+        lobby_transfer(&lobby_m, &lobby_s, true);
+    CHECK(lobby_m.ready && lobby_s.ready);
+    /* The flag rides bit 8 of the CONFIG payload and has to arrive. */
+    CHECK(lobby_s.coop);
+
+    TengenLink master, slave;
+    tengen_link_start(&master, lobby_m.seed, lobby_m.start_level,
+                       TENGEN_PLAYER_1, lobby_m.coop);
+    tengen_link_start(&slave, lobby_s.seed, lobby_s.start_level,
+                       TENGEN_PLAYER_2, lobby_s.coop);
+    CHECK(master.game.coop && slave.game.coop);
+    CHECK(memcmp(&master.game, &slave.game, sizeof(master.game)) == 0);
+
+    /* Twelve playable columns, because the sentinels are gone. */
+    for (int row = 0; row < TENGEN_PF_HEIGHT; row++) {
+        CHECK(master.game.field[0].cell[row][0] == TT_NONE);
+        CHECK(master.game.field[0].cell[row][TENGEN_PF_WIDTH - 1] == TT_NONE);
+    }
+    /* ...and they start on opposite sides of it. */
+    CHECK(master.game.player[0].piece.x == TENGEN_SPAWN_X[0]);
+    CHECK(master.game.player[1].piece.x == TENGEN_SPAWN_X[1]);
+
+    for (int frame = 0; frame < 600; frame++) {
+        uint8_t p1 = scripted_buttons(0, frame);
+        uint8_t p2 = scripted_buttons(1, frame);
+        uint16_t from_master = tengen_link_send_word(&master, p1);
+        uint16_t from_slave = tengen_link_send_word(&slave, p2);
+        CHECK(tengen_link_step(&master, p1, from_slave, 0));
+        CHECK(tengen_link_step(&slave, p2, from_master, 0));
+    }
+    CHECK(memcmp(&master.game, &slave.game, sizeof(master.game)) == 0);
+
+    /* Both players' pieces landed in the SAME field, which is the whole of
+     * what coop is: field[1] is never touched. */
+    int settled = 0;
+    for (int row = 0; row < TENGEN_PF_HEIGHT; row++)
+        for (int col = 0; col < TENGEN_PF_WIDTH; col++) {
+            if (master.game.field[0].cell[row][col] != TT_NONE) settled++;
+            CHECK(master.game.field[1].cell[row][col] == TT_NONE);
+        }
+    CHECK(settled > 0);
+    /* And one level between them: tengen_step copies it across in coop. */
+    CHECK(master.game.player[0].level == master.game.player[1].level);
+}
+
 static void test_either_player_can_pause_a_linked_game(void) {
     /* pauseOrUnpause ORs both controllers (main.asm.txt:7196-7198), so this
      * has to hold over the cable too. */
     TengenLink link;
-    tengen_link_start(&link, 11, 0, TENGEN_PLAYER_1);
+    tengen_link_start(&link, 11, 0, TENGEN_PLAYER_1, false);
     CHECK(!link.game.paused);
 
     /* Player 2, the remote one, presses Start. */
@@ -1604,6 +1665,7 @@ int main(void) {
     test_no_lobby_word_can_look_like_an_absent_console();
     test_a_lobby_hands_straight_over_to_a_matching_pair_of_games();
     test_the_wire_word_survives_a_round_trip();
+    test_coop_is_one_twelve_wide_board_over_the_cable();
     test_either_player_can_pause_a_linked_game();
     test_level_starts_at_the_chosen_start_level();
     test_level_is_recomputed_from_the_line_total();

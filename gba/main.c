@@ -50,6 +50,7 @@
 #include "tiles_title_obj.h"
 #include "tiles_title.h"
 #include "screen_1p.h"
+#include "screen_coop.h"
 #include "screen_title.h"
 #include "screen_proto.h"
 #include "screen_menu.h"
@@ -179,10 +180,28 @@ static void set_offset_layer(int px) {
  * 12 — and leaves the frame alone. Drawing the core's wall sentinels as block
  * tiles instead would both cover the cartridge's art and shift the field a
  * column, which is exactly what an earlier pass here did. */
+/* COOP IS TWELVE COLUMNS AND HAS A SCREEN OF ITS OWN. The ROM writes $00
+ * where it would otherwise write the wall nibbles when playMode is coop
+ * (main.asm.txt:3480-3489, and its own comment there: "to add 1 column on
+ * either side"), so the two sentinel columns the core keeps become playable
+ * and the board is twelve wide. The cartridge draws that mode on its own
+ * nametable — screen 5, already symmetric, with a seven-column panel either
+ * side and the dancers' ledges down both — so the port reflows that one for
+ * coop instead of the 1P screen. See gba/screen_coop.h. */
 #define FIELD_TX SCREEN_1P_FIELD_TX  /* port column of the first playable one */
 #define FIELD_TY 0   /* the field starts at the top of the visible window */
 #define FIELD_COL0 1              /* storage column of the first playable one */
 #define FIELD_PLAYABLE (TENGEN_PF_WIDTH - 2)
+#define COOP_FIELD_TX SCREEN_COOP_FIELD_TX
+#define COOP_FIELD_COL0 0
+#define COOP_FIELD_PLAYABLE TENGEN_PF_WIDTH
+
+/* ...and what a twelve-wide board leaves of thirty: seven columns either
+ * side. Not boxes — the cartridge's coop screen leaves them open, with the
+ * dancers' ledges ruled across them. See draw_coop_panel. */
+#define COOP_PANEL_W 7
+#define COOP_L_TX 0
+#define COOP_R_TX (SCREEN_TW - COOP_PANEL_W)
 
 /* THE TWO BOXES, WHICH ARE MADE OF THE BRAID ITSELF.
  *
@@ -443,6 +462,19 @@ const uint16_t kGameProbe[10] = {
 };
 
 static TengenLink g_session;
+
+/* The board's geometry, which is the MODE'S: see COOP_FIELD_TX. Read through
+ * these rather than the constants, so a coop game does not quietly draw its
+ * twelve columns into ten columns' worth of screen. */
+static int field_tx(void) {
+    return g_session.game.coop ? COOP_FIELD_TX : FIELD_TX;
+}
+static int field_col0(void) {
+    return g_session.game.coop ? COOP_FIELD_COL0 : FIELD_COL0;
+}
+static int field_cols(void) {
+    return g_session.game.coop ? COOP_FIELD_PLAYABLE : FIELD_PLAYABLE;
+}
 /* The best score of this session. The cartridge's own 1P panel shows one
  * (see draw_panel), and like the cartridge's it does not survive a reset. */
 static uint32_t g_high_score;
@@ -636,6 +668,53 @@ static void oam_hide_all(void) {
     for (int i = 0; i < 128; i++) MEM_OAM[i * 4] = OBJ_ATTR0_HIDDEN;
 }
 
+/* COOP'S EIGHT, in TWO columns, which is the other half of the same table.
+ *
+ * Entries 6-13 of the ROM's position tables pair the dancers off down the two
+ * sides at NES x $40 and $B1 — just inside each panel — and four heights
+ * whose feet land on the ledges the coop screen already carries. So there is
+ * no stage to blit here: the cartridge drew it into the nametable, and the
+ * port is showing that nametable.
+ *
+ * They walk OUTWARD, each column toward its own side, which is what attribute
+ * bit 6 on the left-hand entries is for: the same sprite mirrored, facing the
+ * way it is going. Where they stop is the port's choice for the same reason
+ * it is in a solo game — the choreography scripts are not traced — and it is
+ * the middle of the panel they are walking onto. */
+static void draw_coop_dancers(int elapsed, int count) {
+    int pose_step = elapsed / DANCER_POSE_FRAMES;
+    int walk = elapsed / DANCER_WALK_FRAMES;
+
+    if (count > DANCER_COOP_COUNT) count = DANCER_COOP_COUNT;
+    for (int d = 0; d < count; d++) {
+        int pose = (pose_step + d * 5) % DANCER_POSE_COUNT;
+        const uint8_t *tiles = kDancerPoses[pose];
+        uint8_t attr = kDancerCoopAttr[d];
+        bool leftward = (attr & 0x40) != 0;   /* mirrored: walks to the left */
+
+        /* NES pixels to the port's: one column came off the left of the
+         * screen, and the window starts at the field's first row. */
+        int x = (int)kDancerCoopX[d] - 8;
+        int y = (int)kDancerCoopY[d] - SCREEN_COOP_FIELD_TY * 8;
+
+        int limit = leftward
+            ? (COOP_PANEL_W * 8 - 16) / 2
+            : COOP_R_TX * 8 + (COOP_PANEL_W * 8 - 16) / 2;
+        x += leftward ? -walk : walk;
+        if (leftward ? (x < limit) : (x > limit)) x = limit;
+
+        for (int s = 0; s < DANCER_SPRITES; s++) {
+            /* A mirrored pair swaps its own left and right halves. */
+            int sx = x + (((s & 1) != 0) != leftward ? 8 : 0);
+            int sy = y + ((s & 2) ? 8 : 0);
+            oam_set(d * DANCER_SPRITES + s, sx, sy, tiles[s], leftward,
+                     PAL_OBJ_DANCER + (attr & 3));
+        }
+    }
+    for (int i = count * DANCER_SPRITES; i < 128; i++)
+        MEM_OAM[i * 4] = OBJ_ATTR0_HIDDEN;
+}
+
 /* Places the dancers for one frame of the interlude, in the ROM's own
  * positions: one column of six, 24 pixels apart, walking right off their
  * starting mark onto the ledges. */
@@ -788,8 +867,8 @@ static void draw_line_clear_sweep(void) {
         if (!(p->clearing_rows & (1u << row))) continue;
         for (int s = 0; s < TENGEN_CLEAR_SPARKS; s++) {
             int col = (int)step - TENGEN_CLEAR_TRAIL + s;
-            if (col < 0 || col >= FIELD_PLAYABLE) continue;
-            oam_set(used++, (FIELD_TX + col) * 8, (FIELD_TY + row) * 8,
+            if (col < 0 || col >= field_cols()) continue;
+            oam_set(used++, (field_tx() + col) * 8, (FIELD_TY + row) * 8,
                      (uint16_t)(CLEAR_HEAD_TILE + s), false, PAL_OBJ_CLEAR);
         }
     }
@@ -949,6 +1028,12 @@ static void draw_dancer_stage(void) {
 }
 
 
+static unsigned text_len(const char *s) {
+    unsigned n = 0;
+    while (s[n]) n++;
+    return n;
+}
+
 static void draw_text(int tx, int ty, const char *text, int bank) {
     for (int i = 0; text[i]; i++) set_map_tile(tx + i, ty, WITH_BANK(ascii_tile(text[i]), bank));
 }
@@ -967,6 +1052,24 @@ static void draw_number(int tx, int ty, uint32_t value, int digits, int bank) {
  * playfield keeps the frame it had; the rope simply carries on round the HUD
  * instead of stopping. */
 static void draw_static_screen(void) {
+    if (g_session.game.coop) {
+        /* COOP IS THE CARTRIDGE'S OWN SCREEN, whole. There is no reflow to do
+         * and no boxes to close: screen 5 already puts a twelve-wide field in
+         * the middle with a panel either side, the dancers' ledges down both,
+         * and the braid running the full height as the field's walls. All the
+         * port takes off it is the two columns every screen gives up to fit
+         * thirty, and those come one from each end. */
+        for (int ty = 0; ty < SCREEN_TH; ty++) {
+            int layout_row = ty + SCREEN_COOP_FIELD_TY;
+            for (int tx = 0; tx < SCREEN_TW; tx++) {
+                int i = layout_row * SCREEN_COOP_W + tx;
+                set_map_tile(tx, ty, WITH_BANK(kScreenCoopTiles[i],
+                                                kScreenCoopPalettes[i]));
+            }
+        }
+        set_offset_layer(STATS_SHIFT_PX);
+        return;
+    }
     for (int ty = 0; ty < SCREEN_TH; ty++) {
         int layout_row = ty + WINDOW_TOP;
         for (int tx = 0; tx < SCREEN_TW; tx++) {
@@ -983,7 +1086,7 @@ static void draw_static_screen(void) {
 /* gameOverTiles, blitted where the cartridge blits it: nametable (4,12),
  * which is the middle of the playfield (gameOver1pPPUAddr1 = $2184,
  * gameOver1pColsRows1 = 6 columns by 4 rows, gameOverAttrs = palette 3). */
-#define GAMEOVER_TX (FIELD_TX + 2)
+#define GAMEOVER_TX (field_tx() + 2)
 #define GAMEOVER_TY 4
 
 static void draw_game_over(void) {
@@ -1003,6 +1106,10 @@ static void draw_game_over(void) {
  * white lettering and 1 is an orange that reads clearly against it, which is
  * what marks the chosen entry. */
 #define BANK_HILITE (PAL_MENU_BASE + 1)
+/* Anything a menu SAYS rather than offers: the handicap's depth, the line at
+ * the foot, the credit. Bank 2's first colour is the menu's pale cyan against
+ * bank 3's white, so it reads as a note and not as another choice. */
+#define BANK_NOTE (PAL_MENU_BASE + 2)
 
 #define NEXT_CELL_W 4
 
@@ -1285,7 +1392,84 @@ static void draw_next_label_and_piece(int tx, int ty, bool ruled, bool offset) {
     if (ruled) draw_rule(tx, ty + 3);
 }
 
+/* ----------------------------------------------------------------------- *
+ * THE COOP PANEL
+ *
+ * Seven columns either side, which is what a twelve-wide board leaves of
+ * thirty, and they are not boxes: the cartridge's coop screen leaves them
+ * open, with the dancers' LEDGES ruled across them every three rows. Those
+ * ledges are the layout. They sit at window rows 8, 11, 14 and 17, so the
+ * panel's free space is the six rows above the first one and the pairs
+ * between the rest — and the port lays its HUD into exactly that, using the
+ * cartridge's own ledges where the 1P panel would draw a rule.
+ *
+ * WHAT GOES IN THEM is the cartridge's choice too. Its coop screen carries
+ * LEVEL on the left, HIGH and SCORE on the right, and no piece counts — a
+ * shared board has one score, one level, and the histogram would be nobody's.
+ * The port adds what that screen keeps in a band the GBA cannot show: the
+ * NEXT piece.
+ *
+ * ONE preview, not two, and that is a fact about the cartridge rather than a
+ * saving of space: both players' lookahead randomisers are seeded from the
+ * same number (main.asm.txt:3319-3326, and tengen_new_game says so), and each
+ * steps its own once per spawn, so the two sequences are identical from the
+ * first piece to the last however differently the two play. Drawing it twice
+ * would be drawing the same piece twice.
+ * ----------------------------------------------------------------------- */
+#define COOP_NEXT_TY 2              /* label, then the piece on 3-4 */
+#define COOP_COUNTER_TY 6           /* label on 6, value on 7, ledge on 8 */
+#define COOP_LOWER_TY 9             /* between the first two ledges */
+#define COOP_TOP_TY 2               /* the right panel's first counter */
+
+/* One counter in a seven-column panel: label, value, and no rule — the ledge
+ * under it is the cartridge's own. */
+static void draw_coop_counter(int tx, int ty, int label_first, int label_count,
+                               uint32_t value, int digits) {
+    draw_label(tx + (COOP_PANEL_W - label_count) / 2, ty, label_first, label_count);
+    clear_region(tx, ty + 1, COOP_PANEL_W, 1);
+    draw_number(tx + (COOP_PANEL_W - digits) / 2, ty + 1, value, digits, BANK_VALUE);
+}
+
+/* The same, for HIGH — which the cartridge sets in plain ASCII rather than in
+ * the drawn lettering the other three use, on its coop screen as on its 1P
+ * one. */
+static void draw_coop_text_counter(int tx, int ty, const char *label,
+                                    uint32_t value, int digits) {
+    clear_region(tx, ty, COOP_PANEL_W, 2);
+    draw_text(tx + (COOP_PANEL_W - (int)text_len(label)) / 2, ty, label, BANK_LABEL);
+    draw_number(tx + (COOP_PANEL_W - digits) / 2, ty + 1, value, digits, BANK_VALUE);
+}
+
+static void draw_coop_next(int tx) {
+    clear_both(tx, COOP_NEXT_TY, COOP_PANEL_W, 3);
+    int label_tx = tx + (COOP_PANEL_W - HUD_LABEL_NEXT_W) / 2;
+    for (int i = 0; i < HUD_LABEL_NEXT_W; i++)
+        set_map_tile(label_tx + i, COOP_NEXT_TY,
+                      WITH_BANK(HUD_LABEL_TILE_BASE + 18 + i, BANK_LABEL));
+    draw_next_piece(tx + (COOP_PANEL_W - NEXT_CELL_W) / 2, COOP_NEXT_TY + 1);
+}
+
+static void draw_coop_panel(void) {
+    const TengenPlayerState *p = &g_session.game.player[0];
+    if (p->score > g_high_score) g_high_score = p->score;
+
+    g_panel_layer = true;
+    draw_coop_next(COOP_L_TX);
+
+    /* One board, one score and one level — which is what the cartridge's own
+     * coop screen prints, and all a shared field has to say. */
+    draw_coop_counter(COOP_L_TX, COOP_COUNTER_TY, HUD_LABEL_LEVEL, p->level, 2);
+    draw_coop_counter(COOP_L_TX, COOP_LOWER_TY, HUD_LABEL_LINES, p->lines, 4);
+    draw_coop_counter(COOP_R_TX, COOP_TOP_TY, HUD_LABEL_SCORE, p->score, 6);
+    draw_coop_text_counter(COOP_R_TX, COOP_COUNTER_TY, "HIGH", g_high_score, 6);
+    g_panel_layer = false;
+
+    hide_idle_cossack();
+}
+
 static void draw_panel(void) {
+    if (g_session.game.coop) { draw_coop_panel(); return; }
+
     const TengenPlayerState *p = &g_session.game.player[g_view];
     if (p->score > g_high_score) g_high_score = p->score;
 
@@ -1421,11 +1605,11 @@ static void draw_field(void) {
 
     for (int row = 0; row < TENGEN_PF_HEIGHT; row++) {
         bool clearing = (p->clearing_rows & (1u << row)) != 0;
-        for (int col = 0; col < FIELD_PLAYABLE; col++) {
+        for (int col = 0; col < field_cols(); col++) {
             /* A cell's value IS its tile index — that is the whole point of
              * the ROM's nibble encoding (notes.txt.txt:35). Empty is 0, which
              * is the blank tile. All of it draws in the level's palette. */
-            uint16_t entry = WITH_BANK(field->cell[row][FIELD_COL0 + col], 0);
+            uint16_t entry = WITH_BANK(field->cell[row][field_col0() + col], 0);
 
             /* Behind the sweep the row is gone and the word is in its place,
              * one character per playable column (L89E9,
@@ -1433,7 +1617,7 @@ static void draw_field(void) {
             if (clearing && col <= written)
                 entry = WITH_BANK(ascii_tile(word[col]), 0);
 
-            set_map_tile(FIELD_TX + col, FIELD_TY + row, entry);
+            set_map_tile(field_tx() + col, FIELD_TY + row, entry);
         }
     }
 
@@ -1449,10 +1633,10 @@ static void draw_field(void) {
     TengenTetromino current = g_session.game.player[g_view].piece.current;
     for (int i = 0; i < count; i++) {
         if (cells[i].row < 0) continue;
-        int col = cells[i].col - FIELD_COL0;
-        if (col < 0 || col >= FIELD_PLAYABLE) continue;
+        int col = cells[i].col - field_col0();
+        if (col < 0 || col >= field_cols()) continue;
         uint8_t tile = tengen_tile_id_for_cell(current, g_session.game.player[g_view].piece.orientation, i);
-        set_map_tile(FIELD_TX + col, FIELD_TY + cells[i].row,
+        set_map_tile(field_tx() + col, FIELD_TY + cells[i].row,
                       WITH_BANK(tile, PAL_PIECE_BANK));
     }
 }
@@ -1659,10 +1843,21 @@ typedef enum {
     SCREEN_PLAYING
 } Screen;
 
+/* THE CARTRIDGE'S OWN WORDING, and its own order: its GAME SELECT reads
+ * 1 PLAYER / 2 PLAYER / COOPERATIVE / VERSUS COMPUTER / WITH COMPUTER at
+ * nametable rows 14-20 (main.asm.txt:4742-4830). The last two need the
+ * COMPUTER player, which is not ported yet, so they are not offered. */
 #define GAME_1P   0
 #define GAME_2P   1
-#define GAME_COUNT 2
-static const char *const kGameNames[GAME_COUNT] = { "1 PLAYER", "2 PLAYER" };
+#define GAME_COOP 2
+#define GAME_COUNT 3
+static const char *const kGameNames[GAME_COUNT] = {
+    "1 PLAYER", "2 PLAYER", "COOPERATIVE"
+};
+
+/* Both of the cable modes go through the lobby; what they do differently is
+ * what the lobby carries and what the board looks like afterwards. */
+#define GAME_IS_LINKED(m) ((m) == GAME_2P || (m) == GAME_COOP)
 
 /* Set whenever the maps are wiped, so the title knows its tiles are gone. */
 static bool g_title_dirty = true;
@@ -2000,12 +2195,6 @@ static void draw_title_sprites(void) {
 #define MENU_IN_W 26
 #define MENU_TEXT_SHIFT_PX 4
 
-static unsigned text_len(const char *s) {
-    unsigned n = 0;
-    while (s[n]) n++;
-    return n;
-}
-
 /* Writes `text` centred in the frame, on whichever layer makes it land on the
  * middle. Both maps are cleared first, so a name that was odd last frame and
  * is even this one leaves nothing behind. */
@@ -2041,6 +2230,7 @@ static void draw_game_select(uint8_t choice) {
     for (int i = 0; i < GAME_COUNT; i++)
         draw_text_centred(10 + i * 2, kGameNames[i],
                            i == choice ? BANK_HILITE : PAL_MENU_BASE + 3);
+    clear_both(MENU_IN_TX, 10 + GAME_COUNT * 2, MENU_IN_W, 2);
     /* The credit the cartridge never printed. Tengen's title screen carries
      * "(C)1987 ACADEMYSOFT-ELORG" — the Soviet institute, not the man — and
      * the licensing fight that followed is the reason this cartridge was
@@ -2056,7 +2246,7 @@ static void draw_game_select(uint8_t choice) {
      * The menu frame's black interior is columns 3-26 — twenty-four of them —
      * so the full "TETRIS BY ALEXEY PAJITNOV" (twenty-five) ran over the braid
      * at both ends. The word TETRIS is already six tiles tall above this. */
-    draw_text_centred(15, "BY ALEXEY PAJITNOV", PAL_MENU_BASE + 3);
+    draw_text_centred(17, "BY ALEXEY PAJITNOV", BANK_NOTE);
 }
 
 /* What the lobby is doing, while it does it. Two consoles reach this screen
@@ -2194,11 +2384,6 @@ static unsigned append_number(char *row, unsigned n, unsigned value) {
     row[n++] = (char)('0' + value % 10);
     return n;
 }
-
-/* Anything the screen says rather than offers: the handicap's depth, and the
- * line at the foot. Bank 2's first colour is the menu's pale cyan against
- * bank 3's white, so it reads as a note and not as another choice. */
-#define BANK_NOTE (PAL_MENU_BASE + 2)
 
 /* One field: the cursor if it is the chosen one, then the label and the value
  * in their columns, and whatever the value trails after it — which is only
@@ -2788,7 +2973,7 @@ int main(void) {
                  * neither console knows which one that is until the cable has
                  * told them — so 2 PLAYER goes straight to the lobby, and the
                  * master reaches the level screen from there. */
-                if (game_mode == GAME_2P) {
+                if (GAME_IS_LINKED(game_mode)) {
                     uint16_t seed =
                         (uint16_t)(seed_source.lo | (seed_source.hi << 8));
                     link_init();
@@ -2816,7 +3001,7 @@ int main(void) {
              * a lobby that stops transferring looks exactly like a lobby whose
              * cable fell out, and the guest would give up after ten seconds of
              * the master thinking. */
-            if (game_mode == GAME_2P) link_lobby_step(&lobby);
+            if (GAME_IS_LINKED(game_mode)) link_lobby_step(&lobby);
 
             /* ONE CALL EACH, and the results kept: these are edge detectors
              * with their own held state, so asking twice in a frame answers
@@ -2897,7 +3082,7 @@ int main(void) {
                 nes_audio_play(NES_SOUND_SCREEN_SWITCH);
                 screen = SCREEN_GAME_SELECT;
                 /* Backing out of a 2P choice drops the cable with it. */
-                if (game_mode == GAME_2P) link_shutdown();
+                if (GAME_IS_LINKED(game_mode)) link_shutdown();
                 vsync();
                 audio_frame();
                 clear_screen();
@@ -2909,11 +3094,12 @@ int main(void) {
                 uint16_t seed = (uint16_t)(seed_source.lo | (seed_source.hi << 8));
                 nes_audio_play(NES_SOUND_SCREEN_SWITCH);
 
-                if (game_mode == GAME_2P) {
+                if (GAME_IS_LINKED(game_mode)) {
                     /* The master has chosen. Letting the handshake go delivers
                      * the seed, the level and the tune to the other console,
                      * and both leave the lobby together. */
-                    link_lobby_release(&lobby, seed, start_level, g_music, handicap);
+                    link_lobby_release(&lobby, seed, start_level, g_music, handicap,
+                                        game_mode == GAME_COOP);
                     screen = SCREEN_LINK_WAIT;
                     vsync();
                     audio_frame();
@@ -2947,6 +3133,8 @@ int main(void) {
                 continue;
             }
             vsync();
+            /* Only a RACE has two handicaps: coop shares the board, so it
+             * shares the one starting burial too. */
             draw_level_settings(menu_field, start_level, g_music, handicap,
                                  game_mode == GAME_2P);
             audio_frame();
@@ -3004,12 +3192,15 @@ int main(void) {
                    still hears it. */
                 g_music = lobby.music < MUSIC_UNLOCKED_COUNT ? lobby.music : 0;
                 tengen_link_start(&g_session, lobby.seed, lobby.start_level,
-                                   link_is_master() ? TENGEN_PLAYER_1 : TENGEN_PLAYER_2);
+                                   link_is_master() ? TENGEN_PLAYER_1 : TENGEN_PLAYER_2,
+                                   lobby.coop);
                 swallow_held_buttons(&g_session.game);
                 /* Both consoles bury both boards from the one seed the lobby
                  * delivered, so the two fields match without another word on
-                 * the wire. */
-                for (int i = 0; i < 2; i++)
+                 * the wire. Coop has ONE board, so only player 1's handicap
+                 * means anything there — burying the shared field twice would
+                 * be twice the garbage nobody asked for. */
+                for (int i = 0; i < (lobby.coop ? 1 : 2); i++)
                     tengen_apply_handicap(&g_session.game, (TengenPlayerSlot)i,
                                            lobby.handicap[i]);
                 g_mix_step = 0;
@@ -3089,6 +3280,17 @@ int main(void) {
                 tengen_clear_bonus_counts(&g_session.game);
                 draw_static_screen();
                 start_music(g_music);
+            } else if (g_session.game.coop) {
+                /* COOP HAS THE STAGE ALREADY: the ledges are part of the
+                 * cartridge's own screen, four of them down each panel, and
+                 * the eight dancers' feet land on them. All that has to go is
+                 * the HUD text sharing those panels — the dancers walk
+                 * straight through where LINES is printed. */
+                clear_panel_region(COOP_L_TX, 0, COOP_PANEL_W, SCREEN_TH);
+                clear_panel_region(COOP_R_TX, 0, COOP_PANEL_W, SCREEN_TH);
+                clear_both(COOP_L_TX, COOP_NEXT_TY, COOP_PANEL_W, 3);
+                clear_both(COOP_R_TX, COOP_NEXT_TY, COOP_PANEL_W, 3);
+                draw_coop_dancers(g_dancer_elapsed, g_dancer_cast);
             } else if (!g_show_banner) {
                 /* HUD STATS keeps its screen. Nothing is cleared and nothing
                  * has to be put back; the panel redraws every frame anyway,
@@ -3124,7 +3326,10 @@ int main(void) {
          * cartridge's vertical TETRIS banner — while there is a match to swap
          * it around. Once the board is dead the only thing left to press is
          * the one that starts again. */
-        if (screen == SCREEN_PLAYING && match_running && shoulder_chord()) {
+        /* ...and there is nothing to swap on a coop screen: it has no boxes,
+         * and the banner's column is the middle of the board. */
+        if (screen == SCREEN_PLAYING && match_running && !g_session.game.coop &&
+            shoulder_chord()) {
             g_show_banner = !g_show_banner;
             /* Both directions need the static screen back: going TO the
              * banner erases the braid box, and coming back from it has to

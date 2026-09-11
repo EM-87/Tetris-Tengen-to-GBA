@@ -202,8 +202,8 @@ void link_lobby_start_held(TengenLobby *lobby, uint16_t seed) {
 
 void link_lobby_release(TengenLobby *lobby, uint16_t seed,
                          uint8_t start_level, uint8_t music,
-                         const uint8_t handicap[2]) {
-    tengen_lobby_release(lobby, seed, start_level, music, handicap);
+                         const uint8_t handicap[2], bool coop) {
+    tengen_lobby_release(lobby, seed, start_level, music, handicap, coop);
 }
 
 void link_lobby_step(TengenLobby *lobby) {

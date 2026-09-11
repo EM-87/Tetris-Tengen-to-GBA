@@ -727,6 +727,56 @@ case where the tune playing is Korobeiniki because the MIX is on its turn —
 and the mix OPENS on it, so it was every first level of every mixed game.
 `current_tune()` resolves the rotation first.
 
+## COOPERATIVE, which the cartridge had already drawn
+
+Coop needed a screen the port did not have, and it turned out the cartridge
+ships one: **screen 5**, and it is laid out the way a GBA wants already.
+
+    cols  0-7   left panel: LEVEL, and four of the dancers' ledges
+    cols  8-9   braid: the wide field's left wall
+    cols 10-21  playfield: TWELVE playable columns x 20 rows, from row 8
+    cols 22-23  braid: the right wall
+    cols 24-31  right panel: HIGH and SCORE, and the other four ledges
+
+So there is no resequencing to do — coop is the one mode the NES also draws
+symmetrically — and the reflow is only the two columns every screen gives up
+to fit thirty, taken **one from each end**. That leaves the field dead centre
+(GBA columns 9-20, x 72..167, centred on 120) and seven columns of panel
+either side. `COOP_SEGMENTS` in the extractor; `gba/screen_coop.h`.
+
+**The board is twelve wide because the ROM leaves its wall nibbles open** when
+playMode is coop (`main.asm.txt:3480-3489`, and its own comment there: "to add
+1 column on either side"). The core already stored twelve columns and put the
+sentinel in the outer two only outside coop, so nothing there changed; what
+changed is that the port now reads the field's origin and width through
+`field_tx()` / `field_cols()` rather than off the 1P constants.
+
+**ONE preview, not two.** Both players' lookahead randomisers are seeded from
+the same number (`main.asm.txt:3319-3326`) and each steps its own once per
+spawn, so the two sequences are identical from the first piece to the last
+however differently the two play — measured on the built ROM over a linked
+match, and true frame for frame. Drawing NEXT twice would be drawing the same
+piece twice.
+
+**The dancers already have their stage.** Entries 6-13 of the ROM's position
+tables (`$8E5C`/`$8E6A`/`$8E78`) pair the eight of them off down the two sides
+at NES x `$40` and `$B1` with four heights, and those heights put their feet
+exactly on the ledges the coop nametable carries. Attribute bit 6 is set on
+the left-hand ones — the same sprite MIRRORED, which is what makes a column
+walking left face the way it is going. So the port blits no stage in coop: it
+is showing the cartridge's own screen, and the dancers walk outward onto it.
+Coop is the only mode that uses all eight, which is why `tengen_dancer_count`
+caps at six everywhere else.
+
+What the port adds is what screen 5 keeps in a band the GBA cannot show
+(rows 0-9, cut like the 1P screen's own header): NEXT. The panels are not
+boxes — the cartridge leaves them open with the ledges ruled across — so the
+HUD lays into the six rows above the first ledge and the pair between the
+first two, using those ledges where the 1P panel would draw a rule.
+
+And L+R does nothing there: coop has no boxes to swap, and the banner's column
+is the middle of the board.
+
 ## The fireworks burst over the frame, and that is the cartridge's doing
 
 Measured off the ROM's own `oamStaging` while it runs: every burst is a 48x48

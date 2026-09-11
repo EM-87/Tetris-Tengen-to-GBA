@@ -58,6 +58,11 @@ except ImportError as exc:  # pragma: no cover - environment problem
 
 SCREEN_W, SCREEN_H = 240, 160
 
+# The coop board: twelve storage columns, drawn from the coop screen's own
+# origin (SCREEN_COOP_FIELD_TX in the generated header).
+TENGEN_PF_WIDTH = 12
+COOP_FIELD_TX = 9
+
 # I/O registers, as halfword indices into struct GBA's io[] array.
 IO_SIOMULTI0 = 0x120 >> 1
 IO_SIOMULTI1 = 0x122 >> 1
@@ -366,7 +371,122 @@ def main():
         print("  cable fuera: las dos consolas lo detectan y siguen corriendo")
 
     print("OK: dos GBA por cable link juegan la misma partida sin desviarse.")
+    return coop_check(rom)
+
+
+def coop_check(rom):
+    """COOPERATIVE: two consoles, ONE twelve-wide board between them.
+
+    The shared field is what makes this its own check rather than a flag on
+    the one above: 2P can pass while coop is broken, because 2P never writes
+    two players into one playfield. What it looks for is the field the port
+    actually draws — twelve columns of it, at the coop screen's own origin —
+    and pieces from both players settling in it.
+    """
+    sym, why = symbol(rom, "g_session")
+    if sym is None:
+        print(f"SALTADO: {why}")
+        return 0
+    session_addr, session_size = sym
+    game_size = session_size - 4
+
+    mgba.log.silence()
+    cores, screens = [], []
+    for _ in range(2):
+        core = mgba.core.load_path(rom)
+        screen = mgba.image.Image(SCREEN_W, SCREEN_H)
+        core.set_video_buffer(screen)   # must stay alive; see run_rom.load()
+        core.reset()
+        cores.append(core)
+        screens.append(screen)
+    master, slave = cores
+    cable = Cable(master, slave)
+    ends = [CableEnd(cable, True), CableEnd(cable, False)]
+    for core, end in zip(cores, ends):
+        core.attach_sio(end, lib.SIO_MULTI)
+
+    def both(frames, keys=None):
+        for _ in range(frames):
+            for i, core in enumerate(cores):
+                core.set_keys(*(keys[i] if keys else []))
+                core.run_frame()
+
+    def tap(name, who=None):
+        both(4, [[KEYS[name]] if who in (None, i) else [] for i in range(2)])
+        both(10, [[], []])
+
+    failures = []
+    both(8)
+    tap("START")                      # title -> game select
+    tap("DOWN"); tap("DOWN")          # 1 PLAYER -> 2 PLAYER -> COOPERATIVE
+    tap("START")                      # -> the cable
+    both(50)
+    tap("START", who=0)               # the master releases the lobby
+    both(60)
+
+    if read_bytes(master, session_addr, game_size) == bytes(game_size):
+        failures.append("la partida cooperativa no arranco")
+
+    # Play it: opposite buttons, so the two are not doing the same thing.
+    script = [(60, ["LEFT"], ["RIGHT"]), (50, ["DOWN"], ["DOWN"]),
+              (40, ["A"], ["B"]), (60, ["RIGHT"], ["LEFT"]),
+              (120, ["DOWN"], ["DOWN"])]
+    diverged = None
+    frame = 0
+    for count, p1, p2 in script:
+        for _ in range(count):
+            for i, core in enumerate(cores):
+                core.set_keys(*[KEYS[k] for k in (p1 if i == 0 else p2)])
+                core.run_frame()
+            frame += 1
+            if diverged is None and (read_bytes(master, session_addr, game_size)
+                                     != read_bytes(slave, session_addr, game_size)):
+                diverged = frame
+    if diverged is not None:
+        failures.append(f"las dos consolas divergieron en el frame {diverged}")
+
+    # ONE board: everything settled is in field[0], and field[1] is untouched.
+    PF = 20 * 12
+    final = read_bytes(master, session_addr, session_size)
+    shared = sum(1 for b in final[:PF] if b)
+    other = sum(1 for b in final[PF:PF * 2] if b)
+    if other:
+        failures.append(f"el segundo campo tiene {other} celdas: coop deberia "
+                         "jugarse entero en el primero")
+    if shared < 8:
+        failures.append(f"solo {shared} celdas asentadas: no se jugo")
+
+    # ...and it is TWELVE wide ON SCREEN, which is the half of coop the core
+    # tests cannot see. The two outermost storage columns are the ones that
+    # only exist here — elsewhere they hold the wall sentinel — so a block
+    # planted in each has to come out as ink at the coop layout's own origin
+    # and eleven columns along from it.
+    import run_rom
+    off = run_rom.game_offsets(rom)
+    field = session_addr + off["field"]
+    row = 18
+    for col in (0, TENGEN_PF_WIDTH - 1):
+        master.memory.u8[field + row * TENGEN_PF_WIDTH + col] = 0x0F
+    both(3, [[], []])
+    px = run_rom.pixels(screens[0])
+    y = row * 8 + 4
+    for col, tx in ((0, COOP_FIELD_TX), (TENGEN_PF_WIDTH - 1,
+                                          COOP_FIELD_TX + TENGEN_PF_WIDTH - 1)):
+        if all(px[y][tx * 8 + x] == (0, 0, 0) for x in range(1, 7)):
+            failures.append(f"la columna {col} del campo no se dibuja en la "
+                             f"columna {tx} de la pantalla: coop no esta "
+                             "usando sus doce columnas")
+    if not failures:
+        print(f"  campo compartido: {shared} celdas, doce columnas desde la "
+               f"columna {COOP_FIELD_TX}, y el segundo campo vacio")
+
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: en cooperativo los dos juegan en un solo campo de doce columnas.")
     return 0
+
 
 
 if __name__ == "__main__":

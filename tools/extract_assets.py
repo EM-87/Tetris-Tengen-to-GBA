@@ -23,6 +23,7 @@ What comes out, and why each piece is needed:
                   into GBA sound registers. See gba/nes_audio.c and the
                   AUDIO section below.
   screen_1p.h     The 1P screen layout, lifted from the ROM's own nametable
+  screen_coop.h   ...and the COOPERATIVE one, its twelve-wide field included
                   and attribute table, reflowed from the NES's 32 columns to
                   the GBA's 30 (see BOARD LAYOUT below).
   palettes.h      The NES palette entries the game actually uses.
@@ -374,6 +375,31 @@ SCREEN_BLANK = ((26, 28), (20, 30))          # (row range, NES column range)
 
 ROW_PLAYFIELD = (8, 28)         # 20 rows
 
+# ---------------------------------------------------------------------------
+# COOP, which is the cartridge's own screen and needs almost nothing done to it
+#
+# Screen 5 is laid out the way the GBA wants already, because coop is the one
+# mode the NES also draws symmetrically:
+#
+#   cols  0-7   left panel: LEVEL, and five of the dancers' ledges
+#   cols  8-9   braid: the wide field's left wall
+#   cols 10-21  playfield: TWELVE playable columns (the walls are left open,
+#               main.asm.txt:3480-3489) x 20 rows, starting at row 8 like 1P
+#   cols 22-23  braid: the right wall
+#   cols 24-31  right panel: HIGH and SCORE, and the other five ledges
+#
+# So there is no resequencing to do, only the two columns every screen has to
+# give up to fit thirty — and here they come one from each END, which leaves
+# the field dead centre (GBA columns 9-20, x 72..167, centred on 120) and
+# seven columns of panel either side.
+#
+# What IS dropped is the cartridge's own LEVEL / HIGH / SCORE lettering: the
+# port writes its own labels from the same tiles, in its own places, the way
+# it does on every other screen.
+COOP_SEGMENTS = ((1, 15), (16, 15))
+COOP_BLANK = (((11, 13), (2, 7)), ((11, 13), (25, 30)))
+COOP_PLAY_COL = 10
+
 # The NES master palette lives in the PPU, not the cartridge, so no dump can
 # supply it. This is a widely-used approximation; different references (and
 # different consoles) disagree slightly.
@@ -487,7 +513,8 @@ def attribute_palette(attributes: bytes, col: int, row: int) -> int:
     return (byte >> (quadrant * 2)) & 3
 
 
-def reflow_screen(nametable: bytes, attributes: bytes):
+def reflow_screen(nametable: bytes, attributes: bytes, segments=None,
+                   blanks=None, wall_fix=True, play_col=None):
     """NES 32-column screen -> GBA 30-column screen.
 
     Returns (tiles, palettes) as 30-per-row lists covering 30 rows; only the
@@ -498,20 +525,22 @@ def reflow_screen(nametable: bytes, attributes: bytes):
     of the cartridge's own columns in the order the GBA shows them, which is
     what puts the playfield in the middle with the HUD split around it.
     """
-    keep_cols = [c for start, count in SCREEN_SEGMENTS
+    keep_cols = [c for start, count in (segments or SCREEN_SEGMENTS)
                  for c in range(start, start + count)]
     assert len(keep_cols) == 30, f"expected 30 columns, got {len(keep_cols)}"
 
-    blank_rows, blank_cols = SCREEN_BLANK
+    if blanks is None:
+        blanks = (SCREEN_BLANK,)
 
     tiles, palettes = [], []
     for row in range(30):
         for port_col, col in enumerate(keep_cols):
             tile = nametable[row * 32 + col]
-            if (blank_rows[0] <= row < blank_rows[1] and
-                    blank_cols[0] <= col < blank_cols[1]):
-                tile = 0                       # the ROM's own piece icons
-            if SCREEN_WALL_FIX_ROWS[0] <= row < SCREEN_WALL_FIX_ROWS[1]:
+            for blank_rows, blank_cols in blanks:
+                if (blank_rows[0] <= row < blank_rows[1] and
+                        blank_cols[0] <= col < blank_cols[1]):
+                    tile = 0                   # the port draws this itself
+            if wall_fix and SCREEN_WALL_FIX_ROWS[0] <= row < SCREEN_WALL_FIX_ROWS[1]:
                 for fix_col, fix_tile in SCREEN_WALL_FIX:
                     if port_col == fix_col:
                         tile = fix_tile        # braid, not the banner's corner
@@ -520,9 +549,10 @@ def reflow_screen(nametable: bytes, attributes: bytes):
     return tiles, palettes, keep_cols
 
 
-def playfield_origin(keep_cols) -> tuple:
+def playfield_origin(keep_cols, play_col=None) -> tuple:
     """Where the playfield's first playable column ends up after the reflow."""
-    return keep_cols.index(COL_PLAYFIELD_PLAY[0]), ROW_PLAYFIELD[0]
+    return keep_cols.index(COL_PLAYFIELD_PLAY[0] if play_col is None else play_col), \
+        ROW_PLAYFIELD[0]
 
 
 def extract_audio_prg(rom: "Rom"):
@@ -886,6 +916,57 @@ def read_stats_icons(nametable, attributes):
     bar_bank = attribute_palette(attributes, STATS_ICON_COLS[0],
                                   STATS_ICON_ROWS[0] - 2)
     return tiles, banks, bar_bank
+
+
+def emit_coop_screen_header(tiles, palettes, keep_cols, source):
+    """screen_coop.h — the cartridge's own coop layout, two columns narrower.
+
+    Nothing is resequenced here: screen 5 already puts a twelve-wide field in
+    the middle with a panel either side, so the only change is the two columns
+    every screen gives up to fit thirty, taken one from each end. See
+    COOP_SEGMENTS.
+    """
+    origin_x, origin_y = playfield_origin(keep_cols, COOP_PLAY_COL)
+    lines = [
+        "/*",
+        " * screen_coop.h — the COOPERATIVE screen, from the ROM's own nametable.",
+        " *",
+        " * GENERATED by tools/extract_assets.py — do not edit by hand.",
+        f" * Source: {source}",
+        " *",
+        " * Coop is the one mode the cartridge already draws symmetrically: a",
+        " * TWELVE-column field in the middle (its wall nibbles are left open,",
+        " * main.asm.txt:3480-3489) with a seven-column panel either side, and the",
+        " * dancers' ledges down both of them. So this is the cartridge's screen",
+        " * with one column dropped from each end, nothing moved.",
+        " *",
+        " * Tiles marked 0 are blank in the ROM because the game draws over them at",
+        " * runtime; the port does the same — including the ROM's own LEVEL /",
+        " * HIGH / SCORE lettering, which the port writes itself from the same",
+        " * tiles.",
+        " */",
+        "#ifndef SCREEN_COOP_H",
+        "#define SCREEN_COOP_H",
+        "",
+        "#include <stdint.h>",
+        "",
+        "#define SCREEN_COOP_W 30",
+        "#define SCREEN_COOP_H_TILES 30",
+        "",
+        "/* Where the twelve-wide playfield's top-left cell sits. */",
+        f"#define SCREEN_COOP_FIELD_TX {origin_x}",
+        f"#define SCREEN_COOP_FIELD_TY {origin_y}",
+        "",
+        "static const uint8_t kScreenCoopTiles[900] = {",
+    ]
+    for i in range(0, len(tiles), 30):
+        lines.append("    " + ", ".join(f"0x{t:02X}" for t in tiles[i:i + 30]) + ",")
+    lines += ["};", "",
+              "static const uint8_t kScreenCoopPalettes[900] = {"]
+    for i in range(0, len(palettes), 30):
+        lines.append("    " + ", ".join(str(p) for p in palettes[i:i + 30]) + ",")
+    lines += ["};", "", "#endif /* SCREEN_COOP_H */", ""]
+    return "\n".join(lines)
 
 
 def emit_screen_header(tiles, palettes, keep_cols, source, stats):
@@ -1459,6 +1540,22 @@ def emit_dancer_poses_header(poses, stage_rows, pos_x, pos_y, attrs, source):
         f"static const uint8_t kDancerStartY[DANCER_SOLO_COUNT] = {{ "
         + ", ".join(f"0x{b:02X}" for b in pos_y[:DANCER_SOLO_COUNT]) + " };",
         "",
+        "/* COOP'S OWN EIGHT, entries 6-13 of the same tables: two COLUMNS",
+        " * rather than one, at NES x $40 and $B1 — just inside each panel —",
+        " * and four heights, so the pair on each ledge walks out to its own",
+        " * side. Attribute bit 6 is set on the left-hand ones: they are the",
+        " * same sprite MIRRORED, which is what makes a column walking left",
+        " * face the way it is going. Coop is the only mode that uses all",
+        " * eight, which is why tengen_dancer_count caps at six elsewhere. */",
+        f"#define DANCER_COOP_FIRST {DANCER_SOLO_COUNT}",
+        f"#define DANCER_COOP_COUNT {DANCER_POS_COUNT - DANCER_SOLO_COUNT}",
+        "static const uint8_t kDancerCoopX[DANCER_COOP_COUNT] = { "
+        + ", ".join(f"0x{b:02X}" for b in pos_x[DANCER_SOLO_COUNT:]) + " };",
+        "static const uint8_t kDancerCoopY[DANCER_COOP_COUNT] = { "
+        + ", ".join(f"0x{b:02X}" for b in pos_y[DANCER_SOLO_COUNT:]) + " };",
+        "static const uint8_t kDancerCoopAttr[DANCER_COOP_COUNT] = { "
+        + ", ".join(f"0x{b:02X}" for b in attrs[DANCER_SOLO_COUNT:]) + " };",
+        "",
         "/* The OAM attribute byte each one is given: its low two bits pick one",
         " * of spritePalette2's four palettes, which is why the six are not all",
         " * the same colour. */",
@@ -1627,6 +1724,11 @@ def main() -> int:
     nametable, attributes = read_screen(rom, SCREEN_1P)
     tiles, palettes, keep_cols = reflow_screen(nametable, attributes)
 
+    coop_nt, coop_attr = read_screen(rom, SCREEN_COOP)
+    coop_tiles, coop_palettes, coop_cols = reflow_screen(
+        coop_nt, coop_attr, segments=COOP_SEGMENTS, blanks=COOP_BLANK,
+        wall_fix=False)
+
     bg_palette = rom.at(PALETTE_TABLE_ADDR + PALETTE_BG_GAME * PALETTE_SET_BYTES, 16)
     palette_sets = {
         "bg_game": read_palette_set(rom, PALETTE_BG_GAME),
@@ -1681,6 +1783,8 @@ def main() -> int:
         "tiles_title_obj.h": emit_tiles_header(
             "kTitleObjTiles", "TILES_TITLE_OBJ", convert_tiles(rom.chr_bank(3)),
             f"{src} [title sprites]"),
+        "screen_coop.h": emit_coop_screen_header(coop_tiles, coop_palettes,
+                                                  coop_cols, src),
         "screen_1p.h": emit_screen_header(tiles, palettes, keep_cols, src,
                                            read_stats_icons(nametable, attributes)
                                            + (read_gameover_tiles(rom),

@@ -202,10 +202,15 @@ running ROM; only the side panels need reflowing).
    histogram, three across and two UP so its icons clear the braid. SCORE's
    missing headroom and the histogram touching the frame were the same bug
    twice. `make gba-check --panel` measures both gaps off the framebuffer.
-20. Still to do: **coop** — the core already models its 12-column field and
-   its garbage, but a 12-wide playfield plus a two-tile frame is sixteen
-   columns of the thirty, so it needs its own HUD layout rather than the
-   `10 | 10 | 10` the other modes share, and a front end. And the **COMPUTER
+20. ~~Coop~~ — done, and the layout question answered itself: the cartridge
+   ships a coop SCREEN (screen 5) already laid out symmetrically, so the port
+   reflows that one instead of the 1P screen and the only change is the two
+   columns every screen gives up, taken one from each end. Twelve-wide field
+   dead centre, seven columns of panel either side, the dancers' ledges
+   already drawn, and the ROM's own eight coop dancer positions to stand on
+   them. It goes over the cable like 2P, with the choice riding bit 8 of the
+   lobby's CONFIG word. See reference/NOTES.md.
+21. Still to do: the **COMPUTER
    player** (`computerMove`, the VS and WITH modes), which unlike two-human 2P
    needs neither a second console nor a cable: its piece table is decoded and
    verified in reference/NOTES.md — start there, the profile bytes are each

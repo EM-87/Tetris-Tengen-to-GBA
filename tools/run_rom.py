@@ -1068,6 +1068,11 @@ def skin_check(rom_path):
 #   * and the cartridge's engine is still running underneath, because the
 #     sound effects are still meant to be the ROM's.
 # ---------------------------------------------------------------------------
+# GAME SELECT's entries start at row 10, two rows apart. The port offers the
+# cartridge's first three; the last two want the COMPUTER player.
+GAME_SELECT_ROWS = 3
+MENU_DIM_BANK = 11              # PAL_MENU_BASE + 3, the menu's plain white
+
 MUSIC_ROW = 14                  # the MUSIC row of LEVEL SETTINGS
 LEVEL_ROW = 8                   # ...and the LEVEL one above it
 HANDICAP_ROW = 11               # value AND, in one player, what it buries
@@ -1636,9 +1641,27 @@ def leaving_title_check(rom_path):
     else:
         print("  SELECT mueve el cursor en GAME SELECT")
 
-    # ...and back onto 1 PLAYER, because SELECT just moved it and 2 PLAYER now
-    # goes to the cable instead of the level screen.
-    tap(KEYS["SELECT"])
+    # ...and back onto 1 PLAYER, because SELECT just moved it and every other
+    # entry goes to the cable instead of the settings screen. SELECT only ever
+    # moves DOWN (LA048's carry-set add), so this walks it round rather than
+    # counting the entries — there are three now and there may be five when
+    # the COMPUTER player lands.
+    def chosen_row():
+        """Which GAME SELECT row is drawn in the highlight palette."""
+        for row in range(10, 10 + GAME_SELECT_ROWS * 2, 2):
+            banks = {core.memory.u16[SCREENBLOCK_ADDR + (row * 32 + x) * 2] >> 12
+                     for x in range(4, 26)
+                     if core.memory.u16[SCREENBLOCK_ADDR + (row * 32 + x) * 2] & 0x3FF}
+            if banks and banks != {MENU_DIM_BANK}:
+                return row
+        return None
+
+    for _ in range(GAME_SELECT_ROWS + 1):
+        if chosen_row() == 10:
+            break
+        tap(KEYS["SELECT"])
+    if chosen_row() != 10:
+        failures.append("no se puede volver a 1 PLAYER con SELECT")
     tap(KEYS["A"])
     if "LEVEL" not in tilemap_text(core, 8):
         failures.append("A no confirma en GAME SELECT")
@@ -1805,8 +1828,12 @@ def link_check(rom_path):
         failures.append("no aparece GAME SELECT tras el titulo")
     if "2 PLAYER" not in tilemap_text(core, 12):
         failures.append("GAME SELECT no ofrece 2 PLAYER")
+    if "COOPERATIVE" not in tilemap_text(core, 14):
+        failures.append("GAME SELECT no ofrece COOPERATIVE")
 
-    if "PAJITNOV" not in tilemap_text(core, 15):
+    # The credit sits under whatever the last entry is, at the foot of the
+    # frame, so it moves when an entry is added.
+    if "PAJITNOV" not in tilemap_text(core, 17):
         failures.append("falta el credito a Pajitnov en GAME SELECT")
 
     tap("DOWN")                       # 1 PLAYER -> 2 PLAYER
