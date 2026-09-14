@@ -1080,6 +1080,10 @@ MENU_DIM_BANK = 11              # PAL_MENU_BASE + 3, the menu's plain white
 # one, because it is twelve wide (SCREEN_COOP_FIELD_TX in the generated
 # header, and COOP_FIELD_TX in gba/main.c).
 COOP_FIELD_TX = 9
+# The HIGH SCORES page: the heading's row and the first entry's, as
+# gba/screen_leaderboard.h generates them.
+LEADER_HEAD_TY = 2
+LEADER_FIRST_TY = 3
 TENGEN_PF_WIDTH = 12
 TENGEN_PF_HEIGHT = 20
 
@@ -1606,6 +1610,108 @@ def points_check(rom_path):
     return 0
 
 
+def leaderboard_check(rom_path):
+    """THE HIGH SCORES TABLE, which the cartridge keeps in memory.
+
+    Four things, all of them the ROM's:
+
+      * the table it comes up with cold — @resetHighScores builds fifteen
+        entries of AAA from 17000 down to 3000 in thousands
+        (main.asm.txt:5670-5700), which is why HIGH SCORE opens at 017000 and
+        not at nothing;
+      * a score that beats one of them goes IN, at the right row, pushing the
+        rest down and the last off the bottom (L81FF, :342-378);
+      * the three initials are typed with Left and Right and taken with A or B
+        (L9234, :2709-2762); and
+      * the table is still there for the next game.
+    """
+    off = game_offsets(rom_path)
+    base, why = game_state_address(rom_path)
+    if base is None:
+        print(f"SALTADO: {why}")
+        return 0
+
+    failures = []
+
+    def rows(core):
+        return [tilemap_text(core, LEADER_FIRST_TY + i, 0, 30)
+                for i in range(15)]
+
+    def to_gameover(core, score):
+        """Plant a score, bury the board, and take the plaque's way out."""
+        for i in range(4):
+            core.memory.u8[base + off["score"] + i] = (score >> (8 * i)) & 0xFF
+        for r in range(TENGEN_PF_HEIGHT):
+            for c in range(TENGEN_PF_WIDTH):
+                core.memory.u8[base + off["field"] + r * TENGEN_PF_WIDTH + c] = (
+                    CELL_WALL if c in (0, TENGEN_PF_WIDTH - 1)
+                    else (0 if c == 5 else CELL_BLOCK))
+        run(core, 240)
+        press_start(core); run(core, 30)
+
+    core, screen = load(rom_path)   # `screen` must stay alive; see load()
+    start_game(core)
+
+    # The cold table, seen through the panel's own HIGH counter first.
+    to_gameover(core, 20)
+    table = rows(core)
+    wanted = [f"{17 - i}000" for i in range(15)]
+    got = ["".join(ch for ch in row if ch.isdigit())[-9:-3] for row in table]
+    if not all(w in g for w, g in zip(wanted, got)):
+        failures.append(f"la tabla fria no es la del cartucho: {got[:3]} ...")
+    elif "AAA" not in table[0]:
+        failures.append(f"la primera entrada no sale como AAA: {table[0]!r}")
+    else:
+        print("  arranca con las quince del cartucho, de 17000 a 3000, todas AAA")
+
+    # ...and back out, then a score that belongs on it.
+    press_start(core); run(core, 40)
+    press_start(core); run(core, 10)   # title -> game select
+    press_start(core); run(core, 12)   # -> level settings
+    press_start(core); run(core, 30)   # -> play
+    to_gameover(core, 50000)
+    table = rows(core)
+    if "050" not in table[0] or "017000" not in table[1]:
+        failures.append(f"un 50000 no entra en cabeza: {table[0]!r} / {table[1]!r}")
+    elif "003000" in "".join(table):
+        failures.append("la ultima entrada no se cayo de la tabla")
+    else:
+        print("  un 50000 entra el primero y empuja a las demas una fila abajo")
+
+    # The initials: Right walks the alphabet, A takes the letter.
+    def tap(name, times=1):
+        for _ in range(times):
+            core.set_keys(KEYS[name]); run(core, 3); core.set_keys(); run(core, 6)
+
+    tap("RIGHT", 1); tap("A")      # B
+    tap("RIGHT", 2); tap("A")      # C
+    tap("RIGHT", 3); tap("A")      # D
+    run(core, 20)
+    if " BCD " not in tilemap_text(core, LEADER_FIRST_TY, 0, 30):
+        failures.append("las iniciales no se escriben: "
+                         f"{tilemap_text(core, LEADER_FIRST_TY, 0, 30)!r}")
+    else:
+        print("  las tres iniciales se teclean con izquierda/derecha y A")
+
+    # And it survives the next game.
+    press_start(core); run(core, 40)
+    press_start(core); run(core, 10)
+    press_start(core); run(core, 12)
+    press_start(core); run(core, 30)
+    to_gameover(core, 20)
+    if "BCD" not in rows(core)[0]:
+        failures.append("la tabla no sobrevive a la siguiente partida")
+    else:
+        print("  y sigue ahi despues de la siguiente partida")
+
+    for f in failures:
+        print("FALLA:", f)
+    if failures:
+        return 1
+    print("OK: la tabla de records es la del cartucho, y se escribe en ella.")
+    return 0
+
+
 def gameover_check(rom_path):
     """THE WAY OUT. Every mode has to end, and end where the player left.
 
@@ -1702,11 +1808,19 @@ def gameover_check(rom_path):
             failures.append(f"{name}: L+R todavia cambia el HUD despues del game over")
             continue
 
+        # The cartridge's road out of a game runs through its HIGH SCORES
+        # page and only then back to the title (main.asm.txt:2643-2675).
+        press_start(core); run(core, 40)
+        if "HIGH SCORES" not in tilemap_text(core, LEADER_HEAD_TY, 0, 30):
+            failures.append(f"{name}: START no lleva a la tabla de records "
+                             "tras el game over")
+            continue
         press_start(core); run(core, 40)
         if title_face(core) != face:
-            failures.append(f"{name}: START no devuelve al titulo tras el game over")
+            failures.append(f"{name}: no se vuelve al titulo desde la tabla")
             continue
-        print(f"  {name}: el tablero muere, todo se para, y START vuelve al titulo")
+        print(f"  {name}: el tablero muere, todo se para, y START lleva a la "
+               "tabla y al titulo")
 
     for f in failures:
         print("FALLA:", f)
@@ -2352,6 +2466,8 @@ def main():
                      help="check the title starts playing by itself")
     ap.add_argument("--gameover", action="store_true",
                      help="check every mode ends and lets go of the player")
+    ap.add_argument("--leaderboard", action="store_true",
+                     help="check the HIGH SCORES table and its initials")
     ap.add_argument("--points", action="store_true",
                      help="check the drop-point sprites beside the piece")
     ap.add_argument("--falling", action="store_true",
@@ -2398,6 +2514,8 @@ def main():
         sys.exit(falling_piece_check(args.rom))
     if args.points:
         sys.exit(points_check(args.rom))
+    if args.leaderboard:
+        sys.exit(leaderboard_check(args.rom))
 
     core, screen = load(args.rom)
     start_game(core)

@@ -511,14 +511,25 @@ def coop_check(rom):
         failures.append(f"tras el game over cooperativo siguen vivos {active}: "
                          "en coop mueren los dos a la vez")
     else:
+        # Out through the HIGH SCORES page, which is the cartridge's own road
+        # back to the title (main.asm.txt:2643-2675).
         tap("START")
         both(40, [[], []])
-        stuck = [i for i, core in enumerate(cores) if face(core) != title]
-        if stuck:
-            failures.append(f"la(s) consola(s) {stuck} no vuelven al titulo con "
-                             "START tras el game over cooperativo")
+        blind = [i for i, core in enumerate(cores)
+                 if "HIGH SCORES" not in run_rom.tilemap_text(core, 2, 0, 30)]
+        if blind:
+            failures.append(f"la(s) consola(s) {blind} no llegan a la tabla de "
+                             "records tras el game over cooperativo")
         else:
-            print("  las dos mueren juntas y las dos vuelven al titulo con START")
+            tap("START")
+            both(40, [[], []])
+            stuck = [i for i, core in enumerate(cores) if face(core) != title]
+            if stuck:
+                failures.append(f"la(s) consola(s) {stuck} no vuelven al titulo "
+                                 "desde la tabla")
+            else:
+                print("  las dos mueren juntas y las dos salen por la tabla de "
+                       "records al titulo")
 
     for f in failures:
         print(f"FALLA: {f}")

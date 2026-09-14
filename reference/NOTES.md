@@ -585,8 +585,11 @@ by holding A+B either.
 
 **What ends it is the port's own choice.** The cartridge's demo tops out and
 goes to its high-score table, and from there to the title on another timer.
-This port has no leaderboard, so the game over holds for three seconds and the
-title comes back. Measured on the built ROM the computer lasts about 35,000
+The port HAS that table now, but the demo does not go to it — a score nobody
+played for has no business on the board, and the cartridge agrees: the
+insertion (L81DD) is reached only when gameState is 0, which the demo's $FB
+is not. So the demo's game over holds for three seconds and the title comes
+back. Measured on the built ROM the computer lasts about 35,000
 frames — ten minutes — before burying itself, which is the same chooser at the
 same gravity the cartridge has.
 
@@ -618,8 +621,11 @@ by holding A+B either.
 
 **What ends it is the port's own choice.** The cartridge's demo tops out and
 goes to its high-score table, and from there to the title on another timer.
-This port has no leaderboard, so the game over holds for three seconds and the
-title comes back. Measured on the built ROM the computer lasts about 35,000
+The port HAS that table now, but the demo does not go to it — a score nobody
+played for has no business on the board, and the cartridge agrees: the
+insertion (L81DD) is reached only when gameState is 0, which the demo's $FB
+is not. So the demo's game over holds for three seconds and the title comes
+back. Measured on the built ROM the computer lasts about 35,000
 frames — ten minutes — before burying itself, which is the same chooser at the
 same gravity the cartridge has.
 

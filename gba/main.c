@@ -52,6 +52,7 @@
 #include "tiles_title.h"
 #include "screen_1p.h"
 #include "screen_coop.h"
+#include "screen_leaderboard.h"
 #include "screen_title.h"
 #include "screen_proto.h"
 #include "screen_menu.h"
@@ -499,7 +500,17 @@ static int field_cols(void) {
 }
 /* The best score of this session. The cartridge's own 1P panel shows one
  * (see draw_panel), and like the cartridge's it does not survive a reset. */
+/* The number on the panel during a game, which is the TOP OF THE TABLE and
+ * not a separate thing: statsDataAddresses' last entry is the leaderboard's
+ * first score (main.asm.txt:4107). It follows the live score while the game
+ * is being played and settles back onto the table's own top when the game
+ * ends — which is what the cartridge shows too, because the live score is
+ * written over that address as it goes. */
 static uint32_t g_high_score;
+/* True while the COMPUTER is playing one of the two slots — VERSUS or WITH.
+ * Declared up here because the high-score table has to know: a machine never
+ * takes a place on it (main.asm.txt:332-339). */
+static bool g_ai_active;
 /* Which player this console shows and plays. Always 0 in a solo game; in a
  * linked match it is the cable master that is player 1, so the two consoles
  * differ here and nowhere else. */
@@ -1255,6 +1266,220 @@ static void draw_game_over(void) {
  * bank 3's white, so it reads as a note and not as another choice. */
 #define BANK_NOTE (PAL_MENU_BASE + 2)
 
+/* ----------------------------------------------------------------------- *
+ * The HIGH SCORES table
+ *
+ * The cartridge keeps fifteen of them, with the lines that earned each one
+ * and three initials, and it keeps them IN MEMORY: `reset` tests a four-byte
+ * magic at $04F7 — 'L','O','G','G' — and then walks $0418-$04EF checking every
+ * digit is '0'-'9' and every initial is a letter before it trusts what is
+ * there (main.asm.txt:5644-5668). Survive a RESET and the table survives with
+ * you; come up cold and it is rebuilt. A GBA cartridge has no equivalent of
+ * that RAM, so this port rebuilds it every boot — but from the cartridge's own
+ * defaults, which is why HIGH SCORE opens at 17000 rather than at nothing.
+ *
+ * THE FIRST ENTRY IS THE HIGH SCORE. statsDataAddresses' last entry is
+ * `highScoreHundredThousands` (main.asm.txt:4107), which is the top of this
+ * table — the number on the panel during play is not a separate thing.
+ * ----------------------------------------------------------------------- */
+#define LEADER_ENTRIES SCREEN_LEADER_ENTRIES
+#define LEADER_INITIALS 3
+/* The alphabet an initial is chosen from: L93DC (main.asm.txt:2957-2961) is a
+ * space and then A to Z, indexed 0 to 26, which is why an initial is stored as
+ * an index and not as a letter. */
+#define LEADER_LETTERS 27
+static char leader_letter(uint8_t index) {
+    return index == 0 ? ' ' : (char)('A' + index - 1);
+}
+
+typedef struct {
+    uint32_t score;
+    uint16_t lines;
+    uint8_t initials[LEADER_INITIALS];  /* indices into the alphabet */
+} LeaderEntry;
+
+static LeaderEntry g_leader[LEADER_ENTRIES];
+
+/* Which entry is being typed into, and which of its three letters — the
+ * cartridge's $74/$75 (one per player) and the $40/$80 flags it marks the
+ * initials with. See leader_submit for how two of them can be waiting at
+ * once, and why they are typed one after the other. */
+static int g_leader_row = -1;      /* -1: nothing to type */
+static int g_leader_cursor;        /* 0..2 while typing */
+static uint8_t g_leader_blink;
+
+/* @resetHighScores (main.asm.txt:5670-5700). Every digit '0' and every initial
+ * 'A', and then the fifteen scores are built by counting DOWN from entry 0:
+ * `tya; adc #$33`, which lands on 17000 for the first and 3000 for the last in
+ * steps of a thousand. */
+static void leader_reset(void) {
+    for (int i = 0; i < LEADER_ENTRIES; i++) {
+        g_leader[i].score = (uint32_t)(17000 - i * 1000);
+        g_leader[i].lines = 0;
+        for (int c = 0; c < LEADER_INITIALS; c++) g_leader[i].initials[c] = 1; /* 'A' */
+    }
+    g_high_score = g_leader[0].score;
+}
+
+/* L81FF (main.asm.txt:342-378): walk the table from the BOTTOM up while the
+ * new score still beats what is there, which lands on the first row it does
+ * not — so an equal score goes UNDER the one already on the board. Everything
+ * below that row shifts down one and the last falls off (L829A, :414-435).
+ *
+ * Returns the row it landed on, or -1 if the score did not make the table. */
+static int leader_insert(uint32_t score, uint32_t lines) {
+    int row = LEADER_ENTRIES;
+    while (row > 0 && score > g_leader[row - 1].score) row--;
+    if (row >= LEADER_ENTRIES) return -1;
+
+    for (int i = LEADER_ENTRIES - 1; i > row; i--) g_leader[i] = g_leader[i - 1];
+    g_leader[row].score = score;
+    /* main.asm.txt:364-377: a line count that has reached its thousands digit
+     * is stored as "999" — the column is three wide and the ROM says so. */
+    g_leader[row].lines = (uint16_t)(lines > 999 ? 999 : lines);
+    for (int c = 0; c < LEADER_INITIALS; c++) g_leader[row].initials[c] = 1; /* 'A' */
+    g_high_score = g_leader[0].score;
+    return row;
+}
+
+/* THE PAGE WEARS bgPalette1, which is the menu's: initializeLeaderboard ends
+ * with `lda #$01 / jsr updatePalette` (main.asm.txt:3059-3060), and the set at
+ * index 1 is bgPalette1 (:5297). Every cell's bank within it comes off the
+ * screen's own attribute table, the runtime-written ones included — which is
+ * why the text below reads its bank out of the same array as the art rather
+ * than naming one. */
+static int leader_bank(int tx, int ty) {
+    return PAL_MENU_BASE + kScreenLeaderPalettes[ty * SCREEN_LEADER_W + tx];
+}
+
+/* The page itself, and then one row of it. */
+static void draw_leader_row(int row) {
+    int ty = SCREEN_LEADER_FIRST_TY + row;
+    const LeaderEntry *e = &g_leader[row];
+    for (int c = 0; c < LEADER_INITIALS; c++) {
+        char ch = leader_letter(e->initials[c]);
+        /* The letter being typed blinks, the way the cartridge blinks it
+         * (L932A, main.asm.txt:2855-2890). */
+        if (row == g_leader_row && c == g_leader_cursor && (g_leader_blink & 0x10))
+            ch = ' ';
+        int tx = SCREEN_LEADER_NAME_TX + c;
+        set_map_tile(tx, ty, WITH_BANK(ascii_tile(ch), leader_bank(tx, ty)));
+    }
+    draw_number(SCREEN_LEADER_SCORE_TX, ty, e->score, 6,
+                 leader_bank(SCREEN_LEADER_SCORE_TX, ty));
+    draw_number(SCREEN_LEADER_LINES_TX, ty, e->lines, 3,
+                 leader_bank(SCREEN_LEADER_LINES_TX, ty));
+}
+
+static void draw_leaderboard(void) {
+    for (int ty = 0; ty < SCREEN_LEADER_H_TILES; ty++)
+        for (int tx = 0; tx < SCREEN_LEADER_W; tx++) {
+            int i = ty * SCREEN_LEADER_W + tx;
+            set_map_tile(tx, ty, WITH_BANK(kScreenLeaderTiles[i],
+                                            leader_bank(tx, ty)));
+        }
+    for (int row = 0; row < LEADER_ENTRIES; row++) draw_leader_row(row);
+}
+
+/* WHOSE SCORES GO ON THE BOARD. L81DD (main.asm.txt:315-339) is called with
+ * the player who just topped out, and on the negative playMode — coop — it
+ * runs for the other one too, because one board is two players' game. What it
+ * refuses is the COMPUTER: L81EC returns without doing anything for player 2
+ * once menuGameMode has reached VERSUS. So a machine never takes a place on
+ * the table, and in coop both people do.
+ *
+ * Up to two entries can therefore be waiting to be typed into, which is what
+ * the cartridge's $74 and $75 are for. They are typed one after the other
+ * here, oldest first. */
+static int g_leader_queue[2];
+static int g_leader_queued;
+
+static void leader_submit(void) {
+    g_leader_row = -1;
+    g_leader_queued = 0;
+    g_leader_cursor = 0;
+
+    int slots[2];
+    int n = 0;
+    slots[n++] = g_view;
+    if (g_session.game.coop && !g_ai_active) slots[n++] = g_view ^ 1;
+
+    for (int i = 0; i < n; i++) {
+        const TengenPlayerState *p = &g_session.game.player[slots[i]];
+        int row = leader_insert(p->score, p->lines);
+        if (row < 0) continue;
+        /* An entry that lands above one already queued pushes it down a row,
+         * exactly as it pushes every other entry down. */
+        for (int q = 0; q < g_leader_queued; q++)
+            if (g_leader_queue[q] >= row) g_leader_queue[q]++;
+        g_leader_queue[g_leader_queued++] = row;
+    }
+    if (g_leader_queued) {
+        g_leader_row = g_leader_queue[0];
+        g_leader_blink = 0;
+    }
+}
+
+/* One letter along the alphabet, wrapping both ways — L92BA
+ * (main.asm.txt:2789-2799): $FF comes back as $1A and $1B comes back as 0, so
+ * the ring is the space and the twenty-six letters. */
+static void leader_letter_step(int delta) {
+    uint8_t *v = &g_leader[g_leader_row].initials[g_leader_cursor];
+    int next = (int)*v + delta;
+    if (next < 0) next = LEADER_LETTERS - 1;
+    if (next >= LEADER_LETTERS) next = 0;
+    *v = (uint8_t)next;
+}
+
+/* ...and one frame of typing. LEFT and RIGHT walk the alphabet with the
+ * cartridge's own repeat — a fresh press fires, and a held one fires again
+ * every ten frames (L9244-L927E, main.asm.txt:2709-2745). A or B takes the
+ * next letter and, after the third, finishes the entry; SELECT goes back to
+ * the first. Returns true while there is still something to type. */
+/* How long the page stands there once there is nothing left to type. The
+ * cartridge counts player1FallTimer down every fourth frame from whatever the
+ * game over left of it; ten seconds is the same order and is a round number a
+ * player can wait out. */
+#define LEADER_HOLD_FRAMES 600
+#define LEADER_DAS 10
+static bool leader_type(uint8_t held, uint8_t pressed) {
+    static uint8_t das_l, das_r;
+    /* THE BUTTON THAT FINISHES THE LAST LETTER DOES NOT ALSO LEAVE THE PAGE.
+     * A and B are both "next letter" here and "away with you" out there, so
+     * the frame that spends one on the third letter reports itself as still
+     * typing; the caller's clock starts on the next one, with the finished
+     * name on the screen where the player can see it. */
+    bool was_typing = g_leader_row >= 0;
+    if (!was_typing) return false;
+    g_leader_blink++;
+
+    if (pressed & TENGEN_BTN_LEFT) { leader_letter_step(-1); das_l = 0; }
+    else if (held & TENGEN_BTN_LEFT) {
+        if (++das_l >= LEADER_DAS) { leader_letter_step(-1); das_l = 0; }
+    } else das_l = 0;
+
+    if (pressed & TENGEN_BTN_RIGHT) { leader_letter_step(1); das_r = 0; }
+    else if (held & TENGEN_BTN_RIGHT) {
+        if (++das_r >= LEADER_DAS) { leader_letter_step(1); das_r = 0; }
+    } else das_r = 0;
+
+    if (pressed & TENGEN_BTN_SELECT) g_leader_cursor = 0;
+
+    if (pressed & (TENGEN_BTN_A | TENGEN_BTN_B)) {
+        nes_audio_play(NES_SOUND_SCREEN_SWITCH);
+        if (++g_leader_cursor >= LEADER_INITIALS) {
+            /* Done with this one; the next person who made the table, if
+             * there is one, types theirs. */
+            g_leader_cursor = 0;
+            for (int q = 1; q < g_leader_queued; q++)
+                g_leader_queue[q - 1] = g_leader_queue[q];
+            if (--g_leader_queued > 0) g_leader_row = g_leader_queue[0];
+            else g_leader_row = -1;
+        }
+    }
+    return was_typing;
+}
+
 #define NEXT_CELL_W 4
 
 /* CENTRED IN ITS CELL, and the last three pixels of it come from the same
@@ -1995,22 +2220,22 @@ static void start_music(uint8_t music) {
  *
  * GAME SELECT is the cartridge's own first menu, and its own wording: the
  * nametable at rows 14-20 spells 1 PLAYER / 2 PLAYER / COOPERATIVE / VERSUS
- * COMPUTER / WITH COMPUTER. Two of those five are implemented, so two are
- * listed — an entry that does nothing would be worse than an entry that is
- * not there. The three that are missing all want the ROM's `computerMove`
- * AI or the coop front end; see CLAUDE.md's roadmap. */
+ * COMPUTER / WITH COMPUTER. All five are here, and so is the screen that
+ * follows a game: the cartridge goes from its GAME OVER to its HIGH SCORES
+ * table and from there back to the title (somethingWithLeaderboard,
+ * main.asm.txt:2643-2675). */
 typedef enum {
     SCREEN_TITLE,
     SCREEN_GAME_SELECT,
     SCREEN_LEVEL_SELECT,
     SCREEN_LINK_WAIT,
-    SCREEN_PLAYING
+    SCREEN_PLAYING,
+    SCREEN_LEADERBOARD
 } Screen;
 
 /* THE CARTRIDGE'S OWN WORDING, and its own order: its GAME SELECT reads
  * 1 PLAYER / 2 PLAYER / COOPERATIVE / VERSUS COMPUTER / WITH COMPUTER at
- * nametable rows 14-20 (main.asm.txt:4742-4830). The last two need the
- * COMPUTER player, which is not ported yet, so they are not offered. */
+ * nametable rows 14-20 (main.asm.txt:4742-4830). */
 #define GAME_1P   0
 #define GAME_2P   1
 #define GAME_COOP 2
@@ -2682,7 +2907,6 @@ static void draw_level_settings(int chosen, uint8_t start_level, uint8_t music,
  * is playing in. `g_ai_frame` stands in for frameCounterLow, whose low bits
  * are the whole of its cadence. */
 static TengenAi g_ai;
-static bool g_ai_active;
 static uint8_t g_ai_slot = TENGEN_PLAYER_2;
 static TengenTetromino g_ai_last_piece;
 static uint8_t g_ai_frame;
@@ -3127,6 +3351,8 @@ static void draw_match(bool *sweeping) {
 int main(void) {
     upload_tiles();
     upload_palettes();
+    /* The cartridge's cold-boot table. See leader_reset. */
+    leader_reset();
     set_field_palette_for_level(0);
     clear_screen();
 
@@ -3166,6 +3392,7 @@ int main(void) {
                    DCNT_OBJ | DCNT_OBJ_1D;
 
     Screen screen = SCREEN_TITLE;
+    int leader_frames = 0;
     uint8_t start_level = 0;
     /* menuPlayer1Handicap / menuPlayer2Handicap ($04F3-$04F4). */
     uint8_t handicap[2] = { 0, 0 };
@@ -3591,6 +3818,36 @@ int main(void) {
             continue;
         }
 
+        /* THE HIGH SCORES PAGE, which is what a finished game leads to. It
+         * sits here until the entries that made the board have been typed
+         * into, and then until either a button or its own clock — the ROM's
+         * own way out of it is a countdown on player1FallTimer to
+         * initializeTitleScreen (main.asm.txt:2653-2657). */
+        if (screen == SCREEN_LEADERBOARD) {
+            bool typing = leader_type(buttons, pressed);
+            if (typing) {
+                leader_frames = 0;
+            } else if (++leader_frames >= LEADER_HOLD_FRAMES ||
+                        (pressed & (TENGEN_BTN_START | TENGEN_BTN_A |
+                                     TENGEN_BTN_B))) {
+                screen = SCREEN_TITLE;
+                restart_title_sprites();
+                g_front_tune = FRONT_NOTHING;
+                vsync();
+                audio_frame();
+                clear_screen();
+                oam_hide_all();
+                continue;
+            }
+            vsync();
+            /* Only the row being typed into changes, so only it is redrawn —
+             * six hundred tiles a frame for a blinking letter would be a
+             * whole vertical blank spent on nothing. */
+            if (g_leader_row >= 0) draw_leader_row(g_leader_row);
+            audio_frame();
+            continue;
+        }
+
         /* The level-up interlude holds the game still while the dancers
          * perform, the way the ROM switches to its bonus state. Any button
          * cuts it short, which is what the original does too
@@ -3766,12 +4023,17 @@ int main(void) {
          * board is still going (main.asm.txt:82F3-830F) — and a race where the
          * loser has to sit and wait for the winner is a race nobody can leave.
          * So: a dead board here is a way out here. */
-        /* Not in the demo: there the pad is the way out and the computer's
-         * choice is what lands in `pressed`, so its own A and B would read as
-         * a player asking to leave. The demo sees itself out above. */
-        bool own_board_dead = !g_demo &&
-                               !g_session.game.player[g_view].game_active;
-        if ((!match_running || own_board_dead) && (pressed & GAMEOVER_RESTART)) {
+        /* NOT IN THE DEMO, and the whole condition has to say so rather than
+         * just the dead-board half of it. There the pad is not a controller:
+         * the computer's choice is what lands in `pressed`, so its own A or B
+         * would read as a player asking to leave — and on the one frame the
+         * demo's board dies, `pressed` still holds the computer's last press
+         * while `match_running` has just gone false. That put the attract mode
+         * on the HIGH SCORES page with a score nobody played for. The demo
+         * sees itself out above. */
+        bool own_board_dead = !g_session.game.player[g_view].game_active;
+        if (!g_demo && (!match_running || own_board_dead) &&
+            (pressed & GAMEOVER_RESTART)) {
             /* Quitting out from under a match still running on the other side
              * of the cable: the cable has to be told, and put away, exactly as
              * it would have been had both boards died. */
@@ -3782,8 +4044,14 @@ int main(void) {
                     link_shutdown();
                 }
             }
-            screen = SCREEN_TITLE;
-            restart_title_sprites();
+            /* AND THE TABLE COMES NEXT, not the title. The cartridge's own
+             * road out of a game runs through its HIGH SCORES page — the game
+             * over counts down and jumps to initializeLeaderboard, which is
+             * where a score that made the board gets its initials typed into
+             * it (main.asm.txt:2643-2675). */
+            leader_submit();
+            screen = SCREEN_LEADERBOARD;
+            leader_frames = 0;
             g_linked = false;
             g_link_lost = false;
             g_view = 0;
@@ -3800,6 +4068,7 @@ int main(void) {
             g_front_tune = FRONT_NOTHING;
             vsync();
             audio_frame();
+            draw_leaderboard();
             continue;
         }
 
