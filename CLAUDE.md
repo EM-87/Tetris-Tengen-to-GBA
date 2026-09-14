@@ -210,16 +210,17 @@ running ROM; only the side panels need reflowing).
    already drawn, and the ROM's own eight coop dancer positions to stand on
    them. It goes over the cable like 2P, with the choice riding bit 8 of the
    lobby's CONFIG word. See reference/NOTES.md.
-21. Still to do: the **COMPUTER
-   player** (`computerMove`, the VS and WITH modes), which unlike two-human 2P
-   needs neither a second console nor a cable: its piece table is decoded and
-   verified in reference/NOTES.md — start there, the profile bytes are each
-   column's bottom relative to the piece's LEFTMOST column and can be
-   generated from `kOrientationBitmap` rather than transcribed. What is left
-   is the two scoring paths, the well term they share, the tie-break and the
-   driver that turns the chosen placement into button presses. Also unported:
-   the attract-mode demo the title starts at `frameCounterHigh` = 5
-   (`demoStart`), the prototype PIECE art (the skin is the title only).
+21. ~~The COMPUTER player~~ — done, and with it all five of the cartridge's
+   GAME SELECT entries. `computerMove` is `src/tengen_ai.c`, transcribed byte
+   for byte including the arithmetic that wraps; only the 28 bonus bytes are
+   copied, since the profiles derive from the core's own bitmaps and a test
+   checks that they do. `playModeTable` is what says which board each mode
+   uses: VERSUS is a race like 2P, WITH COMPUTER is coop's shared twelve-wide
+   board. Neither needs a cable. See reference/NOTES.md.
+22. Still to do: the **attract-mode demo** the title starts at
+   `frameCounterHigh` = 5 (`demoStart`), which is the one other thing
+   `computerMove` feeds; the prototype PIECE art (the skin is the title only);
+   and the prototype mode that cycles the four dumps.
 
 ## Build
 

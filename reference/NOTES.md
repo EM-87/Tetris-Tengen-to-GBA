@@ -126,13 +126,9 @@ preserve bug-for-bug.
 2. The 2P starting handicap: `initHandicapGarbage` (`main.asm.txt:3545-3598`)
    and its `garbageHeightData` at `$98A7` = `$B8,$A0,$88,$70`. The port's
    linked two-player game is a straight race with no handicap yet.
-3. The coop front end and the second player's screen half, and the menu rows
-   for game type and handicap (`main.asm.txt:4742-4830`). The port's GAME
-   SELECT lists only the two modes it implements, in the cartridge's own
-   wording; the ROM's five are 1 PLAYER / 2 PLAYER / COOPERATIVE / VERSUS
-   COMPUTER / WITH COMPUTER at nametable rows 14-20.
-4. `computerMove`, the AI behind VERSUS COMPUTER and WITH COMPUTER — the one
-   two-player mode that needs no second console.
+3. The prototype dumps' own differences, for the mode that cycles them.
+4. The attract-mode demo, which is the only thing left that `computerMove`
+   feeds and the port does not: `demoStart` at `frameCounterHigh` = 5.
 
 ## The walls do not stop at the top of the visible field
 
@@ -477,56 +473,91 @@ to guess: a dump without the expected first row is rejected with a reason
 rather than converted into 1024 bytes of noise, and the port then builds with
 `SCREEN_PROTO_AVAILABLE 0` and L/R simply have nothing to switch to.
 
-## The COMPUTER player, traced as far as its tables (NOT yet ported)
+## The COMPUTER player, traced and ported
 
-`computerMove` (`main.asm.txt:4207-4307`) is what drives the cartridge's VS
-and WITH modes. It is not yet in the port; this is the trace so far, and the
-part that took the reverse-engineering is done and verified.
+`computerMove` (`main.asm.txt:4207-4307`) is what drives VERSUS COMPUTER and
+WITH COMPUTER, and the attract demo. It is `src/tengen_ai.c` now, transcribed
+rather than reinterpreted — where the ROM's arithmetic overflows a byte, so
+does the port's, because the placements it picks are only the cartridge's if
+the wrap-around is too.
+
+**Which board each mode plays on** is `playModeTable` (`$9F51`), five bytes
+for the five GAME SELECT entries: `00 01 FF 01 FF`. So VERSUS is 2P's board —
+two separate ten-wide fields, a race — and **WITH COMPUTER is COOP's**: one
+twelve-wide field shared with it. In both the computer is player 2
+(`main.asm.txt:3736-3749`), and it reads one field, `playfieldPages,x` indexed
+by playMode (`$8562` = `06 07 06`): its own in a race, the shared one in WITH.
 
 **The height profile.** `computerMove` first walks the playfield building
 `computerScratchA`, sixteen entries — one per nibble column — each the BYTE
-OFFSET of the first non-empty cell in that column, found by stepping down in
-eights from `$28` (`:4224-4256`). Heights are therefore in byte units, eight
-to a row, which is what makes every number below a multiple of eight.
+OFFSET of the first non-empty cell, found by stepping down in eights from
+`$28`, so the first row it actually reads is `$30`, ROM row 6. Heights are
+therefore in byte units, eight to a row, which is what makes every number in
+the thing a multiple of eight. A column empty to the bottom stops on the solid
+floor at rows 26-27 and reads `$D0`; a wall reads `$30`, and so do the `$FF`
+padding bytes either side of every row (`initPlayer1orCoopPlayfield` writes
+bytes 0 and 7 as `$FF`, `:3471-3473`), which is how the well term below tells
+"there is a wall here" from "there is a stack here".
 
 **`computerMoveSelectTableOffsetBy18` ($A0D9) is the piece table**, indexed
-`piece * 16 + orientation * 4`, four bytes an entry:
+`piece * 16 + orientation * 4`, four bytes an entry: a SIGNED bonus, then the
+piece's bottom profile, `$80`-terminated. **The profile is each column's
+bottom RELATIVE TO THE PIECE'S LEFTMOST OCCUPIED COLUMN**, and generating that
+from the port's own `kOrientationBitmap` reproduces all 28 entries byte for
+byte — so the port derives it rather than transcribing it, and a test checks
+the derivation. Only the 28 bonus bytes are copied, because taste cannot be
+derived from anything.
 
-| Byte | Meaning |
-| --- | --- |
-| 0 | a SIGNED bonus, added to the placement's score (`:4419`) |
-| 1-3 | the piece's bottom profile, `$80`-terminated |
+**TWO SCORERS, NOT A RANKING.** `possibleComputerChoosingMove` (`:4311-4357`)
+scores a placement that sits FLUSH — every column of the piece's bottom
+landing exactly on the terrain under it — and the moment one does not, hands
+the whole thing to `L9DA3` (`:4361-4429`), which drops the piece column by
+column, lifts it onto whatever it reaches first, and scores where it comes to
+rest. They write to two different slots of `computerScratchB` and are compared
+once at the end. Both score the same way: **the resting height, less the well
+term, plus the piece's bonus — and higher is better**, because height counts
+downward.
 
-**And the profile is each column's bottom RELATIVE TO THE PIECE'S LEFTMOST
-COLUMN**, not to its neighbour. That is the thing worth writing down, because
-both readings look plausible against half the entries. It is settled two ways.
-The code reads `height[col0] + profile[k]` and compares against `height[col
-k]` (`:4315-4319`), which is only meaningful from a fixed origin. And
-generating the profile from the port's own `kOrientationBitmap` — bottom row
-per column, minus the leftmost column's, times eight — reproduces **all 28
-entries byte for byte**, terminator included, so the table need not be
-transcribed at all when the time comes; it can be derived and asserted.
+The bumpy scorer refuses two things the flush one does not — a score that
+borrows, and one below `$20` — and will not start from column `$0C` or beyond,
+which the flush one is happy to do. That asymmetry is the cartridge's.
 
-Worked: the T flat side up is `1110 / 0100`, bottoms `[0,1,0]`, so from column
-zero `[+8, 0]` — and the table says `08 00`. The L is `1110 / 1000`, bottoms
-`[1,0,0]`, from column zero `[-8,-8]` — `F8 F8`. The number of profile bytes
-before the `$80` is always the piece's width minus one, for every entry.
+**The well term** (`L9E31`, `:4433-4462`) is the only place either scorer looks
+beside the piece rather than under it. If the column to the right is a wall it
+averages the LEFT neighbour with the piece's own column; if the left is, it
+averages the right one; if neither, it averages the two neighbours. The
+wall cases subtract the caller's bias — `$0C` from the flush scorer, `$00`
+from the bumpy one — and everything is then shifted down two.
 
-The bonuses are where its taste lives: an I standing on end is -8 and -10, a T
-flat is +9, an L in its `$10` orientation is +15.
+Its index can run past the sixteen columns: `computerScratchA+1,y` with y the
+placement's rightmost column reaches `scratchA[17]` when a four-wide piece is
+tried at column 13, which is the byte its own caller just saved the table index
+into. It is reachable and harmless, and the port's scratch is sized to nineteen
+so it happens there too rather than being clamped into something the cartridge
+never computes.
 
-**Still to trace and port:** `possibleComputerChoosingMove` (`:4310-4357`) and
-its bumpy-fit twin at `L9DA3` (`:4358-4429`) — the first scores a placement
-that sits FLUSH on the terrain, the second one that does not and accumulates
-the mismatch; `L9E31` (`:4430-4462`), the well/edge term both of them call;
-the two-candidate tie-break with its `+$0B` bias (`:4285-4297`); the `$0C`
-and `$00` arguments that tell `L9E31` which of the two callers it is serving;
-and then the driver that turns `compTargetX` / `compTargetOrientation` into
-button presses over frames (called from `:3735` and `:3749`). After that the
-VS and WITH modes need a front end — which, unlike two-human 2P, needs
-neither a second console nor a cable.
+**The tie-break** is `adc #$0B` and a carry test (`:4285-4297`): the flush
+candidate wins unless the bumpy one beats it by more than eleven. Only the two
+SCORES are cleared at the top of `computerMove` — the two candidates' columns
+and orientations are not — so a call that finds nothing at all quietly keeps
+the placement the piece before it chose.
 
-## The starting handicap
+**The last step is a coordinate fix.** All of the above works in the piece's
+leftmost OCCUPIED column; the driver compares against `player1TetrominoX`,
+which is its bitmap's left edge. Those are the same column for every piece and
+orientation but one — the I standing on end occupies its bitmap's second
+column — so the I, and only the I, gets a column back (`:4299-4305`).
+
+**The driver** (`:4170-4202`) is four lines and the cartridge comments it
+itself: "shifting occurs every 8 frames; rotation every 16". A shift is LEFT or
+RIGHT toward the target column; a rotation is B for one or two steps and A for
+three, which is the same as one step the other way. It never presses DOWN — the
+computer does not soft-drop, so every piece it places takes the whole of
+gravity to land. Playing it out on the host it lasts forty to ninety pieces and
+clears a handful of lines before burying itself, which is about what the
+cartridge's does.
+
+## The starting handicap## The starting handicap
 
 `endPlayfieldInit` (`main.asm.txt:3536-3546`) reads `menuPlayer1Handicap`
 (`$04F3`) — or player 2's, unless the COMPUTER is playing — and if it is not

@@ -8,6 +8,7 @@
  */
 #include "../src/tengen_core.h"
 #include "../src/tengen_link.h"
+#include "../src/tengen_ai.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -1029,6 +1030,169 @@ static void test_a_lobby_hands_straight_over_to_a_matching_pair_of_games(void) {
     CHECK(master.game.player[1].piece.current != TT_NONE);
 }
 
+/* ----------------------------------------------------------------------- *
+ * The COMPUTER player
+ * ----------------------------------------------------------------------- */
+
+static void test_the_computers_piece_table_derives_from_the_bitmaps(void) {
+    /* computerMoveSelectTableOffsetBy18's profile bytes are each column's
+     * bottom RELATIVE TO THE PIECE'S LEFTMOST OCCUPIED COLUMN, times eight.
+     * That reading is what makes the table derivable rather than transcribed,
+     * so this pins the shape of what tengen_ai_profile produces: as many
+     * bytes as the piece is wide, minus one, and the ROM's own values for the
+     * four entries worked out by hand in reference/NOTES.md. */
+    uint8_t p[3];
+
+    /* The T flat side up is 1110 / 0100: bottoms [0,1,0], so from column zero
+     * [+8, 0] — and the ROM says 08 00. */
+    CHECK(tengen_ai_profile(TT_T, 0, p) == 2);
+    CHECK(p[0] == 0x08 && p[1] == 0x00);
+    /* The L is 1110 / 1000: bottoms [1,0,0], from column zero [-8,-8]. */
+    CHECK(tengen_ai_profile(TT_L, 0, p) == 2);
+    CHECK(p[0] == 0xF8 && p[1] == 0xF8);
+    /* The I lying flat is four wide and level. */
+    CHECK(tengen_ai_profile(TT_I, 0, p) == 3);
+    CHECK(p[0] == 0x00 && p[1] == 0x00 && p[2] == 0x00);
+    /* ...and standing on end is one column, so it has no profile at all —
+     * which is the $80 that terminates its entry immediately. */
+    CHECK(tengen_ai_profile(TT_I, 1, p) == 0);
+    CHECK(tengen_ai_profile(TT_I, 3, p) == 0);
+
+    /* Every entry's length is the piece's width minus one, for all 28. */
+    for (int piece = TT_I; piece < TENGEN_TETROMINO_COUNT; piece++) {
+        for (uint8_t o = 0; o < 4; o++) {
+            int width = 0, seen = 0;
+            for (int c = 0; c < 4; c++) {
+                int any = 0;
+                for (int r = 0; r < 4; r++)
+                    if (tengen_piece_occupies((TengenTetromino)piece, o, r, c)) any = 1;
+                if (any) { width++; seen = 1; }
+                else if (seen) { /* pieces are contiguous; nothing to do */ }
+            }
+            CHECK(tengen_ai_profile((TengenTetromino)piece, o, p) == width - 1);
+        }
+    }
+
+    /* And the bonuses are the cartridge's, signed. */
+    CHECK(tengen_ai_bonus(TT_I, 1) == -8);
+    CHECK(tengen_ai_bonus(TT_I, 3) == -10);
+    CHECK(tengen_ai_bonus(TT_T, 0) == 9);
+    CHECK(tengen_ai_bonus(TT_L, 3) == 15);
+}
+
+static void test_the_computer_reads_the_board_in_the_roms_own_units(void) {
+    /* computerMove's height scan steps down in eights from $28, so its first
+     * read is $30 — ROM row 6, the first visible one — and everything it does
+     * downstream is in those byte units. */
+    TengenGame game;
+    uint8_t h[TENGEN_AI_SCRATCH_A];
+
+    tengen_new_game(&game, 1234, 0, false, false);
+    tengen_ai_heights(&game, TENGEN_PLAYER_1, h);
+
+    /* An empty column runs down onto the floor the ROM lays at row 26. */
+    for (int col = 1; col <= 10; col++)
+        CHECK(h[col + TENGEN_ROM_COL_ORIGIN] == 26 * 8);
+    /* The walls, and the padding either side of them, are solid from the top. */
+    CHECK(h[2] == 0x30);
+    CHECK(h[13] == 0x30);
+    CHECK(h[0] == 0x30 && h[1] == 0x30);
+    CHECK(h[14] == 0x30 && h[15] == 0x30);
+
+    /* Drop one block into the middle and the height follows it: visible row
+     * 15 is ROM row 21. */
+    game.field[0].cell[15][5] = TT_O;
+    tengen_ai_heights(&game, TENGEN_PLAYER_1, h);
+    CHECK(h[5 + TENGEN_ROM_COL_ORIGIN] == 21 * 8);
+
+    /* In coop the wall columns are playable, so they read as empty. */
+    TengenGame coop;
+    tengen_new_game(&coop, 1234, 0, true, true);
+    tengen_ai_heights(&coop, TENGEN_PLAYER_2, h);
+    CHECK(h[2] == 26 * 8);
+    CHECK(h[13] == 26 * 8);
+    CHECK(h[1] == 0x30 && h[14] == 0x30);   /* ...but the padding is not */
+}
+
+static void test_the_computer_picks_a_placement_and_walks_to_it(void) {
+    /* The whole thing end to end: choose, then drive. What is checked is not
+     * WHICH square it likes — that is the cartridge's taste and the tables
+     * above are what pin it — but that the choice is reachable and that the
+     * driver actually converges on it at the ROM's own cadence: a shift every
+     * eighth frame, a rotation every sixteenth (main.asm.txt:4170). */
+    TengenGame game;
+    TengenAi ai;
+
+    tengen_new_game(&game, 0x2468, 0, false, false);
+    tengen_ai_reset(&ai);
+    tengen_ai_choose(&ai, &game, TENGEN_PLAYER_1);
+
+    CHECK(ai.target_orientation < 4);
+    /* A target inside the board: the scan runs nibble columns 2..13, and the
+     * I standing on end takes one back. */
+    CHECK(ai.target_x >= 1 && ai.target_x <= 13);
+
+    /* Drive it. Every eighth frame it may shift and every sixteenth rotate,
+     * so a couple of hundred frames is far more than enough to arrive. */
+    uint8_t frame = 0;
+    for (int i = 0; i < 400; i++) {
+        uint8_t buttons = tengen_ai_buttons(&ai, &game, TENGEN_PLAYER_1, frame);
+        /* Nothing but the four it is allowed to press. */
+        CHECK((buttons & ~(uint8_t)(TENGEN_BTN_LEFT | TENGEN_BTN_RIGHT |
+                                     TENGEN_BTN_A | TENGEN_BTN_B)) == 0);
+        /* It only ever asks on the frames the ROM asks on. */
+        if (frame & 0x07) CHECK((buttons & (TENGEN_BTN_LEFT | TENGEN_BTN_RIGHT)) == 0);
+        if (frame & 0x0F) CHECK((buttons & (TENGEN_BTN_A | TENGEN_BTN_B)) == 0);
+        tengen_step(&game, TENGEN_PLAYER_1, buttons);
+        frame++;
+        if (game.player[0].piece.orientation == ai.target_orientation &&
+            (uint8_t)game.player[0].piece.x == ai.target_x)
+            break;
+    }
+    CHECK(game.player[0].piece.orientation == ai.target_orientation);
+    CHECK((uint8_t)game.player[0].piece.x == ai.target_x);
+}
+
+static void test_the_computer_keeps_playing_and_does_not_bury_itself(void) {
+    /* The real test of a placement chooser is a long game, so this plays
+     * three out — re-choosing on every new piece the way getNextTetromino
+     * does — and asks that each one lasts a good many pieces and that lines
+     * get cleared along the way. A chooser that stacks blindly tops out in a
+     * handful of pieces and never clears anything.
+     *
+     * It is not asked to be GOOD. The cartridge's computer is not: it never
+     * soft-drops (its driver presses nothing but left, right, A and B), so
+     * every piece takes the whole of gravity to land, and it buries itself
+     * eventually. Around forty to ninety pieces and a few lines is what this
+     * code does, and what the cartridge's does. */
+    int total_lines = 0;
+
+    for (int run = 0; run < 3; run++) {
+        TengenGame game;
+        TengenAi ai;
+        TengenTetromino last = TT_NONE;
+        uint8_t frame = 0;
+        int pieces = 0;
+
+        tengen_new_game(&game, (uint16_t)(0x1357 + run * 777), 0, false, false);
+        tengen_ai_reset(&ai);
+
+        for (int i = 0; i < 60000 && game.player[0].game_active; i++) {
+            if (game.player[0].piece.current != last) {
+                last = game.player[0].piece.current;
+                pieces++;
+                tengen_ai_choose(&ai, &game, TENGEN_PLAYER_1);
+            }
+            uint8_t buttons = tengen_ai_buttons(&ai, &game, TENGEN_PLAYER_1, frame);
+            TengenStepResult r = tengen_step(&game, TENGEN_PLAYER_1, buttons);
+            total_lines += r.lines_collapsed;
+            frame++;
+        }
+        CHECK(pieces >= 20);
+    }
+    CHECK(total_lines > 0);
+}
+
 static void test_coop_is_one_twelve_wide_board_over_the_cable(void) {
     /* COOPERATIVE is the third mode the cartridge offers and the only one
      * where the two players share a field: initPlayer1orCoopPlayfield leaves
@@ -1665,6 +1829,10 @@ int main(void) {
     test_no_lobby_word_can_look_like_an_absent_console();
     test_a_lobby_hands_straight_over_to_a_matching_pair_of_games();
     test_the_wire_word_survives_a_round_trip();
+    test_the_computers_piece_table_derives_from_the_bitmaps();
+    test_the_computer_reads_the_board_in_the_roms_own_units();
+    test_the_computer_picks_a_placement_and_walks_to_it();
+    test_the_computer_keeps_playing_and_does_not_bury_itself();
     test_coop_is_one_twelve_wide_board_over_the_cable();
     test_either_player_can_pause_a_linked_game();
     test_level_starts_at_the_chosen_start_level();

@@ -43,6 +43,7 @@
 #include "link.h"
 #include "../src/tengen_core.h"
 #include "../src/tengen_link.h"
+#include "../src/tengen_ai.h"
 
 /* Generated from a cartridge dump by tools/extract_assets.py. */
 #include "tiles_game.h"
@@ -1850,10 +1851,23 @@ typedef enum {
 #define GAME_1P   0
 #define GAME_2P   1
 #define GAME_COOP 2
-#define GAME_COUNT 3
+#define GAME_VS   3
+#define GAME_WITH 4
+#define GAME_COUNT 5
 static const char *const kGameNames[GAME_COUNT] = {
-    "1 PLAYER", "2 PLAYER", "COOPERATIVE"
+    "1 PLAYER", "2 PLAYER", "COOPERATIVE", "VERSUS COMPUTER", "WITH COMPUTER"
 };
+
+/* WHAT EACH ONE IS, from playModeTable ($9F51 = `00 01 FF 01 FF`): the five
+ * entries map onto three kinds of board. 1 PLAYER is one. 2 PLAYER and
+ * VERSUS COMPUTER are two separate ten-wide ones — a race. COOPERATIVE and
+ * WITH COMPUTER are one twelve-wide one, shared.
+ *
+ * The difference between the human pairs and the computer ones is only WHO
+ * presses player 2's buttons, which is why these two predicates are separate:
+ * the cable modes need a second console, the computer ones need nothing. */
+#define GAME_IS_COOP(m)  ((m) == GAME_COOP || (m) == GAME_WITH)
+#define GAME_HAS_AI(m)   ((m) == GAME_VS || (m) == GAME_WITH)
 
 /* Both of the cable modes go through the lobby; what they do differently is
  * what the lobby carries and what the board looks like afterwards. */
@@ -2224,13 +2238,17 @@ static void draw_menu_frame(void) {
     }
 }
 
+#define GAME_SELECT_TY 10
 static void draw_game_select(uint8_t choice) {
     draw_menu_frame();
     draw_text_centred(8, "GAME SELECT", PAL_MENU_BASE + 3);
+    /* FIVE ENTRIES ON CONSECUTIVE ROWS, which is the cartridge's own shape:
+     * gameSelectArrowPpuAddrs ($A0AB) is $220A,$222A,$224A,$226A,$228A — five
+     * addresses one nametable row apart. Two rows apart was fine for two of
+     * them and does not fit five under a logo six rows tall. */
     for (int i = 0; i < GAME_COUNT; i++)
-        draw_text_centred(10 + i * 2, kGameNames[i],
+        draw_text_centred(GAME_SELECT_TY + i, kGameNames[i],
                            i == choice ? BANK_HILITE : PAL_MENU_BASE + 3);
-    clear_both(MENU_IN_TX, 10 + GAME_COUNT * 2, MENU_IN_W, 2);
     /* The credit the cartridge never printed. Tengen's title screen carries
      * "(C)1987 ACADEMYSOFT-ELORG" — the Soviet institute, not the man — and
      * the licensing fight that followed is the reason this cartridge was
@@ -2495,6 +2513,21 @@ static void draw_level_settings(int chosen, uint8_t start_level, uint8_t music,
  *     dancers out during a two-player race in any case.
  * ----------------------------------------------------------------------- */
 
+/* THE COMPUTER PLAYER, which needs neither a second console nor a cable: it
+ * is player 2 in VERSUS and WITH, exactly as in the cartridge
+ * (main.asm.txt:3736-3749), and it is handed the same TengenGame the human
+ * is playing in. `g_ai_frame` stands in for frameCounterLow, whose low bits
+ * are the whole of its cadence. */
+static TengenAi g_ai;
+static bool g_ai_active;
+static TengenTetromino g_ai_last_piece;
+static uint8_t g_ai_frame;
+
+/* One frame of the computer's play. It re-chooses on every new piece, which
+ * is where getNextTetromino calls computerMove, and presses whatever the
+ * driver says the rest of the time. */
+static void ai_play_frame(void);
+
 static bool g_linked;            /* this match is running over the cable */
 static bool g_link_lost;         /* ...and the cable stopped answering */
 static bool g_repaint;           /* the static screen needs putting back */
@@ -2626,6 +2659,24 @@ static void announce_step(TengenStepResult step) {
         nes_audio_play(NES_MUSIC_SILENCE);
         nes_audio_play(NES_MUSIC_GAMEOVER);
     }
+}
+
+static void ai_play_frame(void) {
+    if (!g_ai_active) return;
+    if (g_session.game.paused) return;
+    if (!g_session.game.player[TENGEN_PLAYER_2].game_active) return;
+
+    if (g_session.game.player[TENGEN_PLAYER_2].piece.current != g_ai_last_piece) {
+        g_ai_last_piece = g_session.game.player[TENGEN_PLAYER_2].piece.current;
+        tengen_ai_choose(&g_ai, &g_session.game, TENGEN_PLAYER_2);
+    }
+    uint8_t buttons = tengen_ai_buttons(&g_ai, &g_session.game,
+                                         TENGEN_PLAYER_2, g_ai_frame);
+    g_ai_frame++;
+    /* Its clears and its top-out are heard: one screen, one speaker. In WITH
+     * the level is shared, so a level-up it earns brings the dancers out for
+     * both of them, which is what announce_step already does. */
+    announce_step(tengen_step(&g_session.game, TENGEN_PLAYER_2, buttons));
 }
 
 /* The level's colours and the falling piece's, each reinstalled the frame it
@@ -2797,6 +2848,7 @@ static bool solo_play_frame(uint8_t buttons, uint8_t pressed) {
     }
 
     announce_step(tengen_step(&g_session.game, TENGEN_PLAYER_1, buttons));
+    ai_play_frame();
     return !match_over();
 }
 
@@ -3047,7 +3099,8 @@ int main(void) {
              * not be burying anybody on the way. They work wherever the cursor
              * is — that is the point of naming them in the label. */
             if (!chord && (tap_l || tap_r)) {
-                int who = (tap_r && !tap_l && game_mode == GAME_2P) ? 1 : 0;
+                int who = (tap_r && !tap_l &&
+                            (game_mode == GAME_2P || game_mode == GAME_VS)) ? 1 : 0;
                 handicap[who] = (uint8_t)((handicap[who] + 1) %
                                            (TENGEN_HANDICAP_MAX + 1));
                 menu_field = MENU_FIELD_HANDICAP;   /* show what moved */
@@ -3110,11 +3163,24 @@ int main(void) {
                 g_linked = false;
                 g_link_lost = false;
                 g_view = 0;
-                tengen_new_game(&g_session.game, seed, start_level, false, false);
+                /* VERSUS and WITH are the two-player modes that need no second
+                 * console: the board is a race's or a coop's, and the computer
+                 * presses player 2's buttons. playModeTable ($9F51) is what
+                 * says which board — `00 01 FF 01 FF`. */
+                g_ai_active = GAME_HAS_AI(game_mode);
+                tengen_new_game(&g_session.game, seed, start_level,
+                                 g_ai_active, GAME_IS_COOP(game_mode));
+                tengen_ai_reset(&g_ai);
+                g_ai_last_piece = TT_NONE;
+                g_ai_frame = 0;
                 swallow_held_buttons(&g_session.game);
                 /* endPlayfieldInit's own place for it, right after the field
-                 * is laid out (main.asm.txt:3536-3546). */
+                 * is laid out (main.asm.txt:3536-3546). A shared board takes
+                 * one burial, not two. */
                 tengen_apply_handicap(&g_session.game, TENGEN_PLAYER_1, handicap[0]);
+                if (g_ai_active && !g_session.game.coop)
+                    tengen_apply_handicap(&g_session.game, TENGEN_PLAYER_2,
+                                           handicap[1]);
                 g_mix_step = 0;      /* every game opens on the same tune */
                 g_shown_level = 0xFF;
                 g_shown_piece = TT_NONE;
@@ -3133,10 +3199,10 @@ int main(void) {
                 continue;
             }
             vsync();
-            /* Only a RACE has two handicaps: coop shares the board, so it
-             * shares the one starting burial too. */
+            /* Only a RACE has two handicaps — two boards to bury. A shared
+             * board, coop's or WITH COMPUTER's, takes one. */
             draw_level_settings(menu_field, start_level, g_music, handicap,
-                                 game_mode == GAME_2P);
+                                 game_mode == GAME_2P || game_mode == GAME_VS);
             audio_frame();
             continue;
         }
@@ -3186,6 +3252,7 @@ int main(void) {
                  * end of the cable each is plugged into. */
                 g_linked = true;
                 g_link_lost = false;
+                g_ai_active = false;
                 g_view = link_is_master() ? 0 : 1;
                 /* The master's choice wins, the egg included: both consoles run
                    the same ROM, so a linked player who never found the code

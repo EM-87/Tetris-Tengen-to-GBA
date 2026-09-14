@@ -18,8 +18,8 @@ CC      ?= gcc
 CFLAGS  ?= -std=c99 -Wall -Wextra -Wpedantic -g -O1
 BUILD   := build
 
-CORE_SRC := src/tengen_core.c src/tengen_link.c
-CORE_HDR := src/tengen_core.h src/tengen_link.h
+CORE_SRC := src/tengen_core.c src/tengen_link.c src/tengen_ai.c
+CORE_HDR := src/tengen_core.h src/tengen_link.h src/tengen_ai.h
 TEST_SRC := tests/test_tengen.c
 TEST_BIN := $(BUILD)/test_tengen
 
@@ -152,5 +152,6 @@ gba-check: $(GBA_ROM)
 	python3 tools/run_rom.py $(GBA_ROM) --panel
 	python3 tools/run_rom.py $(GBA_ROM) --next-palette
 	python3 tools/run_rom.py $(GBA_ROM) --menu
+	python3 tools/run_rom.py $(GBA_ROM) --computer
 	python3 tools/run_rom.py $(GBA_ROM) --link
 	python3 tools/run_link.py $(GBA_ROM)

@@ -1070,8 +1070,11 @@ def skin_check(rom_path):
 # ---------------------------------------------------------------------------
 # GAME SELECT's entries start at row 10, two rows apart. The port offers the
 # cartridge's first three; the last two want the COMPUTER player.
-GAME_SELECT_ROWS = 3
+GAME_SELECT_ROWS = 5
+GAME_SELECT_TY = 10             # ...and they start here, one row apart
 MENU_DIM_BANK = 11              # PAL_MENU_BASE + 3, the menu's plain white
+TENGEN_PF_WIDTH = 12
+TENGEN_PF_HEIGHT = 20
 
 MUSIC_ROW = 14                  # the MUSIC row of LEVEL SETTINGS
 LEVEL_ROW = 8                   # ...and the LEVEL one above it
@@ -1330,6 +1333,76 @@ def next_palette_check(rom_path):
     print(f"  {len(pairs)} parejas pieza/siguiente, {mixed} de ellas con "
            "paletas distintas")
     print("OK: NEXT se pinta con los colores de la pieza que viene.")
+    return 0
+
+
+def computer_check(rom_path):
+    """VERSUS and WITH COMPUTER: the two modes that need no second console.
+
+    The computer is player 2 in both (main.asm.txt:3736-3749), and nothing
+    here touches the pad — so every cell that appears on its board was placed
+    by computerMove. What this asks is that it PLAYS: pieces land, they do not
+    all land in one column, and the board it lands them on is the right one
+    for the mode (its own in a race, the shared twelve-wide one in WITH).
+    """
+    off = game_offsets(rom_path)
+    base, why = game_state_address(rom_path)
+    if base is None:
+        print(f"SALTADO: {why}")
+        return 0
+
+    failures = []
+    PF = TENGEN_PF_HEIGHT * TENGEN_PF_WIDTH
+
+    def start(entry, frames):
+        core, screen = load(rom_path)   # `screen` must stay alive; see load()
+        run(core, 8)
+        press_start(core)               # title -> game select
+        run(core, 10)
+        for _ in range(entry):          # down to the mode
+            core.set_keys(KEYS["DOWN"]); run(core, 4); core.set_keys(); run(core, 10)
+        press_start(core); run(core, 12)   # -> LEVEL SETTINGS
+        press_start(core); run(core, frames)
+        return core, screen
+
+    def board(core, which):
+        addr = base + off["field"] + which * PF
+        return [[core.memory.u8[addr + y * TENGEN_PF_WIDTH + x]
+                 for x in range(TENGEN_PF_WIDTH)] for y in range(TENGEN_PF_HEIGHT)]
+
+    # VERSUS: two boards. The computer plays its own; ours stays as it was
+    # apart from the piece gravity drops on it.
+    core, screen = start(3, 6000)
+    comp = board(core, 1)
+    cols = {x for row in comp for x in range(1, TENGEN_PF_WIDTH - 1) if row[x]}
+    cells = sum(1 for row in comp for x in range(1, TENGEN_PF_WIDTH - 1) if row[x])
+    if cells < 8:
+        failures.append(f"en VERSUS el ordenador solo asento {cells} celdas: no juega")
+    elif len(cols) < 3:
+        failures.append(f"el ordenador amontona todo en {len(cols)} columna(s): "
+                         "no esta eligiendo")
+    else:
+        print(f"  VERSUS: el ordenador asento {cells} celdas en {len(cols)} columnas")
+
+    # WITH: one twelve-wide board, and the computer plays into it.
+    core2, screen2 = start(4, 6000)
+    shared = board(core2, 0)
+    other = sum(1 for row in board(core2, 1) for v in row if v)
+    wide = sum(1 for row in shared if row[0] or row[TENGEN_PF_WIDTH - 1])
+    if other:
+        failures.append(f"WITH COMPUTER usa dos campos ({other} celdas en el "
+                         "segundo): deberia compartir uno")
+    elif not any(v for row in shared for v in row):
+        failures.append("en WITH COMPUTER no se asento nada")
+    else:
+        print(f"  WITH COMPUTER: un solo campo compartido, {wide} filas "
+               "llegan a las columnas que solo existen en coop")
+
+    for f in failures:
+        print("FALLA:", f)
+    if failures:
+        return 1
+    print("OK: el jugador COMPUTER juega solo, en el tablero de cada modo.")
     return 0
 
 
@@ -1632,7 +1705,8 @@ def leaving_title_check(rom_path):
     # whole map entries, palette bits and all, rather than the text.
     def menu_rows():
         return [core.memory.u16[SCREENBLOCK_ADDR + (r * 32 + x) * 2]
-                for r in (10, 12) for x in range(4, 26)]
+                for r in (GAME_SELECT_TY, GAME_SELECT_TY + 1)
+                for x in range(4, 26)]
 
     before = menu_rows()
     tap(KEYS["SELECT"])
@@ -1648,7 +1722,7 @@ def leaving_title_check(rom_path):
     # the COMPUTER player lands.
     def chosen_row():
         """Which GAME SELECT row is drawn in the highlight palette."""
-        for row in range(10, 10 + GAME_SELECT_ROWS * 2, 2):
+        for row in range(GAME_SELECT_TY, GAME_SELECT_TY + GAME_SELECT_ROWS):
             banks = {core.memory.u16[SCREENBLOCK_ADDR + (row * 32 + x) * 2] >> 12
                      for x in range(4, 26)
                      if core.memory.u16[SCREENBLOCK_ADDR + (row * 32 + x) * 2] & 0x3FF}
@@ -1657,10 +1731,10 @@ def leaving_title_check(rom_path):
         return None
 
     for _ in range(GAME_SELECT_ROWS + 1):
-        if chosen_row() == 10:
+        if chosen_row() == GAME_SELECT_TY:
             break
         tap(KEYS["SELECT"])
-    if chosen_row() != 10:
+    if chosen_row() != GAME_SELECT_TY:
         failures.append("no se puede volver a 1 PLAYER con SELECT")
     tap(KEYS["A"])
     if "LEVEL" not in tilemap_text(core, 8):
@@ -1826,10 +1900,12 @@ def link_check(rom_path):
     tap("START")                      # title -> game select
     if "GAME SELECT" not in tilemap_text(core, 8):
         failures.append("no aparece GAME SELECT tras el titulo")
-    if "2 PLAYER" not in tilemap_text(core, 12):
-        failures.append("GAME SELECT no ofrece 2 PLAYER")
-    if "COOPERATIVE" not in tilemap_text(core, 14):
-        failures.append("GAME SELECT no ofrece COOPERATIVE")
+    # The cartridge's five, on consecutive rows the way it lists them
+    # (gameSelectArrowPpuAddrs, $A0AB).
+    for i, want in enumerate(("1 PLAYER", "2 PLAYER", "COOPERATIVE",
+                               "VERSUS COMPUTER", "WITH COMPUTER")):
+        if want not in tilemap_text(core, GAME_SELECT_TY + i):
+            failures.append(f"GAME SELECT no ofrece {want}")
 
     # The credit sits under whatever the last entry is, at the foot of the
     # frame, so it moves when an entry is added.
@@ -1908,6 +1984,8 @@ def main():
                      help="check NEXT wears the next piece's colours")
     ap.add_argument("--menu", action="store_true",
                      help="check LEVEL SETTINGS fits inside its frame")
+    ap.add_argument("--computer", action="store_true",
+                     help="check the COMPUTER player plays VERSUS and WITH")
     args = ap.parse_args()
 
     if args.selftest:
@@ -1940,6 +2018,8 @@ def main():
         sys.exit(next_palette_check(args.rom))
     if args.menu:
         sys.exit(menu_check(args.rom))
+    if args.computer:
+        sys.exit(computer_check(args.rom))
 
     core, screen = load(args.rom)
     start_game(core)
