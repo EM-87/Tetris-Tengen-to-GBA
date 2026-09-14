@@ -394,7 +394,19 @@ static void set_offset_layer(int px) {
 #define CLEAR_HEAD_TILE 0x5B  /* $5B is the tail; $5B+4 = $5F is the head */
 #define PAL_OBJ_CLEAR 4
 #define TITLE_OBJ_TILE_BASE 256   /* CHR bank 3, above the dancers' 256 */
+/* ...and the ten digits above both of them. The cartridge does not need this:
+ * its mapper banks CHR a kilobyte at a time, so the sprite pattern table can
+ * hold the dancers' sparkles at $5B and the game bank's digits at $30 at the
+ * same time. A GBA charblock is just memory, so the digits are copied in. */
+#define POINTS_OBJ_TILE_BASE 512
 #define PAL_OBJ_TITLE 5           /* banks 5-8: spritePalette1 */
+
+/* spritePalette0, which is the set the cartridge has installed while a game
+ * is being played (main.asm.txt:A716). Only the drop-point digits use it, and
+ * they use it the ROM's way: palette 3 in a one-player game, and the PLAYER'S
+ * OWN palette otherwise — 0 is red and 1 is blue, so on a shared board you
+ * can tell whose points just went up without reading them. */
+#define PAL_OBJ_GAME 9            /* banks 9-12: spritePalette0 */
 
 /* lineClearSingle..lineClearTetris (main.asm.txt:1548-1561), one character
  * per playfield column including the walls, exactly as the ROM stores them.
@@ -455,7 +467,7 @@ static uint16_t ascii_tile(char c) { return (uint16_t)(unsigned char)c; }
  * moves every one of these, and a Python constant that did not move would
  * quietly start reading a neighbour. Adding `garbage_rng` did exactly that
  * and the cheat-code check began failing three tests away from the change. */
-const uint16_t kGameProbe[12] = {
+const uint16_t kGameProbe[13] = {
     (uint16_t)offsetof(TengenGame, field),
     (uint16_t)offsetof(TengenGame, player),
     (uint16_t)sizeof(TengenPlayerState),
@@ -468,6 +480,7 @@ const uint16_t kGameProbe[12] = {
     (uint16_t)offsetof(TengenPlayerState, piece.next),
     (uint16_t)offsetof(TengenPlayerState, game_active),
     (uint16_t)offsetof(TengenPlayerState, piece.x),
+    (uint16_t)offsetof(TengenPlayerState, score),
 };
 
 static TengenLink g_session;
@@ -661,6 +674,17 @@ static void upload_sprite_tiles(void) {
         ldst[i / 2] = (uint16_t)(kHudLabelTiles[i] | (kHudLabelTiles[i + 1] << 8));
     }
 
+    /* The gameplay sprite set, for the drop-point digits. See PAL_OBJ_GAME. */
+    upload_palette_set(PAL_OBJ_GAME, kRomPalette_obj_game, MEM_PALETTE_OBJ);
+
+    /* ...and their glyphs, which are the GAME bank's own '0'-'9'. The tileset
+     * is ASCII-indexed (see ascii_tile), so they sit at $30 and copy straight
+     * across into sprite tiles of their own. */
+    vu16 *ddst = MEM_OBJ_TILES + POINTS_OBJ_TILE_BASE * 16;
+    const uint8_t *digits = kGameTiles + ('0' * 32);
+    for (unsigned i = 0; i < 10 * 32; i += 2)
+        ddst[i / 2] = (uint16_t)(digits[i] | (digits[i + 1] << 8));
+
     /* piecePaletteIndexA, "Line clears" (main.asm.txt:5394-5396). */
     const uint8_t *clear = kRomPiecePalettes[10];
     vu16 *cpal = MEM_PALETTE_OBJ + PAL_OBJ_CLEAR * 16;
@@ -789,6 +813,10 @@ static void draw_dancers(int elapsed, int count) {
  * than as a step. Nothing here invents artwork.
  * ----------------------------------------------------------------------- */
 #define IDLE_OAM_BASE 124          /* four slots nothing else reaches */
+/* ...and six more under him for the drop-point digits, three to a player.
+ * They come out of the sweep's range rather than the cossack's because the
+ * sweep is the only thing that ever fills it, and it needs twenty at most. */
+#define POINTS_OAM_BASE (IDLE_OAM_BASE - 6)
 #define IDLE_POSE_FRAMES 48        /* a slow sway, not the show's eight */
 static const uint8_t kIdlePoses[2] = { 0, 1 };
 
@@ -883,9 +911,114 @@ static void draw_line_clear_sweep(void) {
                      (uint16_t)(CLEAR_HEAD_TILE + s), false, PAL_OBJ_CLEAR);
         }
     }
-    /* ...but not the four at the top: the idle cossack lives there and this
-     * runs after the panel has drawn him. */
-    for (int i = used; i < IDLE_OAM_BASE; i++) MEM_OAM[i * 4] = OBJ_ATTR0_HIDDEN;
+    /* ...but not the ones at the top: the idle cossack lives in the last four
+     * and the drop-point digits in the six under him, and both are drawn
+     * after this. */
+    for (int i = used; i < POINTS_OAM_BASE; i++) MEM_OAM[i * 4] = OBJ_ATTR0_HIDDEN;
+}
+
+/* ----------------------------------------------------------------------- *
+ * The drop-point sprites — what the piece was worth, beside the piece
+ *
+ * L8129 (main.asm.txt:218-274) stages three sprites the moment a piece comes
+ * to rest, and stageDropPointSprites (:283-313) keeps them there for $3C
+ * frames and then takes them away. What they show is the award the scoring
+ * routine has just computed, in the level's own terms, with leading zeros
+ * blanked; where they show it is the whole point of them, and it is worth
+ * spelling out because it is not decoration:
+ *
+ *   THE HEIGHT IS THE SCORE. This game pays for a piece by how HIGH it comes
+ *   to rest (see add_lock_score), and the ROM puts the number at that height:
+ *   `$2D` — the rows between what the piece landed on and the floor — is what
+ *   it turns into the sprites' Y, clamped so it never climbs past the third
+ *   row ($4F, :293-296). So the number rises up the side of the board as the
+ *   stack does, and a player learns what the game pays for by watching it.
+ *
+ *   THE SIDE IS THE PLAYER. Player 1's sit just outside the right-hand edge
+ *   of its board and player 2's just outside the left of its own, which on
+ *   the cartridge's two-player screen puts both in the gap down the middle;
+ *   on a coop board, where there is only one board and two players dropping
+ *   into it, they go one to each side of it. The ports's screen is reflowed
+ *   but the relationship is not: beside the board, outside it, on that
+ *   player's side. Over the braid, as they are over the cartridge's.
+ * ----------------------------------------------------------------------- */
+#define POINTS_FRAMES 0x3C   /* main.asm.txt:271-272 */
+#define POINTS_DIGITS 3
+/* The ROM's #$4F clamp, in rows: $4F is drawn at y=80, which on its screen is
+ * the third row of the playfield. */
+#define POINTS_TOP_ROW 2
+
+static struct {
+    uint16_t value;
+    uint8_t row;
+    uint8_t timer;
+} g_points[2];
+
+static void points_clear(void) {
+    for (int i = 0; i < 2; i++) g_points[i].timer = 0;
+    for (int i = 0; i < POINTS_DIGITS * 2; i++)
+        MEM_OAM[(POINTS_OAM_BASE + i) * 4] = OBJ_ATTR0_HIDDEN;
+}
+
+/* One piece, come to rest, worth this much. */
+static void note_award(int slot, TengenStepResult step) {
+    if (!step.award) return;
+    int row = (TENGEN_PF_HEIGHT - 1) - (int)step.award_rows_above_floor;
+    if (row < POINTS_TOP_ROW) row = POINTS_TOP_ROW;
+    g_points[slot].value = step.award;
+    g_points[slot].row = (uint8_t)row;
+    g_points[slot].timer = POINTS_FRAMES;
+}
+
+static void draw_points(void) {
+    for (int slot = 0; slot < 2; slot++) {
+        int base = POINTS_OAM_BASE + slot * POINTS_DIGITS;
+        const TengenPlayerState *p = &g_session.game.player[slot];
+        /* A board this screen is not showing has nothing to say. Only coop
+         * has two players on the one board; a race shows one of them. */
+        bool visible = g_session.game.coop || slot == g_view;
+        /* stageDropPointSprites' first line: while rows are coming down the
+         * sprites are neither drawn NOR counted down — the clock stops with
+         * everything else. */
+        if (visible && g_points[slot].timer && p->line_clear_timer == 0)
+            g_points[slot].timer--;
+        if (!visible || !g_points[slot].timer || p->line_clear_timer > 0) {
+            for (int i = 0; i < POINTS_DIGITS; i++)
+                MEM_OAM[(base + i) * 4] = OBJ_ATTR0_HIDDEN;
+            continue;
+        }
+
+        /* The digits, most significant first, with the leading zeros simply
+         * not drawn — which is what the ROM's blank tile amounts to. */
+        uint8_t digit[POINTS_DIGITS];
+        int count = 0;
+        uint16_t v = g_points[slot].value;
+        for (int i = POINTS_DIGITS - 1; i >= 0; i--) {
+            digit[i] = (uint8_t)(v % 10);
+            v /= 10;
+            if (digit[i] || i == POINTS_DIGITS - 1) count = POINTS_DIGITS - i;
+        }
+
+        int x;
+        if (!g_session.game.coop) {
+            /* Outside the right-hand edge, reading away from the board. */
+            x = (FIELD_TX + FIELD_PLAYABLE) * 8;
+        } else if (slot == 0) {
+            /* Left of the shared board, ending at its edge. */
+            x = COOP_FIELD_TX * 8 - count * 8;
+        } else {
+            x = (COOP_FIELD_TX + TENGEN_PF_WIDTH) * 8;
+        }
+
+        int bank = PAL_OBJ_GAME + (g_session.game.two_player ? slot : 3);
+        int y = (FIELD_TY + g_points[slot].row) * 8;
+        for (int i = 0; i < POINTS_DIGITS; i++) {
+            int d = POINTS_DIGITS - count + i;
+            if (i >= count) { MEM_OAM[(base + i) * 4] = OBJ_ATTR0_HIDDEN; continue; }
+            oam_set(base + i, x + i * 8, y,
+                     (uint16_t)(POINTS_OBJ_TILE_BASE + digit[d]), false, bank);
+        }
+    }
 }
 
 /* While this is on, everything that goes through set_map_tile lands on the
@@ -2742,7 +2875,9 @@ static void ai_play_frame(void) {
     /* Its clears and its top-out are heard: one screen, one speaker. In WITH
      * the level is shared, so a level-up it earns brings the dancers out for
      * both of them, which is what announce_step already does. */
-    announce_step(tengen_step(&g_session.game, TENGEN_PLAYER_2, buttons));
+    TengenStepResult out = tengen_step(&g_session.game, TENGEN_PLAYER_2, buttons);
+    note_award(TENGEN_PLAYER_2, out);
+    announce_step(out);
 }
 
 /* The level's colours and the falling piece's, each reinstalled the frame it
@@ -2835,6 +2970,8 @@ static bool link_play_frame(void) {
         TengenStepResult out[2];
         if (!tengen_link_step(&g_session, tengen_link_buttons(local), remote, out))
             break;
+        note_award(0, out[0]);
+        note_award(1, out[1]);
         announce_step(out[g_view]);
         stepped++;
     }
@@ -2936,7 +3073,9 @@ static bool solo_play_frame(uint8_t buttons, uint8_t pressed) {
             nes_audio_play(NES_SOUND_SCREEN_SWITCH);
     }
 
-    announce_step(tengen_step(&g_session.game, TENGEN_PLAYER_1, buttons));
+    TengenStepResult local = tengen_step(&g_session.game, TENGEN_PLAYER_1, buttons);
+    note_award(TENGEN_PLAYER_1, local);
+    announce_step(local);
     ai_play_frame();
     return !match_over();
 }
@@ -2971,6 +3110,10 @@ static void draw_match(bool *sweeping) {
         oam_hide_all();
         *sweeping = false;
     }
+
+    /* After the sweep, which hides everything below its own range when it
+     * finishes, and before the plaque. */
+    draw_points();
 
     /* Last, so they sit over whatever was just drawn. */
     if (!g_session.game.player[g_view].game_active) draw_game_over();
@@ -3097,6 +3240,7 @@ int main(void) {
                 g_ai.settle = DEMO_SETTLE_FRAMES;
                 g_ai_last_piece = TT_NONE;
                 g_ai_frame = 0;
+                points_clear();
                 g_demo_over_frames = 0;
                 g_mix_step = 0;
                 g_shown_level = 0xFF;
@@ -3319,6 +3463,7 @@ int main(void) {
                 g_ai.settle = AI_SETTLE_FRAMES;
                 g_ai_last_piece = TT_NONE;
                 g_ai_frame = 0;
+                points_clear();
                 swallow_held_buttons(&g_session.game);
                 /* endPlayfieldInit's own place for it, right after the field
                  * is laid out (main.asm.txt:3536-3546). A shared board takes
@@ -3419,6 +3564,8 @@ int main(void) {
                 g_mix_step = 0;
                 g_shown_level = 0xFF;
                 g_shown_piece = TT_NONE;
+                g_shown_piece2 = TT_NONE;
+                points_clear();
                 set_piece_palette(g_session.game.player[g_view].piece.current);
                 link_play_begin();
                 screen = SCREEN_PLAYING;

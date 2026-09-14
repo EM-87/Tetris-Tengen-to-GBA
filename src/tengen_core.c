@@ -669,7 +669,8 @@ static uint8_t level_for_lines(uint32_t lines, uint8_t start_level) {
  * tens digit is set — but since the level caps at 17 the tens digit is only
  * ever 0 or 1, so it works out to exactly level + 1 across the whole range. */
 static uint32_t add_lock_score(uint32_t score, uint8_t level, int lowest_hit_row,
-                                uint8_t drop_rate_possible) {
+                                uint8_t drop_rate_possible,
+                                TengenStepResult *result) {
     if (lowest_hit_row < 0) return score;
 
     int rows_above_floor = TENGEN_ROM_FLOOR_ROW - lowest_hit_row;
@@ -685,6 +686,14 @@ static uint32_t add_lock_score(uint32_t score, uint8_t level, int lowest_hit_row
     if (drop_rate_possible < 2) {
         award *= 2;
         if (award > 999) award = 999;
+    }
+
+    /* $2D and the three digits L8129 is about to stage beside the piece. The
+     * ROM has them in generalCounter36/37/38 by now for the same reason: the
+     * routine that renders them is the one that just computed the award. */
+    if (result) {
+        result->award = (uint16_t)award;
+        result->award_rows_above_floor = (uint8_t)rows_above_floor;
     }
 
     score += award;
@@ -1036,7 +1045,7 @@ TengenStepResult tengen_step(TengenGame *game, TengenPlayerSlot slot, uint8_t he
              * deciding whether this was a normal lock or a top-out
              * (main.asm.txt:582-590). */
             p->score = add_lock_score(p->score, p->level, lowest_hit_row,
-                                       p->drop_rate_possible);
+                                       p->drop_rate_possible, &result);
 
             /* main.asm.txt:588-590: resting with the box top still above the
              * visible field ends the game — the piece is not planted. */

@@ -477,14 +477,15 @@ def game_offsets(rom_path):
             raise RuntimeError(why)
         core, screen = load(rom_path)   # `screen` must stay alive; see load()
         (field, player, stride, cur, y, level, stats,
-         paused, held, nxt, alive, x) = (core.memory.u16[addr + i * 2]
-                                          for i in range(12))
+         paused, held, nxt, alive, x, score) = (core.memory.u16[addr + i * 2]
+                                                 for i in range(13))
         _GAME_PROBE_CACHE[rom_path] = {
             "field": field, "player": player, "stride": stride,
             "current": player + cur, "y": player + y,
             "level": player + level, "stats": player + stats,
             "paused": paused, "held": player + held, "next": player + nxt,
             "active": player + alive, "x": player + x,
+            "score": player + score,
         }
     return _GAME_PROBE_CACHE[rom_path]
 
@@ -1487,6 +1488,124 @@ def computer_check(rom_path):
     return 0
 
 
+def points_check(rom_path):
+    """THE POINTS THE PIECE WAS WORTH, beside the piece.
+
+    L8129 stages three sprites the moment a piece rests and
+    stageDropPointSprites keeps them up for $3C frames
+    (main.asm.txt:218-313). Three things have to be true of them and all
+    three are the cartridge's:
+
+      * the number is the award, which is what the score just went up by;
+      * the HEIGHT is the landing height, because in this game the height IS
+        the score (the award grows the higher the piece rests); and
+      * the SIDE is the player — on a coop board, one to each side of it, in
+        each player's own palette.
+    """
+    off = game_offsets(rom_path)
+    base, why = game_state_address(rom_path)
+    if base is None:
+        print(f"SALTADO: {why}")
+        return 0
+
+    failures = []
+    POINTS_FIRST, POINTS_COUNT = 118, 6
+
+    def digits(core, first, count):
+        """(x, y, value) of a run of point sprites, or None."""
+        out = oam_visible(core, first, first + count)
+        if not out:
+            return None
+        out.sort()
+        value = 0
+        for _x, _y, tile in out:
+            value = value * 10 + ((tile - 512) & 0xF)
+        return out[0][0], out[0][1], value
+
+    # 1 PLAYER: hold Down, watch a piece land on the floor.
+    core, screen = load(rom_path)   # `screen` must stay alive; see load()
+    start_game(core)
+    score = base + off["score"]
+
+    def read_score():
+        return sum(core.memory.u8[score + i] << (8 * i) for i in range(4))
+
+    # The score changes inside tengen_step and the sprites are written at the
+    # end of draw_match, and mGBA's frame boundary need not fall between the
+    # two — so the award is measured as the last CHANGE in the score rather
+    # than as a difference across the frame the sprites turned up on.
+    last = read_score()
+    gained = 0
+    shown = None
+    for _ in range(2000):
+        core.set_keys(KEYS["DOWN"]); run(core, 1)
+        now = read_score()
+        if now != last:
+            gained = now - last
+            last = now
+        got = digits(core, POINTS_FIRST, 3)
+        if got:
+            shown = got
+            break
+    core.set_keys(); run(core, 2)
+
+    if shown is None:
+        failures.append("una pieza se asento y no aparecio su puntuacion al lado")
+    else:
+        x, y, value = shown
+        if value != gained:
+            failures.append(f"los sprites dicen {value} y el marcador subio {gained}")
+        elif x != (COL_FIELD[1]) * TILE:
+            failures.append(f"la puntuacion sale en x={x}, no al borde derecho "
+                             f"del tablero ({COL_FIELD[1] * TILE})")
+        elif y != (TENGEN_PF_HEIGHT - 1) * TILE:
+            failures.append(f"una pieza asentada en el suelo muestra sus puntos "
+                             f"en y={y}, no en la ultima fila")
+        else:
+            print(f"  1 PLAYER: {value} puntos, junto al tablero, a la altura "
+                   "en que se poso la pieza")
+
+    # WITH COMPUTER: one board, two players, one to each side of it.
+    core2, screen2 = load(rom_path)
+    run(core2, 8); press_start(core2); run(core2, 10)
+    for _ in range(4):
+        core2.set_keys(KEYS["DOWN"]); run(core2, 4); core2.set_keys(); run(core2, 10)
+    press_start(core2); run(core2, 12)
+    press_start(core2); run(core2, 30)
+
+    sides = {}
+    for _ in range(4000):
+        run(core2, 1)
+        for slot in (0, 1):
+            got = digits(core2, POINTS_FIRST + slot * 3, 3)
+            if got and slot not in sides:
+                sides[slot] = got
+        if len(sides) == 2:
+            break
+
+    if len(sides) < 2:
+        failures.append(f"en el tablero compartido solo salieron los puntos de "
+                         f"{len(sides)} jugador(es)")
+    else:
+        left = sides[0][0] + 8 * 3
+        if sides[0][0] >= COOP_FIELD_TX * TILE:
+            failures.append("los puntos del jugador 1 no salen a la izquierda "
+                             "del tablero compartido")
+        elif sides[1][0] < (COOP_FIELD_TX + TENGEN_PF_WIDTH) * TILE:
+            failures.append("los puntos del ordenador no salen a la derecha "
+                             "del tablero compartido")
+        else:
+            print(f"  WITH COMPUTER: {sides[0][2]} a la izquierda y "
+                   f"{sides[1][2]} a la derecha, uno por jugador (left={left})")
+
+    for f in failures:
+        print("FALLA:", f)
+    if failures:
+        return 1
+    print("OK: cada pieza dice lo que vale, donde y cuando lo dice el cartucho.")
+    return 0
+
+
 def gameover_check(rom_path):
     """THE WAY OUT. Every mode has to end, and end where the player left.
 
@@ -2233,6 +2352,8 @@ def main():
                      help="check the title starts playing by itself")
     ap.add_argument("--gameover", action="store_true",
                      help="check every mode ends and lets go of the player")
+    ap.add_argument("--points", action="store_true",
+                     help="check the drop-point sprites beside the piece")
     ap.add_argument("--falling", action="store_true",
                      help="check both pieces of a coop board are drawn")
     args = ap.parse_args()
@@ -2275,6 +2396,8 @@ def main():
         sys.exit(gameover_check(args.rom))
     if args.falling:
         sys.exit(falling_piece_check(args.rom))
+    if args.points:
+        sys.exit(points_check(args.rom))
 
     core, screen = load(args.rom)
     start_game(core)

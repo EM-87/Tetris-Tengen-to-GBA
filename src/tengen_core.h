@@ -306,6 +306,21 @@ typedef struct {
     bool lines_collapsed;       /* set on the frame the rows actually vanish */
     bool leveled_up;
     bool topped_out;
+
+    /* WHAT THE PIECE WAS WORTH, and how high it came to rest — the two things
+     * L8129 needs to put the little three-digit total up beside it
+     * (main.asm.txt:275-318). `award` is what add_lock_score just added, 0 to
+     * 999, and `award_rows_above_floor` is the ROM's own $2D: the number of
+     * rows between what the piece landed on and the floor, which is what the
+     * ROM turns into the sprites' height. Both are set on the frame the piece
+     * stops, the fatal one included — the cartridge stages this before it
+     * decides whether the game is over.
+     *
+     * `award` is zero on every other frame, which is how a renderer knows
+     * there is nothing new to show: a piece worth zero points does not exist
+     * (the level term alone is at least one). */
+    uint16_t award;
+    uint8_t award_rows_above_floor;
 } TengenStepResult;
 
 /* ----------------------------------------------------------------------- *
