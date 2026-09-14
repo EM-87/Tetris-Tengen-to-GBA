@@ -2520,8 +2520,29 @@ static void draw_level_settings(int chosen, uint8_t start_level, uint8_t music,
  * are the whole of its cadence. */
 static TengenAi g_ai;
 static bool g_ai_active;
+static uint8_t g_ai_slot = TENGEN_PLAYER_2;
 static TengenTetromino g_ai_last_piece;
 static uint8_t g_ai_frame;
+
+/* THE ATTRACT DEMO, which is the same computer playing the same game with
+ * nobody watching the pad. `demoStart` (main.asm.txt:3216-3230) sets
+ * GAMESTATE_DEMO, playMode 0 — one board, one player — suspends the music and
+ * drops straight into the ordinary game init, so the only things that make it
+ * a demo are who presses the buttons and what a press on the real pad does.
+ *
+ * It starts off the title's own clock: frameCounterHigh 5, frameCounterLow
+ * $20 (main.asm.txt:4154-4160), which is 1312 frames of title — 288 after the
+ * fireworks stop themselves at frameCounterHigh 4. The port already feeds
+ * that counter to the cartridge's own firework code, so the demo can start
+ * off the very same number. */
+#define DEMO_START_FRAME ((5 * 256) + 0x20)
+static bool g_demo;
+/* How long the demo lingers on its own GAME OVER before the title comes back.
+ * The cartridge goes to its high-score table here and from there to the title
+ * on another timer; this port has no leaderboard, so it takes the shorter
+ * road and says so. */
+#define DEMO_GAMEOVER_FRAMES 180
+static int g_demo_over_frames;
 
 /* One frame of the computer's play. It re-chooses on every new piece, which
  * is where getNextTetromino calls computerMove, and presses whatever the
@@ -2661,18 +2682,24 @@ static void announce_step(TengenStepResult step) {
     }
 }
 
+/* One frame of the computer's input, for whichever player it is. It
+ * re-chooses on every new piece, which is where getNextTetromino calls
+ * computerMove (main.asm.txt:3735, 3749). */
+static uint8_t ai_input(void) {
+    TengenPlayerSlot slot = (TengenPlayerSlot)g_ai_slot;
+    if (g_session.game.player[slot].piece.current != g_ai_last_piece) {
+        g_ai_last_piece = g_session.game.player[slot].piece.current;
+        tengen_ai_choose(&g_ai, &g_session.game, slot);
+    }
+    return tengen_ai_buttons(&g_ai, &g_session.game, slot, g_ai_frame++);
+}
+
 static void ai_play_frame(void) {
-    if (!g_ai_active) return;
+    if (!g_ai_active || g_ai_slot != TENGEN_PLAYER_2) return;
     if (g_session.game.paused) return;
     if (!g_session.game.player[TENGEN_PLAYER_2].game_active) return;
 
-    if (g_session.game.player[TENGEN_PLAYER_2].piece.current != g_ai_last_piece) {
-        g_ai_last_piece = g_session.game.player[TENGEN_PLAYER_2].piece.current;
-        tengen_ai_choose(&g_ai, &g_session.game, TENGEN_PLAYER_2);
-    }
-    uint8_t buttons = tengen_ai_buttons(&g_ai, &g_session.game,
-                                         TENGEN_PLAYER_2, g_ai_frame);
-    g_ai_frame++;
+    uint8_t buttons = ai_input();
     /* Its clears and its top-out are heard: one screen, one speaker. In WITH
      * the level is shared, so a level-up it earns brings the dancers out for
      * both of them, which is what announce_step already does. */
@@ -2988,6 +3015,42 @@ int main(void) {
                 oam_hide_all();
                 continue;
             }
+            /* ...and if nobody presses anything, the cartridge starts playing
+             * by itself. See DEMO_START_FRAME. */
+            if (g_title_frame >= DEMO_START_FRAME) {
+                uint16_t seed = (uint16_t)(seed_source.lo | (seed_source.hi << 8));
+                g_demo = true;
+                g_linked = false;
+                g_link_lost = false;
+                g_view = 0;
+                g_ai_active = true;
+                g_ai_slot = TENGEN_PLAYER_1;   /* the demo's computer is P1 */
+                tengen_new_game(&g_session.game, seed, 0, false, false);
+                tengen_ai_reset(&g_ai);
+                g_ai_last_piece = TT_NONE;
+                g_ai_frame = 0;
+                g_demo_over_frames = 0;
+                g_mix_step = 0;
+                g_shown_level = 0xFF;
+                g_shown_piece = TT_NONE;
+                set_piece_palette(g_session.game.player[0].piece.current);
+                oam_hide_all();
+                g_idle_frame = 0;
+                g_dance_frames = 0;
+                screen = SCREEN_PLAYING;
+                match_running = true;
+                /* MUSIC_SUSPEND, which is demoStart's own second act
+                 * (main.asm.txt:3220-3221): the attract mode is silent but
+                 * for the game's effects. */
+                g_front_tune = FRONT_NOTHING;
+                stop_music();
+                vsync();
+                audio_frame();
+                clear_screen();
+                draw_static_screen();
+                continue;
+            }
+
             vsync();
             draw_title();
             draw_title_sprites();
@@ -3406,6 +3469,30 @@ int main(void) {
             nes_audio_play(NES_SOUND_SCREEN_SWITCH);
         }
 
+        /* IN THE DEMO THE PAD IS NOT A CONTROLLER, it is the way out. The
+         * cartridge writes the computer's choice straight into
+         * player1ControllerNew, so what the game sees IS the computer — and
+         * what the player presses reaches processMenuInput instead, where
+         * SELECT or START leaves for GAME SELECT (main.asm.txt:4633-4638). */
+        if (g_demo) {
+            if (pressed & (MENU_ADVANCE | TENGEN_BTN_B)) {
+                g_demo = false;
+                g_ai_active = false;
+                match_running = false;
+                screen = SCREEN_GAME_SELECT;
+                nes_audio_play(NES_SOUND_SCREEN_SWITCH);
+                vsync();
+                audio_frame();
+                clear_screen();
+                oam_hide_all();
+                continue;
+            }
+            buttons = (match_running &&
+                        g_session.game.player[TENGEN_PLAYER_1].game_active)
+                ? ai_input() : 0;
+            pressed = buttons;
+        }
+
         if (match_running) {
             bool keep_going = g_linked ? link_play_frame()
                                         : solo_play_frame(buttons, pressed);
@@ -3415,6 +3502,23 @@ int main(void) {
                     link_play_end();
                     link_shutdown();
                 }
+            }
+        }
+
+        /* THE DEMO SEES ITSELF OUT. Nothing is waiting for a button here, so
+         * the game over holds for a moment and the title comes back. */
+        if (g_demo && !match_running) {
+            if (++g_demo_over_frames >= DEMO_GAMEOVER_FRAMES) {
+                g_demo = false;
+                g_ai_active = false;
+                screen = SCREEN_TITLE;
+                g_front_tune = FRONT_NOTHING;
+                vsync();
+                audio_frame();
+                clear_screen();
+                oam_hide_all();
+                restart_title_sprites();
+                continue;
             }
         }
 

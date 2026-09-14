@@ -153,5 +153,6 @@ gba-check: $(GBA_ROM)
 	python3 tools/run_rom.py $(GBA_ROM) --next-palette
 	python3 tools/run_rom.py $(GBA_ROM) --menu
 	python3 tools/run_rom.py $(GBA_ROM) --computer
+	python3 tools/run_rom.py $(GBA_ROM) --demo
 	python3 tools/run_rom.py $(GBA_ROM) --link
 	python3 tools/run_link.py $(GBA_ROM)

@@ -217,10 +217,15 @@ running ROM; only the side panels need reflowing).
    checks that they do. `playModeTable` is what says which board each mode
    uses: VERSUS is a race like 2P, WITH COMPUTER is coop's shared twelve-wide
    board. Neither needs a cable. See reference/NOTES.md.
-22. Still to do: the **attract-mode demo** the title starts at
-   `frameCounterHigh` = 5 (`demoStart`), which is the one other thing
-   `computerMove` feeds; the prototype PIECE art (the skin is the title only);
-   and the prototype mode that cycles the four dumps.
+22. ~~The attract demo~~ — done, and it is the same computer playing the same
+   game: `demoStart` is playMode 0 with the music suspended, reached off the
+   title's own clock at frameCounterHigh 5 / low $20, with the computer on
+   PLAYER 1 (the VS and WITH paths `inx` first, the demo does not). A press is
+   the way out rather than a move. What ends it is the port's: the cartridge
+   goes to a high-score table this port does not have, so the game over holds
+   three seconds and the title comes back.
+23. Still to do: the prototype PIECE art (the skin is the title only), and the
+   prototype mode that cycles the four dumps.
 
 ## Build
 

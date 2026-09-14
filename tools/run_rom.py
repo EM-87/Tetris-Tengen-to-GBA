@@ -1076,6 +1076,10 @@ MENU_DIM_BANK = 11              # PAL_MENU_BASE + 3, the menu's plain white
 TENGEN_PF_WIDTH = 12
 TENGEN_PF_HEIGHT = 20
 
+# The attract demo's own clock: frameCounterHigh 5, frameCounterLow $20.
+DEMO_START_FRAME = 5 * 256 + 0x20
+DEMO_WATCH_FRAMES = 2000
+
 MUSIC_ROW = 14                  # the MUSIC row of LEVEL SETTINGS
 LEVEL_ROW = 8                   # ...and the LEVEL one above it
 HANDICAP_ROW = 11               # value AND, in one player, what it buries
@@ -1333,6 +1337,77 @@ def next_palette_check(rom_path):
     print(f"  {len(pairs)} parejas pieza/siguiente, {mixed} de ellas con "
            "paletas distintas")
     print("OK: NEXT se pinta con los colores de la pieza que viene.")
+    return 0
+
+
+def demo_check(rom_path):
+    """The attract demo: the title starts playing by itself.
+
+    demoStart is reached from the title's own clock at frameCounterHigh 5,
+    frameCounterLow $20 (main.asm.txt:4154-4160) — 1312 frames — and sets
+    playMode 0, suspends the music and drops into the ordinary game init. So
+    what this checks is the three things that make it a demo: it starts on
+    its own, the board fills without the pad being touched, and a press on
+    the pad is the way OUT rather than a move.
+    """
+    flag, why = game_state_address(rom_path, "g_demo")
+    if flag is None:
+        print(f"SALTADO: {why}")
+        return 0
+    off = game_offsets(rom_path)
+    base, why = game_state_address(rom_path)
+    if base is None:
+        print(f"SALTADO: {why}")
+        return 0
+
+    failures = []
+    core, screen = load(rom_path)   # `screen` must stay alive; see load()
+
+    started = None
+    for f in range(DEMO_WATCH_FRAMES):
+        core.run_frame()
+        if core.memory.u8[flag]:
+            started = f
+            break
+    if started is None:
+        failures.append(f"la demo no arranca sola en {DEMO_WATCH_FRAMES} frames")
+        print("FALLA:", failures[-1])
+        return 1
+    if not (1250 <= started <= 1400):
+        failures.append(f"la demo arranca en el frame {started}, no cerca de "
+                         f"{DEMO_START_FRAME} (frameCounterHigh 5, low $20)")
+    else:
+        print(f"  arranca sola en el frame {started}, con el titulo sin tocar")
+
+    # Nothing touches the pad from here: every cell that appears was the
+    # computer's.
+    run(core, 6000)
+    cells = sum(1 for y in range(TENGEN_PF_HEIGHT)
+                for x in range(1, TENGEN_PF_WIDTH - 1)
+                if core.memory.u8[base + off["field"] + y * TENGEN_PF_WIDTH + x])
+    if cells < 4:
+        failures.append(f"la demo solo asento {cells} celdas: no esta jugando")
+    else:
+        print(f"  juega sola: {cells} celdas asentadas sin tocar el mando")
+
+    # ...and START is the way out, to GAME SELECT, not a pause.
+    core.set_keys(KEYS["START"])
+    run(core, 4)
+    core.set_keys()
+    run(core, 20)
+    if core.memory.u8[flag]:
+        failures.append("START no saca de la demo")
+    elif "GAME SELECT" not in tilemap_text(core, 8):
+        failures.append(f"START saca de la demo a {tilemap_text(core, 8)!r}, "
+                         "no a GAME SELECT")
+    else:
+        print("  START sale de la demo a GAME SELECT, como en el cartucho")
+
+    for f in failures:
+        print("FALLA:", f)
+    if failures:
+        return 1
+    print("OK: el titulo se pone a jugar solo y se sale con un boton.")
     return 0
 
 
@@ -1986,6 +2061,8 @@ def main():
                      help="check LEVEL SETTINGS fits inside its frame")
     ap.add_argument("--computer", action="store_true",
                      help="check the COMPUTER player plays VERSUS and WITH")
+    ap.add_argument("--demo", action="store_true",
+                     help="check the title starts playing by itself")
     args = ap.parse_args()
 
     if args.selftest:
@@ -2020,6 +2097,8 @@ def main():
         sys.exit(menu_check(args.rom))
     if args.computer:
         sys.exit(computer_check(args.rom))
+    if args.demo:
+        sys.exit(demo_check(args.rom))
 
     core, screen = load(args.rom)
     start_game(core)

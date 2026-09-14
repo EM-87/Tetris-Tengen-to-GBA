@@ -557,7 +557,73 @@ gravity to land. Playing it out on the host it lasts forty to ninety pieces and
 clears a handful of lines before burying itself, which is about what the
 cartridge's does.
 
-## The starting handicap## The starting handicap
+## The attract demo
+
+`demoStart` (`main.asm.txt:3216-3230`) is four lines and then the ordinary
+game init: gameState becomes `GAMESTATE_DEMO` (`$FB`), **playMode 0** — one
+board, one player — the music is SUSPENDED, player 1's score and lines digits
+are set to ASCII zeroes, and it falls into `skipOverScoreReset`. Nothing else
+about it is special. What makes it a demo is only who presses the buttons and
+what a press on the real pad does.
+
+**It starts off the title's own clock**: `frameCounterHigh` 5 and
+`frameCounterLow` `$20` (`:4154-4160`), which is 1312 frames — about
+twenty-two seconds, and 288 frames after the fireworks stop themselves at
+`frameCounterHigh` 4. The port already feeds that counter to the cartridge's
+firework code, so it starts the demo off the very same number.
+
+**The computer plays PLAYER 1 here**, not player 2:
+`loadComputerInputOrMoveScreen` reaches `@compInputForDemo` with X still zero
+(`:4118`), where the VS and WITH paths do an `inx` first. Same chooser, same
+driver, same cadence.
+
+**A press is the way out, not a move.** `processMenuInput`'s test for gameState
+`$FB` falls to `$9F9A`, where SELECT or START goes to GAME SELECT
+(`:4633-4638`) — and `handleGameOver` refuses to restart anything while the
+state is `$FB` (`cpy #$FB / beq`, `:477`), so the demo cannot be resurrected
+by holding A+B either.
+
+**What ends it is the port's own choice.** The cartridge's demo tops out and
+goes to its high-score table, and from there to the title on another timer.
+This port has no leaderboard, so the game over holds for three seconds and the
+title comes back. Measured on the built ROM the computer lasts about 35,000
+frames — ten minutes — before burying itself, which is the same chooser at the
+same gravity the cartridge has.
+
+## The starting handicap## The attract demo
+
+`demoStart` (`main.asm.txt:3216-3230`) is four lines and then the ordinary
+game init: gameState becomes `GAMESTATE_DEMO` (`$FB`), **playMode 0** — one
+board, one player — the music is SUSPENDED, player 1's score and lines digits
+are set to ASCII zeroes, and it falls into `skipOverScoreReset`. Nothing else
+about it is special. What makes it a demo is only who presses the buttons and
+what a press on the real pad does.
+
+**It starts off the title's own clock**: `frameCounterHigh` 5 and
+`frameCounterLow` `$20` (`:4154-4160`), which is 1312 frames — about
+twenty-two seconds, and 288 frames after the fireworks stop themselves at
+`frameCounterHigh` 4. The port already feeds that counter to the cartridge's
+firework code, so it starts the demo off the very same number.
+
+**The computer plays PLAYER 1 here**, not player 2:
+`loadComputerInputOrMoveScreen` reaches `@compInputForDemo` with X still zero
+(`:4118`), where the VS and WITH paths do an `inx` first. Same chooser, same
+driver, same cadence.
+
+**A press is the way out, not a move.** `processMenuInput`'s test for gameState
+`$FB` falls to `$9F9A`, where SELECT or START goes to GAME SELECT
+(`:4633-4638`) — and `handleGameOver` refuses to restart anything while the
+state is `$FB` (`cpy #$FB / beq`, `:477`), so the demo cannot be resurrected
+by holding A+B either.
+
+**What ends it is the port's own choice.** The cartridge's demo tops out and
+goes to its high-score table, and from there to the title on another timer.
+This port has no leaderboard, so the game over holds for three seconds and the
+title comes back. Measured on the built ROM the computer lasts about 35,000
+frames — ten minutes — before burying itself, which is the same chooser at the
+same gravity the cartridge has.
+
+## The starting handicap
 
 `endPlayfieldInit` (`main.asm.txt:3536-3546`) reads `menuPlayer1Handicap`
 (`$04F3`) — or player 2's, unless the COMPUTER is playing — and if it is not
