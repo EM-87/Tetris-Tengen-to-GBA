@@ -843,12 +843,47 @@ static void apply_autorotate(uint8_t held, uint8_t new_presses, TengenButton btn
     if (*counter >= TENGEN_AUTOROTATE_CHARGE) *fire = true; /* verified: no reload, fires every frame once charged */
 }
 
+/* A BOARD TOPS OUT, AND IN COOP IT TAKES BOTH PLAYERS WITH IT.
+ *
+ * main.asm.txt:83D4-83DD is unambiguous about this: before storing the zero
+ * into `player1GameActive,x` it tests playMode, and on the negative one — the
+ * $FF that means coop, which is COOPERATIVE and WITH COMPUTER both — it
+ * stores that zero into BOTH flags first. There is one board, so there is one
+ * game to lose; the partner cannot go on playing a stack that has already
+ * reached the ceiling.
+ *
+ * Getting this wrong is what wedged coop: the game was over for the player
+ * who topped out, the partner stayed `game_active`, and nothing anywhere
+ * agreed the match had finished — so the front end sat there with a board it
+ * would not leave and a Start it would not read. */
+static void top_out(TengenGame *game, TengenPlayerSlot slot,
+                     TengenStepResult *result) {
+    if (game->coop) {
+        game->player[0].game_active = false;
+        game->player[1].game_active = false;
+    }
+    game->player[slot].game_active = false;
+    result->topped_out = true;
+}
+
 TengenStepResult tengen_step(TengenGame *game, TengenPlayerSlot slot, uint8_t held_buttons) {
     TengenStepResult result;
     memset(&result, 0, sizeof(result));
 
     TengenPlayerState *p = &game->player[slot];
     if (!p->game_active) return result;
+
+    /* ...AND ON A SHARED BOARD, EITHER PLAYER'S ANIMATION HOLDS BOTH OF THEM.
+     * activeGamePlay tests its own timer first and then, on the negative
+     * playMode that means coop, the OR of the two (main.asm.txt:82DC-82E7).
+     * One board, one pause: rows cannot be coming down under a piece that is
+     * still falling into them. The partner's timer is only read here — it is
+     * decremented by the step that owns it, below. */
+    if (game->coop && game->player[slot ^ 1].line_clear_timer > 0 &&
+        p->line_clear_timer == 0) {
+        p->held_last_frame = held_buttons;
+        return result;
+    }
 
     /* While the line-clear animation runs the game is held still and the
      * completed rows are still standing, so a renderer can animate them. When
@@ -890,10 +925,8 @@ TengenStepResult tengen_step(TengenGame *game, TengenPlayerSlot slot, uint8_t he
             }
 
             spawn_piece(game, slot);
-            if (!tengen_position_valid(game, slot)) {
-                p->game_active = false;
-                result.topped_out = true;
-            }
+            if (!tengen_position_valid(game, slot))
+                top_out(game, slot, &result);
         }
         p->held_last_frame = held_buttons;
         return result;
@@ -1008,8 +1041,7 @@ TengenStepResult tengen_step(TengenGame *game, TengenPlayerSlot slot, uint8_t he
             /* main.asm.txt:588-590: resting with the box top still above the
              * visible field ends the game — the piece is not planted. */
             if (p->piece.y < TENGEN_TOPOUT_ROW) {
-                p->game_active = false;
-                result.topped_out = true;
+                top_out(game, slot, &result);
                 p->held_last_frame = held_buttons;
                 return result;
             }
@@ -1034,10 +1066,8 @@ TengenStepResult tengen_step(TengenGame *game, TengenPlayerSlot slot, uint8_t he
             }
 
             spawn_piece(game, slot);
-            if (!tengen_position_valid(game, slot)) {
-                p->game_active = false;
-                result.topped_out = true;
-            }
+            if (!tengen_position_valid(game, slot))
+                top_out(game, slot, &result);
         }
     }
 

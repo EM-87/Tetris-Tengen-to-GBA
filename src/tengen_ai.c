@@ -217,6 +217,9 @@ void tengen_ai_choose(TengenAi *ai, const TengenGame *game,
     uint8_t a[TENGEN_AI_SCRATCH_A];
     TengenTetromino piece = game->player[slot].piece.current;
 
+    /* A new piece is a new hand on the pad, as far as `settle` is concerned. */
+    ai->since_spawn = 0;
+
     if (piece <= TT_NONE || piece >= TENGEN_TETROMINO_COUNT) return;
     tengen_ai_heights(game, slot, a);
 
@@ -252,10 +255,17 @@ void tengen_ai_choose(TengenAi *ai, const TengenGame *game,
     ai->target_x = y;
 }
 
-uint8_t tengen_ai_buttons(const TengenAi *ai, const TengenGame *game,
+uint8_t tengen_ai_buttons(TengenAi *ai, const TengenGame *game,
                            TengenPlayerSlot slot, uint8_t frame_counter) {
     const TengenPlayerState *p = &game->player[slot];
     uint8_t buttons = 0;
+
+    /* Look at it before touching it. See `settle` on TengenAi. */
+    if (ai->since_spawn < ai->settle) {
+        ai->since_spawn++;
+        return 0;
+    }
+    if (ai->since_spawn < 0xFF) ai->since_spawn++;
 
     /* "shifting occurs every 8 frames; rotation every 16" — the cartridge's
      * own comment, at main.asm.txt:4170. */
@@ -272,6 +282,15 @@ uint8_t tengen_ai_buttons(const TengenAi *ai, const TengenGame *game,
              * with a single compare: B for one or two, A for three. */
             buttons |= ((delta & 3) < 3) ? TENGEN_BTN_B : TENGEN_BTN_A;
         }
+    }
+
+    /* And down, once there is nothing left to aim. See `soft_drop`. Only when
+     * the piece is already where it wants to be in the orientation it wants —
+     * dropping it early would land it somewhere it did not choose. */
+    if (ai->soft_drop && !buttons &&
+        (uint8_t)p->piece.x == ai->target_x &&
+        p->piece.orientation == (ai->target_orientation & 3)) {
+        buttons |= TENGEN_BTN_DOWN;
     }
     return buttons;
 }

@@ -274,6 +274,12 @@ static void set_offset_layer(int px) {
  * cheapest thing that is right. */
 #define PAL_NEXT_BANK  13
 
+/* AND COOP NEEDS A THIRD. There are two pieces falling on the one board there
+ * and no reason for them to be the same tetromino, so the partner's carries
+ * its own colours out of its own bank — which is what the cartridge does too,
+ * by staging the two players' pieces as sprites with a palette each. */
+#define PAL_PIECE2_BANK 14
+
 /* The title screen has its own 256-tile set, uploaded above the game's so
  * both live in one charblock (512 tiles is exactly its 16KB). */
 #define TITLE_TILE_BASE 256
@@ -449,7 +455,7 @@ static uint16_t ascii_tile(char c) { return (uint16_t)(unsigned char)c; }
  * moves every one of these, and a Python constant that did not move would
  * quietly start reading a neighbour. Adding `garbage_rng` did exactly that
  * and the cheat-code check began failing three tests away from the change. */
-const uint16_t kGameProbe[10] = {
+const uint16_t kGameProbe[12] = {
     (uint16_t)offsetof(TengenGame, field),
     (uint16_t)offsetof(TengenGame, player),
     (uint16_t)sizeof(TengenPlayerState),
@@ -460,6 +466,8 @@ const uint16_t kGameProbe[10] = {
     (uint16_t)offsetof(TengenGame, paused),
     (uint16_t)offsetof(TengenPlayerState, held_last_frame),
     (uint16_t)offsetof(TengenPlayerState, piece.next),
+    (uint16_t)offsetof(TengenPlayerState, game_active),
+    (uint16_t)offsetof(TengenPlayerState, piece.x),
 };
 
 static TengenLink g_session;
@@ -574,6 +582,8 @@ static void upload_palettes(void) {
     piece[0] = nes_colour_to_gba(TENGEN_BACKDROP_INDEX);
     vu16 *next = MEM_PALETTE + PAL_NEXT_BANK * 16;
     next[0] = nes_colour_to_gba(TENGEN_BACKDROP_INDEX);
+    vu16 *piece2 = MEM_PALETTE + PAL_PIECE2_BANK * 16;
+    piece2[0] = nes_colour_to_gba(TENGEN_BACKDROP_INDEX);
 }
 
 /* setPlayfieldPaletteFromLevel (main.asm.txt:5328) recolours the settled
@@ -1622,23 +1632,43 @@ static void draw_field(void) {
         }
     }
 
-    /* No falling piece exists while the completed rows animate. */
-    if (p->line_clear_timer > 0) return;
+    /* No falling piece exists while the completed rows animate — the ROM
+     * blanks player1TetrominoCurrent as the piece locks. That is per player:
+     * on a coop board the partner's piece is still standing there, frozen
+     * with everything else, and the loop below skips only the one that is
+     * actually clearing. */
 
     /* The falling piece is drawn over the settled field rather than into it,
      * and in its own palette — the ROM draws it as sprites for exactly that
      * reason. Cells above the field are skipped, which is what makes a piece
-     * visibly slide in from off-screen the way the original does. */
-    TengenCell cells[4];
-    int count = tengen_active_piece_cells(&g_session.game, (TengenPlayerSlot)g_view, cells);
-    TengenTetromino current = g_session.game.player[g_view].piece.current;
-    for (int i = 0; i < count; i++) {
-        if (cells[i].row < 0) continue;
-        int col = cells[i].col - field_col0();
-        if (col < 0 || col >= field_cols()) continue;
-        uint8_t tile = tengen_tile_id_for_cell(current, g_session.game.player[g_view].piece.orientation, i);
-        set_map_tile(field_tx() + col, FIELD_TY + cells[i].row,
-                      WITH_BANK(tile, PAL_PIECE_BANK));
+     * visibly slide in from off-screen the way the original does.
+     *
+     * TWO PIECES FALL ON A COOP BOARD AND BOTH OF THEM HAVE TO BE DRAWN. This
+     * used to draw only the viewed player's, and since coop is one shared
+     * field the partner's piece — the computer's, in WITH COMPUTER — simply
+     * was not there: nothing fell, and then a piece appeared on the floor out
+     * of nowhere when it locked and joined the settled cells. The partner
+     * goes down first so the local piece wins any overlap, which is the one
+     * the player is steering. */
+    for (int pass = 0; pass < 2; pass++) {
+        int slot = pass == 0 ? (g_view ^ 1) : g_view;
+        if (pass == 0 && !g_session.game.coop) continue;
+        const TengenPlayerState *sp = &g_session.game.player[slot];
+        if (!sp->game_active || sp->line_clear_timer > 0) continue;
+
+        TengenCell cells[4];
+        int count = tengen_active_piece_cells(&g_session.game,
+                                               (TengenPlayerSlot)slot, cells);
+        TengenTetromino current = sp->piece.current;
+        int bank = pass == 0 ? PAL_PIECE2_BANK : PAL_PIECE_BANK;
+        for (int i = 0; i < count; i++) {
+            if (cells[i].row < 0) continue;
+            int col = cells[i].col - field_col0();
+            if (col < 0 || col >= field_cols()) continue;
+            uint8_t tile = tengen_tile_id_for_cell(current, sp->piece.orientation, i);
+            set_map_tile(field_tx() + col, FIELD_TY + cells[i].row,
+                          WITH_BANK(tile, bank));
+        }
     }
 }
 
@@ -2544,6 +2574,14 @@ static bool g_demo;
 #define DEMO_GAMEOVER_FRAMES 180
 static int g_demo_over_frames;
 
+/* And how long it looks at a new piece before it touches it — see `settle` on
+ * TengenAi. Half a second: long enough to read as a decision being made, short
+ * enough that even a level-9 piece still reaches the column it picked. */
+#define DEMO_SETTLE_FRAMES 30
+/* ...and the computer's own, in a game with a player in it, where it is also
+ * the throttle on how fast it fills a shared board. See where it is set. */
+#define AI_SETTLE_FRAMES 60
+
 /* One frame of the computer's play. It re-chooses on every new piece, which
  * is where getNextTetromino calls computerMove, and presses whatever the
  * driver says the rest of the time. */
@@ -2614,6 +2652,7 @@ static uint16_t g_dancer_tick;   /* stands in for frameCounterLow & $0F */
 static int g_dancer_cast = 1;    /* how many walk on; see tengen_dancer_count */
 static uint8_t g_shown_level = 0xFF;
 static TengenTetromino g_shown_piece = TT_NONE;
+static TengenTetromino g_shown_piece2 = TT_NONE;  /* coop: the partner's */
 
 /* Two seconds without a transfer. Long enough that nothing short of the
  * cable actually coming out reaches it, short enough that the player is not
@@ -2718,11 +2757,34 @@ static void refresh_palettes(void) {
         g_shown_piece = p->piece.current;
         set_piece_palette(g_shown_piece);
     }
+    /* The partner's falling piece has a bank of its own on a coop board. */
+    if (g_session.game.coop) {
+        TengenTetromino other = g_session.game.player[g_view ^ 1].piece.current;
+        if (other != g_shown_piece2) {
+            g_shown_piece2 = other;
+            set_bank_from_piece(PAL_PIECE2_BANK, other);
+        }
+    }
 }
 
-/* True once neither board is playing, which is how a race ends. */
+/* True once there is nothing left to play, which each mode decides its own
+ * way.
+ *
+ * COOP IS ONE GAME, so one top-out finishes it — the core kills both players
+ * at once there, the way the cartridge does (main.asm.txt:83D4-83DD), and
+ * this only has to read either flag.
+ *
+ * AGAINST THE COMPUTER, THE RACE ENDS WITH THE PLAYER. The cartridge lets the
+ * computer play on over a dead board, because its own way out is A+B held,
+ * which restarts on the spot from handleGameOver (main.asm.txt:82F3-830F) —
+ * so nobody ever sat and watched it. This port's way out is the GAME OVER
+ * plaque and Start, and leaving the thing playing behind that plaque is what
+ * it looked like: a game that would not end. It ends. */
 static bool match_over(void) {
-    if (!g_session.game.two_player) return !g_session.game.player[g_view].game_active;
+    if (!g_session.game.two_player || g_session.game.coop)
+        return !g_session.game.player[g_view].game_active;
+    if (g_ai_active)
+        return !g_session.game.player[TENGEN_PLAYER_1].game_active;
     return !g_session.game.player[0].game_active &&
             !g_session.game.player[1].game_active;
 }
@@ -3027,12 +3089,19 @@ int main(void) {
                 g_ai_slot = TENGEN_PLAYER_1;   /* the demo's computer is P1 */
                 tengen_new_game(&g_session.game, seed, 0, false, false);
                 tengen_ai_reset(&g_ai);
+                /* THE DEMO LOOKS AT A PIECE BEFORE IT MOVES IT. Nothing else
+                 * separates the attract mode from a machine twitching the pad
+                 * the instant a piece appears; see `settle` on TengenAi. And
+                 * no soft drop here — the attract mode keeps the cartridge's
+                 * pace, which is the pace it is meant to be showing off. */
+                g_ai.settle = DEMO_SETTLE_FRAMES;
                 g_ai_last_piece = TT_NONE;
                 g_ai_frame = 0;
                 g_demo_over_frames = 0;
                 g_mix_step = 0;
                 g_shown_level = 0xFF;
                 g_shown_piece = TT_NONE;
+                g_shown_piece2 = TT_NONE;
                 set_piece_palette(g_session.game.player[0].piece.current);
                 oam_hide_all();
                 g_idle_frame = 0;
@@ -3234,6 +3303,20 @@ int main(void) {
                 tengen_new_game(&g_session.game, seed, start_level,
                                  g_ai_active, GAME_IS_COOP(game_mode));
                 tengen_ai_reset(&g_ai);
+                /* IT DROPS ITS OWN PIECES NOW, AND LOOKS AT THEM FIRST.
+                 * The ROM's computer never presses down, which costs nothing
+                 * when it has a board to itself and costs the human the whole
+                 * game on the shared board of WITH COMPUTER — a piece of its
+                 * own took a full level-0 descent, and that is what "va un
+                 * tanto lento" was. Holding down once it is lined up fixes
+                 * that outright, and then overshoots: it would place ten
+                 * pieces to a free-falling human's one. The settle is what
+                 * buys the pace back, and it reads as thinking rather than as
+                 * a handicap. Measured, on an idle board: 36 cells in three
+                 * thousand frames before, 136 with both of these, 189 with
+                 * the drop and no settle at all. */
+                g_ai.soft_drop = true;
+                g_ai.settle = AI_SETTLE_FRAMES;
                 g_ai_last_piece = TT_NONE;
                 g_ai_frame = 0;
                 swallow_held_buttons(&g_session.game);
@@ -3459,7 +3542,7 @@ int main(void) {
         /* ...and there is nothing to swap on a coop screen: it has no boxes,
          * and the banner's column is the middle of the board. */
         if (screen == SCREEN_PLAYING && match_running && !g_session.game.coop &&
-            shoulder_chord()) {
+            g_session.game.player[g_view].game_active && shoulder_chord()) {
             g_show_banner = !g_show_banner;
             /* Both directions need the static screen back: going TO the
              * banner erases the braid box, and coming back from it has to
@@ -3530,7 +3613,28 @@ int main(void) {
          * rather than over the cable — by now the cable is shut down, and
          * neither player should have to wait for the other to agree. */
 #define GAMEOVER_RESTART (TENGEN_BTN_START | TENGEN_BTN_A | TENGEN_BTN_B)
-        if (!match_running && (pressed & GAMEOVER_RESTART)) {
+        /* THE BUTTON BELONGS TO THE BOARD IN FRONT OF THE PLAYER, not to the
+         * match. The cartridge reads it per player — handleGameOver is called
+         * with x on the dead side and restarts from there even while the other
+         * board is still going (main.asm.txt:82F3-830F) — and a race where the
+         * loser has to sit and wait for the winner is a race nobody can leave.
+         * So: a dead board here is a way out here. */
+        /* Not in the demo: there the pad is the way out and the computer's
+         * choice is what lands in `pressed`, so its own A and B would read as
+         * a player asking to leave. The demo sees itself out above. */
+        bool own_board_dead = !g_demo &&
+                               !g_session.game.player[g_view].game_active;
+        if ((!match_running || own_board_dead) && (pressed & GAMEOVER_RESTART)) {
+            /* Quitting out from under a match still running on the other side
+             * of the cable: the cable has to be told, and put away, exactly as
+             * it would have been had both boards died. */
+            if (match_running) {
+                match_running = false;
+                if (g_linked) {
+                    link_play_end();
+                    link_shutdown();
+                }
+            }
             screen = SCREEN_TITLE;
             restart_title_sprites();
             g_linked = false;

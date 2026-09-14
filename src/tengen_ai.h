@@ -39,6 +39,25 @@ typedef struct {
     uint8_t scratch[6];
     uint8_t target_x;            /* compTargetX ($01CA) */
     uint8_t target_orientation;  /* compTargetOrientation ($01CB) */
+
+    /* Two knobs the cartridge does not have, both set by the caller and both
+     * zero by default — leave them alone and this is the ROM's player.
+     *
+     * `settle` holds the pad still for that many frames after a piece
+     * appears. The ROM shifts off the GLOBAL frame counter, so a piece can be
+     * yanked sideways on the very frame it spawns, and in the attract demo —
+     * where there is no player to explain it — that reads as a machine, not
+     * as somebody playing. A short pause first is all it takes.
+     *
+     * `soft_drop` holds DOWN once the piece is over its target in the right
+     * orientation. The ROM never presses it, which is fine when the computer
+     * has a board to itself; on the SHARED board of WITH COMPUTER the human
+     * spends the whole game waiting on it, which is what "va un tanto lento"
+     * was. Off in the demo, so the attract mode keeps the cartridge's pace. */
+    uint8_t settle;
+    bool soft_drop;
+
+    uint8_t since_spawn;         /* frames since tengen_ai_choose was called */
 } TengenAi;
 
 /* A new game. The ROM does not clear this either — its scratch is whatever
@@ -55,7 +74,7 @@ void tengen_ai_choose(TengenAi *ai, const TengenGame *game,
  * the ROM's: a shift every eighth frame and a rotation every sixteenth
  * (main.asm.txt:4170-4202, and the comment there says so in as many words).
  * `frame_counter` stands in for frameCounterLow. */
-uint8_t tengen_ai_buttons(const TengenAi *ai, const TengenGame *game,
+uint8_t tengen_ai_buttons(TengenAi *ai, const TengenGame *game,
                            TengenPlayerSlot slot, uint8_t frame_counter);
 
 /* Exposed for the tests: the sixteen column heights computerMove builds

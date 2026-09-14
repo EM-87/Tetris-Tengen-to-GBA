@@ -477,12 +477,14 @@ def game_offsets(rom_path):
             raise RuntimeError(why)
         core, screen = load(rom_path)   # `screen` must stay alive; see load()
         (field, player, stride, cur, y, level, stats,
-         paused, held, nxt) = (core.memory.u16[addr + i * 2] for i in range(10))
+         paused, held, nxt, alive, x) = (core.memory.u16[addr + i * 2]
+                                          for i in range(12))
         _GAME_PROBE_CACHE[rom_path] = {
             "field": field, "player": player, "stride": stride,
             "current": player + cur, "y": player + y,
             "level": player + level, "stats": player + stats,
             "paused": paused, "held": player + held, "next": player + nxt,
+            "active": player + alive, "x": player + x,
         }
     return _GAME_PROBE_CACHE[rom_path]
 
@@ -1073,6 +1075,10 @@ def skin_check(rom_path):
 GAME_SELECT_ROWS = 5
 GAME_SELECT_TY = 10             # ...and they start here, one row apart
 MENU_DIM_BANK = 11              # PAL_MENU_BASE + 3, the menu's plain white
+# The shared coop board starts one column further left than the ten-wide
+# one, because it is twelve wide (SCREEN_COOP_FIELD_TX in the generated
+# header, and COOP_FIELD_TX in gba/main.c).
+COOP_FIELD_TX = 9
 TENGEN_PF_WIDTH = 12
 TENGEN_PF_HEIGHT = 20
 
@@ -1478,6 +1484,168 @@ def computer_check(rom_path):
     if failures:
         return 1
     print("OK: el jugador COMPUTER juega solo, en el tablero de cada modo.")
+    return 0
+
+
+def gameover_check(rom_path):
+    """THE WAY OUT. Every mode has to end, and end where the player left.
+
+    This is the check the twenty-one before it did not do: they all started
+    games and none of them ever lost one. What a lost game has to do is
+
+      * stop — in coop that means BOTH players, because there is one board and
+        the cartridge kills both flags at once (main.asm.txt:83D4-83DD), and
+        against the computer it means the computer too;
+      * stay stopped — no piece of anybody's moves after the plaque is up;
+      * let go — Start goes back to the title from the mode's own screen; and
+      * take the HUD swap with it: L+R is a thing you do to a game in play.
+
+    It buries the board by hand rather than stacking pieces for ten minutes:
+    every row solid but one column, so nothing can clear and the next piece
+    tops out where it stands. That is the same `game_active` path the player
+    walked into, reached in a second instead of a quarter of an hour.
+    """
+    off = game_offsets(rom_path)
+    base, why = game_state_address(rom_path)
+    if base is None:
+        print(f"SALTADO: {why}")
+        return 0
+
+    failures = []
+    PF = TENGEN_PF_HEIGHT * TENGEN_PF_WIDTH
+
+    def player(core, slot, key):
+        return core.memory.u8[base + off[key] + slot * off["stride"]]
+
+    def board_cells(core, which):
+        addr = base + off["field"] + which * PF
+        return sum(1 for i in range(PF) if core.memory.u8[addr + i] == CELL_BLOCK)
+
+    def bury(core, which, coop):
+        """Solid everywhere but one column, so no row can ever complete."""
+        addr = base + off["field"] + which * PF
+        gap = 5
+        for row in range(TENGEN_PF_HEIGHT):
+            for col in range(TENGEN_PF_WIDTH):
+                edge = not coop and col in (0, TENGEN_PF_WIDTH - 1)
+                value = CELL_WALL if edge else (0 if col == gap else CELL_BLOCK)
+                core.memory.u8[addr + row * TENGEN_PF_WIDTH + col] = value
+
+    def enter(entry):
+        core, screen = load(rom_path)   # `screen` must stay alive; see load()
+        run(core, 8)
+        press_start(core)               # title -> GAME SELECT
+        run(core, 10)
+        for _ in range(entry):
+            core.set_keys(KEYS["DOWN"]); run(core, 4); core.set_keys(); run(core, 10)
+        press_start(core); run(core, 12)   # -> LEVEL SETTINGS
+        press_start(core); run(core, 30)   # -> play
+        return core, screen
+
+    def title_face(core):
+        """Three rows of the title's own tilemap, which no other screen has."""
+        return tuple(tilemap_text(core, r) for r in (4, 6, 8))
+
+    reference, _ref_screen = load(rom_path)
+    run(reference, 40)
+    face = title_face(reference)
+
+    for name, entry, coop in (("1 PLAYER", 0, False),
+                               ("WITH COMPUTER", 4, True),
+                               ("VERSUS COMPUTER", 3, False)):
+        core, screen = enter(entry)
+        bury(core, 0, coop)
+        run(core, 240)
+
+        if player(core, 0, "active"):
+            failures.append(f"{name}: el tablero del jugador no muere aun enterrado")
+            continue
+        if coop and player(core, 1, "active"):
+            failures.append(f"{name}: el jugador 1 murio y el 2 sigue vivo "
+                             "sobre el mismo tablero")
+            continue
+
+        # Nothing may move behind the plaque — not the computer, not anybody.
+        before = (board_cells(core, 0), board_cells(core, 1))
+        run(core, 600)
+        after = (board_cells(core, 0), board_cells(core, 1))
+        if after != before:
+            failures.append(f"{name}: despues del game over se siguio jugando "
+                             f"({before} -> {after})")
+            continue
+
+        # L+R is for a game in play. Read the far right column, which is the
+        # box the banner would take over.
+        hud = tuple(tilemap_text(core, r, 22, 30) for r in range(4, 12))
+        core.set_keys(KEYS["L"], KEYS["R"]); run(core, 6)
+        core.set_keys(); run(core, 12)
+        if tuple(tilemap_text(core, r, 22, 30) for r in range(4, 12)) != hud:
+            failures.append(f"{name}: L+R todavia cambia el HUD despues del game over")
+            continue
+
+        press_start(core); run(core, 40)
+        if title_face(core) != face:
+            failures.append(f"{name}: START no devuelve al titulo tras el game over")
+            continue
+        print(f"  {name}: el tablero muere, todo se para, y START vuelve al titulo")
+
+    for f in failures:
+        print("FALLA:", f)
+    if failures:
+        return 1
+    print("OK: cada modo termina, se para del todo, y suelta al jugador.")
+    return 0
+
+
+def falling_piece_check(rom_path):
+    """THE PARTNER'S PIECE HAS TO BE ON THE SCREEN WHILE IT FALLS.
+
+    Coop is one board with two pieces coming down it, and the renderer used to
+    draw only the one belonging to the player it was showing. On a shared
+    board that is the difference between watching somebody play and watching
+    pieces appear on the floor out of nowhere — which is exactly what WITH
+    COMPUTER looked like.
+
+    Counted rather than eyeballed: the tiles drawn over the board minus the
+    cells the playfield buffer actually holds are the falling pieces, and two
+    pieces are eight cells.
+    """
+    off = game_offsets(rom_path)
+    base, why = game_state_address(rom_path)
+    if base is None:
+        print(f"SALTADO: {why}")
+        return 0
+
+    PF = TENGEN_PF_HEIGHT * TENGEN_PF_WIDTH
+    core, screen = load(rom_path)   # `screen` must stay alive; see load()
+    run(core, 8)
+    press_start(core); run(core, 10)
+    for _ in range(4):              # GAME SELECT -> WITH COMPUTER
+        core.set_keys(KEYS["DOWN"]); run(core, 4); core.set_keys(); run(core, 10)
+    press_start(core); run(core, 12)
+    press_start(core); run(core, 30)
+
+    best = 0
+    for _ in range(120):
+        run(core, 4)
+        drawn = 0
+        for row in range(TENGEN_PF_HEIGHT):
+            for col in range(TENGEN_PF_WIDTH):
+                tile = core.memory.u16[SCREENBLOCK_ADDR +
+                                        ((row * 32) + COOP_FIELD_TX + col) * 2] & 0x3FF
+                cell = core.memory.u8[base + off["field"] +
+                                       row * TENGEN_PF_WIDTH + col]
+                if tile and not cell:
+                    drawn += 1
+        best = max(best, drawn)
+        if best >= 8:
+            break
+
+    if best < 8:
+        print(f"FALLA: solo {best} celdas cayendo sobre el tablero compartido; "
+               "una de las dos piezas no se dibuja")
+        return 1
+    print(f"OK: {best} celdas cayendo a la vez — las dos piezas de un tablero coop.")
     return 0
 
 
@@ -2063,6 +2231,10 @@ def main():
                      help="check the COMPUTER player plays VERSUS and WITH")
     ap.add_argument("--demo", action="store_true",
                      help="check the title starts playing by itself")
+    ap.add_argument("--gameover", action="store_true",
+                     help="check every mode ends and lets go of the player")
+    ap.add_argument("--falling", action="store_true",
+                     help="check both pieces of a coop board are drawn")
     args = ap.parse_args()
 
     if args.selftest:
@@ -2099,6 +2271,10 @@ def main():
         sys.exit(computer_check(args.rom))
     if args.demo:
         sys.exit(demo_check(args.rom))
+    if args.gameover:
+        sys.exit(gameover_check(args.rom))
+    if args.falling:
+        sys.exit(falling_piece_check(args.rom))
 
     core, screen = load(args.rom)
     start_game(core)

@@ -1193,6 +1193,134 @@ static void test_the_computer_keeps_playing_and_does_not_bury_itself(void) {
     CHECK(total_lines > 0);
 }
 
+static void test_a_coop_line_clear_holds_both_players(void) {
+    /* activeGamePlay (main.asm.txt:82DC-82E7) reads its own line-clear timer
+     * and then, on the negative playMode that is coop, the OR of the two. One
+     * board means one pause: the partner cannot keep dropping into rows that
+     * are already coming down. */
+    TengenGame game;
+    tengen_new_game(&game, 0x4242, 0, true, true);
+
+    /* Give player 1 a row to clear: everything but the column its piece is
+     * not over, so the lock completes it. */
+    int row = TENGEN_PF_HEIGHT - 1;
+    for (int col = 0; col < TENGEN_PF_WIDTH; col++)
+        game.field[0].cell[row][col] = TT_I;
+    game.player[TENGEN_PLAYER_1].clearing_rows = 1u << row;
+    game.player[TENGEN_PLAYER_1].line_clear_timer = 20;
+
+    int8_t was_y = game.player[TENGEN_PLAYER_2].piece.y;
+    int8_t was_x = game.player[TENGEN_PLAYER_2].piece.x;
+    for (int frame = 0; frame < 10; frame++)
+        tengen_step(&game, TENGEN_PLAYER_2, TENGEN_BTN_DOWN | TENGEN_BTN_LEFT);
+    CHECK(game.player[TENGEN_PLAYER_2].piece.y == was_y);
+    CHECK(game.player[TENGEN_PLAYER_2].piece.x == was_x);
+    /* ...and the timer it is waiting on is not its own to spend. */
+    CHECK(game.player[TENGEN_PLAYER_1].line_clear_timer == 20);
+
+    /* A RACE IS TWO BOARDS AND TWO CLOCKS: the same timer on the rival holds
+     * nobody here. */
+    TengenGame race;
+    tengen_new_game(&race, 0x4242, 0, true, false);
+    race.player[TENGEN_PLAYER_1].line_clear_timer = 20;
+    was_y = race.player[TENGEN_PLAYER_2].piece.y;
+    for (int frame = 0; frame < 60; frame++)
+        tengen_step(&race, TENGEN_PLAYER_2, 0);
+    CHECK(race.player[TENGEN_PLAYER_2].piece.y != was_y);
+}
+
+static void test_a_coop_top_out_ends_the_game_for_both_players(void) {
+    /* main.asm.txt:83D4-83DD. The store that clears `player1GameActive,x` is
+     * preceded by a `bit playMode / bpl`, and on the negative playMode — the
+     * $FF that is COOPERATIVE and WITH COMPUTER — it clears BOTH flags first.
+     * One board, one game to lose.
+     *
+     * Leaving the partner alive is what wedged coop in the front end: the
+     * board was dead, one flag said the match was still on, and nothing
+     * anywhere agreed it had finished. */
+    TengenGame game;
+    tengen_new_game(&game, 0x1234, 0, true, true);
+    CHECK(game.coop);
+    CHECK(game.player[0].game_active && game.player[1].game_active);
+
+    /* Bury the shared board: solid but for one column, so no row can ever
+     * complete and the next piece has nowhere to go. */
+    for (int row = 0; row < TENGEN_PF_HEIGHT; row++)
+        for (int col = 0; col < TENGEN_PF_WIDTH; col++)
+            game.field[0].cell[row][col] = (col == 5) ? TT_NONE : TT_I;
+
+    bool topped = false;
+    for (int frame = 0; frame < 600 && !topped; frame++)
+        topped = tengen_step(&game, TENGEN_PLAYER_1, 0).topped_out;
+    CHECK(topped);
+    CHECK(!game.player[0].game_active);
+    CHECK(!game.player[1].game_active);
+
+    /* And a race is NOT that: two boards, two games, and the one that is
+     * still standing keeps playing. */
+    TengenGame race;
+    tengen_new_game(&race, 0x1234, 0, true, false);
+    CHECK(!race.coop);
+    for (int row = 0; row < TENGEN_PF_HEIGHT; row++)
+        for (int col = 1; col < TENGEN_PF_WIDTH - 1; col++)
+            race.field[0].cell[row][col] = (col == 5) ? TT_NONE : TT_I;
+    topped = false;
+    for (int frame = 0; frame < 600 && !topped; frame++)
+        topped = tengen_step(&race, TENGEN_PLAYER_1, 0).topped_out;
+    CHECK(topped);
+    CHECK(!race.player[0].game_active);
+    CHECK(race.player[1].game_active);
+}
+
+static void test_the_computer_can_be_told_to_look_first_and_to_drop(void) {
+    /* Two knobs the cartridge does not have, and both OFF by default so the
+     * default is still the cartridge's player. See TengenAi. */
+    TengenGame game;
+    TengenAi ai;
+    tengen_new_game(&game, 0x2222, 0, true, false);
+    tengen_ai_reset(&ai);
+    CHECK(ai.settle == 0 && !ai.soft_drop);
+
+    /* `settle`: nothing at all comes out of the pad until it has elapsed,
+     * counted from the choice — which is made once per spawn. */
+    ai.settle = 30;
+    tengen_ai_choose(&ai, &game, TENGEN_PLAYER_2);
+    for (int frame = 0; frame < 30; frame++)
+        CHECK(tengen_ai_buttons(&ai, &game, TENGEN_PLAYER_2,
+                                 (uint8_t)frame) == 0);
+
+    /* ...and afterwards it plays: over enough frames it must press something,
+     * on the ROM's own eighth-frame cadence. */
+    uint8_t seen = 0;
+    for (int frame = 0; frame < 64; frame++)
+        seen |= tengen_ai_buttons(&ai, &game, TENGEN_PLAYER_2, (uint8_t)frame);
+    CHECK(seen != 0);
+
+    /* `soft_drop`: DOWN once the piece is over its target in the orientation
+     * it wants, and never while it is still aiming. */
+    TengenAi drop;
+    tengen_ai_reset(&drop);
+    drop.soft_drop = true;
+    tengen_ai_choose(&drop, &game, TENGEN_PLAYER_2);
+    game.player[TENGEN_PLAYER_2].piece.x = (int8_t)drop.target_x;
+    game.player[TENGEN_PLAYER_2].piece.orientation =
+        (uint8_t)(drop.target_orientation & 3);
+    CHECK(tengen_ai_buttons(&drop, &game, TENGEN_PLAYER_2, 0) == TENGEN_BTN_DOWN);
+
+    game.player[TENGEN_PLAYER_2].piece.x = (int8_t)(drop.target_x + 2);
+    uint8_t aiming = tengen_ai_buttons(&drop, &game, TENGEN_PLAYER_2, 0);
+    CHECK(!(aiming & TENGEN_BTN_DOWN));
+
+    /* The ROM's player, asked the same question, keeps its hands off it. */
+    TengenAi rom;
+    tengen_ai_reset(&rom);
+    tengen_ai_choose(&rom, &game, TENGEN_PLAYER_2);
+    game.player[TENGEN_PLAYER_2].piece.x = (int8_t)rom.target_x;
+    game.player[TENGEN_PLAYER_2].piece.orientation =
+        (uint8_t)(rom.target_orientation & 3);
+    CHECK(tengen_ai_buttons(&rom, &game, TENGEN_PLAYER_2, 0) == 0);
+}
+
 static void test_coop_is_one_twelve_wide_board_over_the_cable(void) {
     /* COOPERATIVE is the third mode the cartridge offers and the only one
      * where the two players share a field: initPlayer1orCoopPlayfield leaves
@@ -1834,6 +1962,9 @@ int main(void) {
     test_the_computer_picks_a_placement_and_walks_to_it();
     test_the_computer_keeps_playing_and_does_not_bury_itself();
     test_coop_is_one_twelve_wide_board_over_the_cable();
+    test_a_coop_top_out_ends_the_game_for_both_players();
+    test_a_coop_line_clear_holds_both_players();
+    test_the_computer_can_be_told_to_look_first_and_to_drop();
     test_either_player_can_pause_a_linked_game();
     test_level_starts_at_the_chosen_start_level();
     test_level_is_recomputed_from_the_line_total();

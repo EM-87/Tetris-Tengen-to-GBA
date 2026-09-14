@@ -61,6 +61,7 @@ SCREEN_W, SCREEN_H = 240, 160
 # The coop board: twelve storage columns, drawn from the coop screen's own
 # origin (SCREEN_COOP_FIELD_TX in the generated header).
 TENGEN_PF_WIDTH = 12
+TENGEN_PF_HEIGHT = 20
 COOP_FIELD_TX = 9
 
 # I/O registers, as halfword indices into struct GBA's io[] array.
@@ -479,6 +480,45 @@ def coop_check(rom):
     if not failures:
         print(f"  campo compartido: {shared} celdas, doce columnas desde la "
                f"columna {COOP_FIELD_TX}, y el segundo campo vacio")
+
+    # AND IT HAS TO END. Topping out a coop game used to leave the partner's
+    # `game_active` standing, so neither console ever agreed the match was
+    # over: the board sat there and Start did nothing. Buried by hand — solid
+    # but for one column, so no row can complete — and buried IDENTICALLY on
+    # both cores, which is the only way to touch memory without breaking the
+    # lockstep the rest of this check just proved.
+    def face(core):
+        return tuple(run_rom.tilemap_text(core, r) for r in (4, 6, 8))
+
+    reference = mgba.core.load_path(rom)
+    ref_screen = mgba.image.Image(SCREEN_W, SCREEN_H)
+    reference.set_video_buffer(ref_screen)
+    reference.reset()
+    for _ in range(40):
+        reference.run_frame()
+    title = face(reference)
+
+    for core in cores:
+        for r in range(TENGEN_PF_HEIGHT):
+            for c in range(TENGEN_PF_WIDTH):
+                core.memory.u8[field + r * TENGEN_PF_WIDTH + c] = (
+                    0 if c == 5 else 0x01)
+    both(300, [[], []])
+
+    active = [read_bytes(core, session_addr + off["active"] + slot * off["stride"], 1)[0]
+              for core in cores for slot in (0, 1)]
+    if any(active):
+        failures.append(f"tras el game over cooperativo siguen vivos {active}: "
+                         "en coop mueren los dos a la vez")
+    else:
+        tap("START")
+        both(40, [[], []])
+        stuck = [i for i, core in enumerate(cores) if face(core) != title]
+        if stuck:
+            failures.append(f"la(s) consola(s) {stuck} no vuelven al titulo con "
+                             "START tras el game over cooperativo")
+        else:
+            print("  las dos mueren juntas y las dos vuelven al titulo con START")
 
     for f in failures:
         print(f"FALLA: {f}")
