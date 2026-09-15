@@ -477,8 +477,8 @@ def game_offsets(rom_path):
             raise RuntimeError(why)
         core, screen = load(rom_path)   # `screen` must stay alive; see load()
         (field, player, stride, cur, y, level, stats,
-         paused, held, nxt, alive, x, score) = (core.memory.u16[addr + i * 2]
-                                                 for i in range(13))
+         paused, held, nxt, alive, x, score, lines,
+         counts) = (core.memory.u16[addr + i * 2] for i in range(15))
         _GAME_PROBE_CACHE[rom_path] = {
             "field": field, "player": player, "stride": stride,
             "current": player + cur, "y": player + y,
@@ -486,6 +486,7 @@ def game_offsets(rom_path):
             "paused": paused, "held": player + held, "next": player + nxt,
             "active": player + alive, "x": player + x,
             "score": player + score,
+            "lines": player + lines, "counts": player + counts,
         }
     return _GAME_PROBE_CACHE[rom_path]
 

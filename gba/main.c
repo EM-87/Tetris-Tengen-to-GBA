@@ -468,7 +468,7 @@ static uint16_t ascii_tile(char c) { return (uint16_t)(unsigned char)c; }
  * moves every one of these, and a Python constant that did not move would
  * quietly start reading a neighbour. Adding `garbage_rng` did exactly that
  * and the cheat-code check began failing three tests away from the change. */
-const uint16_t kGameProbe[13] = {
+const uint16_t kGameProbe[15] = {
     (uint16_t)offsetof(TengenGame, field),
     (uint16_t)offsetof(TengenGame, player),
     (uint16_t)sizeof(TengenPlayerState),
@@ -482,6 +482,8 @@ const uint16_t kGameProbe[13] = {
     (uint16_t)offsetof(TengenPlayerState, game_active),
     (uint16_t)offsetof(TengenPlayerState, piece.x),
     (uint16_t)offsetof(TengenPlayerState, score),
+    (uint16_t)offsetof(TengenPlayerState, lines),
+    (uint16_t)offsetof(TengenPlayerState, clear_counts),
 };
 
 static TengenLink g_session;
@@ -1200,6 +1202,20 @@ static void draw_number(int tx, int ty, uint32_t value, int digits, int bank) {
     }
 }
 
+/* ...and the same with the leading zeros left blank. The counters keep theirs
+ * — the cartridge's SCORE really does read 000000 — but the level's tally does
+ * not: it prints " 1 TETRIS" and "X100=  1300", blanking everything left of
+ * the first digit the way L8EA2's own staging does. */
+static void draw_number_blank(int tx, int ty, uint32_t value, int digits, int bank) {
+    for (int i = digits - 1; i >= 0; i--) {
+        bool ink = value != 0 || i == digits - 1;
+        set_map_tile(tx + i, ty,
+                      WITH_BANK(ink ? ascii_tile((char)('0' + (value % 10)))
+                                     : T_BLANK, bank));
+        value /= 10;
+    }
+}
+
 /* Paints the cartridge's own screen: the braided border, every decorative
  * tile, each with the palette the ROM's attribute table assigns it — and then
  * closes the two bare strips of rope into panels. Their inner sides land
@@ -1265,6 +1281,159 @@ static void draw_game_over(void) {
  * the foot, the credit. Bank 2's first colour is the menu's pale cyan against
  * bank 3's white, so it reads as a note and not as another choice. */
 #define BANK_NOTE (PAL_MENU_BASE + 2)
+
+/* ----------------------------------------------------------------------- *
+ * The level's BONUS tally
+ *
+ * A level does not just bring the cossacks on. `displayStatsP1` — index 9 of
+ * gameBackgroundPatches (main.asm.txt:7554-7660) — paints the PLAYFIELD ITSELF
+ * over with a scoreboard while they dance: the BONUS heading, then what this
+ * level's clears were worth, category by category, and a total. The
+ * multipliers are printed in the ROM's own strings, so there is nothing to
+ * guess about them:
+ *
+ *     n SINGLES   X100=   n*100
+ *     n DOUBLES   X400=   n*400
+ *     n TRIPLES   X900=   n*900
+ *     n TETRIS    2500=   n*2500      (no X on this one — the ROM's "X" at
+ *     TOTAL               sum          statsTiles9 is never blitted)
+ *
+ * ...and the total is not a read-out: L8EA2 (:2189-2280) counts it up a clear
+ * at a time, one every five frames, ADDING TO THE SCORE as it goes. That is
+ * where a Tengen game's points actually come from at high levels, and the port
+ * had none of it.
+ *
+ * WHERE IT GOES. The ROM's blit addresses are rows 8-27, columns 2-11 of its
+ * nametable — which is the playfield, exactly — so in this port's frame that
+ * is the ten columns at FIELD_TX and rows 0-19. Every row below is the ROM's
+ * own, minus the eight the window drops.
+ * ----------------------------------------------------------------------- */
+#define BONUS_TICK_FRAMES 5      /* $0198 reloads with 5 (main.asm.txt:2244-2250) */
+#define BONUS_CATEGORIES 4
+/* $2165, $21E5, $2265, $22E5 — the labels — and the rows under them. */
+static const uint8_t kBonusLabelTy[BONUS_CATEGORIES] = { 3, 7, 11, 15 };
+static const uint8_t kBonusValueTy[BONUS_CATEGORIES] = { 4, 8, 12, 16 };
+static const char *const kBonusLabel[BONUS_CATEGORIES] = {
+    "SINGLES", "DOUBLES", "TRIPLES", "TETRIS"
+};
+static const char *const kBonusMultiplier[BONUS_CATEGORIES] = {
+    "X100=", "X400=", "X900=", "2500="
+};
+#define BONUS_LABEL_DX 3         /* the labels sit at the ROM's column 5 */
+#define BONUS_COUNT_DX 0         /* ...and the count, two wide, at the left edge */
+#define BONUS_TOTAL_TY 18        /* $2342 */
+#define BONUS_TOTAL_VALUE_TY 19  /* $236A, on the row under it */
+#define BONUS_VALUE_DIGITS 5     /* what is left of the ten columns after "X100=" */
+
+static uint8_t g_bonus_count[BONUS_CATEGORIES];  /* this level's clears */
+static uint8_t g_bonus_shown[BONUS_CATEGORIES];  /* how far the tally has got */
+static uint32_t g_bonus_total;
+static uint8_t g_bonus_tick;
+static bool g_bonus_showing;
+static bool g_bonus_dirty;
+
+static int bonus_tx(void) {
+    /* Coop's board is twelve wide and the panel is ten, so it sits in the
+     * middle of it; everywhere else the panel IS the board. */
+    return g_session.game.coop ? COOP_FIELD_TX + 1 : FIELD_TX;
+}
+
+/* One number, right-aligned against the panel's right edge the way the ROM's
+ * own blit leaves room for it. */
+static void draw_bonus_number(int ty, uint32_t value, int digits) {
+    int tx = bonus_tx() + SCREEN_1P_BONUS_W - digits;
+    draw_number_blank(tx, ty, value, digits, BANK_VALUE);
+}
+
+static void draw_bonus_static(void) {
+    int tx = bonus_tx();
+    clear_region(tx, 0, SCREEN_1P_BONUS_W, SCREEN_TH);
+    for (int y = 0; y < SCREEN_1P_BONUS_H; y++)
+        for (int x = 0; x < SCREEN_1P_BONUS_W; x++)
+            set_map_tile(tx + x, y, WITH_BANK(kBonusTiles[y][x], BANK_LABEL));
+    for (int i = 0; i < BONUS_CATEGORIES; i++) {
+        draw_text(tx + BONUS_LABEL_DX, kBonusLabelTy[i], kBonusLabel[i], BANK_LABEL);
+        draw_text(tx, kBonusValueTy[i], kBonusMultiplier[i], BANK_LABEL);
+    }
+    draw_text(tx, BONUS_TOTAL_TY, "TOTAL", BANK_LABEL);
+}
+
+static void draw_bonus_numbers(void) {
+    int tx = bonus_tx();
+    for (int i = 0; i < BONUS_CATEGORIES; i++) {
+        draw_number_blank(tx + BONUS_COUNT_DX, kBonusLabelTy[i],
+                           g_bonus_shown[i], 2, BANK_VALUE);
+        draw_bonus_number(kBonusValueTy[i],
+                           (uint32_t)g_bonus_shown[i] * TENGEN_BONUS_PER_CLEAR[i],
+                           BONUS_VALUE_DIGITS);
+    }
+    draw_bonus_number(BONUS_TOTAL_VALUE_TY, g_bonus_total, BONUS_VALUE_DIGITS);
+}
+
+/* The show is starting: take this level's counts and put the board away. */
+static void bonus_begin(void) {
+    for (int i = 0; i < BONUS_CATEGORIES; i++) {
+        unsigned n = g_session.game.player[g_view].clear_counts[i];
+        /* One board, one tally: coop counts both people's clears into it, the
+         * way the ROM's own loop walks both players (main.asm.txt:2196-2204). */
+        if (g_session.game.coop)
+            n += g_session.game.player[g_view ^ 1].clear_counts[i];
+        if (n > 99) n = 99;   /* two columns is what the ROM prints */
+        g_bonus_count[i] = (uint8_t)n;
+        g_bonus_shown[i] = 0;
+    }
+    g_bonus_total = 0;
+    g_bonus_tick = 0;
+    g_bonus_showing = true;
+    /* NOT DRAWN HERE. The frame a level turns over is still a playing frame:
+     * draw_match runs at the end of it and draw_field paints the board back
+     * over anything put on top of it. The show's own first frame draws the
+     * panel — see g_bonus_dirty. */
+    g_bonus_dirty = true;
+}
+
+/* ...and one frame of counting it up. Every fifth frame one more clear is
+ * added, to the tally and to the score together. */
+static void bonus_step(void) {
+    if (!g_bonus_showing) return;
+    if (++g_bonus_tick < BONUS_TICK_FRAMES) return;
+    g_bonus_tick = 0;
+
+    for (int i = 0; i < BONUS_CATEGORIES; i++) {
+        if (g_bonus_shown[i] >= g_bonus_count[i]) continue;
+        g_bonus_shown[i]++;
+        g_bonus_total += TENGEN_BONUS_PER_CLEAR[i];
+        /* L8F17 adds it through the score's own routine, and in coop adds it
+         * to BOTH players (`bit playMode / bpl / ldx #$01 / jsr L9A6A`,
+         * main.asm.txt:2266-2271). */
+        for (int slot = 0; slot < 2; slot++) {
+            if (slot != g_view && !g_session.game.coop) continue;
+            if (!g_session.game.player[slot].game_active) continue;
+            g_session.game.player[slot].score =
+                tengen_score_add(g_session.game.player[slot].score,
+                                  TENGEN_BONUS_PER_CLEAR[i]);
+        }
+        draw_bonus_numbers();
+        return;
+    }
+    /* Nothing left to count. */
+}
+
+/* The rival's tally is never on this screen, so it is settled in one go when
+ * the show ends — the cartridge counts it up beside player 1's on its own half
+ * of a two-board screen, which this port does not have. */
+static void bonus_end(void) {
+    g_bonus_showing = false;
+    if (g_session.game.two_player && !g_session.game.coop) {
+        int other = g_view ^ 1;
+        if (g_session.game.player[other].game_active) {
+            g_session.game.player[other].score =
+                tengen_score_add(g_session.game.player[other].score,
+                                  tengen_level_bonus(&g_session.game,
+                                                      (TengenPlayerSlot)other));
+        }
+    }
+}
 
 /* ----------------------------------------------------------------------- *
  * The HIGH SCORES table
@@ -1864,8 +2033,8 @@ static void draw_panel(void) {
         /* The cartridge's own 1P panel carries a HIGH SCORE beside the score
          * — "HIGH" and "SCORE" in plain ASCII at nametable row 2, and
          * highScoreHundredThousands is the seventh entry of
-         * statsDataAddresses (main.asm.txt:4100-4107). Kept for the session
-         * rather than saved: this cartridge has no battery either. */
+         * statsDataAddresses (main.asm.txt:4100-4107), which is the top of
+         * the HIGH SCORES table — see leader_reset. */
         draw_text(BOX_L_IN + 1, ROW_HIGH, "HIGH", BANK_LABEL);
         draw_rule(BOX_L_TX, ROW_HIGH + 2);
         clear_region(BOX_L_IN, ROW_HIGH + 1, BOX_L_W, 1);
@@ -3061,6 +3230,7 @@ static void announce_step(TengenStepResult step) {
         if (!g_linked) {
             g_dancer_active = true;
             g_dancer_timer = DANCER_TIMER_START;
+            bonus_begin();
             g_dancer_tick = 0;
             g_dancer_elapsed = 0;
             /* The cast is read HERE, before the tally is emptied: L8D8B runs
@@ -3887,9 +4057,26 @@ int main(void) {
                 }
             }
             g_dancer_elapsed++;
+            bonus_step();
 
             vsync();
+            if (g_bonus_dirty) {
+                draw_bonus_static();
+                draw_bonus_numbers();
+                g_bonus_dirty = false;
+            }
+            /* THE SCORE HAS TO BE SEEN CLIMBING. That is what the tally is —
+             * L8EA2 adds to it a clear at a time — and draw_panel does not run
+             * during the interlude, so the counter would sit at what it read
+             * when the level turned over and jump when the board came back. */
+            if (!g_session.game.coop && g_bonus_showing) {
+                g_panel_layer = true;
+                draw_counter(ROW_SCORE, HUD_LABEL_SCORE,
+                              g_session.game.player[g_view].score, 6, 0);
+                g_panel_layer = false;
+            }
             if (!g_dancer_active) {
+                bonus_end();
                 oam_hide_all();
                 /* finishLevelUpAnimation empties the level's bonus tally on
                  * its way back to play (main.asm.txt:2476-2482), so the next

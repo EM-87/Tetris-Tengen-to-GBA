@@ -786,6 +786,14 @@ GAMEOVER_TILES_ADDR = 0xC800
 GAMEOVER_COLS = 6
 GAMEOVER_ROWS = 4
 
+# statsTiles1, the BONUS heading of the level-up tally, immediately after the
+# GAME OVER plaque in the same table. displayStatsP1ColsRows2 reads it as ten
+# columns by two rows with the high bit set, which means the source runs on
+# across the rows rather than restarting (main.asm.txt:7563-7570).
+BONUS_TILES_ADDR = GAMEOVER_TILES_ADDR + GAMEOVER_COLS * GAMEOVER_ROWS
+BONUS_COLS = 10
+BONUS_ROWS = 2
+
 STATS_ICON_ROWS = (26, 28)
 STATS_ICON_COLS = (21, 28)      # seven pieces, I T O J L S Z
 STATS_BAR_TILE = 0x21           # $21 + (count & 7); $28 is a full tile
@@ -914,6 +922,13 @@ def read_gameover_tiles(rom):
     raw = rom.at(GAMEOVER_TILES_ADDR, GAMEOVER_COLS * GAMEOVER_ROWS)
     return [list(raw[r * GAMEOVER_COLS:(r + 1) * GAMEOVER_COLS])
             for r in range(GAMEOVER_ROWS)]
+
+
+def read_bonus_tiles(rom):
+    """statsTiles1, the BONUS heading, as BONUS_ROWS rows of BONUS_COLS."""
+    raw = rom.at(BONUS_TILES_ADDR, BONUS_COLS * BONUS_ROWS)
+    return [list(raw[r * BONUS_COLS:(r + 1) * BONUS_COLS])
+            for r in range(BONUS_ROWS)]
 
 
 def read_stats_icons(nametable, attributes):
@@ -1097,7 +1112,7 @@ def emit_screen_header(tiles, palettes, keep_cols, source, stats):
         f"#define SCREEN_1P_STATS_BAR_TILE 0x{STATS_BAR_TILE:02X}",
         "static const uint8_t kStatsIcons[2][SCREEN_1P_STATS_PIECES] = {",
     ]
-    icons, icon_banks, bar_bank, gameover, banner, braid, labels = stats
+    icons, icon_banks, bar_bank, gameover, bonus, banner, braid, labels = stats
     for row in icons:
         lines.append("    { " + ", ".join(f"0x{t:02X}" for t in row) + " },")
     lines += [
@@ -1118,6 +1133,17 @@ def emit_screen_header(tiles, palettes, keep_cols, source, stats):
     ] + [
         "    { " + ", ".join(f"0x{v:02X}" for v in gameover[r]) + " },"
         for r in range(GAMEOVER_ROWS)
+    ] + [
+        "};",
+        "",
+        "/* statsTiles1: the BONUS heading the level-up tally is written",
+        " * under, ten by two. Its own tiles, the same table as the plaque. */",
+        f"#define SCREEN_1P_BONUS_W {BONUS_COLS}",
+        f"#define SCREEN_1P_BONUS_H {BONUS_ROWS}",
+        "static const uint8_t kBonusTiles[SCREEN_1P_BONUS_H][SCREEN_1P_BONUS_W] = {",
+    ] + [
+        "    { " + ", ".join(f"0x{v:02X}" for v in bonus[r]) + " },"
+        for r in range(BONUS_ROWS)
     ] + [
         "};",
         "",
@@ -1870,6 +1896,7 @@ def main() -> int:
         "screen_1p.h": emit_screen_header(tiles, palettes, keep_cols, src,
                                            read_stats_icons(nametable, attributes)
                                            + (read_gameover_tiles(rom),
+                                              read_bonus_tiles(rom),
                                               read_banner(nametable, attributes),
                                               read_braid_frame(nametable, attributes),
                                               read_hud_labels(rom))),

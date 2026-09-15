@@ -489,6 +489,20 @@ void tengen_pause_input(TengenGame *game, const uint8_t new_presses[2],
  * full TengenButton bitmask currently held by that player. */
 TengenStepResult tengen_step(TengenGame *game, TengenPlayerSlot slot, uint8_t held_buttons);
 
+/* The ROM's own score addition, wrap included: the hundred-thousands digit is
+ * replaced by '1' rather than carrying when it would pass '9', so a score that
+ * runs out of room comes back to 100000 instead of to zero
+ * (main.asm.txt:3942-3946). Exposed because the level's bonus tally adds
+ * through it too, not just a locked piece. */
+uint32_t tengen_score_add(uint32_t score, uint32_t amount);
+
+/* What the level's tally is worth: singles x100, doubles x400, triples x900
+ * and a tetris x2500, which are the cartridge's own printed multipliers
+ * (statsTiles3/5/7/A, main.asm.txt:8004-8024). `slot` is the player whose
+ * clear_counts are read; in coop pass either and add the other yourself. */
+uint32_t tengen_level_bonus(const TengenGame *game, TengenPlayerSlot slot);
+extern const uint16_t TENGEN_BONUS_PER_CLEAR[4];
+
 /* True if the piece's current position is legal (in bounds, not overlapping
  * a locked cell). Exposed for tests and for renderer ghost-piece previews. */
 bool tengen_position_valid(const TengenGame *game, TengenPlayerSlot slot);

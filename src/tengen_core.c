@@ -696,13 +696,28 @@ static uint32_t add_lock_score(uint32_t score, uint8_t level, int lowest_hit_row
         result->award_rows_above_floor = (uint8_t)rows_above_floor;
     }
 
-    score += award;
+    return tengen_score_add(score, award);
+}
 
+uint32_t tengen_score_add(uint32_t score, uint32_t amount) {
+    score += amount;
     /* main.asm.txt:3942-3946: the hundred-thousands digit is replaced by '1'
      * rather than carrying when it would pass '9', so the score wraps to
      * 100000 instead of rolling over to 0 or sticking at 999999. */
-    if (score > 999999) score = 100000 + (score % 100000);
+    while (score > 999999) score = 100000 + (score % 100000);
     return score;
+}
+
+/* The multipliers the cartridge PRINTS on its own tally: "X100=", "X400=",
+ * "X900=" and "2500=" (statsTiles3/5/7/A, main.asm.txt:8004-8024). */
+const uint16_t TENGEN_BONUS_PER_CLEAR[4] = { 100, 400, 900, 2500 };
+
+uint32_t tengen_level_bonus(const TengenGame *game, TengenPlayerSlot slot) {
+    const TengenPlayerState *p = &game->player[slot];
+    uint32_t total = 0;
+    for (int i = 0; i < 4; i++)
+        total += (uint32_t)p->clear_counts[i] * TENGEN_BONUS_PER_CLEAR[i];
+    return total;
 }
 
 void tengen_new_game(TengenGame *game, uint16_t seed, uint8_t start_level, bool two_player, bool coop) {
