@@ -240,6 +240,26 @@ running ROM; only the side panels need reflowing).
 26. ~~The pause menu~~ — the port's own, behind L+R on the plaque: the tune
    (silence and the MIX included) and a way out that asks first. Built from
    the game-over plaque's nine-patch frame so it reads as part of the game.
+   Two things it taught, both of them traps for anything added near it.
+   **A PAUSE THAT IS TORN DOWN HAS TO BE RESUMED.** `MUSIC_SUSPEND` is a gag
+   on the whole engine, not a stop for the music — under it only the two
+   class-62 effects are still heard and every tune and every class-29 effect
+   is silent — so EXIT, which pulls the match out from under the plaque
+   without going back through `pauseOrUnpause`, left the machine mute for the
+   rest of the session: no piece landing, no game-over jingle, no menu blip,
+   no title theme. It sends the RESUME itself now, FIRST in the ring so its
+   own blip is not swallowed, and `make gba-check --quit-audio` walks that
+   road and listens at every screen. See reference/NOTES.md.
+   **AND CENTRING IN THIS BOX NEEDS THREE OF THE FOUR BACKGROUNDS.** Its
+   interior is eleven columns, so an even-length word misses the middle by
+   half a tile and goes on the offset layer (three across) to miss it by one
+   pixel instead; the heading rides the counters' layer, two pixels down,
+   which is the only sub-tile nudge downwards this port has. A line can have
+   one or the other, never both — see `draw_pmenu_line`. The question mark in
+   EXIT / SURE? is the one glyph in the port that is not the cartridge's: the
+   tile set is ASCII-indexed but $3F is a LEFT ARROW, so `extract_assets.py`
+   draws one into a slot the cartridge left empty and refuses to if the dump
+   has art there.
 27. Still to do: the prototype PIECE art, and a prototype mode cycling more
    than one dump. **WHAT THE THREE DUMPS ACTUALLY HAVE**, measured rather than
    assumed: only `proto_b` carries the title screen this port can read (its

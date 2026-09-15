@@ -735,7 +735,60 @@ def emit_audio_header(base, data, span, source):
     return "\n".join(lines)
 
 
-def emit_tiles_header(name, guard, tiles, source):
+# ---------------------------------------------------------------------------
+# THE ONE GLYPH THE CARTRIDGE DOES NOT HAVE.
+#
+# The game's tile set is ASCII-indexed, which is why the port can print words
+# at all — but only where the cartridge needed a character. It has no
+# parentheses ($28/$29 are border art), no colon ($3A-$3C are the plaque's
+# frame), and no QUESTION MARK: $3F, where ASCII puts one, is the settings
+# screen's LEFT ARROW. Tengen's Tetris never asks the player anything, so
+# nothing in the ROM ever needed one.
+#
+# The pause menu does: EXIT asks SURE? before it throws a game away, and a
+# question with no question mark is not a question. So this is the second
+# thing in the port that is entered by hand rather than extracted — the first
+# is Korobeiniki (gba/korobeiniki.c) — and it is kept honest the same way: it
+# is declared here rather than smuggled into a generated header, it is built
+# to the ROM font's own metrics (ink in rows 1-7, two-pixel strokes, colour
+# index 1, column 7 clear), and it takes a slot the cartridge left EMPTY
+# rather than overwriting any of its art.
+#
+# $EF-$FF are blank in the release's CHR bank 0. $F0 is the one used; the
+# check below refuses to plant anything on a dump where it is not blank, so a
+# different cartridge cannot lose a tile to this without saying so.
+QUESTION_TILE = 0xF0
+QUESTION_GLYPH = (
+    "........",
+    ".XXXXX..",
+    "XX...XX.",
+    ".....XX.",
+    "...XXX..",
+    "...XX...",
+    "........",
+    "...XX...",
+)
+
+
+def plant_question_mark(tiles: bytes) -> bytes:
+    """Writes the '?' above into QUESTION_TILE of a converted tile page."""
+    out = bytearray(tiles)
+    base = QUESTION_TILE * GBA_TILE_BYTES
+    if len(out) < base + GBA_TILE_BYTES:
+        raise SystemExit(f"la pagina de tiles no llega a ${QUESTION_TILE:02X}")
+    if any(out[base:base + GBA_TILE_BYTES]):
+        raise SystemExit(
+            f"el tile ${QUESTION_TILE:02X} no esta vacio en este volcado: "
+            "el signo de interrogacion borraria arte del cartucho")
+    for row, bits in enumerate(QUESTION_GLYPH):
+        for col in range(0, 8, 2):
+            lo = 1 if bits[col] == "X" else 0
+            hi = 1 if bits[col + 1] == "X" else 0
+            out[base + row * 4 + col // 2] = lo | (hi << 4)
+    return bytes(out)
+
+
+def emit_tiles_header(name, guard, tiles, source, extra=()):
     count = len(tiles) // GBA_TILE_BYTES
     lines = [
         "/*",
@@ -753,6 +806,9 @@ def emit_tiles_header(name, guard, tiles, source):
         "#include <stdint.h>",
         "",
         f"#define {guard}_TILE_COUNT {count}",
+    ]
+    lines += [f"#define {key} 0x{value:02X}" for key, value in extra]
+    lines += [
         "",
         f"static const uint8_t {name}[{len(tiles)}] = {{",
     ]
@@ -1949,8 +2005,12 @@ def main() -> int:
             f"{src} [title]"),
         "dancer_poses.h": emit_dancer_poses_header(
             poses, stage_rows, dancer_x, dancer_y, dancer_attr, f"{src} [dancers]"),
+        # ...and the one glyph that is not the cartridge's, planted in a slot
+        # the cartridge left empty. See plant_question_mark.
         "tiles_game.h": emit_tiles_header(
-            "kGameTiles", "TILES_GAME", convert_tiles(rom.chr_bank(0)), f"{src} [game]"),
+            "kGameTiles", "TILES_GAME",
+            plant_question_mark(convert_tiles(rom.chr_bank(0))), f"{src} [game]",
+            extra=(("TILES_GAME_QUESTION", QUESTION_TILE),)),
         "tiles_dancers.h": emit_tiles_header(
             "kDancerTiles", "TILES_DANCERS", convert_tiles(rom.chr_bank(1)), f"{src} [dancers]"),
         # CHR bank 3 is the title screen's SPRITE bank: the cathedral overlay

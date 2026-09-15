@@ -1828,6 +1828,23 @@ def counters_check(rom_path):
     return 0
 
 
+# Where the pause menu's lines land, derived the way gba/main.c derives them:
+# a box PMENU_H tall centred on a 20-row screen, with the column inside it.
+# The lines do NOT all live on the same background — the heading and the
+# question's second line ride the counters' layer two pixels down, the
+# even-length ones the offset layer three across — but tilemap_text reads all
+# four, so these are just rows.
+PMENU_H = 9
+PMENU_TY = (SCREEN_H // TILE - PMENU_H) // 2
+PM_HEAD = PMENU_TY + 1       # PAUSE
+PM_MUSIC = PMENU_TY + 3      # MUSIC
+PM_TUNE = PMENU_TY + 4       # ...and the tune's name under it
+PM_EXIT = PMENU_TY + 6       # EXIT
+PM_ASK = PMENU_TY + 2        # the question's EXIT
+PM_SURE = PMENU_TY + 3       # ...and its SURE?
+PM_ANSWER = PMENU_TY + 6     # YES / NO
+
+
 def pausemenu_check(rom_path):
     """L+R ON THE PAUSE PLAQUE: the menu, and the two things it offers.
 
@@ -1860,27 +1877,28 @@ def pausemenu_check(rom_path):
     if not core.memory.u8[base + off["paused"]]:
         failures.append("START no pausa")
     tap("L", "R")
-    if "PAUSE" not in row(7) or "MUSIC" not in row(9) or "EXIT" not in row(11):
-        failures.append(f"L+R no abre el menu de pausa: {row(7)!r} / "
-                         f"{row(9)!r} / {row(11)!r}")
+    if ("PAUSE" not in row(PM_HEAD) or "MUSIC" not in row(PM_MUSIC)
+            or "EXIT" not in row(PM_EXIT)):
+        failures.append(f"L+R no abre el menu de pausa: {row(PM_HEAD)!r} / "
+                         f"{row(PM_MUSIC)!r} / {row(PM_EXIT)!r}")
         print("FALLA:", failures[-1])
         return 1
     print("  L+R sobre la pausa abre el menu, en columna")
 
-    before = row(10)
+    before = row(PM_TUNE)
     tap("RIGHT")
-    if row(10) == before:
+    if row(PM_TUNE) == before:
         failures.append("DERECHA no cambia la cancion en el menu de pausa")
     else:
         print(f"  la musica se cambia sin salir: {before.strip()!r} -> "
-               f"{row(10).strip()!r}")
+               f"{row(PM_TUNE).strip()!r}")
 
     # START IS THE WAY OUT: it closes the menu and resumes, because it is the
     # button that put the plaque up in the first place.
     tap("START")
     if core.memory.u8[base + off["paused"]]:
         failures.append("START en el menu de pausa no reanuda la partida")
-    elif "MUSIC" in row(8):
+    elif "MUSIC" in row(PM_MUSIC):
         failures.append("START reanuda pero deja el menu en pantalla")
     else:
         print("  START cierra el menu y reanuda")
@@ -1902,31 +1920,31 @@ def pausemenu_check(rom_path):
     # held before driving the menu.)
     if not core.memory.u8[base + off["paused"]]:
         tap("START")
-    while "SURE" in row(8):
+    while "SURE" in row(PM_SURE):
         tap("DOWN"); tap("A")    # back out of a question it may have opened
-    while "EXIT" not in row(11):
+    while "EXIT" not in row(PM_EXIT):
         tap("START")
     tap("DOWN"); tap("A")
-    if "SURE" not in row(8):
-        failures.append(f"EXIT no pregunta antes de salir: {row(8)!r}")
+    if "SURE" not in row(PM_SURE):
+        failures.append(f"EXIT no pregunta antes de salir: {row(PM_SURE)!r}")
     else:
         print("  EXIT pregunta antes de nada")
         # NO comes back to the game, still paused, still playing.
         tap("A")
         if not core.memory.u8[base + off["paused"]]:
             failures.append("decir NO al salir dejo la partida sin pausa")
-        elif "SURE" in row(8):
+        elif "SURE" in row(PM_SURE):
             failures.append("decir NO no cierra la pregunta")
         else:
             print("  NO vuelve a la partida")
         # ...and YES leaves STRAIGHT to the title: a game you walked out of
         # has not ended, and its score has no business on the board.
-        while "SURE" not in row(8):
+        while "SURE" not in row(PM_SURE):
             tap("DOWN"); tap("A")
         tap("LEFT"); tap("A"); run(core, 60)
         if "HIGH SCORES" in tilemap_text(core, LEADER_HEAD_TY, 0, 30):
             failures.append("salir a la fuerza pasa por la tabla de records")
-        elif "EXIT" in row(11) or "PAUSE" in row(7):
+        elif "EXIT" in row(PM_EXIT) or "PAUSE" in row(PM_HEAD):
             failures.append("decir SI no sale de la partida")
         else:
             print("  SI sale al titulo, sin pasar por la tabla")
@@ -1939,7 +1957,7 @@ def pausemenu_check(rom_path):
     press_start(core); run(core, 12)    # -> level settings
     press_start(core); run(core, 30)    # -> play
     tap("START")
-    if "PAUSE" not in row(7) or "EXIT" not in row(11):
+    if "PAUSE" not in row(PM_HEAD) or "EXIT" not in row(PM_EXIT):
         failures.append("el menu de pausa se pierde al empezar otra partida")
     else:
         print("  y en la siguiente partida la pausa ya es el menu, sin acorde")
@@ -1974,6 +1992,91 @@ def pausemenu_check(rom_path):
     if failures:
         return 1
     print("OK: el menu de pausa cambia la musica, sale preguntando, y se queda.")
+    return 0
+
+
+def quit_audio_check(rom_path):
+    """SALIR POR EL MENU DE PAUSA NO PUEDE DEJAR LA MAQUINA MUDA.
+
+    Pausar manda el MUSIC_SUSPEND del cartucho, que no es un silencio de la
+    musica sino una MORDAZA sobre el motor entero: tambien calla los efectos, y
+    lo unico que la levanta es MUSIC_RESUME. Toda salida normal de la pausa
+    pasa por pauseOrUnpause y lo manda; la del menu secreto desmonta la partida
+    por debajo del cartel y no pasaba por ahi, asi que el motor se quedaba
+    amordazado para el resto de la sesion. Sonaba exactamente asi: ni las
+    piezas al caer, ni la musiquita de game over, ni el blip de los menus, ni
+    el tema al volver al titulo, hasta apagar la consola.
+
+    Asi que esto no mira una pantalla: recorre el camino del jugador -- una
+    partida en WITH COMPUTER, pausa, L+R, EXIT, SI -- y cuenta frames con algun
+    canal sonando en cada sitio al que lleva.
+    """
+    core, screen = load(rom_path)   # `screen` must stay alive; see load()
+
+    def tap(*names, hold=4, settle=12):
+        core.set_keys(*[KEYS[n] for n in names]); run(core, hold)
+        core.set_keys(); run(core, settle)
+
+    def heard(frames):
+        n = 0
+        for _ in range(frames):
+            core.run_frame()
+            if sound_state(core)["activos"]:
+                n += 1
+        return n
+
+    run(core, 8)
+    tap("START"); run(core, 10)            # titulo -> GAME SELECT
+    for _ in range(4):                      # -> WITH COMPUTER
+        tap("DOWN")
+    tap("START"); run(core, 12)             # -> LEVEL SETTINGS
+    for _ in range(2):                      # el cursor hasta MUSIC
+        tap("DOWN")
+    tap("RIGHT")                            # NO MUSIC -> LOGINSKA
+    tap("START"); run(core, 30)             # -> a jugar
+
+    playing = heard(120)
+    tap("START"); run(core, 10)             # pausa
+    core.set_keys(KEYS["L"], KEYS["R"]); run(core, 6)
+    core.set_keys(); run(core, 12)          # ...y el menu secreto
+    tap("DOWN")                             # MUSIC -> EXIT
+    tap("A")                                # -> la pregunta
+    tap("RIGHT")                            # NO -> YES
+    tap("A"); run(core, 40)                 # fuera
+
+    title = heard(300)
+    tap("START"); run(core, 30)             # -> GAME SELECT
+    core.set_keys(KEYS["DOWN"])
+    blip = heard(4)
+    core.set_keys()
+    blip += heard(20)
+    tap("START"); run(core, 20)             # -> LEVEL SETTINGS
+    for _ in range(2):
+        tap("DOWN")
+    tap("RIGHT")
+    tap("START"); run(core, 30)             # -> a jugar otra vez
+    again = heard(180)
+
+    print(f"  jugando antes de salir:   {playing:3d}/120 frames con sonido")
+    print(f"  el titulo al volver:      {title:3d}/300")
+    print(f"  el blip del cursor:       {blip:3d}/24")
+    print(f"  la siguiente partida:     {again:3d}/180")
+
+    failures = []
+    if playing < 20:
+        failures.append("no habia sonido antes de salir; la medida no prueba nada")
+    if title < 60:
+        failures.append("el titulo vuelve mudo despues de salir por el menu de pausa")
+    if blip < 2:
+        failures.append("los menus pierden su blip despues de salir por el menu de pausa")
+    if again < 40:
+        failures.append("la siguiente partida es muda despues de salir por el menu de pausa")
+
+    for f in failures:
+        print("FALLA:", f)
+    if failures:
+        return 1
+    print("OK: salir por el menu de pausa deja el motor de sonido como estaba.")
     return 0
 
 
@@ -2759,6 +2862,8 @@ def main():
                      help="check the counters blank their leading zeros")
     ap.add_argument("--pausemenu", action="store_true",
                      help="check the L+R pause menu")
+    ap.add_argument("--quit-audio", action="store_true",
+                     help="check quitting from the pause menu leaves the sound alive")
     ap.add_argument("--leaderboard", action="store_true",
                      help="check the HIGH SCORES table and its initials")
     ap.add_argument("--points", action="store_true",
@@ -2809,6 +2914,8 @@ def main():
         sys.exit(points_check(args.rom))
     if args.leaderboard:
         sys.exit(leaderboard_check(args.rom))
+    if args.quit_audio:
+        sys.exit(quit_audio_check(args.rom))
     if args.pausemenu:
         sys.exit(pausemenu_check(args.rom))
     if args.counters:

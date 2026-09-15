@@ -1168,8 +1168,25 @@ pair (`main.asm.txt:7204-7211`). It silences every channel and holds them
 there until `MUSIC_RESUME` ($02). Two things about it make it the right tool
 for leaving a screen as well as for pausing:
 
-* **Sound effects queued after it still play.** So the screen-switch blip is
-  heard in full — all twelve frames of it — with the music gone underneath.
+* **TWO sound effects queued after it still play, and only two.** This was
+  written down too broadly the first time and cost a whole session's audio
+  later on, so here it is as measured — suspend the engine on GAME SELECT and
+  hand it each cue in turn:
+
+  | heard under SUSPEND | silent under SUSPEND |
+  | --- | --- |
+  | SCREEN_SWITCH `$15` (12 frames), TOPOUT `$16` | DROP `$0E`, LINECLEAR `$13`, MENU_SELECT `$14`, CHIRP `$10`, ALARM `$12`, and every tune |
+
+  It is the priority classes again: the two that survive are class 62, and
+  everything gagged is class 29 or a tune. The tunes are not even refused
+  their slots — `$0292` fills with 33s and 29s exactly as it would unsuspended
+  — they simply never reach the speaker. So a SUSPEND that is never resumed is
+  not "the music is off", it is **the machine is mute**: no piece landing, no
+  game-over jingle, no menu blip, no title theme, until the console is
+  switched off. Anything that tears a PAUSED game down has to send the RESUME
+  itself, because nothing else will — see `pause_menu_input` in `gba/main.c`,
+  where EXIT does, and `make gba-check --quit-audio`, which walks that road
+  and counts frames with a channel sounding at every screen it leads to.
 * **RESUME is not free when nothing is suspended.** On a cold engine an extra
   RESUME costs the first frame of the tune and the recordings drift from
   there, so the port tracks whether it suspended rather than firing one

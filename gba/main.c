@@ -479,8 +479,20 @@ static const uint8_t kPauseTiles[PAUSE_H][PAUSE_W] = {
 
 
 /* The tileset's letters and digits sit at their ASCII codes, which is how the
- * ROM's own nametable spells "HIGH SCORE" and "STATS". */
-static uint16_t ascii_tile(char c) { return (uint16_t)(unsigned char)c; }
+ * ROM's own nametable spells "HIGH SCORE" and "STATS".
+ *
+ * WITH ONE EXCEPTION, and it is the only character in the port that is not
+ * the cartridge's. ASCII's '?' is $3F and $3F in this set is the settings
+ * screen's LEFT ARROW — Tengen's Tetris never asks the player anything, so it
+ * never needed a question mark. The pause menu does (EXIT / SURE?), so
+ * tools/extract_assets.py draws one into a slot the cartridge left empty and
+ * says where; see plant_question_mark there for the whole of why and how.
+ * Mapping it here rather than at the call sites means text_len, the centring
+ * and every draw_text go on working on a string with a '?' in it. */
+static uint16_t ascii_tile(char c) {
+    if (c == '?') return TILES_GAME_QUESTION;
+    return (uint16_t)(unsigned char)c;
+}
 
 /* OFFSETS THE HEADLESS CHECKS NEED, exported so the ELF is the single place
  * that knows them — the same reason kNes6502Probe exists in nes_audio.c, and
@@ -3563,8 +3575,21 @@ static void refresh_palettes(void) {
  * out by palette rather than by an arrow — an arrow in a centred column is a
  * character that has to come from somewhere, and it pulls the line off
  * centre. */
+/* NINE ROWS, and every one of them is doing something. Seven had the three
+ * lines of the column packed against each other and EXIT sitting on the box's
+ * own floor; these two extra rows are the air between the tune and the way
+ * out, and the air under the way out:
+ *
+ *      row 1   PAUSE       two pixels lower than the grid; see draw_pmenu_line
+ *      row 2   -
+ *      row 3   MUSIC
+ *      row 4   KOROBEINIKI
+ *      row 5   -
+ *      row 6   EXIT
+ *      row 7   -
+ */
 #define PMENU_W 13
-#define PMENU_H 7
+#define PMENU_H 9
 #define PMENU_TX ((SCREEN_TW - PMENU_W) / 2)
 #define PMENU_TY ((SCREEN_TH - PMENU_H) / 2)
 #define PMENU_IN_TX (PMENU_TX + 1)
@@ -3611,12 +3636,43 @@ static void draw_box_frame(int tx, int ty, int w, int h) {
     }
 }
 
-/* One line of the column, centred in the box's interior. */
-static void draw_pmenu_line(int ty, const char *text, int bank) {
+/* One line of the column, centred in the box's interior — and "centred" here
+ * needs two of the four backgrounds, because a tile grid cannot centre
+ * everything and the player can see the difference.
+ *
+ * ACROSS. The interior is ELEVEN columns, an odd number, so a word of ODD
+ * length lands on the middle exactly and a word of EVEN length misses it by
+ * half a tile — four pixels, and four pixels is what "sigue sin estar bien
+ * centrado" looks like with MUSIC over LOGINSKA over EXIT. The offset layer
+ * is three pixels right of the grid (STATS_SHIFT_PX), which is one pixel
+ * short of that half tile, so an even-length line is drawn THERE and comes
+ * out one pixel off centre instead of four. It is the same trick
+ * draw_text_centred plays on the settings screen, with the parity the other
+ * way round because that frame's interior is even.
+ *
+ * DOWN. `lower` asks for the counters' layer, which is two pixels below the
+ * grid (PANEL_SHIFT_PX) and nothing across — the only sub-tile nudge in the
+ * vertical direction this port has. It is what takes two pixels of the gap
+ * out from under the heading. It cannot be combined with the three across,
+ * so it is only ever asked for on a line that centres exactly without them;
+ * when the parity says otherwise, the centring wins. */
+static void draw_pmenu_line(int ty, const char *text, int bank, bool lower) {
     unsigned len = text_len(text);
     int tx = PMENU_IN_TX + ((int)PMENU_IN_W - (int)len) / 2;
-    for (unsigned i = 0; i < len; i++)
-        set_map_tile(tx + (int)i, ty, WITH_BANK(ascii_tile(text[i]), bank));
+    bool offset = (len & 1u) == 0;
+    for (unsigned i = 0; i < len; i++) {
+        uint16_t entry = WITH_BANK(ascii_tile(text[i]), bank);
+        if (offset) {
+            set_stats_tile(tx + (int)i, ty, entry);
+        } else if (lower) {
+            bool was = g_panel_layer;
+            g_panel_layer = true;
+            set_map_tile(tx + (int)i, ty, entry);
+            g_panel_layer = was;
+        } else {
+            set_map_tile(tx + (int)i, ty, entry);
+        }
+    }
 }
 
 static void draw_pause_menu(void) {
@@ -3634,26 +3690,36 @@ static void draw_pause_menu(void) {
     draw_box_frame(PMENU_TX, PMENU_TY, PMENU_W, PMENU_H);
 
     if (g_pause_confirm) {
-        draw_pmenu_line(PMENU_TY + 1, "EXIT", BANK_LABEL);
-        draw_pmenu_line(PMENU_TY + 2, "SURE", BANK_LABEL);
+        /* THE QUESTION MARK IS THE POINT OF THE SECOND LINE. It is not in the
+         * cartridge's tile set at all — see ascii_tile — and without it the
+         * two words read as a label rather than as a question.
+         *
+         * A blank row keeps EXIT off the box's ceiling, and SURE? rides two
+         * pixels lower than its own row so the two words are spaced without
+         * eight pixels of nothing between them. Both of them can only sit
+         * where they do because EXIT is four letters and SURE? is five: see
+         * draw_pmenu_line for why the parity decides which layer each gets. */
+        draw_pmenu_line(PMENU_TY + 2, "EXIT", BANK_LABEL, false);
+        draw_pmenu_line(PMENU_TY + 3, "SURE?", BANK_LABEL, true);
         /* NO LOWERCASE IN THIS TILE SET — $61 up are the braid and the
          * border, which is why 'yes' came out as two stray marks — so the two
          * answers are drawn as two words in two palettes rather than as one
-         * line with the picked one in capitals. */
+         * line with the picked one in capitals. Seven columns of eleven, so
+         * the pair lands on the middle without help. */
         int tx = PMENU_IN_TX + (PMENU_IN_W - 7) / 2;  /* YES + gap + NO */
-        draw_text(tx, PMENU_TY + 4, "YES",
+        draw_text(tx, PMENU_TY + 6, "YES",
                    g_pause_yes ? BANK_HILITE : BANK_LABEL);
-        draw_text(tx + 5, PMENU_TY + 4, "NO",
+        draw_text(tx + 5, PMENU_TY + 6, "NO",
                    g_pause_yes ? BANK_LABEL : BANK_HILITE);
         return;
     }
-    draw_pmenu_line(PMENU_TY + 1, "PAUSE", BANK_NOTE);
+    draw_pmenu_line(PMENU_TY + 1, "PAUSE", BANK_NOTE, true);
     draw_pmenu_line(PMENU_TY + 3, "MUSIC",
-                     g_pause_row == PMENU_MUSIC ? BANK_HILITE : BANK_LABEL);
+                     g_pause_row == PMENU_MUSIC ? BANK_HILITE : BANK_LABEL, false);
     draw_pmenu_line(PMENU_TY + 4, kMusicNames[g_music],
-                     g_pause_row == PMENU_MUSIC ? BANK_HILITE : BANK_LABEL);
-    draw_pmenu_line(PMENU_TY + 5, "EXIT",
-                     g_pause_row == PMENU_EXIT ? BANK_HILITE : BANK_LABEL);
+                     g_pause_row == PMENU_MUSIC ? BANK_HILITE : BANK_LABEL, false);
+    draw_pmenu_line(PMENU_TY + 6, "EXIT",
+                     g_pause_row == PMENU_EXIT ? BANK_HILITE : BANK_LABEL, false);
 }
 
 /* One frame of it. Returns true if the menu ate the input, which is what
@@ -3681,9 +3747,34 @@ static bool pause_menu_input(uint8_t pressed, bool *leaving) {
             g_pause_confirm = false;
             nes_audio_play(NES_SOUND_SCREEN_SWITCH);
         } else if (pressed & (TENGEN_BTN_A | TENGEN_BTN_START)) {
+            if (g_pause_yes) {
+                /* QUITTING IS NOT AN UNPAUSE, AND THE ENGINE ONLY KNOWS ABOUT
+                 * UNPAUSING. This is the whole of a bug that killed every
+                 * sound in the machine for the rest of the session.
+                 *
+                 * Pausing sends the cartridge's MUSIC_SUSPEND, which is a gag
+                 * on the WHOLE engine and not on the music alone: it silences
+                 * the effects too, and the only thing that lifts it is
+                 * MUSIC_RESUME. Every other way out of a pause goes back
+                 * through pauseOrUnpause, which sends exactly that. This one
+                 * did not — it tore the match down from under the plaque, and
+                 * stop_music() only frees voice slots, it does not ungag
+                 * anything — so the engine was left suspended with no pause
+                 * left to lift it. After that the piece never landed with a
+                 * sound, the game-over jingle never played, the menus lost
+                 * their blip and the title came back silent, exactly as
+                 * reported, until the console was switched off.
+                 *
+                 * FIRST IN THE RING, TOO. updateAudio takes one request per
+                 * frame ($CFCC-$CFDB), so a resume queued after the blip
+                 * below would let the blip be swallowed by the gag it is
+                 * meant to lift. */
+                nes_audio_play(NES_MUSIC_RESUME);
+                *leaving = true;
+            } else {
+                g_pause_confirm = false;
+            }
             nes_audio_play(NES_SOUND_SCREEN_SWITCH);
-            if (g_pause_yes) *leaving = true;
-            else g_pause_confirm = false;
         }
         /* The question keeps START, because there it is an answer and not a
          * way out: the way out of it is NO. */
@@ -4705,11 +4796,20 @@ int main(void) {
              * game that ENDED takes it. A game you walked out of has not
              * ended: you killed it, and a score you abandoned has no business
              * on the board. */
+            /* NOTHING IS LEFT OF THE TORN-DOWN GAME, THE HOLD INCLUDED — and
+             * the hold is two things, not one. The flag is this port's, and
+             * leaving it lying about is a paused game handed to the next
+             * screen; the SUSPEND is the cartridge engine's, and it gags the
+             * EFFECTS as well as the music, so a game abandoned under the
+             * plaque and never resumed leaves the whole machine mute. See the
+             * note by MUSIC_RESUME in pause_menu_input: the way out through
+             * EXIT sends its own resume first, so that the blip it plays on
+             * the way is heard rather than swallowed. This is for the roads
+             * that do not — a cable pulled out from under a held match. */
+            if (g_session.game.paused && !quit_match)
+                nes_audio_play(NES_MUSIC_RESUME);
+            g_session.game.paused = false;
             if (quit_match) {
-                /* Nothing is left of the abandoned game, the hold included:
-                 * it is not this one's business to leave a paused flag lying
-                 * where the next screen can find it. */
-                g_session.game.paused = false;
                 screen = SCREEN_TITLE;
                 restart_title_sprites();
             } else {
