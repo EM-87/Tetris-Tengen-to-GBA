@@ -386,6 +386,13 @@ extern const uint8_t TENGEN_LEVEL_LINE_TENS[21];
  * ----------------------------------------------------------------------- */
 #define TENGEN_DAS_CHARGE_FIRST  11 /* frames held before the first auto-repeat shift */
 #define TENGEN_DAS_CHARGE_REPEAT 6  /* frames between subsequent auto-repeat shifts */
+/* ...and what a BLOCKED shift reloads it to instead (main.asm.txt:527, 540:
+ * `lda #$09 / sta dasLeftPlayer1,x`). Two frames short of the charge rather
+ * than six, so a piece pressed against a wall — or, in coop, against the
+ * other player — keeps asking three times as often as one moving freely.
+ * That fast retry is what unsticks two players standing on each other: every
+ * refused shift runs the fall-timer stagger. */
+#define TENGEN_DAS_CHARGE_BLOCKED 9
 #define TENGEN_AUTOROTATE_CHARGE 15 /* frames held before auto-rotate kicks in (fires every frame after) */
 
 /* ----------------------------------------------------------------------- *
@@ -504,8 +511,19 @@ uint32_t tengen_level_bonus(const TengenGame *game, TengenPlayerSlot slot);
 extern const uint16_t TENGEN_BONUS_PER_CLEAR[4];
 
 /* True if the piece's current position is legal (in bounds, not overlapping
- * a locked cell). Exposed for tests and for renderer ghost-piece previews. */
+ * a locked cell). Exposed for tests and for renderer ghost-piece previews.
+ *
+ * SETTLED BLOCKS ONLY, which is the ROM's own split: the playfield buffer is
+ * all this sees, and the OTHER falling piece of a coop board is not in it.
+ * For that there is the routine below — the cartridge keeps them apart too,
+ * and only the three places that call `checkCoopCollision` ask both. */
 bool tengen_position_valid(const TengenGame *game, TengenPlayerSlot slot);
+
+/* True if `slot`'s falling piece is overlapping its PARTNER'S falling piece
+ * on a shared coop board — `checkCoopCollision` (main.asm.txt:1827-1924),
+ * transcribed bit shift for bit shift. Always false outside coop, which is
+ * the ROM's own `bit playMode / bpl` at :8C2C. Exposed for the tests. */
+bool tengen_coop_pieces_overlap(const TengenGame *game, TengenPlayerSlot slot);
 
 /* Attempts to shift the active piece by `dx` columns; reverts and returns
  * false if that would be an invalid position. */

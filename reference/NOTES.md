@@ -854,6 +854,52 @@ sentinel in the outer two only outside coop, so nothing there changed; what
 changed is that the port now reads the field's origin and width through
 `field_tx()` / `field_cols()` rather than off the 1P constants.
 
+### The two falling pieces are solid to each other, and it takes a routine
+
+`checkCoopCollision` (`main.asm.txt:1827-1924`). This one is easy to miss
+because nothing points at it: the playfield buffer holds only SETTLED blocks —
+a falling piece lives in four bytes of zero page and is drawn as sprites — so
+the ordinary collision check cannot see the partner's piece at all, and a port
+that stops there has two players sharing a board and walking through each
+other like ghosts. Which is what this port did until it was reported.
+
+It is not a bounding box. It brings the two pieces into one frame and ANDs
+their bitmaps:
+
+* they must be within three rows AND three columns, in the ROM's own piece
+  coordinates, or there is nothing to test (`:8C1B`, `:8C30`); a partner with
+  no piece in play cannot be hit (`:8C4C`);
+* MY 4x4 bitmap is shifted into the PARTNER'S frame by **`4*dy + dx` bits** —
+  which works because `orientationTable`'s entries are four bits to the row,
+  so a row of difference is four bits and a column is one (`:8C5F-:8C80`);
+* shifting a 4x4 bitmap sideways WRAPS bits out of one row into the next, so
+  the columns that wrapped are masked off. That is all `@coopCollisionTable2`
+  is: `1000 / 1100 / 1110 / 1111 / 0111 / 0011 / 0001`, one per distance
+  (`:8C81-8C90`);
+* AND the two. Any bit left is an overlap.
+
+`bit playMode / bpl` at `:8C2C` is why none of it reaches 1P or 2P.
+
+**Three callers, and all three matter.**
+
+| Where | What it does |
+| --- | --- |
+| `checkPositionAndClearFlagsOnCarrySet` (`:1017`) | The partner is asked BEFORE the field, on every shift and every rotation, kick included. Carry clear = invalid. |
+| the gravity step (`:580`) | A partner underneath goes to `L840B` (`:604-616`), which is **not** the lock path: the piece is put back, its fall timer set to 1 and its soft-drop threshold to 5, so it HOVERS and retries every frame. Two pieces resting on each other must not merge into the board. |
+| `L862E` (`:993-1010`), off a refused shift | The stagger, and what stops two players pressed together from deadlocking: the HIGHER piece's fall timer goes up by two, or the partner's does if I am the lower. Both are +2 — the second looks like +1 but is reached through a `cmp` that fell through, so the carry is set. |
+
+And the thing that makes the stagger bite: a **refused** shift reloads the
+auto-repeat to `$09` (`:527`, `:540`), two frames short of its charge rather
+than the usual six, so a piece held against something asks three times as
+often as one moving freely. The port was missing that too; it is
+`TENGEN_DAS_CHARGE_BLOCKED` now, and it applies to a wall in 1P exactly as it
+does to a partner in coop, because the ROM does not distinguish.
+
+`tengen_coop_pieces_overlap` in the core, four tests in `tests/test_tengen.c`,
+and `make gba-check --falling` intersects the two pieces' cells off the
+running ROM every frame for 2400 frames — a different route to the same
+question, so the check is not asking the code under test to mark its own work.
+
 **ONE preview, not two.** Both players' lookahead randomisers are seeded from
 the same number (`main.asm.txt:3319-3326`) and each steps its own once per
 spawn, so the two sequences are identical from the first piece to the last

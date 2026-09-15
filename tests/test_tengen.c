@@ -1599,6 +1599,155 @@ static void test_coop_garbage_fills_the_two_extra_columns(void) {
     CHECK(edge > 0);
 }
 
+/* Puts both coop pieces where the caller says, with nothing settled under
+ * them, so a test can talk about the two falling pieces and only those. */
+static void place_coop_pair(TengenGame *game,
+                             TengenTetromino a, uint8_t ao, int ax, int ay,
+                             TengenTetromino b, uint8_t bo, int bx, int by) {
+    tengen_new_game(game, 0x5EED, 0, true, true);
+    game->player[0].piece.current = a;
+    game->player[0].piece.orientation = ao;
+    game->player[0].piece.x = (int8_t)ax;
+    game->player[0].piece.y = (int8_t)ay;
+    game->player[1].piece.current = b;
+    game->player[1].piece.orientation = bo;
+    game->player[1].piece.x = (int8_t)bx;
+    game->player[1].piece.y = (int8_t)by;
+}
+
+static void test_the_two_coop_pieces_are_solid_to_each_other(void) {
+    /* checkCoopCollision (main.asm.txt:1827-1924). The playfield buffer holds
+     * only settled blocks, so without this routine two players on one board
+     * walk through each other — which is what they did here.
+     *
+     * Two O pieces. The O's bitmap is $CC,$00: the top-left 2x2 of the 4x4
+     * box, so two of them overlap while they are within one row and one
+     * column of each other and not beyond. */
+    TengenGame game;
+    place_coop_pair(&game, TT_O, 0, 5, 10, TT_O, 0, 5, 10);
+    CHECK(tengen_coop_pieces_overlap(&game, TENGEN_PLAYER_1));
+    CHECK(tengen_coop_pieces_overlap(&game, TENGEN_PLAYER_2));
+
+    /* One column apart: the right half of one meets the left half of the
+     * other. Two columns apart: nothing does. */
+    game.player[0].piece.x = 6;
+    CHECK(tengen_coop_pieces_overlap(&game, TENGEN_PLAYER_1));
+    game.player[0].piece.x = 7;
+    CHECK(!tengen_coop_pieces_overlap(&game, TENGEN_PLAYER_1));
+
+    /* And the same vertically, which is the shift by four rather than one. */
+    game.player[0].piece.x = 5;
+    game.player[0].piece.y = 11;
+    CHECK(tengen_coop_pieces_overlap(&game, TENGEN_PLAYER_1));
+    game.player[0].piece.y = 12;
+    CHECK(!tengen_coop_pieces_overlap(&game, TENGEN_PLAYER_1));
+
+    /* THE MASK EARNS ITS KEEP HERE. Shifting a 4x4 bitmap sideways wraps bits
+     * out of one row into the next, so without @coopCollisionTable2 an O two
+     * columns to the right would appear to touch the far side of the row
+     * above. Checked with the two lined up on the SAME row, three apart —
+     * which is the widest the routine even looks. */
+    game.player[0].piece.y = 10;
+    game.player[0].piece.x = 8;
+    CHECK(!tengen_coop_pieces_overlap(&game, TENGEN_PLAYER_1));
+
+    /* A partner with no piece in play cannot be collided with (:8C4C). */
+    place_coop_pair(&game, TT_O, 0, 5, 10, TT_O, 0, 5, 10);
+    game.player[1].piece.current = TT_NONE;
+    CHECK(!tengen_coop_pieces_overlap(&game, TENGEN_PLAYER_1));
+
+    /* None of it exists outside coop: two boards, nothing to meet. */
+    TengenGame race;
+    tengen_new_game(&race, 0x5EED, 0, true, false);
+    race.player[0].piece.current = race.player[1].piece.current = TT_O;
+    race.player[0].piece.x = race.player[1].piece.x = 5;
+    race.player[0].piece.y = race.player[1].piece.y = 10;
+    CHECK(!tengen_coop_pieces_overlap(&race, TENGEN_PLAYER_1));
+}
+
+static void test_a_coop_piece_cannot_be_walked_into_its_partner(void) {
+    /* checkPositionAndClearFlagsOnCarrySet asks the partner before it asks
+     * the field (main.asm.txt:1017-1021), so a shift into the other player's
+     * piece is refused exactly as one into a wall is — and the refusal
+     * reloads the auto-repeat to $09 (:527) so the player keeps asking. */
+    TengenGame game;
+    place_coop_pair(&game, TT_O, 0, 5, 10, TT_O, 0, 7, 10);
+    CHECK(!tengen_try_move(&game, TENGEN_PLAYER_1, 1));
+    CHECK(game.player[0].piece.x == 5);
+    CHECK(game.player[0].das_right == TENGEN_DAS_CHARGE_BLOCKED);
+    /* ...and away from it is still free. */
+    CHECK(tengen_try_move(&game, TENGEN_PLAYER_1, -1));
+    CHECK(game.player[0].piece.x == 4);
+
+    /* A rotation into the partner is refused too, kick included, and leaves
+     * the piece exactly as it was (:8371-838C). */
+    place_coop_pair(&game, TT_I, 1, 5, 10, TT_I, 0, 3, 10);
+    uint8_t before = game.player[0].piece.orientation;
+    int8_t x_before = game.player[0].piece.x;
+    CHECK(!tengen_try_rotate(&game, TENGEN_PLAYER_1, true));
+    CHECK(game.player[0].piece.orientation == before);
+    CHECK(game.player[0].piece.x == x_before);
+}
+
+static void test_a_coop_piece_hovers_on_its_partner_instead_of_landing(void) {
+    /* L840B (main.asm.txt:604-616) is NOT the lock path. A piece whose fall
+     * is stopped by the partner's piece is put back, given a fall timer of 1
+     * and left to try again next frame — it must not merge into the board on
+     * top of a piece that is still falling. */
+    TengenGame game;
+    place_coop_pair(&game, TT_O, 0, 5, 10, TT_O, 0, 5, 12);
+    game.player[0].fall_timer = 1;
+    game.player[1].fall_timer = 200;   /* the one underneath holds still */
+
+    for (int i = 0; i < 240; i++) {
+        TengenStepResult step = tengen_step(&game, TENGEN_PLAYER_1, 0);
+        CHECK(!step.piece_locked);
+        game.player[1].fall_timer = 200;
+    }
+    /* It came to rest ON the partner and stayed there. The O fills rows
+     * y and y+1, so a piece at 10 is sitting directly on one at 12. */
+    CHECK(game.player[0].piece.y == 10);
+    CHECK(game.player[0].piece.current == TT_O);
+    /* Nothing of it reached the board. */
+    int settled = 0;
+    for (int row = 0; row < TENGEN_PF_HEIGHT; row++)
+        for (int col = 0; col < TENGEN_PF_WIDTH; col++)
+            if (game.field[0].cell[row][col] != TT_NONE) settled++;
+    CHECK(settled == 0);
+
+    /* And once the partner goes, it falls again like anything else. */
+    game.player[1].piece.current = TT_NONE;
+    game.player[0].fall_timer = 1;
+    tengen_step(&game, TENGEN_PLAYER_1, 0);
+    CHECK(game.player[0].piece.y == 11);
+}
+
+static void test_two_coop_players_pressed_together_untangle(void) {
+    /* L862E (main.asm.txt:993-1010): shoulder to shoulder neither can move,
+     * so every refused shift nudges a fall timer — the HIGHER piece waits and
+     * the lower one is let down, which is what stops the two from standing
+     * there forever. */
+    TengenGame game;
+    place_coop_pair(&game, TT_O, 0, 5, 10, TT_O, 0, 7, 11);
+    game.player[0].fall_timer = 40;
+    game.player[1].fall_timer = 40;
+
+    /* Player 1 is the higher of the two, so pushing into player 2 makes
+     * PLAYER 1 wait rather than player 2. */
+    CHECK(!tengen_try_move(&game, TENGEN_PLAYER_1, 1));
+    CHECK(game.player[0].fall_timer == 42);
+    CHECK(game.player[1].fall_timer == 40);
+
+    /* ...and from the other side, the one that is lower hands the wait back
+     * up to its partner. */
+    place_coop_pair(&game, TT_O, 0, 5, 11, TT_O, 0, 7, 10);
+    game.player[0].fall_timer = 40;
+    game.player[1].fall_timer = 40;
+    CHECK(!tengen_try_move(&game, TENGEN_PLAYER_1, 1));
+    CHECK(game.player[0].fall_timer == 40);
+    CHECK(game.player[1].fall_timer == 42);
+}
+
 static void test_level_never_passes_the_rom_cap(void) {
     TengenGame game;
     tengen_new_game(&game, 37, TENGEN_MAX_LEVEL, false, false);
@@ -2017,6 +2166,10 @@ int main(void) {
     test_every_handicap_row_has_a_way_through();
     test_the_handicap_is_the_same_from_the_same_seed();
     test_coop_garbage_fills_the_two_extra_columns();
+    test_the_two_coop_pieces_are_solid_to_each_other();
+    test_a_coop_piece_cannot_be_walked_into_its_partner();
+    test_a_coop_piece_hovers_on_its_partner_instead_of_landing();
+    test_two_coop_players_pressed_together_untangle();
     test_the_dancers_cast_grows_with_triples_and_tetrises();
     test_a_clear_is_tallied_by_how_many_rows_it_took();
     test_level_never_passes_the_rom_cap();

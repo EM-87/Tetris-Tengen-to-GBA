@@ -202,7 +202,18 @@ running ROM; only the side panels need reflowing).
    histogram, three across and two UP so its icons clear the braid. SCORE's
    missing headroom and the histogram touching the frame were the same bug
    twice. `make gba-check --panel` measures both gaps off the framebuffer.
-20. ~~Coop~~ — done, and the layout question answered itself: the cartridge
+20. ~~Coop~~ — and the thing to know before touching anything on a shared
+   board: **THE TWO FALLING PIECES ARE SOLID TO EACH OTHER, and the ordinary
+   collision check cannot see that.** The playfield buffer holds settled
+   blocks only, so the partner's falling piece is invisible to it and the two
+   walked through each other like ghosts. The cartridge has a whole routine
+   for it, `checkCoopCollision`, which shifts one piece's 4x4 bitmap into the
+   other's frame and ANDs them; it is called from every shift, every rotation
+   AND the gravity step, where a partner underneath makes the piece HOVER
+   rather than lock, and a refused shift runs a fall-timer stagger so two
+   players pressed together untangle instead of deadlocking. All of it is
+   traced in reference/NOTES.md and tested both natively and off the running
+   ROM. The layout question answered itself: the cartridge
    ships a coop SCREEN (screen 5) already laid out symmetrically, so the port
    reflows that one instead of the 1P screen and the only change is the two
    columns every screen gives up, taken one from each end. Twelve-wide field
@@ -250,6 +261,16 @@ running ROM; only the side panels need reflowing).
    no title theme. It sends the RESUME itself now, FIRST in the ring so its
    own blip is not swallowed, and `make gba-check --quit-audio` walks that
    road and listens at every screen. See reference/NOTES.md.
+   **THE CURSOR IS AN ARROW AND START ALWAYS LEAVES.** Picking the line out
+   by palette read as a colour scheme rather than as a cursor, so it is the
+   cartridge's own `$3E` two columns left of the line, where the settings
+   screen puts its own; SELECT moves it as it does there, A takes a choice, B
+   backs out, and START resumes from every line including EXIT and from
+   inside the question. **AND THE BOX HAS TO BE TORN DOWN ON THREE MAPS**:
+   `draw_static_screen` puts the main background back, but the lines on the
+   offset and counter layers are in the middle of the board where it never
+   writes, so the window vanished and the words stayed — see
+   `clear_pmenu_layers`, called off the same `g_repaint`.
    **AND CENTRING IN THIS BOX NEEDS THREE OF THE FOUR BACKGROUNDS.** Its
    interior is eleven columns, so an even-length word misses the middle by
    half a tile and goes on the offset layer (three across) to miss it by one

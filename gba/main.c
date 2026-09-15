@@ -500,7 +500,7 @@ static uint16_t ascii_tile(char c) {
  * moves every one of these, and a Python constant that did not move would
  * quietly start reading a neighbour. Adding `garbage_rng` did exactly that
  * and the cheat-code check began failing three tests away from the change. */
-const uint16_t kGameProbe[15] = {
+const uint16_t kGameProbe[16] = {
     (uint16_t)offsetof(TengenGame, field),
     (uint16_t)offsetof(TengenGame, player),
     (uint16_t)sizeof(TengenPlayerState),
@@ -516,6 +516,7 @@ const uint16_t kGameProbe[15] = {
     (uint16_t)offsetof(TengenPlayerState, score),
     (uint16_t)offsetof(TengenPlayerState, lines),
     (uint16_t)offsetof(TengenPlayerState, clear_counts),
+    (uint16_t)offsetof(TengenPlayerState, piece.orientation),
 };
 
 static TengenLink g_session;
@@ -3150,8 +3151,12 @@ static void draw_link_wait(const TengenLobby *lobby, int elapsed) {
  * $3F = left arrow", and this tile set is indexed straight off ASCII, so
  * writing '>' prints the ROM's arrow rather than punctuation.
  * ----------------------------------------------------------------------- */
-#define MENU_ARROW_L '?'   /* tile $3F — main.asm.txt:4797 */
-#define MENU_ARROW_R '>'   /* tile $3E */
+/* ...but NOT for the left one, and this is a trap worth the line it costs:
+ * ASCII's '?' is $3F, and ascii_tile now sends '?' to the question mark the
+ * port plants for the pause menu. The left arrow is named by its tile. */
+#define T_ARROW_L    0x3F  /* main.asm.txt:4797 */
+#define T_ARROW_R    0x3E
+#define MENU_ARROW_R '>'   /* tile $3E, and ASCII agrees for this one */
 
 #define MENU_FIELD_LEVEL    0
 #define MENU_FIELD_HANDICAP 1
@@ -3605,6 +3610,9 @@ static void refresh_palettes(void) {
 #define T_BOX_B  0x3B
 #define T_BOX_BR 0x3C
 
+/* How far left of a line its cursor sits. See draw_pmenu_line. */
+#define PMENU_CURSOR_DX 2
+
 #define PMENU_MUSIC 0
 #define PMENU_EXIT  1
 #define PMENU_ROWS  2
@@ -3656,23 +3664,62 @@ static void draw_box_frame(int tx, int ty, int w, int h) {
  * out from under the heading. It cannot be combined with the three across,
  * so it is only ever asked for on a line that centres exactly without them;
  * when the parity says otherwise, the centring wins. */
-static void draw_pmenu_line(int ty, const char *text, int bank, bool lower) {
+static void draw_pmenu_line(int ty, const char *text, int bank, bool lower,
+                             bool cursor) {
     unsigned len = text_len(text);
     int tx = PMENU_IN_TX + ((int)PMENU_IN_W - (int)len) / 2;
     bool offset = (len & 1u) == 0;
-    for (unsigned i = 0; i < len; i++) {
-        uint16_t entry = WITH_BANK(ascii_tile(text[i]), bank);
+
+    /* THE CURSOR IS AN ARROW, NOT A COLOUR. Picking the line out by palette
+     * was this menu's first idea and it does not read: four words in four
+     * colours is a colour scheme, not a cursor, and nothing on screen says
+     * which colour means "here". The arrow is the cartridge's own $3E, the
+     * one its settings screen uses, and it sits immediately left of the line
+     * it marks so it moves with the words rather than standing in a column of
+     * its own.
+     *
+     * It rides whichever layer the line does, or it would sit three pixels
+     * off the word it belongs to. And it is only ever asked for on the two
+     * LABEL rows: the longest thing this box prints is KOROBEINIKI, which is
+     * eleven characters in an eleven-column interior with no room beside it —
+     * but that is the second line of the MUSIC entry, and the arrow marks the
+     * entry at its label. */
+    /* TWO COLUMNS LEFT, which is where the settings screen puts its cursor
+     * (MENU_CURSOR_TX) and for the same reason: $3E's shaft runs the full
+     * width of its tile and the letters start at the edge of theirs, so an
+     * arrow one column left of a word is an arrow welded to it. */
+    int first = cursor ? tx - PMENU_CURSOR_DX : tx;
+    for (int i = first; i < tx + (int)len; i++) {
+        uint16_t entry = (i == first && cursor) ? WITH_BANK(T_ARROW_R, bank)
+                        : (i < tx) ? WITH_BANK(T_BLANK, bank)
+                        : WITH_BANK(ascii_tile(text[i - tx]), bank);
         if (offset) {
-            set_stats_tile(tx + (int)i, ty, entry);
+            set_stats_tile(i, ty, entry);
         } else if (lower) {
             bool was = g_panel_layer;
             g_panel_layer = true;
-            set_map_tile(tx + (int)i, ty, entry);
+            set_map_tile(i, ty, entry);
             g_panel_layer = was;
         } else {
-            set_map_tile(tx + (int)i, ty, entry);
+            set_map_tile(i, ty, entry);
         }
     }
+}
+
+/* WHAT THE BOX LEAVES BEHIND WHEN IT GOES. The frame and the rows that centre
+ * exactly are on the main background, and a repaint of the static screen
+ * covers those; the rest of the menu is on the offset and counter layers,
+ * which the static screen has no business in the middle of the board and
+ * therefore never touches. So the window vanished and its words stayed. This
+ * is the teardown, and it runs off the same g_repaint that paints the plaque
+ * over — see draw_match. */
+static void clear_pmenu_layers(void) {
+    for (int y = 0; y < PMENU_H; y++)
+        for (int x = 0; x < PMENU_W; x++) {
+            clear_panel_region(PMENU_TX + x, PMENU_TY + y, 1, 1);
+            set_stats_tile(PMENU_TX + x, PMENU_TY + y, T_BLANK);
+            set_histogram_tile(PMENU_TX + x, PMENU_TY + y, T_BLANK);
+        }
 }
 
 static void draw_pause_menu(void) {
@@ -3680,13 +3727,9 @@ static void draw_pause_menu(void) {
      * Thirteen columns centred is the board and its braid, so in practice
      * this only clears frame art — but the counters' background is drawn
      * ABOVE the main one, and a box that met one would have the panel
-     * printing straight through it. */
-    for (int y = 0; y < PMENU_H; y++)
-        for (int x = 0; x < PMENU_W; x++) {
-            clear_panel_region(PMENU_TX + x, PMENU_TY + y, 1, 1);
-            set_stats_tile(PMENU_TX + x, PMENU_TY + y, T_BLANK);
-            set_histogram_tile(PMENU_TX + x, PMENU_TY + y, T_BLANK);
-        }
+     * printing straight through it. It is also what wipes the line the cursor
+     * was on a frame ago, now that the lines move between layers. */
+    clear_pmenu_layers();
     draw_box_frame(PMENU_TX, PMENU_TY, PMENU_W, PMENU_H);
 
     if (g_pause_confirm) {
@@ -3699,27 +3742,30 @@ static void draw_pause_menu(void) {
          * eight pixels of nothing between them. Both of them can only sit
          * where they do because EXIT is four letters and SURE? is five: see
          * draw_pmenu_line for why the parity decides which layer each gets. */
-        draw_pmenu_line(PMENU_TY + 2, "EXIT", BANK_LABEL, false);
-        draw_pmenu_line(PMENU_TY + 3, "SURE?", BANK_LABEL, true);
-        /* NO LOWERCASE IN THIS TILE SET — $61 up are the braid and the
-         * border, which is why 'yes' came out as two stray marks — so the two
-         * answers are drawn as two words in two palettes rather than as one
-         * line with the picked one in capitals. Seven columns of eleven, so
-         * the pair lands on the middle without help. */
-        int tx = PMENU_IN_TX + (PMENU_IN_W - 7) / 2;  /* YES + gap + NO */
-        draw_text(tx, PMENU_TY + 6, "YES",
-                   g_pause_yes ? BANK_HILITE : BANK_LABEL);
-        draw_text(tx + 5, PMENU_TY + 6, "NO",
-                   g_pause_yes ? BANK_LABEL : BANK_HILITE);
+        draw_pmenu_line(PMENU_TY + 2, "EXIT", BANK_LABEL, false, false);
+        draw_pmenu_line(PMENU_TY + 3, "SURE?", BANK_LABEL, true, false);
+        /* THE TWO ANSWERS STACK, like everything else in this box. Side by
+         * side they had the arrow sitting exactly between them — as far from
+         * YES as from NO, which is an arrow that answers nothing. One to a
+         * line each gets its own, in the same column as the cursor upstairs,
+         * and there is no reading it wrong.
+         *
+         * (No lowercase in this tile set either — $61 up are the braid and
+         * the border, which is why 'yes' came out as two stray marks — so
+         * capitals and an arrow are all there is to say it with.) */
+        draw_pmenu_line(PMENU_TY + 5, "YES", BANK_LABEL, false, g_pause_yes);
+        draw_pmenu_line(PMENU_TY + 6, "NO", BANK_LABEL, false, !g_pause_yes);
         return;
     }
-    draw_pmenu_line(PMENU_TY + 1, "PAUSE", BANK_NOTE, true);
-    draw_pmenu_line(PMENU_TY + 3, "MUSIC",
-                     g_pause_row == PMENU_MUSIC ? BANK_HILITE : BANK_LABEL, false);
-    draw_pmenu_line(PMENU_TY + 4, kMusicNames[g_music],
-                     g_pause_row == PMENU_MUSIC ? BANK_HILITE : BANK_LABEL, false);
-    draw_pmenu_line(PMENU_TY + 6, "EXIT",
-                     g_pause_row == PMENU_EXIT ? BANK_HILITE : BANK_LABEL, false);
+    /* PAUSE keeps its own colour because it is the heading and not a choice;
+     * the three lines under it are all one colour now, and the arrow is what
+     * says where you are. */
+    draw_pmenu_line(PMENU_TY + 1, "PAUSE", BANK_NOTE, true, false);
+    draw_pmenu_line(PMENU_TY + 3, "MUSIC", BANK_LABEL, false,
+                     g_pause_row == PMENU_MUSIC);
+    draw_pmenu_line(PMENU_TY + 4, kMusicNames[g_music], BANK_LABEL, false, false);
+    draw_pmenu_line(PMENU_TY + 6, "EXIT", BANK_LABEL, false,
+                     g_pause_row == PMENU_EXIT);
 }
 
 /* One frame of it. Returns true if the menu ate the input, which is what
@@ -3728,25 +3774,32 @@ static void draw_pause_menu(void) {
 static bool pause_menu_input(uint8_t pressed, bool *leaving) {
     if (!g_pause_unlocked || !g_session.game.paused) return false;
 
-    /* START IS ALWAYS RESUME. It is the button that put the plaque up, and a
-     * player who presses it expects to be playing again — so it is handed
-     * STRAIGHT ON to the core, which is what actually unpauses. Without this
-     * it did nothing at all on the MUSIC row, which is a menu you cannot
-     * leave with the only button that means "leave". A is what takes a
-     * choice. */
-    if (!g_pause_confirm && g_pause_row != PMENU_EXIT &&
-        (pressed & TENGEN_BTN_START)) {
+    /* START IS ALWAYS RESUME, EVERYWHERE IN THIS MENU — on the EXIT line and
+     * inside the question as well. It is the button that put the plaque up,
+     * so it is the button that takes it down, and a menu where the meaning of
+     * START depends on which line you are standing on is a menu you have to
+     * remember rather than read. It is handed STRAIGHT ON to the core, which
+     * is what actually unpauses; the question is dropped on the way out, so
+     * the next pause opens on the column and not on a half-answered
+     * "SURE?". A takes a choice, B backs out of one. */
+    if (pressed & TENGEN_BTN_START) {
+        g_pause_confirm = false;
         g_repaint = true;
         return false;
     }
 
     if (g_pause_confirm) {
-        if (pressed & (TENGEN_BTN_LEFT | TENGEN_BTN_RIGHT))
+        /* The answers stack, so Up and Down move between them as they do on
+         * the column, and SELECT does too. Left and Right are kept because a
+         * hand that has just been changing the tune with them is already
+         * there. */
+        if (pressed & (TENGEN_BTN_LEFT | TENGEN_BTN_RIGHT | TENGEN_BTN_UP |
+                        TENGEN_BTN_DOWN | TENGEN_BTN_SELECT))
             g_pause_yes = !g_pause_yes;
         if (pressed & TENGEN_BTN_B) {
             g_pause_confirm = false;
             nes_audio_play(NES_SOUND_SCREEN_SWITCH);
-        } else if (pressed & (TENGEN_BTN_A | TENGEN_BTN_START)) {
+        } else if (pressed & TENGEN_BTN_A) {
             if (g_pause_yes) {
                 /* QUITTING IS NOT AN UNPAUSE, AND THE ENGINE ONLY KNOWS ABOUT
                  * UNPAUSING. This is the whole of a bug that killed every
@@ -3776,12 +3829,15 @@ static bool pause_menu_input(uint8_t pressed, bool *leaving) {
             }
             nes_audio_play(NES_SOUND_SCREEN_SWITCH);
         }
-        /* The question keeps START, because there it is an answer and not a
-         * way out: the way out of it is NO. */
         return true;
     }
 
-    if (pressed & (TENGEN_BTN_UP | TENGEN_BTN_DOWN))
+    /* SELECT MOVES THE CURSOR, the way it does on the settings screen — the
+     * cartridge's own LA048 treats SELECT as another DOWN ($9FBC), and this
+     * menu has no reason to be the one place in the port where it does not.
+     * Up and Down still do it too; with two entries all three are the same
+     * step. */
+    if (pressed & (TENGEN_BTN_UP | TENGEN_BTN_DOWN | TENGEN_BTN_SELECT))
         g_pause_row = (uint8_t)((g_pause_row + 1) % PMENU_ROWS);
     if (g_pause_row == PMENU_MUSIC &&
         (pressed & (TENGEN_BTN_LEFT | TENGEN_BTN_RIGHT))) {
@@ -3799,10 +3855,9 @@ static bool pause_menu_input(uint8_t pressed, bool *leaving) {
         nes_audio_play(NES_MUSIC_RESUME);
         start_music(g_music);
     }
-    /* START ON EXIT IS A. Elsewhere on the column START means resume — it is
-     * the button that put the plaque up — but a line that says EXIT should
-     * answer to the button a hand is already on. */
-    if (g_pause_row == PMENU_EXIT && (pressed & (TENGEN_BTN_A | TENGEN_BTN_START))) {
+    /* A TAKES THE CHOICE, and only A. START used to do it here as well and it
+     * cost the menu its way out — see the note at the top. */
+    if (g_pause_row == PMENU_EXIT && (pressed & TENGEN_BTN_A)) {
         g_pause_confirm = true;
         g_pause_yes = false;   /* NO first: a pause menu does not lose games */
         nes_audio_play(NES_SOUND_SCREEN_SWITCH);
@@ -4012,6 +4067,15 @@ static bool solo_play_frame(uint8_t buttons, uint8_t pressed, bool *quit) {
 static void draw_match(bool *sweeping) {
     vsync();
     if (g_repaint) {
+        /* THE WINDOW WENT AND THE WORDS STAYED. draw_static_screen puts the
+         * board and the HUD back, which covers everything the pause menu drew
+         * on the MAIN background — its frame, and the lines that centre
+         * exactly. The rest of it is on the offset and counter layers, and
+         * those the static screen has no business in the middle of the board
+         * and so never writes: PAUSE, the tune's name and EXIT simply stayed
+         * printed over the playfield. They are wiped here, where the plaque
+         * is painted over, because that is the same moment. */
+        clear_pmenu_layers();
         draw_static_screen();
         g_repaint = false;
     }

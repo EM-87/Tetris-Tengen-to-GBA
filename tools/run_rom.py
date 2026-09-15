@@ -478,7 +478,7 @@ def game_offsets(rom_path):
         core, screen = load(rom_path)   # `screen` must stay alive; see load()
         (field, player, stride, cur, y, level, stats,
          paused, held, nxt, alive, x, score, lines,
-         counts) = (core.memory.u16[addr + i * 2] for i in range(15))
+         counts, orient) = (core.memory.u16[addr + i * 2] for i in range(16))
         _GAME_PROBE_CACHE[rom_path] = {
             "field": field, "player": player, "stride": stride,
             "current": player + cur, "y": player + y,
@@ -487,8 +487,25 @@ def game_offsets(rom_path):
             "active": player + alive, "x": player + x,
             "score": player + score,
             "lines": player + lines, "counts": player + counts,
+            "orientation": player + orient,
         }
     return _GAME_PROBE_CACHE[rom_path]
+
+
+# The pieces' own 4x4 bitmaps, from orientationTable ($86C3) — the same bytes
+# src/tengen_core.c carries, written out again here ON PURPOSE: a check that
+# read the core's answer for what a piece covers would be asking the code
+# under test to mark its own work. Bit 15 is (row 0, column 0).
+ORIENTATION_BITS = [
+    [0x0000, 0x0000, 0x0000, 0x0000],   # none
+    [0xF000, 0x4444, 0xF000, 0x4444],   # I
+    [0xE400, 0x8C80, 0x4E00, 0x4C40],   # T
+    [0xCC00, 0xCC00, 0xCC00, 0xCC00],   # O
+    [0xE200, 0xC880, 0x8E00, 0x44C0],   # J
+    [0xE800, 0x88C0, 0x2E00, 0xC440],   # L
+    [0x6C00, 0x8C40, 0x6C00, 0x8C40],   # S
+    [0xC600, 0x4C80, 0xC600, 0x4C80],   # Z
+]
 
 
 def pause_box(core, row):
@@ -1842,7 +1859,13 @@ PM_TUNE = PMENU_TY + 4       # ...and the tune's name under it
 PM_EXIT = PMENU_TY + 6       # EXIT
 PM_ASK = PMENU_TY + 2        # the question's EXIT
 PM_SURE = PMENU_TY + 3       # ...and its SURE?
-PM_ANSWER = PMENU_TY + 6     # YES / NO
+PM_ANSWER = PMENU_TY + 5     # YES, with NO under it
+# The box's own columns, which is all a check about the box should read: the
+# rest of the row is the HUD, and the braid decodes as stray letters.
+PMENU_W_T = 13
+PMENU_TX = (SCREEN_TW_TILES - PMENU_W_T) // 2
+PM_L = PMENU_TX + 1
+PM_R = PMENU_TX + PMENU_W_T - 1
 
 
 def pausemenu_check(rom_path):
@@ -1871,7 +1894,8 @@ def pausemenu_check(rom_path):
         core.set_keys(); run(core, settle)
 
     def row(r):
-        return tilemap_text(core, r, 0, 30)
+        """Only the pause box's own columns: see PM_L."""
+        return tilemap_text(core, r, PM_L, PM_R)
 
     tap("START")
     if not core.memory.u8[base + off["paused"]]:
@@ -1893,15 +1917,44 @@ def pausemenu_check(rom_path):
         print(f"  la musica se cambia sin salir: {before.strip()!r} -> "
                f"{row(PM_TUNE).strip()!r}")
 
-    # START IS THE WAY OUT: it closes the menu and resumes, because it is the
-    # button that put the plaque up in the first place.
+    # THE CURSOR IS AN ARROW, and it has to be ON the line it marks and on no
+    # other -- picking the line out by palette read as a colour scheme rather
+    # than as a cursor. $3E is the cartridge's own right arrow and the tileset
+    # is ASCII-indexed, so it comes back from tilemap_text as '>'.
+    if ">" not in row(PM_MUSIC) or ">" in row(PM_EXIT):
+        failures.append(f"la flecha no esta en MUSIC: {row(PM_MUSIC)!r} / "
+                         f"{row(PM_EXIT)!r}")
+    # ...and SELECT moves it, the way it does on the settings screen.
+    tap("SELECT")
+    if ">" not in row(PM_EXIT) or ">" in row(PM_MUSIC):
+        failures.append(f"SELECT no mueve la flecha: {row(PM_MUSIC)!r} / "
+                         f"{row(PM_EXIT)!r}")
+    else:
+        print("  la flecha marca la linea, y SELECT la mueve")
+
+    # START IS THE WAY OUT FROM EVERY LINE OF IT, the EXIT line included: it
+    # is the button that put the plaque up. The cursor is sitting on EXIT
+    # right now, which is where it used to open the question instead.
     tap("START")
     if core.memory.u8[base + off["paused"]]:
-        failures.append("START en el menu de pausa no reanuda la partida")
-    elif "MUSIC" in row(PM_MUSIC):
-        failures.append("START reanuda pero deja el menu en pantalla")
+        failures.append("START sobre EXIT no reanuda la partida")
     else:
-        print("  START cierra el menu y reanuda")
+        # AND IT TAKES THE WHOLE MENU WITH IT. The frame and the lines that
+        # centre exactly are on the main background and a repaint covers
+        # those; PAUSE, the tune's name and EXIT are on the counter and
+        # offset layers, which the static screen never writes in the middle
+        # of the board -- so the window vanished and the words stayed.
+        # The board's own frame art decodes as the odd stray letter inside
+        # these columns, so this looks for the menu's WORDS and its cursor.
+        seen = " ".join(row(r) for r in range(PMENU_TY, PMENU_TY + PMENU_H))
+        leftover = [w for w in ("PAUSE", "MUSIC", "EXIT", "LOGINSKA", ">")
+                    if w in seen]
+        if leftover:
+            failures.append("START reanuda pero deja texto del menu en "
+                             f"pantalla: {leftover} en {seen!r}")
+        else:
+            print("  START cierra el menu desde cualquier linea, y no deja "
+                   "nada escrito")
     tap("START"); tap("L", "R")
 
     # The cheat codes must not be reachable through it. The level-up code is
@@ -1924,7 +1977,10 @@ def pausemenu_check(rom_path):
         tap("DOWN"); tap("A")    # back out of a question it may have opened
     while "EXIT" not in row(PM_EXIT):
         tap("START")
-    tap("DOWN"); tap("A")
+    # A is what takes a choice now; START only ever leaves.
+    while ">" not in row(PM_EXIT):
+        tap("DOWN")
+    tap("A")
     if "SURE" not in row(PM_SURE):
         failures.append(f"EXIT no pregunta antes de salir: {row(PM_SURE)!r}")
     else:
@@ -1940,7 +1996,9 @@ def pausemenu_check(rom_path):
         # ...and YES leaves STRAIGHT to the title: a game you walked out of
         # has not ended, and its score has no business on the board.
         while "SURE" not in row(PM_SURE):
-            tap("DOWN"); tap("A")
+            while ">" not in row(PM_EXIT):
+                tap("DOWN")
+            tap("A")
         tap("LEFT"); tap("A"); run(core, 60)
         if "HIGH SCORES" in tilemap_text(core, LEADER_HEAD_TY, 0, 30):
             failures.append("salir a la fuerza pasa por la tabla de records")
@@ -1978,7 +2036,10 @@ def pausemenu_check(rom_path):
         failures.append("L+R en juego no cambia el HUD")
     else:
         # quit out and come back
-        tap("START"); tap("DOWN"); tap("A"); tap("LEFT"); tap("A"); run(core, 60)
+        tap("START")
+        while ">" not in row(PM_EXIT):
+            tap("DOWN")
+        tap("A"); tap("LEFT"); tap("A"); run(core, 60)
         press_start(core); run(core, 10)
         press_start(core); run(core, 12)
         press_start(core); run(core, 30)
@@ -2269,8 +2330,51 @@ def falling_piece_check(rom_path):
         print(f"FALLA: la pieza del ordenador solo esta dentro del campo el "
                f"{share}% del tiempo: no se le ve caer")
         return 1
-    print(f"OK: las dos piezas se dibujan, y la del ordenador esta a la vista "
-           f"el {share}% del tiempo.")
+    print(f"  las dos piezas se dibujan, y la del ordenador esta a la vista "
+           f"el {share}% del tiempo")
+
+    # ...AND THEY ARE SOLID TO EACH OTHER. The playfield buffer holds only
+    # settled blocks, so without checkCoopCollision (main.asm.txt:1827-1924)
+    # the two pieces of a shared board walk straight through each other --
+    # which they did. Measured off the SCREEN rather than off the rule: every
+    # frame, the cells each falling piece covers, and no cell may be in both.
+    #
+    # The port draws them in two palette banks so the partner's piece can be
+    # told apart, but a cell is a cell: this reads the two pieces' own
+    # positions out of the game state and intersects them, which is the same
+    # question checkCoopCollision answers and a completely different route to
+    # it.
+    def piece_cells(slot):
+        b = base + slot * off["stride"]
+        piece = core.memory.u8[b + off["current"]]
+        if not piece:
+            return set()
+        y = core.memory.u8[b + off["y"]]
+        if y > 127:
+            y -= 256
+        x = core.memory.u8[b + off["x"]]
+        if x > 127:
+            x -= 256
+        orientation = core.memory.u8[b + off["orientation"]] & 3
+        bits = ORIENTATION_BITS[piece][orientation]
+        return {(y + r, x + c)
+                for r in range(4) for c in range(4)
+                if bits & (0x8000 >> (r * 4 + c))}
+
+    overlaps = 0
+    ghost = None
+    for _ in range(2400):
+        run(core, 1)
+        both = piece_cells(0) & piece_cells(1)
+        if both:
+            overlaps += 1
+            if ghost is None:
+                ghost = sorted(both)
+    if overlaps:
+        print(f"FALLA: las dos piezas del tablero compartido se atraviesan: "
+               f"{overlaps} frames con celdas en comun, la primera en {ghost}")
+        return 1
+    print(f"OK: las dos piezas se dibujan, se ven caer, y no se atraviesan.")
     return 0
 
 

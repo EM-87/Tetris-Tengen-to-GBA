@@ -205,12 +205,131 @@ bool tengen_position_valid(const TengenGame *game, TengenPlayerSlot slot) {
     return position_valid_ex(game, slot, NULL);
 }
 
+/* ----------------------------------------------------------------------- *
+ * THE TWO FALLING PIECES OF A COOP BOARD ARE SOLID TO EACH OTHER.
+ *
+ * The playfield buffer holds only SETTLED blocks — a falling piece lives in
+ * four bytes of zero page and is drawn as sprites — so the collision routine
+ * above cannot see the partner's piece at all, and a port that stops there
+ * has two players sharing a board and walking through each other.
+ *
+ * The cartridge has a whole routine for it: `checkCoopCollision`
+ * (main.asm.txt:1827-1924), and it is not a bounding box. It brings the two
+ * pieces into one frame and ANDs their bitmaps:
+ *
+ *   * the two must be within three rows AND three columns of each other, in
+ *     the ROM's own piece coordinates, or there is nothing to test (:8C1B,
+ *     :8C30) — and a partner with no piece in play cannot be hit (:8C4C);
+ *   * MY 4x4 bitmap is shifted into the PARTNER'S frame by `4*dy + dx` bits,
+ *     which works because the bitmap is four bits to the row: a row of
+ *     difference is four bits, a column is one (:8C5F-:8C80);
+ *   * shifting a 4x4 bitmap sideways WRAPS bits from one row into the next,
+ *     so the columns that wrapped are masked off — that is the whole of
+ *     @coopCollisionTable2, one mask per horizontal distance (:8C81-:8C90);
+ *   * and then the two bitmaps are ANDed. Any bit left is an overlap.
+ *
+ * `bit playMode / bpl` at :8C2C is why none of this reaches 1P or 2P: those
+ * modes have two separate boards and nothing to collide with.
+ * ----------------------------------------------------------------------- */
+static uint16_t piece_bits(TengenTetromino piece, uint8_t orientation) {
+    if (piece <= TT_NONE || piece >= TENGEN_TETROMINO_COUNT) return 0;
+    const uint8_t *b = kOrientationBitmap[piece][orientation & 3];
+    return (uint16_t)(((uint16_t)b[0] << 8) | b[1]);
+}
+
+/* @coopCollisionTable1 (main.asm.txt:1921): the seven byte values $FD..$03
+ * are -3..3, which is the distance the index stands for. */
+static const int8_t kCoopShift[7] = { -3, -2, -1, 0, 1, 2, 3 };
+/* @coopCollisionTable2 (:1924), and the ROM writes the shape out in binary
+ * beside it: 1000, 1100, 1110, 1111, 0111, 0011, 0001 — the columns that
+ * survive a horizontal shift of that distance, in both nibbles of the byte. */
+static const uint8_t kCoopMask[7] = { 0x88, 0xCC, 0xEE, 0xFF, 0x77, 0x33, 0x11 };
+
+bool tengen_coop_pieces_overlap(const TengenGame *game, TengenPlayerSlot slot) {
+    if (!game->coop) return false;
+    const TengenPiece *mine = &game->player[slot].piece;
+    const TengenPiece *theirs = &game->player[slot ^ 1].piece;
+
+    /* The ROM does these two in a wrapping byte and tests `bmi` as well as
+     * `cmp #$07`, which together mean exactly "0 to 6" — a piece row never
+     * gets far enough from another for the wrap to be reachable. */
+    int dy = (int)mine->y - (int)theirs->y + 3;
+    if (dy < 0 || dy > 6) return false;
+    int dx = (int)mine->x - (int)theirs->x + 3;
+    if (dx < 0 || dx > 6) return false;
+    if (theirs->current <= TT_NONE) return false;
+
+    /* 16 bits wide in a 32-bit word so the shift can run off either end the
+     * way `lsr/ror` and `asl/rol` do; the cast throws away what fell out. */
+    uint32_t bits = piece_bits(mine->current, mine->orientation);
+    int shift = kCoopShift[dy] * 4 + kCoopShift[dx];
+    if (shift > 0) bits >>= shift;
+    else if (shift < 0) bits <<= -shift;
+
+    uint16_t mask = (uint16_t)(((uint16_t)kCoopMask[dx] << 8) | kCoopMask[dx]);
+    return (piece_bits(theirs->current, theirs->orientation)
+             & (uint16_t)bits & mask) != 0;
+}
+
+/* `checkPositionAndClearFlagsOnCarrySet` (main.asm.txt:1017-1021). The
+ * partner is asked FIRST and the answer is final: a cell the partner's piece
+ * is in is not a place this one may be, whatever the settled field says. The
+ * routine leaves the V flag clear when the partner is what stopped it, which
+ * is how its callers tell "there is a wall there" from "there is a PLAYER
+ * there" — only the second runs the stagger below. */
+static bool check_position(const TengenGame *game, TengenPlayerSlot slot,
+                            bool *by_partner) {
+    if (tengen_coop_pieces_overlap(game, slot)) {
+        if (by_partner) *by_partner = true;
+        return false;
+    }
+    if (by_partner) *by_partner = false;
+    return position_valid_ex(game, slot, NULL);
+}
+
+/* ...and `L862E` (main.asm.txt:993-1010), which is what keeps two players
+ * pressed against each other from deadlocking. Shoulder to shoulder neither
+ * can move, so the one that is HIGHER waits and the other is let down: my
+ * fall timer goes up by two if the partner is under me (or would still be
+ * under me a row lower), and the partner's goes up by two if I am.
+ *
+ * Both are +2. The second looks like +1 — `lda fallTimer,y / adc #$01` — but
+ * it is reached through a `cmp` that fell through, so the carry is set and
+ * the add is of two. The counters are bytes and are left to wrap as the
+ * ROM's `inc` does. */
+static void coop_yield(TengenGame *game, TengenPlayerSlot slot) {
+    TengenPlayerState *me = &game->player[slot];
+    TengenPlayerState *other = &game->player[slot ^ 1];
+
+    me->piece.y++;
+    bool still_meeting = tengen_coop_pieces_overlap(game, slot);
+    me->piece.y--;
+
+    if (still_meeting || me->piece.y < other->piece.y)
+        me->fall_timer = (uint8_t)(me->fall_timer + 2);
+    else
+        other->fall_timer = (uint8_t)(other->fall_timer + 2);
+}
+
+/* main.asm.txt:522-536 for the two directions, which are the same block
+ * twice. A move that fails RELOADS THE AUTO-REPEAT to $09 — two frames short
+ * of its charge rather than the usual six — so a piece held against
+ * something retries three times as often as one moving freely; and when what
+ * it failed against was the partner rather than the field, the stagger runs.
+ */
 bool tengen_try_move(TengenGame *game, TengenPlayerSlot slot, int dx) {
-    TengenPiece *piece = &game->player[slot].piece;
+    TengenPlayerState *p = &game->player[slot];
+    TengenPiece *piece = &p->piece;
     int8_t old_x = piece->x;
+    bool by_partner = false;
+
     piece->x = (int8_t)(piece->x + dx);
-    if (tengen_position_valid(game, slot)) return true;
+    if (check_position(game, slot, &by_partner)) return true;
+
+    if (dx < 0) p->das_left = TENGEN_DAS_CHARGE_BLOCKED;
+    else if (dx > 0) p->das_right = TENGEN_DAS_CHARGE_BLOCKED;
     piece->x = old_x;
+    if (by_partner) coop_yield(game, slot);
     return false;
 }
 
@@ -234,11 +353,16 @@ bool tengen_try_rotate(TengenGame *game, TengenPlayerSlot slot, bool clockwise) 
     uint8_t new_orientation = clockwise ? (uint8_t)((old_orientation + 1) & 3)
                                          : (uint8_t)((old_orientation - 1) & 3);
 
+    /* Through check_position, so a rotation into the partner's piece fails
+     * exactly as one into a wall does — both attempts, the kick included. The
+     * rotate block is the one place the ROM does NOT follow a partner block
+     * with the stagger (:8371-838C has no L862E), and no wonder: turning on
+     * the spot is not two players trying to walk through each other. */
     piece->orientation = new_orientation;
-    if (tengen_position_valid(game, slot)) return true;
+    if (check_position(game, slot, NULL)) return true;
 
     piece->x = (int8_t)(piece->x - 1);
-    if (tengen_position_valid(game, slot)) return true;
+    if (check_position(game, slot, NULL)) return true;
 
     piece->x = (int8_t)(piece->x + 1);
     piece->orientation = old_orientation;
@@ -1041,6 +1165,23 @@ TengenStepResult tengen_step(TengenGame *game, TengenPlayerSlot slot, uint8_t he
 
     if (gravity_tick) {
         p->piece.y++;
+
+        /* A PIECE STOPPED BY THE PARTNER DOES NOT LAND ON IT. The gravity
+         * step asks the partner before it asks the field (main.asm.txt:580),
+         * and a partner underneath sends it to `L840B` (:604-616), which is
+         * NOT the lock path: the piece is put back where it was, its fall
+         * timer set to 1 and its soft-drop threshold to 5, so it hangs there
+         * trying again every single frame until the other piece moves out
+         * from under it. Two pieces resting on each other and then merging
+         * into the board would make a coop board a lottery. */
+        if (tengen_coop_pieces_overlap(game, slot)) {
+            p->piece.y--;
+            p->fall_timer = 1;
+            p->drop_rate_possible = TENGEN_DROP_RATE_AFTER_RELEASE;
+            p->held_last_frame = held_buttons;
+            return result;
+        }
+
         int lowest_hit_row = -1;
         if (!position_valid_ex(game, slot, &lowest_hit_row)) {
             p->piece.y--;
