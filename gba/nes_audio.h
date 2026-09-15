@@ -52,6 +52,9 @@
  * skin easter egg uses CHIRP, so the egg has a voice nothing else in the game
  * uses, and it is still the ROM's voice. */
 #define NES_SOUND_CHIRP        0x10
+/* SOUND_ALARM, which the cartridge never plays — constants.asm.txt:54 marks
+ * it "maybe unused" — and which is exactly the noise a refusal wants. */
+#define NES_SOUND_ALARM        0x12
 #define NES_SOUND_LINECLEAR    0x13
 #define NES_SOUND_MENU_SELECT  0x14
 #define NES_SOUND_SCREEN_SWITCH 0x15

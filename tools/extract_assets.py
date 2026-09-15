@@ -225,19 +225,23 @@ TITLE_COL_BLOCKS = (
 # Its left neighbour, $7D at (13,15), is ONE pixel of the ball's left edge and
 # it does not come: row 11 column 15 is a solid bar of lettering.
 #
-# AND THE BALL'S LEFT EDGE COMES TOO. It is a tile of its own, $7D at (13,15):
-# one pixel wide and four tall, the sphere's lit left rim, and without it the
-# ball comes out flat-sided — which is what "a la esfera dorada le faltan dos
-# pixeles" was. Its logo cell is $6E at (11,15), the right half of a letter's
-# bottom serif; the serif loses eight pixels of its length and the letter's
-# stroke above it is untouched. Compositing the two instead was tried and is
-# worse: the cell can only carry ONE palette, and the cathedral's turns that
-# serif gold.
+# AND THE BALL'S LEFT EDGE IS A SPRITE. It is a tile of its own, $7D at
+# (13,15): one pixel wide and four tall, the sphere's lit left rim, and
+# without it the ball comes out flat-sided. Printing it into the logo the way
+# the other two go costs the right half of a letter's bottom serif — the
+# second T's — and compositing the two into one tile costs the serif its
+# colour, because a cell carries one palette and the cathedral's turns it
+# gold. So it goes on TOP, as a single object: the logo tile underneath is
+# untouched and the rim is drawn in the cathedral's own colours. See
+# TITLE_SPIRE_SPRITE and draw_spire_rim in gba/main.c.
 TITLE_SPIRE_OVERLAY = (
     (12, 16, 10, 0x1D),
     (13, 16, 11, 0x73),
-    (13, 15, 11, 0x6E),
 )
+
+# (source tile, the composed screen's column and row it is drawn over, and the
+# background palette its colours come from).
+TITLE_SPIRE_SPRITE = (0x7D, 15, 11, 2)
 
 TITLE_BLANK_TILE = 0x1D
 
@@ -1232,6 +1236,17 @@ def emit_screen_header(tiles, palettes, keep_cols, source, stats):
     return "\n".join(lines)
 
 
+def _title_col(src_col):
+    """Where a cartridge column ends up on the composed title screen."""
+    cols = [c for start, end in TITLE_COL_BLOCKS for c in range(start, end)]
+    return cols.index(src_col)
+
+
+def _title_row(src_row):
+    rows = [r for start, end in TITLE_ROW_BLOCKS for r in range(start, end)]
+    return rows.index(src_row)
+
+
 def compose_title(nametable, attributes):
     """32x30 title screen -> a 30x20 layout that keeps every element.
 
@@ -1570,6 +1585,14 @@ def emit_title_header(tiles, banks, source):
         "#include <stdint.h>",
         "",
         f"#define SCREEN_TITLE_W {sum(e - s for s, e in TITLE_COL_BLOCKS)}",
+        "",
+        "/* The ball's left rim, drawn as ONE OBJECT over the logo cell it",
+        " * would otherwise have to replace — see TITLE_SPIRE_SPRITE. The",
+        " * column and row are the composed screen's, not the cartridge's. */",
+        f"#define SCREEN_TITLE_RIM_TILE 0x{TITLE_SPIRE_SPRITE[0]:02X}",
+        f"#define SCREEN_TITLE_RIM_TX {_title_col(TITLE_SPIRE_SPRITE[1])}",
+        f"#define SCREEN_TITLE_RIM_TY {_title_row(TITLE_SPIRE_SPRITE[2])}",
+        f"#define SCREEN_TITLE_RIM_BANK {TITLE_SPIRE_SPRITE[3]}",
         "#define SCREEN_TITLE_H_TILES 20",
         f"#define SCREEN_TITLE_KEEP_COL0 {TITLE_COL_BLOCKS[0][0]}",
         "",

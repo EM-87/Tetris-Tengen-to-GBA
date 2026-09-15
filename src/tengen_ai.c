@@ -284,8 +284,9 @@ uint8_t tengen_ai_buttons(TengenAi *ai, const TengenGame *game,
         }
     }
 
-    /* AND DOWN, ON EVERY FRAME IT IS NOT AIMING — but not on all of them.
-     * See `soft_drop`. Two things decide the shape of this:
+    /* AND DOWN, ON SEVEN FRAMES IN EVERY EIGHT. See `soft_drop`. Three things
+     * decide the shape of this and the third one is the whole reason it is
+     * written as a mask on the frame counter:
      *
      * IT HAS TO START AT ONCE. A piece spawns two rows above the field and
      * level-0 gravity is fifty-three frames a row, so a computer that waits
@@ -294,14 +295,26 @@ uint8_t tengen_ai_buttons(TengenAi *ai, const TengenGame *game,
      * twenty. Which is what "no veo la caida de sus piezas" was: the piece
      * was drawn, there was just nothing to see for most of its life.
      *
-     * AND IT HAS TO BREATHE. The soft drop TIGHTENS while Down is held — 20
-     * frames for the first step, then 19, 18, down to 1 — and resets to 5 the
-     * moment it is let go (main.asm.txt:184-216). Held flat out, the piece
-     * crosses the board in half a second. Letting go one frame in six keeps
-     * the ramp at its start, which is a steady row every six frames: a whole
-     * board in two seconds, watchable, and still eight times the pace of
-     * waiting for gravity. */
-    if (ai->soft_drop && !buttons && (frame_counter % 6) != 5)
+     * IT HAS TO BREATHE. The soft drop TIGHTENS while Down is held — 20 frames
+     * for the first step, then 19, 18, down to 1 — and resets to 5 the moment
+     * it is let go (main.asm.txt:184-216). Held flat out, a piece crosses the
+     * board in half a second; letting go keeps the ramp near its start.
+     *
+     * AND IT MUST LET GO ON THE FRAME BEFORE IT SHIFTS. This is the one that
+     * broke it. The core discards a FRESH Left or Right outright if Down was
+     * held on the previous frame (main.asm.txt:98-107) — a real quirk of the
+     * cartridge's input handling, faithfully reproduced — and the driver
+     * shifts on frames where the counter is a multiple of eight. Holding Down
+     * through frame seven ate every shift the computer ever tried: it dropped
+     * each piece straight down its spawn column, buried itself in a couple of
+     * minutes, and then sat there dead. Both "ha vuelto a desaparecer la CPU"
+     * and "Rival no sube de puntuacion" were that.
+     *
+     * So the gap goes at counter & 7 == 7: one frame off before every shift
+     * frame, which both frees the shift and resets the ramp. A row roughly
+     * every eight frames — a board in under three seconds, watchable, and
+     * about seven times what waiting for gravity gives. */
+    if (ai->soft_drop && !buttons && (frame_counter & 0x07) != 0x07)
         buttons |= TENGEN_BTN_DOWN;
     return buttons;
 }

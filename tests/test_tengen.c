@@ -1229,6 +1229,50 @@ static void test_a_coop_line_clear_holds_both_players(void) {
     CHECK(race.player[TENGEN_PLAYER_2].piece.y != was_y);
 }
 
+static void test_the_computers_soft_drop_does_not_eat_its_own_shifts(void) {
+    /* THE ONE THE CORE'S OWN QUIRK BREAKS. main.asm.txt:98-107 discards a
+     * FRESH Left or Right outright if Down was held on the PREVIOUS frame,
+     * and the driver shifts on frames where the counter is a multiple of
+     * eight. A computer that holds Down through frame seven therefore has
+     * most of its shifts thrown away before they reach the board: it drops
+     * pieces down the column they spawned in, buries itself, and looks from
+     * the outside exactly like a computer that is not playing.
+     *
+     * So this counts what actually happens rather than the outcome: every
+     * frame the driver asks for a shift, did the piece move? */
+    TengenGame game;
+    TengenAi ai;
+    tengen_new_game(&game, 0x31337, 0, true, false);
+    tengen_ai_reset(&ai);
+    ai.soft_drop = true;
+
+    int asked = 0, landed = 0;
+    TengenTetromino last = TT_NONE;
+    for (int frame = 0; frame < 4000; frame++) {
+        TengenPlayerState *p = &game.player[TENGEN_PLAYER_2];
+        if (!p->game_active) break;
+        if (p->piece.current != last) {
+            last = p->piece.current;
+            tengen_ai_choose(&ai, &game, TENGEN_PLAYER_2);
+        }
+        uint8_t buttons = tengen_ai_buttons(&ai, &game, TENGEN_PLAYER_2,
+                                             (uint8_t)frame);
+        int8_t was_x = p->piece.x;
+        TengenTetromino was = p->piece.current;
+        tengen_step(&game, TENGEN_PLAYER_2, buttons);
+        if (buttons & (TENGEN_BTN_LEFT | TENGEN_BTN_RIGHT)) {
+            asked++;
+            /* A shift that was refused by the WALL is not one the input
+             * handler ate, and neither is a frame the piece locked on. */
+            if (p->piece.current == was && p->piece.x != was_x) landed++;
+        }
+    }
+    CHECK(asked > 20);
+    /* Every shift the driver asks for should reach the board. Allow a few
+     * for the ones a wall or the terrain legitimately refuses. */
+    CHECK(landed * 10 >= asked * 8);
+}
+
 static void test_a_coop_top_out_ends_the_game_for_both_players(void) {
     /* main.asm.txt:83D4-83DD. The store that clears `player1GameActive,x` is
      * preceded by a `bit playMode / bpl`, and on the negative playMode — the
@@ -1963,6 +2007,7 @@ int main(void) {
     test_the_computer_keeps_playing_and_does_not_bury_itself();
     test_coop_is_one_twelve_wide_board_over_the_cable();
     test_a_coop_top_out_ends_the_game_for_both_players();
+    test_the_computers_soft_drop_does_not_eat_its_own_shifts();
     test_a_coop_line_clear_holds_both_players();
     test_the_computer_can_be_told_to_look_first_and_to_drop();
     test_either_player_can_pause_a_linked_game();

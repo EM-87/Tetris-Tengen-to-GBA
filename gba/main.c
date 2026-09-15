@@ -415,6 +415,8 @@ static void set_credit_layer(bool front_end) {
  * hold the dancers' sparkles at $5B and the game bank's digits at $30 at the
  * same time. A GBA charblock is just memory, so the digits are copied in. */
 #define POINTS_OBJ_TILE_BASE 512
+/* ...and the tile after the ten digits, for the spire's rim. */
+#define SPIRE_RIM_TILE (POINTS_OBJ_TILE_BASE + 10)
 #define PAL_OBJ_TITLE 5           /* banks 5-8: spritePalette1 */
 
 /* spritePalette0, which is the set the cartridge has installed while a game
@@ -423,6 +425,9 @@ static void set_credit_layer(bool front_end) {
  * OWN palette otherwise — 0 is red and 1 is blue, so on a shared board you
  * can tell whose points just went up without reading them. */
 #define PAL_OBJ_GAME 9            /* banks 9-12: spritePalette0 */
+/* ...and one more for the cathedral's topmost ball, whose left rim is drawn
+ * as an object over the logo rather than into it. See draw_spire_rim. */
+#define PAL_OBJ_SPIRE 13
 
 /* lineClearSingle..lineClearTetris (main.asm.txt:1548-1561), one character
  * per playfield column including the walls, exactly as the ROM stores them.
@@ -712,6 +717,18 @@ static void upload_sprite_tiles(void) {
     const uint8_t *digits = kGameTiles + ('0' * 32);
     for (unsigned i = 0; i < 10 * 32; i += 2)
         ddst[i / 2] = (uint16_t)(digits[i] | (digits[i + 1] << 8));
+
+    /* The spire's rim, out of the title's own tile set, and its colours out
+     * of the title's BACKGROUND palette — bank 2 of it is the cathedral's.
+     * See draw_spire_rim. */
+    vu16 *rim = MEM_OBJ_TILES + SPIRE_RIM_TILE * 16;
+    const uint8_t *rim_src = kTitleTiles + (SCREEN_TITLE_RIM_TILE * 32);
+    for (unsigned i = 0; i < 32; i += 2)
+        rim[i / 2] = (uint16_t)(rim_src[i] | (rim_src[i + 1] << 8));
+    vu16 *rim_pal = MEM_PALETTE_OBJ + PAL_OBJ_SPIRE * 16;
+    for (int i = 0; i < 4; i++)
+        rim_pal[i] = nes_colour_to_gba(
+            kRomPalette_bg_title[SCREEN_TITLE_RIM_BANK * 4 + i]);
 
     /* piecePaletteIndexA, "Line clears" (main.asm.txt:5394-5396). */
     const uint8_t *clear = kRomPiecePalettes[10];
@@ -1492,6 +1509,10 @@ static LeaderEntry g_leader[LEADER_ENTRIES];
 static int g_leader_row = -1;      /* -1: nothing to type */
 static int g_leader_cursor;        /* 0..2 while typing */
 static uint8_t g_leader_blink;
+/* Which letters have been changed, oldest first; B puts the last one
+ * back. Three is the whole name, so it cannot overflow. */
+static uint8_t g_leader_undo[LEADER_INITIALS];
+static int g_leader_undo_n;
 
 /* THE TABLE IS SAVED, which is the one thing the cartridge wanted and could
  * not have. Its `reset` tests a four-byte magic at $04F7 — 'L','O','G','G' —
@@ -1691,6 +1712,7 @@ static void leader_submit(void) {
     if (g_leader_queued) {
         g_leader_row = g_leader_queue[0];
         g_leader_blink = 0;
+        g_leader_undo_n = 0;
     }
     leader_save();
 }
@@ -1704,63 +1726,104 @@ static void leader_letter_step(int delta) {
     if (next < 0) next = LEADER_LETTERS - 1;
     if (next >= LEADER_LETTERS) next = 0;
     *v = (uint8_t)next;
+
+    /* ...and remember that this is the place to put back. See leader_type's
+     * UNDO. Touching a letter twice does not stack: the position moves to the
+     * top of the list rather than being pushed onto it again. */
+    for (int i = 0; i < g_leader_undo_n; i++) {
+        if (g_leader_undo[i] != g_leader_cursor) continue;
+        for (int j = i; j + 1 < g_leader_undo_n; j++)
+            g_leader_undo[j] = g_leader_undo[j + 1];
+        g_leader_undo_n--;
+        break;
+    }
+    if (g_leader_undo_n < LEADER_INITIALS)
+        g_leader_undo[g_leader_undo_n++] = (uint8_t)g_leader_cursor;
 }
 
-/* ...and one frame of typing. LEFT and RIGHT walk the alphabet with the
- * cartridge's own repeat — a fresh press fires, and a held one fires again
- * every ten frames (L9244-L927E, main.asm.txt:2709-2745). A or B takes the
- * next letter and, after the third, finishes the entry; SELECT goes back to
- * the first. Returns true while there is still something to type. */
 /* How long the page stands there once there is nothing left to type. The
  * cartridge counts player1FallTimer down every fourth frame from whatever the
- * game over left of it; ten seconds is the same order and is a round number a
- * player can wait out. */
-#define LEADER_HOLD_FRAMES 600
+ * game over left of it; five seconds is the same order and is a round number
+ * a player can wait out — and any button cuts it short. */
+#define LEADER_HOLD_FRAMES 300
 #define LEADER_DAS 10
+
+/* ONE FRAME OF TYPING, and the controls are NOT the cartridge's.
+ *
+ * Its own are Left and Right to walk the alphabet, A or B to take the letter
+ * and move on, and SELECT — undocumented, unsignposted — to go back to the
+ * first one (L9234, main.asm.txt:2709-2762). That is a menu you can only get
+ * out of by finishing, where the button that fixes a mistake is one nobody
+ * would find. So:
+ *
+ *   UP / DOWN     the letter
+ *   LEFT / RIGHT  which letter, and SELECT walks the three round
+ *   A / START     take the name
+ *   B             undo the last letter changed: back to A, cursor onto it
+ *
+ * ...and B with nothing to undo is an ALARM rather than nothing happening,
+ * because a button that is silent is a button you cannot tell from a broken
+ * one. SOUND_ALARM is the cartridge's own, and one it never plays.
+ *
+ * Returns true while there is still something to type. THE BUTTON THAT TAKES
+ * THE NAME DOES NOT ALSO LEAVE THE PAGE: A and START mean "done" here and
+ * "away with you" out there, so the frame that spends one reports itself as
+ * still typing and the caller's clock starts on the next. */
 static bool leader_type(uint8_t held, uint8_t pressed) {
-    static uint8_t das_l, das_r;
-    /* THE BUTTON THAT FINISHES THE LAST LETTER DOES NOT ALSO LEAVE THE PAGE.
-     * A and B are both "next letter" here and "away with you" out there, so
-     * the frame that spends one on the third letter reports itself as still
-     * typing; the caller's clock starts on the next one, with the finished
-     * name on the screen where the player can see it. */
+    static uint8_t das_u, das_d;
     bool was_typing = g_leader_row >= 0;
     if (!was_typing) return false;
     g_leader_blink++;
 
-    if (pressed & TENGEN_BTN_LEFT) { leader_letter_step(-1); das_l = 0; }
-    else if (held & TENGEN_BTN_LEFT) {
-        if (++das_l >= LEADER_DAS) { leader_letter_step(-1); das_l = 0; }
-    } else das_l = 0;
+    if (pressed & TENGEN_BTN_UP) { leader_letter_step(1); das_u = 0; }
+    else if (held & TENGEN_BTN_UP) {
+        if (++das_u >= LEADER_DAS) { leader_letter_step(1); das_u = 0; }
+    } else das_u = 0;
 
-    if (pressed & TENGEN_BTN_RIGHT) { leader_letter_step(1); das_r = 0; }
-    else if (held & TENGEN_BTN_RIGHT) {
-        if (++das_r >= LEADER_DAS) { leader_letter_step(1); das_r = 0; }
-    } else das_r = 0;
+    if (pressed & TENGEN_BTN_DOWN) { leader_letter_step(-1); das_d = 0; }
+    else if (held & TENGEN_BTN_DOWN) {
+        if (++das_d >= LEADER_DAS) { leader_letter_step(-1); das_d = 0; }
+    } else das_d = 0;
 
-    if (pressed & TENGEN_BTN_SELECT) g_leader_cursor = 0;
+    if ((pressed & TENGEN_BTN_LEFT) && g_leader_cursor > 0) g_leader_cursor--;
+    if ((pressed & TENGEN_BTN_RIGHT) && g_leader_cursor < LEADER_INITIALS - 1)
+        g_leader_cursor++;
+    /* SELECT as a cursor button is the cartridge's own idiom — it is what
+     * moves the cursor on the settings screen too — and here it walks the
+     * three round rather than stopping at the end. */
+    if (pressed & TENGEN_BTN_SELECT)
+        g_leader_cursor = (g_leader_cursor + 1) % LEADER_INITIALS;
 
-    /* START TAKES THE NAME AS IT STANDS. The cartridge has no such button —
-     * its three letters are taken one at a time with A or B and there is no
-     * way past them — and on a console you can put in your pocket a page you
-     * cannot leave without knowing which button advances is a trap. This is
-     * the one that always means "done". */
-    if (pressed & TENGEN_BTN_START) g_leader_cursor = LEADER_INITIALS - 1;
-
-    if (pressed & (TENGEN_BTN_A | TENGEN_BTN_B | TENGEN_BTN_START)) {
-        nes_audio_play(NES_SOUND_SCREEN_SWITCH);
-        if (++g_leader_cursor >= LEADER_INITIALS) {
-            /* Done with this one; the next person who made the table, if
-             * there is one, types theirs. */
-            g_leader_cursor = 0;
-            for (int q = 1; q < g_leader_queued; q++)
-                g_leader_queue[q - 1] = g_leader_queue[q];
-            if (--g_leader_queued > 0) g_leader_row = g_leader_queue[0];
-            else g_leader_row = -1;
-            /* A name is not a name until it is finished, so this is where it
-             * is written down. */
-            leader_save();
+    if (pressed & TENGEN_BTN_B) {
+        if (g_leader_undo_n == 0) {
+            nes_audio_play(NES_SOUND_ALARM);
+        } else {
+            int p = g_leader_undo[--g_leader_undo_n];
+            g_leader[g_leader_row].initials[p] = 1;   /* 'A' */
+            g_leader_cursor = p;
+            nes_audio_play(NES_SOUND_SCREEN_SWITCH);
         }
+    }
+
+    if (pressed & (TENGEN_BTN_A | TENGEN_BTN_START)) {
+        nes_audio_play(NES_SOUND_SCREEN_SWITCH);
+        g_leader_cursor = 0;
+        g_leader_undo_n = 0;
+        /* Done with this one; the next person who made the table, if there is
+         * one, types theirs. */
+        for (int q = 1; q < g_leader_queued; q++)
+            g_leader_queue[q - 1] = g_leader_queue[q];
+        int finished = g_leader_row;
+        if (--g_leader_queued > 0) g_leader_row = g_leader_queue[0];
+        else g_leader_row = -1;
+        /* A name is not a name until it is finished, so this is where it is
+         * written down — and THE ROW IS REDRAWN ONE LAST TIME, unblinking.
+         * Without that the letter under the cursor kept whichever half of the
+         * blink it was in when the button landed, and a name taken on the
+         * wrong frame lost its last letter for good: nothing redraws a row
+         * that is no longer being typed into. */
+        leader_save();
+        draw_leader_row(finished);
     }
     return was_typing;
 }
@@ -2699,6 +2762,7 @@ static void draw_title(void) {
  * is hidden rather than moved somewhere it does not belong.
  * ----------------------------------------------------------------------- */
 #define TITLE_OAM_COUNT 64        /* the whole staging page: $0500-$05FF */
+#define SPIRE_RIM_OAM TITLE_OAM_COUNT       /* one past it; see draw_spire_rim */
 /* Columns go through their own map for the same reason rows do: the two the
  * composition drops come out of the middle, so a sprite right of the gap is
  * two columns left of where its NES x says. */
@@ -2779,6 +2843,24 @@ static int title_col_near(int ncol) {
             return kTitleColMap[ncol + d];
     }
     return -1;
+}
+
+/* THE BALL'S LEFT RIM, AS AN OBJECT.
+ *
+ * The cathedral's tallest spire is one tile wide and the reflow drops the row
+ * its top two tiles live on, so the finial and the ball are printed back over
+ * the logo (TITLE_SPIRE_OVERLAY). The ball's LEFT rim is a third tile, $7D,
+ * and its logo cell is the right half of the second T's bottom serif — which
+ * printing it would take, and compositing the two would recolour, because a
+ * background cell carries one palette and the cathedral's turns that serif
+ * gold.
+ *
+ * A sprite has neither problem: the logo tile underneath is untouched, and it
+ * brings its own palette, loaded from the title's BACKGROUND set so the rim
+ * is the same colour as the rest of the ball rather than near it. */
+static void draw_spire_rim(void) {
+    oam_set(SPIRE_RIM_OAM, SCREEN_TITLE_RIM_TX * 8, SCREEN_TITLE_RIM_TY * 8,
+             SPIRE_RIM_TILE, false, PAL_OBJ_SPIRE);
 }
 
 static void draw_title_sprites(void) {
@@ -2870,7 +2952,11 @@ static void draw_title_sprites(void) {
                  (uint16_t)(TITLE_OBJ_TILE_BASE + tile), false,
                  PAL_OBJ_TITLE + (attr & 3));
     }
-    for (int i = TITLE_OAM_COUNT; i < 128; i++) MEM_OAM[i * 4] = OBJ_ATTR0_HIDDEN;
+    /* ...and the cathedral's topmost ball keeps its left rim, on the ONE
+     * slot past the staging page. See SPIRE_RIM_OAM. */
+    draw_spire_rim();
+    for (int i = TITLE_OAM_COUNT + 1; i < 128; i++)
+        MEM_OAM[i * 4] = OBJ_ATTR0_HIDDEN;
 }
 
 /* The level selector, inside the ROM's own menu frame. The wording matches
@@ -3460,12 +3546,31 @@ static void refresh_palettes(void) {
 /* Wide enough for the longest tune's name beside its label, and tall enough
  * to put a line of air between the two choices — the game-over plaque's own
  * four rows would have had them touching. */
-#define PMENU_W 22
-#define PMENU_H 5
+/* A NARROW COLUMN, CENTRED, and narrow for a reason: the first shape of this
+ * was twenty-two columns wide so a tune's name could sit beside its label,
+ * and at that width it reached into both HUD boxes and cut the counters in
+ * half. Stacked instead, the widest line IS the longest tune's name, eleven
+ * characters — so the box is thirteen columns and lands on the board and its
+ * braid, which is frame art, and leaves every counter alone.
+ *
+ *      PAUSE
+ *
+ *      MUSIC
+ *      KOROBEINIKI
+ *
+ *      EXIT
+ *
+ * PAUSE is the heading, because this box IS the pause plaque once the chord
+ * has been found: see g_pause_unlocked. The line the cursor is on is picked
+ * out by palette rather than by an arrow — an arrow in a centred column is a
+ * character that has to come from somewhere, and it pulls the line off
+ * centre. */
+#define PMENU_W 13
+#define PMENU_H 8
 #define PMENU_TX ((SCREEN_TW - PMENU_W) / 2)
 #define PMENU_TY ((SCREEN_TH - PMENU_H) / 2)
-#define PMENU_IN_TX (PMENU_TX + 2)
-#define PMENU_VALUE_DX 7
+#define PMENU_IN_TX (PMENU_TX + 1)
+#define PMENU_IN_W (PMENU_W - 2)
 
 /* The frame's own tiles, out of the plaque the game over is drawn with. */
 #define T_BOX_TL 0x29
@@ -3481,7 +3586,12 @@ static void refresh_palettes(void) {
 #define PMENU_EXIT  1
 #define PMENU_ROWS  2
 
-static bool g_pause_menu;      /* the plaque has become a menu */
+/* ONCE FOUND, IT STAYS FOUND — until the console is switched off. The chord
+ * is a thing you discover, not a thing you should have to remember to do at
+ * the start of every game; the same is true of the fifth tune's, and of which
+ * HUD you like. The high scores are the only thing that outlives a power
+ * cycle. */
+static bool g_pause_unlocked;
 static uint8_t g_pause_row;    /* which line the cursor is on */
 static bool g_pause_confirm;   /* ...and the SURE? question over the top of it */
 static bool g_pause_yes;
@@ -3503,12 +3613,20 @@ static void draw_box_frame(int tx, int ty, int w, int h) {
     }
 }
 
+/* One line of the column, centred in the box's interior. */
+static void draw_pmenu_line(int ty, const char *text, int bank) {
+    unsigned len = text_len(text);
+    int tx = PMENU_IN_TX + ((int)PMENU_IN_W - (int)len) / 2;
+    for (unsigned i = 0; i < len; i++)
+        set_map_tile(tx + (int)i, ty, WITH_BANK(ascii_tile(text[i]), bank));
+}
+
 static void draw_pause_menu(void) {
-    /* THE OTHER THREE LAYERS HAVE TO GET OUT OF THE WAY. The cartridge's own
-     * plaque is eight columns wide and sits inside the playfield, so it never
-     * met the HUD; this box is wide enough for a tune's name and reaches into
-     * both boxes, and the counters' background is drawn ABOVE the main one.
-     * Without this the panel printed LEVEL and HIGH straight through it. */
+    /* THE OTHER THREE LAYERS HAVE TO GET OUT OF THE WAY where the box lands.
+     * Thirteen columns centred is the board and its braid, so in practice
+     * this only clears frame art — but the counters' background is drawn
+     * ABOVE the main one, and a box that met one would have the panel
+     * printing straight through it. */
     for (int y = 0; y < PMENU_H; y++)
         for (int x = 0; x < PMENU_W; x++) {
             clear_panel_region(PMENU_TX + x, PMENU_TY + y, 1, 1);
@@ -3516,39 +3634,43 @@ static void draw_pause_menu(void) {
             set_histogram_tile(PMENU_TX + x, PMENU_TY + y, T_BLANK);
         }
     draw_box_frame(PMENU_TX, PMENU_TY, PMENU_W, PMENU_H);
+
     if (g_pause_confirm) {
-        /* NO QUESTION MARK: $3F in this tile set is a LEFT ARROW, not a '?'
-         * — the same reason the menus have no parentheses (see MENU_ARROW_R).
-         * The two answers under it ask the question well enough. */
-        draw_text(PMENU_IN_TX, PMENU_TY + 1, "ARE YOU SURE", BANK_LABEL);
-        draw_text(PMENU_IN_TX + 1, PMENU_TY + 3,
-                   g_pause_yes ? ">YES    NO" : " YES   >NO", BANK_LABEL);
+        draw_pmenu_line(PMENU_TY + 1, "EXIT", BANK_LABEL);
+        draw_pmenu_line(PMENU_TY + 3, "SURE", BANK_LABEL);
+        /* NO LOWERCASE IN THIS TILE SET — $61 up are the braid and the
+         * border, which is why 'yes' came out as two stray marks — so the two
+         * answers are drawn as two words in two palettes rather than as one
+         * line with the picked one in capitals. */
+        int tx = PMENU_IN_TX + (PMENU_IN_W - 7) / 2;  /* YES + gap + NO */
+        draw_text(tx, PMENU_TY + 6, "YES",
+                   g_pause_yes ? BANK_HILITE : BANK_LABEL);
+        draw_text(tx + 5, PMENU_TY + 6, "NO",
+                   g_pause_yes ? BANK_LABEL : BANK_HILITE);
         return;
     }
-    draw_text(PMENU_IN_TX - 1, PMENU_TY + 1,
-               g_pause_row == PMENU_MUSIC ? ">" : " ", BANK_LABEL);
-    draw_text(PMENU_IN_TX, PMENU_TY + 1, "MUSIC", BANK_LABEL);
-    draw_text(PMENU_IN_TX + PMENU_VALUE_DX, PMENU_TY + 1,
-               kMusicNames[g_music], BANK_HILITE);
-    draw_text(PMENU_IN_TX - 1, PMENU_TY + 3,
-               g_pause_row == PMENU_EXIT ? ">" : " ", BANK_LABEL);
-    draw_text(PMENU_IN_TX, PMENU_TY + 3, "EXIT", BANK_LABEL);
+    draw_pmenu_line(PMENU_TY + 1, "PAUSE", BANK_NOTE);
+    draw_pmenu_line(PMENU_TY + 3, "MUSIC",
+                     g_pause_row == PMENU_MUSIC ? BANK_HILITE : BANK_LABEL);
+    draw_pmenu_line(PMENU_TY + 4, kMusicNames[g_music],
+                     g_pause_row == PMENU_MUSIC ? BANK_HILITE : BANK_LABEL);
+    draw_pmenu_line(PMENU_TY + 6, "EXIT",
+                     g_pause_row == PMENU_EXIT ? BANK_HILITE : BANK_LABEL);
 }
 
 /* One frame of it. Returns true if the menu ate the input, which is what
  * keeps the cheat codes out of it — they are entered on the pad while paused
  * too, and a Down meant for this menu is the first byte of one of them. */
 static bool pause_menu_input(uint8_t pressed, bool *leaving) {
-    if (!g_pause_menu) return false;
+    if (!g_pause_unlocked || !g_session.game.paused) return false;
 
     /* START IS ALWAYS RESUME. It is the button that put the plaque up, and a
-     * player who presses it expects to be playing again — so it closes the
-     * menu and is handed STRAIGHT ON to the core, which is what actually
-     * unpauses. Without this it did nothing at all on the MUSIC row, which is
-     * a menu you cannot leave with the only button that means "leave". A is
-     * what takes a choice. */
+     * player who presses it expects to be playing again — so it is handed
+     * STRAIGHT ON to the core, which is what actually unpauses. Without this
+     * it did nothing at all on the MUSIC row, which is a menu you cannot
+     * leave with the only button that means "leave". A is what takes a
+     * choice. */
     if (!g_pause_confirm && (pressed & TENGEN_BTN_START)) {
-        g_pause_menu = false;
         g_repaint = true;
         return false;
     }
@@ -3585,11 +3707,6 @@ static bool pause_menu_input(uint8_t pressed, bool *leaving) {
     if (g_pause_row == PMENU_EXIT && (pressed & TENGEN_BTN_A)) {
         g_pause_confirm = true;
         g_pause_yes = false;   /* NO first: a pause menu does not lose games */
-        nes_audio_play(NES_SOUND_SCREEN_SWITCH);
-    }
-    if (pressed & TENGEN_BTN_B) {
-        g_pause_menu = false;
-        g_repaint = true;
         nes_audio_play(NES_SOUND_SCREEN_SWITCH);
     }
     return true;
@@ -3815,7 +3932,7 @@ static void draw_match(bool *sweeping) {
     /* Last, so they sit over whatever was just drawn. */
     if (!g_session.game.player[g_view].game_active) draw_game_over();
     if (g_session.game.paused) {
-        if (g_pause_menu) draw_pause_menu();
+        if (g_pause_unlocked) draw_pause_menu();
         else draw_pause_box();
     }
 
@@ -4440,16 +4557,17 @@ int main(void) {
          * the one that starts again. */
         /* ...and there is nothing to swap on a coop screen: it has no boxes,
          * and the banner's column is the middle of the board. */
-        /* L+R WHILE PAUSED IS THE MENU, not the HUD swap: the plaque is
+        /* L+R WHILE PAUSED UNCOVERS THE MENU, not the HUD swap: the plaque is
          * covering the thing the swap would show, and a menu wants the only
-         * chord the pad has left. */
+         * chord the pad has left. It is a one-way door — see g_pause_unlocked
+         * — so from here on the plaque IS the menu. */
         if (screen == SCREEN_PLAYING && match_running &&
             g_session.game.paused && shoulder_chord()) {
-            g_pause_menu = !g_pause_menu;
+            if (!g_pause_unlocked) nes_audio_play(NES_SOUND_SCREEN_SWITCH);
+            g_pause_unlocked = true;
             g_pause_confirm = false;
             g_pause_row = PMENU_MUSIC;
             g_repaint = true;
-            nes_audio_play(NES_SOUND_SCREEN_SWITCH);
         } else if (screen == SCREEN_PLAYING && match_running &&
             !g_session.game.coop && !g_session.game.paused &&
             g_session.game.player[g_view].game_active && shoulder_chord()) {
@@ -4545,7 +4663,6 @@ int main(void) {
         if (!g_demo && (quit_match ||
                          ((!match_running || own_board_dead) &&
                           (pressed & GAMEOVER_RESTART)))) {
-            g_pause_menu = false;
             g_pause_confirm = false;
             /* Quitting out from under a match still running on the other side
              * of the cable: the cable has to be told, and put away, exactly as
@@ -4557,13 +4674,24 @@ int main(void) {
                     link_shutdown();
                 }
             }
-            /* AND THE TABLE COMES NEXT, not the title. The cartridge's own
-             * road out of a game runs through its HIGH SCORES page — the game
-             * over counts down and jumps to initializeLeaderboard, which is
-             * where a score that made the board gets its initials typed into
-             * it (main.asm.txt:2643-2675). */
-            leader_submit();
-            screen = SCREEN_LEADERBOARD;
+            /* AND THE TABLE COMES NEXT — unless you QUIT, in which case it
+             * does not. The cartridge's own road out of a finished game runs
+             * through its HIGH SCORES page (the game over counts down and
+             * jumps to initializeLeaderboard, main.asm.txt:2643-2675), and a
+             * game that ENDED takes it. A game you walked out of has not
+             * ended: you killed it, and a score you abandoned has no business
+             * on the board. */
+            if (quit_match) {
+                /* Nothing is left of the abandoned game, the hold included:
+                 * it is not this one's business to leave a paused flag lying
+                 * where the next screen can find it. */
+                g_session.game.paused = false;
+                screen = SCREEN_TITLE;
+                restart_title_sprites();
+            } else {
+                leader_submit();
+                screen = SCREEN_LEADERBOARD;
+            }
             leader_frames = 0;
             g_linked = false;
             g_link_lost = false;

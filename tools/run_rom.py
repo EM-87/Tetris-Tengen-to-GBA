@@ -1702,15 +1702,25 @@ def leaderboard_check(rom_path):
         for _ in range(times):
             core.set_keys(KEYS[name]); run(core, 3); core.set_keys(); run(core, 6)
 
-    tap("RIGHT", 1); tap("A")      # B
-    tap("RIGHT", 2); tap("A")      # C
-    tap("RIGHT", 3); tap("A")      # D
+    # UP and DOWN walk the alphabet, LEFT and RIGHT pick the letter, B undoes
+    # the last change and A takes the name. B with nothing to undo is an
+    # alarm, which cannot be read off the tilemap — the core check for that is
+    # that it does not change anything.
+    tap("UP", 1); tap("RIGHT")     # B
+    tap("UP", 2); tap("RIGHT")     # C
+    tap("UP", 3)                   # D
+    tap("B")                       # ...and take the D back
+    if "BC" not in tilemap_text(core, LEADER_FIRST_TY, 0, 30):
+        failures.append(f"B no deshizo solo la ultima letra: "
+                         f"{tilemap_text(core, LEADER_FIRST_TY, 0, 30)!r}")
+    tap("UP", 3); tap("A")
     run(core, 20)
     if " BCD " not in tilemap_text(core, LEADER_FIRST_TY, 0, 30):
         failures.append("las iniciales no se escriben: "
                          f"{tilemap_text(core, LEADER_FIRST_TY, 0, 30)!r}")
     else:
-        print("  las tres iniciales se teclean con izquierda/derecha y A")
+        print("  arriba/abajo la letra, izquierda/derecha el hueco, B deshace, "
+               "A acepta")
 
     # AND IT SURVIVES THE POWER GOING OFF, which is the one thing the NES
     # cartridge wanted and could not have: its magic at $04F7 only carries the
@@ -1821,25 +1831,23 @@ def pausemenu_check(rom_path):
         return tilemap_text(core, r, 0, 30)
 
     tap("START")
-    if "PAUSE" not in "".join(row(r) for r in range(8, 12)):
-        # the plaque is drawn from its own tiles, not ASCII; the game being
-        # held is what says it paused.
-        if not core.memory.u8[base + off["paused"]]:
-            failures.append("START no pausa")
+    if not core.memory.u8[base + off["paused"]]:
+        failures.append("START no pausa")
     tap("L", "R")
-    if "MUSIC" not in row(8) or "EXIT" not in row(10):
-        failures.append(f"L+R no abre el menu de pausa: {row(8)!r} / {row(10)!r}")
+    if "PAUSE" not in row(7) or "MUSIC" not in row(9) or "EXIT" not in row(12):
+        failures.append(f"L+R no abre el menu de pausa: {row(7)!r} / "
+                         f"{row(9)!r} / {row(12)!r}")
         print("FALLA:", failures[-1])
         return 1
-    print("  L+R sobre la pausa abre el menu")
+    print("  L+R sobre la pausa abre el menu, en columna")
 
-    before = row(8)
+    before = row(10)
     tap("RIGHT")
-    if row(8) == before:
+    if row(10) == before:
         failures.append("DERECHA no cambia la cancion en el menu de pausa")
     else:
         print(f"  la musica se cambia sin salir: {before.strip()!r} -> "
-               f"{row(8).strip()!r}")
+               f"{row(10).strip()!r}")
 
     # START IS THE WAY OUT: it closes the menu and resumes, because it is the
     # button that put the plaque up in the first place.
@@ -1863,39 +1871,83 @@ def pausemenu_check(rom_path):
     else:
         print("  los codigos de trucos no atraviesan el menu")
 
-    # B closed the menu somewhere in that sequence; open it again and walk to
-    # EXIT, which must ASK.
-    if "MUSIC" not in row(8):
-        tap("L", "R")
-    while ">" not in row(10):
-        tap("DOWN")
-    tap("A")
-    if "SURE" not in row(8):
-        failures.append(f"EXIT no pregunta antes de salir: {row(8)!r}")
+    # Walk to EXIT, which must ASK. (The cheat-code sequence above left the
+    # game in whatever state its last button put it in, so make sure it is
+    # held before driving the menu.)
+    if not core.memory.u8[base + off["paused"]]:
+        tap("START")
+    while "SURE" in row(9):
+        tap("DOWN"); tap("A")    # back out of a question it may have opened
+    while "EXIT" not in row(12):
+        tap("START")
+    tap("DOWN"); tap("A")
+    if "SURE" not in row(9):
+        failures.append(f"EXIT no pregunta antes de salir: {row(9)!r}")
     else:
         print("  EXIT pregunta antes de nada")
         # NO comes back to the game, still paused, still playing.
         tap("A")
         if not core.memory.u8[base + off["paused"]]:
             failures.append("decir NO al salir dejo la partida sin pausa")
-        elif "SURE" in row(8):
+        elif "SURE" in row(9):
             failures.append("decir NO no cierra la pregunta")
         else:
             print("  NO vuelve a la partida")
-        # ...and YES leaves, by way of the table.
-        while "SURE" not in row(8):
-            tap("A")
-        tap("LEFT"); tap("A"); run(core, 40)
-        if "HIGH SCORES" not in tilemap_text(core, LEADER_HEAD_TY, 0, 30):
+        # ...and YES leaves STRAIGHT to the title: a game you walked out of
+        # has not ended, and its score has no business on the board.
+        while "SURE" not in row(9):
+            tap("DOWN"); tap("A")
+        tap("LEFT"); tap("A"); run(core, 60)
+        if "HIGH SCORES" in tilemap_text(core, LEADER_HEAD_TY, 0, 30):
+            failures.append("salir a la fuerza pasa por la tabla de records")
+        elif "EXIT" in row(12) or "PAUSE" in row(7):
             failures.append("decir SI no sale de la partida")
         else:
-            print("  SI sale, por la tabla de records, como cualquier partida")
+            print("  SI sale al titulo, sin pasar por la tabla")
+
+    # ONCE FOUND, STILL FOUND. The chord is a thing you discover, not a thing
+    # you should have to remember to do at the start of every game — so the
+    # next game's PAUSE is the menu, with no chord. And the HUD you picked is
+    # still the HUD you picked.
+    press_start(core); run(core, 10)    # title -> game select
+    press_start(core); run(core, 12)    # -> level settings
+    press_start(core); run(core, 30)    # -> play
+    tap("START")
+    if "PAUSE" not in row(7) or "EXIT" not in row(12):
+        failures.append("el menu de pausa se pierde al empezar otra partida")
+    else:
+        print("  y en la siguiente partida la pausa ya es el menu, sin acorde")
+    tap("START")
+
+    # ...and so does the HUD. The banner's letters are art, not ASCII, so this
+    # reads the tilemap directly: the right column carries them in HUD Banner
+    # and is blank there in HUD Stats.
+    def hud():
+        row10 = [core.memory.u16[SCREENBLOCK_ADDR + ((10 * 32 + c) * 2)] & 0x3FF
+                 for c in range(24, 28)]
+        return "BANNER" if any(row10) else "STATS"
+
+    if hud() != "BANNER":
+        failures.append(f"la partida no abre en HUD Banner sino en {hud()}")
+    core.set_keys(KEYS["L"], KEYS["R"]); run(core, 4); core.set_keys(); run(core, 20)
+    if hud() != "STATS":
+        failures.append("L+R en juego no cambia el HUD")
+    else:
+        # quit out and come back
+        tap("START"); tap("DOWN"); tap("A"); tap("LEFT"); tap("A"); run(core, 60)
+        press_start(core); run(core, 10)
+        press_start(core); run(core, 12)
+        press_start(core); run(core, 30)
+        if hud() != "STATS":
+            failures.append("el HUD elegido se pierde al empezar otra partida")
+        else:
+            print("  y el HUD que elegiste sigue siendo el tuyo")
 
     for f in failures:
         print("FALLA:", f)
     if failures:
         return 1
-    print("OK: el menu de pausa cambia la musica y sale preguntando.")
+    print("OK: el menu de pausa cambia la musica, sale preguntando, y se queda.")
     return 0
 
 
