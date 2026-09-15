@@ -1740,7 +1740,14 @@ static bool leader_type(uint8_t held, uint8_t pressed) {
 
     if (pressed & TENGEN_BTN_SELECT) g_leader_cursor = 0;
 
-    if (pressed & (TENGEN_BTN_A | TENGEN_BTN_B)) {
+    /* START TAKES THE NAME AS IT STANDS. The cartridge has no such button —
+     * its three letters are taken one at a time with A or B and there is no
+     * way past them — and on a console you can put in your pocket a page you
+     * cannot leave without knowing which button advances is a trap. This is
+     * the one that always means "done". */
+    if (pressed & TENGEN_BTN_START) g_leader_cursor = LEADER_INITIALS - 1;
+
+    if (pressed & (TENGEN_BTN_A | TENGEN_BTN_B | TENGEN_BTN_START)) {
         nes_audio_play(NES_SOUND_SCREEN_SWITCH);
         if (++g_leader_cursor >= LEADER_INITIALS) {
             /* Done with this one; the next person who made the table, if

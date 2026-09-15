@@ -224,8 +224,35 @@ running ROM; only the side panels need reflowing).
    the way out rather than a move. What ends it is the port's: the cartridge
    goes to a high-score table this port does not have, so the game over holds
    three seconds and the title comes back.
-23. Still to do: the prototype PIECE art (the skin is the title only), and the
-   prototype mode that cycles the four dumps.
+23. ~~The HIGH SCORES table~~ — done, and SAVED: fifteen entries with their
+   lines and three initials, inserted the ROM's way (bottom up, equal scores
+   go under), typed into with Left/Right and A, and kept in the GBA's
+   battery-backed SRAM under the cartridge's own 'LOGG' magic — which on the
+   NES only carried it across a RESET. A cold table is @resetHighScores', 17000
+   down to 3000 in thousands, which is why HIGH SCORE opens at 017000.
+24. ~~The level's BONUS tally~~ — done. displayStatsP1 paints the playfield
+   over with it while the cossacks dance, and L8EA2 counts it up one clear at
+   a time ADDING TO THE SCORE: singles x100, doubles x400, triples x900,
+   tetris x2500, all printed in the ROM's own strings.
+25. ~~The drop-point sprites~~ — done. Three digits beside the piece the moment
+   it lands, for $3C frames, at the HEIGHT it landed — which is the whole
+   point, because this game pays by how high a piece comes to rest.
+26. ~~The pause menu~~ — the port's own, behind L+R on the plaque: the tune
+   (silence and the MIX included) and a way out that asks first. Built from
+   the game-over plaque's nine-patch frame so it reads as part of the game.
+27. Still to do: the prototype PIECE art, and a prototype mode cycling more
+   than one dump. **WHAT THE THREE DUMPS ACTUALLY HAVE**, measured rather than
+   assumed: only `proto_b` carries the title screen this port can read (its
+   signature is at $A3C4 of a two-bank PRG). `proto_a` and `proto_c` are
+   one-bank builds whose screens are somewhere else in a format none of the
+   release's machinery recognises — the release's own decompressor
+   (`sendNametableToPPU`, which read_screen RUNS) does not appear in either,
+   so finding theirs means disassembling each build's own upload routine.
+   And the charblock caps it anyway: 256 tiles for the game, 256 for the
+   title, which leaves room for TWO prototype skins, not three. Their piece
+   art is there and is completely different — flat solid squares at $01-$03
+   rather than the release's shaded joined blocks — but how their game maps a
+   cell to a tile is not traced, so putting it in would be inventing it.
 
 ## Build
 
