@@ -1720,6 +1720,102 @@ def leaderboard_check(rom_path):
     return 0
 
 
+def pausemenu_check(rom_path):
+    """L+R ON THE PAUSE PLAQUE: the menu, and the two things it offers.
+
+    Not the cartridge's — its PAUSE is a plaque and nothing else — so what
+    this checks is that it behaves: that the chord opens it, that MUSIC really
+    changes the tune while the game is held, that EXIT asks before it does
+    anything, that NO comes back, and that YES leaves by the same road a
+    finished game leaves by. And that the cheat codes cannot be typed through
+    it, which is the one way it could break something that already worked.
+    """
+    off = game_offsets(rom_path)
+    base, why = game_state_address(rom_path)
+    if base is None:
+        print(f"SALTADO: {why}")
+        return 0
+
+    failures = []
+    core, screen = load(rom_path)   # `screen` must stay alive; see load()
+    start_game(core)
+    run(core, 30)
+
+    def tap(*names, hold=4, settle=12):
+        core.set_keys(*[KEYS[n] for n in names]); run(core, hold)
+        core.set_keys(); run(core, settle)
+
+    def row(r):
+        return tilemap_text(core, r, 0, 30)
+
+    tap("START")
+    if "PAUSE" not in "".join(row(r) for r in range(8, 12)):
+        # the plaque is drawn from its own tiles, not ASCII; the game being
+        # held is what says it paused.
+        if not core.memory.u8[base + off["paused"]]:
+            failures.append("START no pausa")
+    tap("L", "R")
+    if "MUSIC" not in row(8) or "EXIT" not in row(10):
+        failures.append(f"L+R no abre el menu de pausa: {row(8)!r} / {row(10)!r}")
+        print("FALLA:", failures[-1])
+        return 1
+    print("  L+R sobre la pausa abre el menu")
+
+    before = row(8)
+    tap("RIGHT")
+    if row(8) == before:
+        failures.append("DERECHA no cambia la cancion en el menu de pausa")
+    else:
+        print(f"  la musica se cambia sin salir: {before.strip()!r} -> "
+               f"{row(8).strip()!r}")
+
+    # The cheat codes must not be reachable through it. The level-up code is
+    # Up Down Up Down Left Right B B A; typed here it moves the cursor and
+    # picks tunes, and the level must not move.
+    level = core.memory.u8[base + off["level"]]
+    for name in ("UP", "DOWN", "UP", "DOWN", "LEFT", "RIGHT", "B", "B", "A"):
+        tap(name)
+    if core.memory.u8[base + off["level"]] != level:
+        failures.append("el codigo de subir nivel se cuela por el menu de pausa")
+    else:
+        print("  los codigos de trucos no atraviesan el menu")
+
+    # B closed the menu somewhere in that sequence; open it again and walk to
+    # EXIT, which must ASK.
+    if "MUSIC" not in row(8):
+        tap("L", "R")
+    while ">" not in row(10):
+        tap("DOWN")
+    tap("A")
+    if "SURE" not in row(8):
+        failures.append(f"EXIT no pregunta antes de salir: {row(8)!r}")
+    else:
+        print("  EXIT pregunta antes de nada")
+        # NO comes back to the game, still paused, still playing.
+        tap("A")
+        if not core.memory.u8[base + off["paused"]]:
+            failures.append("decir NO al salir dejo la partida sin pausa")
+        elif "SURE" in row(8):
+            failures.append("decir NO no cierra la pregunta")
+        else:
+            print("  NO vuelve a la partida")
+        # ...and YES leaves, by way of the table.
+        while "SURE" not in row(8):
+            tap("A")
+        tap("LEFT"); tap("A"); run(core, 40)
+        if "HIGH SCORES" not in tilemap_text(core, LEADER_HEAD_TY, 0, 30):
+            failures.append("decir SI no sale de la partida")
+        else:
+            print("  SI sale, por la tabla de records, como cualquier partida")
+
+    for f in failures:
+        print("FALLA:", f)
+    if failures:
+        return 1
+    print("OK: el menu de pausa cambia la musica y sale preguntando.")
+    return 0
+
+
 def gameover_check(rom_path):
     """THE WAY OUT. Every mode has to end, and end where the player left.
 
@@ -2498,6 +2594,8 @@ def main():
                      help="check the title starts playing by itself")
     ap.add_argument("--gameover", action="store_true",
                      help="check every mode ends and lets go of the player")
+    ap.add_argument("--pausemenu", action="store_true",
+                     help="check the L+R pause menu")
     ap.add_argument("--leaderboard", action="store_true",
                      help="check the HIGH SCORES table and its initials")
     ap.add_argument("--points", action="store_true",
@@ -2548,6 +2646,8 @@ def main():
         sys.exit(points_check(args.rom))
     if args.leaderboard:
         sys.exit(leaderboard_check(args.rom))
+    if args.pausemenu:
+        sys.exit(pausemenu_check(args.rom))
 
     core, screen = load(args.rom)
     start_game(core)

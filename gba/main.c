@@ -2222,6 +2222,7 @@ static void draw_pause_box(void) {
                           WITH_BANK(kPauseTiles[y][x], BANK_PAUSE));
 }
 
+
 /* ----------------------------------------------------------------------- *
  * Title screen
  * ----------------------------------------------------------------------- */
@@ -3326,6 +3327,147 @@ static void refresh_palettes(void) {
     }
 }
 
+/* ----------------------------------------------------------------------- *
+ * The pause menu — L+R while the plaque is up
+ *
+ * Not the cartridge's: its PAUSE is a plaque and nothing else, and the two
+ * things this offers are two things a GBA in somebody's hands wants that a
+ * console in front of a television did not. It is built out of the
+ * cartridge's own parts, though — the GAME OVER plaque's nine-patch frame
+ * ($29/$2A/$2B over $2C/$2F over $3A/$3B/$3C, see kGameOverTiles) and the
+ * tile set's own lettering — so it reads as part of the game rather than as
+ * something bolted to it.
+ *
+ * MUSIC changes the tune where the cartridge would have made you start a new
+ * game to do it, silence and the MIX included. EXIT leaves, and asks first,
+ * because losing a long game to a mis-press is exactly the thing a pause menu
+ * is supposed to prevent. Leaving goes out the way every finished game goes
+ * out — through the HIGH SCORES page — so a score you quit on still counts.
+ * ----------------------------------------------------------------------- */
+/* Wide enough for the longest tune's name beside its label, and tall enough
+ * to put a line of air between the two choices — the game-over plaque's own
+ * four rows would have had them touching. */
+#define PMENU_W 22
+#define PMENU_H 5
+#define PMENU_TX ((SCREEN_TW - PMENU_W) / 2)
+#define PMENU_TY ((SCREEN_TH - PMENU_H) / 2)
+#define PMENU_IN_TX (PMENU_TX + 2)
+#define PMENU_VALUE_DX 7
+
+/* The frame's own tiles, out of the plaque the game over is drawn with. */
+#define T_BOX_TL 0x29
+#define T_BOX_T  0x2A
+#define T_BOX_TR 0x2B
+#define T_BOX_L  0x2C
+#define T_BOX_R  0x2F
+#define T_BOX_BL 0x3A
+#define T_BOX_B  0x3B
+#define T_BOX_BR 0x3C
+
+#define PMENU_MUSIC 0
+#define PMENU_EXIT  1
+#define PMENU_ROWS  2
+
+static bool g_pause_menu;      /* the plaque has become a menu */
+static uint8_t g_pause_row;    /* which line the cursor is on */
+static bool g_pause_confirm;   /* ...and the SURE? question over the top of it */
+static bool g_pause_yes;
+
+static void draw_box_frame(int tx, int ty, int w, int h) {
+    for (int x = 0; x < w; x++) {
+        set_map_tile(tx + x, ty,
+                      WITH_BANK(x == 0 ? T_BOX_TL : x == w - 1 ? T_BOX_TR : T_BOX_T,
+                                 BANK_PAUSE));
+        set_map_tile(tx + x, ty + h - 1,
+                      WITH_BANK(x == 0 ? T_BOX_BL : x == w - 1 ? T_BOX_BR : T_BOX_B,
+                                 BANK_PAUSE));
+    }
+    for (int y = 1; y < h - 1; y++) {
+        set_map_tile(tx, ty + y, WITH_BANK(T_BOX_L, BANK_PAUSE));
+        set_map_tile(tx + w - 1, ty + y, WITH_BANK(T_BOX_R, BANK_PAUSE));
+        for (int x = 1; x < w - 1; x++)
+            set_map_tile(tx + x, ty + y, WITH_BANK(T_BLANK, BANK_PAUSE));
+    }
+}
+
+static void draw_pause_menu(void) {
+    /* THE OTHER THREE LAYERS HAVE TO GET OUT OF THE WAY. The cartridge's own
+     * plaque is eight columns wide and sits inside the playfield, so it never
+     * met the HUD; this box is wide enough for a tune's name and reaches into
+     * both boxes, and the counters' background is drawn ABOVE the main one.
+     * Without this the panel printed LEVEL and HIGH straight through it. */
+    for (int y = 0; y < PMENU_H; y++)
+        for (int x = 0; x < PMENU_W; x++) {
+            clear_panel_region(PMENU_TX + x, PMENU_TY + y, 1, 1);
+            set_stats_tile(PMENU_TX + x, PMENU_TY + y, T_BLANK);
+            set_histogram_tile(PMENU_TX + x, PMENU_TY + y, T_BLANK);
+        }
+    draw_box_frame(PMENU_TX, PMENU_TY, PMENU_W, PMENU_H);
+    if (g_pause_confirm) {
+        /* NO QUESTION MARK: $3F in this tile set is a LEFT ARROW, not a '?'
+         * — the same reason the menus have no parentheses (see MENU_ARROW_R).
+         * The two answers under it ask the question well enough. */
+        draw_text(PMENU_IN_TX, PMENU_TY + 1, "ARE YOU SURE", BANK_LABEL);
+        draw_text(PMENU_IN_TX + 1, PMENU_TY + 3,
+                   g_pause_yes ? ">YES    NO" : " YES   >NO", BANK_LABEL);
+        return;
+    }
+    draw_text(PMENU_IN_TX - 1, PMENU_TY + 1,
+               g_pause_row == PMENU_MUSIC ? ">" : " ", BANK_LABEL);
+    draw_text(PMENU_IN_TX, PMENU_TY + 1, "MUSIC", BANK_LABEL);
+    draw_text(PMENU_IN_TX + PMENU_VALUE_DX, PMENU_TY + 1,
+               kMusicNames[g_music], BANK_HILITE);
+    draw_text(PMENU_IN_TX - 1, PMENU_TY + 3,
+               g_pause_row == PMENU_EXIT ? ">" : " ", BANK_LABEL);
+    draw_text(PMENU_IN_TX, PMENU_TY + 3, "EXIT", BANK_LABEL);
+}
+
+/* One frame of it. Returns true if the menu ate the input, which is what
+ * keeps the cheat codes out of it — they are entered on the pad while paused
+ * too, and a Down meant for this menu is the first byte of one of them. */
+static bool pause_menu_input(uint8_t pressed, bool *leaving) {
+    if (!g_pause_menu) return false;
+
+    if (g_pause_confirm) {
+        if (pressed & (TENGEN_BTN_LEFT | TENGEN_BTN_RIGHT))
+            g_pause_yes = !g_pause_yes;
+        if (pressed & TENGEN_BTN_B) {
+            g_pause_confirm = false;
+            nes_audio_play(NES_SOUND_SCREEN_SWITCH);
+        } else if (pressed & (TENGEN_BTN_A | TENGEN_BTN_START)) {
+            nes_audio_play(NES_SOUND_SCREEN_SWITCH);
+            if (g_pause_yes) *leaving = true;
+            else g_pause_confirm = false;
+        }
+        return true;
+    }
+
+    if (pressed & (TENGEN_BTN_UP | TENGEN_BTN_DOWN))
+        g_pause_row = (uint8_t)((g_pause_row + 1) % PMENU_ROWS);
+    if (g_pause_row == PMENU_MUSIC &&
+        (pressed & (TENGEN_BTN_LEFT | TENGEN_BTN_RIGHT))) {
+        int count = music_choices();
+        int step = (pressed & TENGEN_BTN_RIGHT) ? 1 : count - 1;
+        g_music = (uint8_t)((g_music + step) % count);
+        /* Heard at once, which is the whole point of putting it here. The mix
+         * restarts on its current turn rather than from the top. */
+        g_mix_step = 0;
+        start_music(g_music);
+        nes_audio_play(NES_SOUND_SCREEN_SWITCH);
+    }
+    if (g_pause_row == PMENU_EXIT && (pressed & (TENGEN_BTN_A | TENGEN_BTN_START))) {
+        g_pause_confirm = true;
+        g_pause_yes = false;   /* NO first: a pause menu does not lose games */
+        nes_audio_play(NES_SOUND_SCREEN_SWITCH);
+    }
+    if (pressed & TENGEN_BTN_B) {
+        g_pause_menu = false;
+        g_repaint = true;
+        nes_audio_play(NES_SOUND_SCREEN_SWITCH);
+    }
+    return true;
+}
+
 /* True once there is nothing left to play, which each mode decides its own
  * way.
  *
@@ -3460,7 +3602,11 @@ static void front_music(uint8_t which) {
  * pauseOrUnpause, which is where checkCodeInput lives). A code that fires
  * shows up on its own: a level-up through the palette check, a long bar or an
  * undo through the current-piece check. */
-static bool solo_play_frame(uint8_t buttons, uint8_t pressed) {
+static bool solo_play_frame(uint8_t buttons, uint8_t pressed, bool *quit) {
+    /* THE MENU EATS THE PAD WHILE IT IS OPEN, and it has to: the cheat codes
+     * are typed on the pad while paused too, so a Down meant for this menu is
+     * the first byte of one of them. */
+    if (pause_menu_input(pressed, quit)) { buttons = 0; pressed = 0; }
     if (g_session.game.player[0].game_active) {
         uint8_t presses[2] = { pressed, 0 };
         TengenCheat cheat[2];
@@ -3541,7 +3687,10 @@ static void draw_match(bool *sweeping) {
 
     /* Last, so they sit over whatever was just drawn. */
     if (!g_session.game.player[g_view].game_active) draw_game_over();
-    if (g_session.game.paused) draw_pause_box();
+    if (g_session.game.paused) {
+        if (g_pause_menu) draw_pause_menu();
+        else draw_pause_box();
+    }
 
     /* And the sound engine afterwards, out of the blank, where it costs
      * nothing but CPU time. */
@@ -4162,7 +4311,18 @@ int main(void) {
          * the one that starts again. */
         /* ...and there is nothing to swap on a coop screen: it has no boxes,
          * and the banner's column is the middle of the board. */
-        if (screen == SCREEN_PLAYING && match_running && !g_session.game.coop &&
+        /* L+R WHILE PAUSED IS THE MENU, not the HUD swap: the plaque is
+         * covering the thing the swap would show, and a menu wants the only
+         * chord the pad has left. */
+        if (screen == SCREEN_PLAYING && match_running &&
+            g_session.game.paused && shoulder_chord()) {
+            g_pause_menu = !g_pause_menu;
+            g_pause_confirm = false;
+            g_pause_row = PMENU_MUSIC;
+            g_repaint = true;
+            nes_audio_play(NES_SOUND_SCREEN_SWITCH);
+        } else if (screen == SCREEN_PLAYING && match_running &&
+            !g_session.game.coop && !g_session.game.paused &&
             g_session.game.player[g_view].game_active && shoulder_chord()) {
             g_show_banner = !g_show_banner;
             /* Both directions need the static screen back: going TO the
@@ -4197,9 +4357,11 @@ int main(void) {
             pressed = buttons;
         }
 
+        bool quit_match = false;
         if (match_running) {
             bool keep_going = g_linked ? link_play_frame()
-                                        : solo_play_frame(buttons, pressed);
+                                        : solo_play_frame(buttons, pressed,
+                                                           &quit_match);
             if (!keep_going) {
                 match_running = false;
                 if (g_linked) {
@@ -4249,8 +4411,13 @@ int main(void) {
          * on the HIGH SCORES page with a score nobody played for. The demo
          * sees itself out above. */
         bool own_board_dead = !g_session.game.player[g_view].game_active;
-        if (!g_demo && (!match_running || own_board_dead) &&
-            (pressed & GAMEOVER_RESTART)) {
+        /* ...and EXIT on the pause menu takes the same road, so a game you
+         * quit still puts its score on the board. */
+        if (!g_demo && (quit_match ||
+                         ((!match_running || own_board_dead) &&
+                          (pressed & GAMEOVER_RESTART)))) {
+            g_pause_menu = false;
+            g_pause_confirm = false;
             /* Quitting out from under a match still running on the other side
              * of the cable: the cable has to be told, and put away, exactly as
              * it would have been had both boards died. */
