@@ -1087,6 +1087,7 @@ LEADER_HEAD_TY = 2
 LEADER_FIRST_TY = 3
 TENGEN_PF_WIDTH = 12
 TENGEN_PF_HEIGHT = 20
+TENGEN_ROM_ROW_ORIGIN = 6   # the ROM row the visible field starts at
 
 # The attract demo's own clock: frameCounterHigh 5, frameCounterLow $20.
 DEMO_START_FRAME = 5 * 256 + 0x20
@@ -1879,7 +1880,31 @@ def falling_piece_check(rom_path):
         print(f"FALLA: solo {best} celdas cayendo sobre el tablero compartido; "
                "una de las dos piezas no se dibuja")
         return 1
-    print(f"OK: {best} celdas cayendo a la vez — las dos piezas de un tablero coop.")
+    print(f"  {best} celdas cayendo a la vez — las dos piezas de un tablero coop")
+
+    # ...AND IT HAS TO BE WATCHABLE. Drawn is not the same as seen: a piece
+    # that waits above the field and then crosses the board in twenty frames
+    # is on screen for a tenth of its life, which is what "no veo la caida de
+    # sus piezas" was even after both pieces were being drawn. So this
+    # measures the fraction of frames the computer's piece spends INSIDE the
+    # field, off the piece's own row rather than off the tilemap.
+    y_addr = base + off["y"] + off["stride"]
+    inside = 0
+    frames = 1200
+    for _ in range(frames):
+        run(core, 1)
+        y = core.memory.u8[y_addr]
+        if y > 127:
+            y -= 256
+        if y >= TENGEN_ROM_ROW_ORIGIN:
+            inside += 1
+    share = inside * 100 // frames
+    if share < 60:
+        print(f"FALLA: la pieza del ordenador solo esta dentro del campo el "
+               f"{share}% del tiempo: no se le ve caer")
+        return 1
+    print(f"OK: las dos piezas se dibujan, y la del ordenador esta a la vista "
+           f"el {share}% del tiempo.")
     return 0
 
 

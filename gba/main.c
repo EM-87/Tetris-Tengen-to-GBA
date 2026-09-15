@@ -3106,7 +3106,7 @@ static int g_demo_over_frames;
 #define DEMO_SETTLE_FRAMES 30
 /* ...and the computer's own, in a game with a player in it, where it is also
  * the throttle on how fast it fills a shared board. See where it is set. */
-#define AI_SETTLE_FRAMES 60
+#define AI_SETTLE_FRAMES 0
 
 /* One frame of the computer's play. It re-chooses on every new piece, which
  * is where getNextTetromino calls computerMove, and presses whatever the

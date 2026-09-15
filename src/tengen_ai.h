@@ -49,11 +49,12 @@ typedef struct {
      * where there is no player to explain it — that reads as a machine, not
      * as somebody playing. A short pause first is all it takes.
      *
-     * `soft_drop` holds DOWN once the piece is over its target in the right
-     * orientation. The ROM never presses it, which is fine when the computer
+     * `soft_drop` presses DOWN on every frame the driver is not aiming, bar one
+     * in six. The ROM never presses it at all, which is fine when the computer
      * has a board to itself; on the SHARED board of WITH COMPUTER the human
-     * spends the whole game waiting on it, which is what "va un tanto lento"
-     * was. Off in the demo, so the attract mode keeps the cartridge's pace. */
+     * spends the whole game waiting on it. See tengen_ai_buttons for why it
+     * starts at once and why it lets go. Off in the demo, so the attract mode
+     * keeps the cartridge's pace. */
     uint8_t settle;
     bool soft_drop;
 

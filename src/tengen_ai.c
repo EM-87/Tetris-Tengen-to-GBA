@@ -284,13 +284,24 @@ uint8_t tengen_ai_buttons(TengenAi *ai, const TengenGame *game,
         }
     }
 
-    /* And down, once there is nothing left to aim. See `soft_drop`. Only when
-     * the piece is already where it wants to be in the orientation it wants —
-     * dropping it early would land it somewhere it did not choose. */
-    if (ai->soft_drop && !buttons &&
-        (uint8_t)p->piece.x == ai->target_x &&
-        p->piece.orientation == (ai->target_orientation & 3)) {
+    /* AND DOWN, ON EVERY FRAME IT IS NOT AIMING — but not on all of them.
+     * See `soft_drop`. Two things decide the shape of this:
+     *
+     * IT HAS TO START AT ONCE. A piece spawns two rows above the field and
+     * level-0 gravity is fifty-three frames a row, so a computer that waits
+     * until it is lined up before dropping spends its first hundred frames
+     * off the top of the screen and then falls through the whole board in
+     * twenty. Which is what "no veo la caida de sus piezas" was: the piece
+     * was drawn, there was just nothing to see for most of its life.
+     *
+     * AND IT HAS TO BREATHE. The soft drop TIGHTENS while Down is held — 20
+     * frames for the first step, then 19, 18, down to 1 — and resets to 5 the
+     * moment it is let go (main.asm.txt:184-216). Held flat out, the piece
+     * crosses the board in half a second. Letting go one frame in six keeps
+     * the ramp at its start, which is a steady row every six frames: a whole
+     * board in two seconds, watchable, and still eight times the pace of
+     * waiting for gravity. */
+    if (ai->soft_drop && !buttons && (frame_counter % 6) != 5)
         buttons |= TENGEN_BTN_DOWN;
-    }
     return buttons;
 }
