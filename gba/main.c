@@ -721,14 +721,16 @@ static void upload_sprite_tiles(void) {
     /* The spire's rim, out of the title's own tile set, and its colours out
      * of the title's BACKGROUND palette — bank 2 of it is the cathedral's.
      * See draw_spire_rim. */
-    vu16 *rim = MEM_OBJ_TILES + SPIRE_RIM_TILE * 16;
-    const uint8_t *rim_src = kTitleTiles + (SCREEN_TITLE_RIM_TILE * 32);
-    for (unsigned i = 0; i < 32; i += 2)
-        rim[i / 2] = (uint16_t)(rim_src[i] | (rim_src[i + 1] << 8));
+    for (int t = 0; t < SCREEN_TITLE_SPIRE_COUNT; t++) {
+        vu16 *dst2 = MEM_OBJ_TILES + (SPIRE_RIM_TILE + t) * 16;
+        const uint8_t *src2 = kTitleTiles + (kTitleSpire[t].tile * 32);
+        for (unsigned i = 0; i < 32; i += 2)
+            dst2[i / 2] = (uint16_t)(src2[i] | (src2[i + 1] << 8));
+    }
     vu16 *rim_pal = MEM_PALETTE_OBJ + PAL_OBJ_SPIRE * 16;
     for (int i = 0; i < 4; i++)
         rim_pal[i] = nes_colour_to_gba(
-            kRomPalette_bg_title[SCREEN_TITLE_RIM_BANK * 4 + i]);
+            kRomPalette_bg_title[kTitleSpire[0].bank * 4 + i]);
 
     /* piecePaletteIndexA, "Line clears" (main.asm.txt:5394-5396). */
     const uint8_t *clear = kRomPiecePalettes[10];
@@ -2845,22 +2847,19 @@ static int title_col_near(int ncol) {
     return -1;
 }
 
-/* THE BALL'S LEFT RIM, AS AN OBJECT.
- *
- * The cathedral's tallest spire is one tile wide and the reflow drops the row
- * its top two tiles live on, so the finial and the ball are printed back over
- * the logo (TITLE_SPIRE_OVERLAY). The ball's LEFT rim is a third tile, $7D,
- * and its logo cell is the right half of the second T's bottom serif — which
- * printing it would take, and compositing the two would recolour, because a
- * background cell carries one palette and the cathedral's turns that serif
- * gold.
- *
- * A sprite has neither problem: the logo tile underneath is untouched, and it
- * brings its own palette, loaded from the title's BACKGROUND set so the rim
- * is the same colour as the rest of the ball rather than near it. */
+/* THE SPIRE'S TIP, AS OBJECTS — the finial, the ball, and the ball's lit left
+ * rim. See TITLE_SPIRE_SPRITES in tools/extract_assets.py for the whole of
+ * why: printed into the logo, each of the three costs whatever ink its cell
+ * held, and between them they were taking the second T's bottom serif and
+ * three pixels of two more. As objects they cost nothing, they bring their
+ * own palette — loaded from the title's BACKGROUND set, so the tip is the
+ * same gold as the rest of the cathedral rather than near it — and the pixel
+ * they are lowered by closes the gap the ball's blank bottom row left above
+ * the tent. */
 static void draw_spire_rim(void) {
-    oam_set(SPIRE_RIM_OAM, SCREEN_TITLE_RIM_TX * 8, SCREEN_TITLE_RIM_TY * 8,
-             SPIRE_RIM_TILE, false, PAL_OBJ_SPIRE);
+    for (int i = 0; i < SCREEN_TITLE_SPIRE_COUNT; i++)
+        oam_set(SPIRE_RIM_OAM + i, kTitleSpire[i].x, kTitleSpire[i].y,
+                 (uint16_t)(SPIRE_RIM_TILE + i), false, PAL_OBJ_SPIRE);
 }
 
 static void draw_title_sprites(void) {
@@ -2952,10 +2951,10 @@ static void draw_title_sprites(void) {
                  (uint16_t)(TITLE_OBJ_TILE_BASE + tile), false,
                  PAL_OBJ_TITLE + (attr & 3));
     }
-    /* ...and the cathedral's topmost ball keeps its left rim, on the ONE
-     * slot past the staging page. See SPIRE_RIM_OAM. */
+    /* ...and the cathedral's topmost spire keeps its tip, on the slots past
+     * the staging page. See SPIRE_RIM_OAM. */
     draw_spire_rim();
-    for (int i = TITLE_OAM_COUNT + 1; i < 128; i++)
+    for (int i = TITLE_OAM_COUNT + SCREEN_TITLE_SPIRE_COUNT; i < 128; i++)
         MEM_OAM[i * 4] = OBJ_ATTR0_HIDDEN;
 }
 
@@ -3557,7 +3556,6 @@ static void refresh_palettes(void) {
  *
  *      MUSIC
  *      KOROBEINIKI
- *
  *      EXIT
  *
  * PAUSE is the heading, because this box IS the pause plaque once the chord
@@ -3566,7 +3564,7 @@ static void refresh_palettes(void) {
  * character that has to come from somewhere, and it pulls the line off
  * centre. */
 #define PMENU_W 13
-#define PMENU_H 8
+#define PMENU_H 7
 #define PMENU_TX ((SCREEN_TW - PMENU_W) / 2)
 #define PMENU_TY ((SCREEN_TH - PMENU_H) / 2)
 #define PMENU_IN_TX (PMENU_TX + 1)
@@ -3637,15 +3635,15 @@ static void draw_pause_menu(void) {
 
     if (g_pause_confirm) {
         draw_pmenu_line(PMENU_TY + 1, "EXIT", BANK_LABEL);
-        draw_pmenu_line(PMENU_TY + 3, "SURE", BANK_LABEL);
+        draw_pmenu_line(PMENU_TY + 2, "SURE", BANK_LABEL);
         /* NO LOWERCASE IN THIS TILE SET — $61 up are the braid and the
          * border, which is why 'yes' came out as two stray marks — so the two
          * answers are drawn as two words in two palettes rather than as one
          * line with the picked one in capitals. */
         int tx = PMENU_IN_TX + (PMENU_IN_W - 7) / 2;  /* YES + gap + NO */
-        draw_text(tx, PMENU_TY + 6, "YES",
+        draw_text(tx, PMENU_TY + 4, "YES",
                    g_pause_yes ? BANK_HILITE : BANK_LABEL);
-        draw_text(tx + 5, PMENU_TY + 6, "NO",
+        draw_text(tx + 5, PMENU_TY + 4, "NO",
                    g_pause_yes ? BANK_LABEL : BANK_HILITE);
         return;
     }
@@ -3654,7 +3652,7 @@ static void draw_pause_menu(void) {
                      g_pause_row == PMENU_MUSIC ? BANK_HILITE : BANK_LABEL);
     draw_pmenu_line(PMENU_TY + 4, kMusicNames[g_music],
                      g_pause_row == PMENU_MUSIC ? BANK_HILITE : BANK_LABEL);
-    draw_pmenu_line(PMENU_TY + 6, "EXIT",
+    draw_pmenu_line(PMENU_TY + 5, "EXIT",
                      g_pause_row == PMENU_EXIT ? BANK_HILITE : BANK_LABEL);
 }
 
@@ -3670,7 +3668,8 @@ static bool pause_menu_input(uint8_t pressed, bool *leaving) {
      * it did nothing at all on the MUSIC row, which is a menu you cannot
      * leave with the only button that means "leave". A is what takes a
      * choice. */
-    if (!g_pause_confirm && (pressed & TENGEN_BTN_START)) {
+    if (!g_pause_confirm && g_pause_row != PMENU_EXIT &&
+        (pressed & TENGEN_BTN_START)) {
         g_repaint = true;
         return false;
     }
@@ -3701,10 +3700,18 @@ static bool pause_menu_input(uint8_t pressed, bool *leaving) {
         /* Heard at once, which is the whole point of putting it here. The mix
          * restarts on its current turn rather than from the top. */
         g_mix_step = 0;
+        /* HEARD AT ONCE, which is the whole point of putting it here — and
+         * the game is PAUSED, so the engine has been suspended and a track
+         * handed to it now would sit there silent. Resume, then start. The
+         * pause's own suspend goes back on when the menu is left, because
+         * tengen_pause_input resumes on the way out either way. */
+        nes_audio_play(NES_MUSIC_RESUME);
         start_music(g_music);
-        nes_audio_play(NES_SOUND_SCREEN_SWITCH);
     }
-    if (g_pause_row == PMENU_EXIT && (pressed & TENGEN_BTN_A)) {
+    /* START ON EXIT IS A. Elsewhere on the column START means resume — it is
+     * the button that put the plaque up — but a line that says EXIT should
+     * answer to the button a hand is already on. */
+    if (g_pause_row == PMENU_EXIT && (pressed & (TENGEN_BTN_A | TENGEN_BTN_START))) {
         g_pause_confirm = true;
         g_pause_yes = false;   /* NO first: a pause menu does not lose games */
         nes_audio_play(NES_SOUND_SCREEN_SWITCH);
@@ -3857,6 +3864,12 @@ static bool solo_play_frame(uint8_t buttons, uint8_t pressed, bool *quit) {
         bool was_paused = g_session.game.paused;
         tengen_pause_input(&g_session.game, presses, cheat);
         if (was_paused != g_session.game.paused) {
+            /* EVERY PAUSE OPENS ON MUSIC. The cursor used to be left where
+             * the last one ended, so a player who had been to EXIT came back
+             * to a menu whose START — the button that means resume
+             * everywhere else on it — opened the quit question instead. */
+            g_pause_row = PMENU_MUSIC;
+            g_pause_confirm = false;
             /* pauseOrUnpause suspends and resumes the music
              * (main.asm.txt:7204-7211) — the same pair the front end uses to
              * go quiet, through the same two helpers so the port never loses
@@ -4266,6 +4279,17 @@ int main(void) {
                  * presses player 2's buttons. playModeTable ($9F51) is what
                  * says which board — `00 01 FF 01 FF`. */
                 g_ai_active = GAME_HAS_AI(game_mode);
+                /* AND THE COMPUTER IS PLAYER 2 AGAIN. The attract demo puts
+                 * it on PLAYER 1 — that is the cartridge's own arrangement,
+                 * the VS and WITH paths `inx` first and the demo does not
+                 * (main.asm.txt:4145-4157) — and nothing here ever put it
+                 * back. So a console that had been left alone long enough for
+                 * the demo to run once started VERSUS and WITH COMPUTER with
+                 * ai_play_frame bailing out on its first line, and the
+                 * computer simply never played. Every headless check drove
+                 * the menus faster than the demo's own clock, so every one of
+                 * them passed. */
+                g_ai_slot = TENGEN_PLAYER_2;
                 tengen_new_game(&g_session.game, seed, start_level,
                                  g_ai_active, GAME_IS_COOP(game_mode));
                 tengen_ai_reset(&g_ai);
@@ -4698,7 +4722,13 @@ int main(void) {
             g_view = 0;
             oam_hide_all();
             sweeping = false;
-            stop_music();
+            /* THE GAME-OVER TUNE IS NOT CUT OFF ON ITS WAY TO THE TABLE.
+             * initializeLeaderboard sets no music at all (main.asm.txt:2963
+             * onward): whatever was playing carries on, which for a game that
+             * just ended is its own jingle. Silencing it here meant a quick
+             * hand on Start heard the plaque's music stop dead. The title,
+             * which does want its own theme, still gets the silence. */
+            if (screen != SCREEN_LEADERBOARD) stop_music();
             /* THE TITLE HAS TO BE ASKED FOR AGAIN. Coming back here left the
              * match's screen underneath — including the statistics, which
              * live on their own background and so survived even a redraw of
@@ -4709,7 +4739,12 @@ int main(void) {
             g_front_tune = FRONT_NOTHING;
             vsync();
             audio_frame();
-            draw_leaderboard();
+            /* ONLY IF THAT IS WHERE WE ARE GOING. This drew the page whatever
+             * the destination was, so quitting out through the pause menu put
+             * one frame of HIGH SCORES on the screen on its way to the title
+             * — a flash, and a flash of exactly the thing quitting is
+             * supposed not to do. */
+            if (screen == SCREEN_LEADERBOARD) draw_leaderboard();
             continue;
         }
 

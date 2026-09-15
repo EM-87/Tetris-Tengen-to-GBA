@@ -1497,6 +1497,32 @@ def computer_check(rom_path):
         print(f"  WITH COMPUTER: un solo campo compartido, {wide} filas "
                "llegan a las columnas que solo existen en coop")
 
+    # ...AND IT STILL PLAYS AFTER THE ATTRACT DEMO HAS RUN. The demo puts the
+    # computer on PLAYER 1, which is the cartridge's own arrangement, and for
+    # a while nothing here put it back — so a console left alone for the
+    # twenty-two seconds the demo's clock takes started VERSUS and WITH
+    # COMPUTER with a computer that never moved. Every check above drove the
+    # menus faster than that clock, so every one of them passed.
+    core3, screen3 = load(rom_path)
+    run(core3, DEMO_START_FRAME + 400)
+    if "TETRIS" in tilemap_text(core3, 4, 0, 30):
+        failures.append("la demo no arranco: esta comprobacion no prueba nada")
+    press_start(core3); run(core3, 20)        # out of the demo -> GAME SELECT
+    for _ in range(4):
+        core3.set_keys(KEYS["DOWN"]); run(core3, 4)
+        core3.set_keys(); run(core3, 10)
+    press_start(core3); run(core3, 12)
+    press_start(core3); run(core3, 30)
+    run(core3, 2500)
+    addr = base + off["field"]
+    after = sum(1 for i in range(PF) if core3.memory.u8[addr + i])
+    if after < 40:
+        failures.append(f"tras la demo el ordenador no juega: solo {after} "
+                         "celdas en el tablero compartido")
+    else:
+        print(f"  ...y sigue jugando despues de la demo de atraccion "
+               f"({after} celdas)")
+
     for f in failures:
         print("FALLA:", f)
     if failures:
@@ -1834,9 +1860,9 @@ def pausemenu_check(rom_path):
     if not core.memory.u8[base + off["paused"]]:
         failures.append("START no pausa")
     tap("L", "R")
-    if "PAUSE" not in row(7) or "MUSIC" not in row(9) or "EXIT" not in row(12):
+    if "PAUSE" not in row(7) or "MUSIC" not in row(9) or "EXIT" not in row(11):
         failures.append(f"L+R no abre el menu de pausa: {row(7)!r} / "
-                         f"{row(9)!r} / {row(12)!r}")
+                         f"{row(9)!r} / {row(11)!r}")
         print("FALLA:", failures[-1])
         return 1
     print("  L+R sobre la pausa abre el menu, en columna")
@@ -1876,31 +1902,31 @@ def pausemenu_check(rom_path):
     # held before driving the menu.)
     if not core.memory.u8[base + off["paused"]]:
         tap("START")
-    while "SURE" in row(9):
+    while "SURE" in row(8):
         tap("DOWN"); tap("A")    # back out of a question it may have opened
-    while "EXIT" not in row(12):
+    while "EXIT" not in row(11):
         tap("START")
     tap("DOWN"); tap("A")
-    if "SURE" not in row(9):
-        failures.append(f"EXIT no pregunta antes de salir: {row(9)!r}")
+    if "SURE" not in row(8):
+        failures.append(f"EXIT no pregunta antes de salir: {row(8)!r}")
     else:
         print("  EXIT pregunta antes de nada")
         # NO comes back to the game, still paused, still playing.
         tap("A")
         if not core.memory.u8[base + off["paused"]]:
             failures.append("decir NO al salir dejo la partida sin pausa")
-        elif "SURE" in row(9):
+        elif "SURE" in row(8):
             failures.append("decir NO no cierra la pregunta")
         else:
             print("  NO vuelve a la partida")
         # ...and YES leaves STRAIGHT to the title: a game you walked out of
         # has not ended, and its score has no business on the board.
-        while "SURE" not in row(9):
+        while "SURE" not in row(8):
             tap("DOWN"); tap("A")
         tap("LEFT"); tap("A"); run(core, 60)
         if "HIGH SCORES" in tilemap_text(core, LEADER_HEAD_TY, 0, 30):
             failures.append("salir a la fuerza pasa por la tabla de records")
-        elif "EXIT" in row(12) or "PAUSE" in row(7):
+        elif "EXIT" in row(11) or "PAUSE" in row(7):
             failures.append("decir SI no sale de la partida")
         else:
             print("  SI sale al titulo, sin pasar por la tabla")
@@ -1913,7 +1939,7 @@ def pausemenu_check(rom_path):
     press_start(core); run(core, 12)    # -> level settings
     press_start(core); run(core, 30)    # -> play
     tap("START")
-    if "PAUSE" not in row(7) or "EXIT" not in row(12):
+    if "PAUSE" not in row(7) or "EXIT" not in row(11):
         failures.append("el menu de pausa se pierde al empezar otra partida")
     else:
         print("  y en la siguiente partida la pausa ya es el menu, sin acorde")

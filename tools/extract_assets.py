@@ -225,23 +225,32 @@ TITLE_COL_BLOCKS = (
 # Its left neighbour, $7D at (13,15), is ONE pixel of the ball's left edge and
 # it does not come: row 11 column 15 is a solid bar of lettering.
 #
-# AND THE BALL'S LEFT EDGE IS A SPRITE. It is a tile of its own, $7D at
-# (13,15): one pixel wide and four tall, the sphere's lit left rim, and
-# without it the ball comes out flat-sided. Printing it into the logo the way
-# the other two go costs the right half of a letter's bottom serif — the
-# second T's — and compositing the two into one tile costs the serif its
-# colour, because a cell carries one palette and the cathedral's turns it
-# gold. So it goes on TOP, as a single object: the logo tile underneath is
-# untouched and the rim is drawn in the cathedral's own colours. See
-# TITLE_SPIRE_SPRITE and draw_spire_rim in gba/main.c.
-TITLE_SPIRE_OVERLAY = (
-    (12, 16, 10, 0x1D),
-    (13, 16, 11, 0x73),
-)
+# THE SPIRE'S TIP IS DRAWN AS SPRITES, not printed into the logo.
+#
+# The cathedral's tallest spire is one tile wide and the reflow drops the row
+# its top three tiles live on: the finial $7C, the ball $7E and the ball's lit
+# left rim $7D. Printing them back into the logo cells underneath is what the
+# port did, and each one costs whatever ink that cell held — $6E is the right
+# half of the second T's bottom serif, and $73 is three pixels of two more:
+# one of the T's and two of the Я's. Compositing does not help, because a
+# background cell carries ONE palette and the cathedral's turns a serif gold.
+#
+# As objects there is no cost at all: the logo tiles underneath are untouched
+# and the tip brings its own palette. And they go ONE PIXEL LOWER than the
+# grid, which is not a fudge — the ball's own artwork has a blank bottom row,
+# so on the grid it stopped a pixel short of the tent it is supposed to be
+# sitting on. A pixel down closes that and frees the serif row whole.
+TITLE_SPIRE_OVERLAY = ()
 
-# (source tile, the composed screen's column and row it is drawn over, and the
-# background palette its colours come from).
-TITLE_SPIRE_SPRITE = (0x7D, 15, 11, 2)
+# (source tile, source column, source row, the background palette its colours
+# come from). Their screen position is where the cartridge's own reflow would
+# have put that source cell, plus TITLE_SPIRE_LIFT.
+TITLE_SPIRE_SPRITES = (
+    (0x7C, 16, 12, 2),   # the finial
+    (0x7D, 15, 13, 2),   # the ball's left rim
+    (0x7E, 16, 13, 2),   # the ball
+)
+TITLE_SPIRE_LIFT = 1     # pixels DOWN, so the ball meets the tent
 
 TITLE_BLANK_TILE = 0x1D
 
@@ -1242,6 +1251,15 @@ def _title_col(src_col):
     return cols.index(src_col)
 
 
+def _spire_y(src_row):
+    """Where a dropped spire row lands, in pixels.
+
+    Its own row is not in the layout, so it goes where the cell it is printed
+    over would be: the logo rows the cartridge's own composition already uses
+    for the tip, two rows up from the source. Plus the lift."""
+    return _title_row(src_row - 2) * 8 + TITLE_SPIRE_LIFT
+
+
 def _title_row(src_row):
     rows = [r for start, end in TITLE_ROW_BLOCKS for r in range(start, end)]
     return rows.index(src_row)
@@ -1586,13 +1604,19 @@ def emit_title_header(tiles, banks, source):
         "",
         f"#define SCREEN_TITLE_W {sum(e - s for s, e in TITLE_COL_BLOCKS)}",
         "",
-        "/* The ball's left rim, drawn as ONE OBJECT over the logo cell it",
-        " * would otherwise have to replace — see TITLE_SPIRE_SPRITE. The",
-        " * column and row are the composed screen's, not the cartridge's. */",
-        f"#define SCREEN_TITLE_RIM_TILE 0x{TITLE_SPIRE_SPRITE[0]:02X}",
-        f"#define SCREEN_TITLE_RIM_TX {_title_col(TITLE_SPIRE_SPRITE[1])}",
-        f"#define SCREEN_TITLE_RIM_TY {_title_row(TITLE_SPIRE_SPRITE[2])}",
-        f"#define SCREEN_TITLE_RIM_BANK {TITLE_SPIRE_SPRITE[3]}",
+        "/* The spire's tip, drawn as OBJECTS over the logo rather than into",
+        " * it — see TITLE_SPIRE_SPRITES. Each entry is a tile id, the pixel",
+        " * it goes at, and the background palette its colours come from; the",
+        " * rows the source tiles live on are dropped by the reflow, so these",
+        " * are where those cells WOULD have landed, a pixel lower. */",
+        f"#define SCREEN_TITLE_SPIRE_COUNT {len(TITLE_SPIRE_SPRITES)}",
+        "static const struct { uint8_t tile; uint8_t x, y, bank; }",
+        "    kTitleSpire[SCREEN_TITLE_SPIRE_COUNT] = {"] + [
+        f"    {{ 0x{t:02X}, {_title_col(c) * 8}, "
+        f"{_spire_y(r)}, {b} }},"
+        for t, c, r, b in TITLE_SPIRE_SPRITES
+    ] + [
+        "};",
         "#define SCREEN_TITLE_H_TILES 20",
         f"#define SCREEN_TITLE_KEEP_COL0 {TITLE_COL_BLOCKS[0][0]}",
         "",
