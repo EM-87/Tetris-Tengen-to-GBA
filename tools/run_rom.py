@@ -839,6 +839,9 @@ SCREENBLOCK_OFFSET_ADDR = SCREENBLOCK_ADDR + 0x800
 # one line the port wants two pixels higher than the grid (see
 # set_credit_layer in gba/main.c).
 SCREENBLOCK_LIFTED_ADDR = SCREENBLOCK_ADDR + 0x1800
+# ...and screenblock 30, the counters', which is where SCORE, LINES, LEVEL
+# and HIGH are actually written.
+SCREENBLOCK_PANEL_ADDR = SCREENBLOCK_ADDR + 0x1000
 
 
 def tilemap_text(core, row, first=0, last=30):
@@ -858,6 +861,8 @@ def tilemap_text(core, row, first=0, last=30):
             tile = core.memory.u16[SCREENBLOCK_OFFSET_ADDR + off] & 0x3FF
         if not (32 <= tile < 127):
             tile = core.memory.u16[SCREENBLOCK_LIFTED_ADDR + off] & 0x3FF
+        if not (32 <= tile < 127):
+            tile = core.memory.u16[SCREENBLOCK_PANEL_ADDR + off] & 0x3FF
         out.append(chr(tile) if 32 <= tile < 127 else " ")
     return "".join(out).strip()
 
@@ -1748,6 +1753,45 @@ def leaderboard_check(rom_path):
     return 0
 
 
+def counters_check(rom_path):
+    """NO LEADING ZEROS. renderStatistics walks each counter's digits from the
+    top and, while it finds a '0', shortens the run and advances the write
+    position (main.asm.txt:4067-4082) — the number keeps its place and the
+    zeros in front of it are never drawn. The cartridge's own screen reads
+    8294 / 30 / 2, not 008294 / 0030 / 02.
+    """
+    off = game_offsets(rom_path)
+    base, why = game_state_address(rom_path)
+    if base is None:
+        print(f"SALTADO: {why}")
+        return 0
+
+    core, screen = load(rom_path)   # `screen` must stay alive; see load()
+    start_game(core)
+    run(core, 20)
+    for i in range(4):
+        core.memory.u8[base + off["score"] + i] = (8294 >> (8 * i)) & 0xFF
+        core.memory.u8[base + off["lines"] + i] = (30 >> (8 * i)) & 0xFF
+    core.memory.u8[base + off["level"]] = 2
+    run(core, 20)
+
+    failures = []
+    for name, ty, want in (("SCORE", 3, "8294"), ("LINES", 6, "30"),
+                            ("LEVEL", 9, "2")):
+        # columns 2-8 are the counter's own; 0-1 and 9 are the braid,
+        # whose tiles happen to fall in the printable range.
+        line = tilemap_text(core, ty, 2, 8).strip()
+        if line != want:
+            failures.append(f"{name} sale como {line!r}, el cartucho lo pinta "
+                             f"como {want!r}")
+    if failures:
+        for f in failures:
+            print("FALLA:", f)
+        return 1
+    print("OK: los contadores no pintan ceros a la izquierda, como el cartucho.")
+    return 0
+
+
 def pausemenu_check(rom_path):
     """L+R ON THE PAUSE PLAQUE: the menu, and the two things it offers.
 
@@ -1796,6 +1840,17 @@ def pausemenu_check(rom_path):
     else:
         print(f"  la musica se cambia sin salir: {before.strip()!r} -> "
                f"{row(8).strip()!r}")
+
+    # START IS THE WAY OUT: it closes the menu and resumes, because it is the
+    # button that put the plaque up in the first place.
+    tap("START")
+    if core.memory.u8[base + off["paused"]]:
+        failures.append("START en el menu de pausa no reanuda la partida")
+    elif "MUSIC" in row(8):
+        failures.append("START reanuda pero deja el menu en pantalla")
+    else:
+        print("  START cierra el menu y reanuda")
+    tap("START"); tap("L", "R")
 
     # The cheat codes must not be reachable through it. The level-up code is
     # Up Down Up Down Left Right B B A; typed here it moves the cursor and
@@ -2622,6 +2677,8 @@ def main():
                      help="check the title starts playing by itself")
     ap.add_argument("--gameover", action="store_true",
                      help="check every mode ends and lets go of the player")
+    ap.add_argument("--counters", action="store_true",
+                     help="check the counters blank their leading zeros")
     ap.add_argument("--pausemenu", action="store_true",
                      help="check the L+R pause menu")
     ap.add_argument("--leaderboard", action="store_true",
@@ -2676,6 +2733,8 @@ def main():
         sys.exit(leaderboard_check(args.rom))
     if args.pausemenu:
         sys.exit(pausemenu_check(args.rom))
+    if args.counters:
+        sys.exit(counters_check(args.rom))
 
     core, screen = load(args.rom)
     start_game(core)

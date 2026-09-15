@@ -1987,11 +1987,24 @@ static void draw_rule(int tx, int ty) {
         set_map_tile(tx + x, ty, WITH_BANK(T_GRID_RULE, BANK_LABEL));
 }
 
+/* NO LEADING ZEROS, which is the cartridge's own and was missed here for a
+ * long time: renderStatistics walks each counter's digits from the top and,
+ * while it finds a '0', shortens the run AND advances the write position
+ * (main.asm.txt:4067-4082) — so the number keeps its place and the zeros in
+ * front of it are simply never drawn. A screen of 000000 / 0000 / 00 is not
+ * what this game looks like; it looks like 8294 / 30 / 2.
+ *
+ * It is player 1's counters that are pushed right like this. Player 2's are
+ * not (`lda generalCounter38 / lsr a / bcs @noIncrement` — the odd indices are
+ * its own), and neither is coop's, which is the one case this port would have
+ * to mirror if its coop panel were the cartridge's shape. It is not: coop's
+ * counters are centred in their own panels here, so they take the same
+ * treatment as everything else. */
 static void draw_counter(int ty, int label_first, int label_count,
                           uint32_t value, int digits, int value_indent) {
     draw_label(BOX_L_IN, ty, label_first, label_count);
     clear_region(BOX_L_IN, ty + 1, BOX_L_W, 1);
-    draw_number(BOX_L_IN + value_indent, ty + 1, value, digits, BANK_VALUE);
+    draw_number_blank(BOX_L_IN + value_indent, ty + 1, value, digits, BANK_VALUE);
     draw_rule(BOX_L_TX, ty + 2);
 }
 
@@ -2074,7 +2087,7 @@ static void draw_coop_counter(int tx, int ty, int label_first, int label_count,
                                uint32_t value, int digits) {
     draw_label(tx + (COOP_PANEL_W - label_count) / 2, ty, label_first, label_count);
     clear_region(tx, ty + 1, COOP_PANEL_W, 1);
-    draw_number(tx + (COOP_PANEL_W - digits) / 2, ty + 1, value, digits, BANK_VALUE);
+    draw_number_blank(tx + (COOP_PANEL_W - digits) / 2, ty + 1, value, digits, BANK_VALUE);
 }
 
 /* The same, for HIGH — which the cartridge sets in plain ASCII rather than in
@@ -2084,7 +2097,7 @@ static void draw_coop_text_counter(int tx, int ty, const char *label,
                                     uint32_t value, int digits) {
     clear_region(tx, ty, COOP_PANEL_W, 2);
     draw_text(tx + (COOP_PANEL_W - (int)text_len(label)) / 2, ty, label, BANK_LABEL);
-    draw_number(tx + (COOP_PANEL_W - digits) / 2, ty + 1, value, digits, BANK_VALUE);
+    draw_number_blank(tx + (COOP_PANEL_W - digits) / 2, ty + 1, value, digits, BANK_VALUE);
 }
 
 static void draw_coop_next(int tx) {
@@ -2137,7 +2150,7 @@ static void draw_panel(void) {
         draw_text(BOX_L_IN, ROW_HIGH, "RIVAL", BANK_LABEL);
         draw_rule(BOX_L_TX, ROW_HIGH + 2);
         clear_region(BOX_L_IN, ROW_HIGH + 1, BOX_L_W, 1);
-        draw_number(BOX_L_IN, ROW_HIGH + 1, o->score, 6, BANK_VALUE);
+        draw_number_blank(BOX_L_IN, ROW_HIGH + 1, o->score, 6, BANK_VALUE);
     } else {
         /* The cartridge's own 1P panel carries a HIGH SCORE beside the score
          * — "HIGH" and "SCORE" in plain ASCII at nametable row 2, and
@@ -2147,7 +2160,7 @@ static void draw_panel(void) {
         draw_text(BOX_L_IN + 1, ROW_HIGH, "HIGH", BANK_LABEL);
         draw_rule(BOX_L_TX, ROW_HIGH + 2);
         clear_region(BOX_L_IN, ROW_HIGH + 1, BOX_L_W, 1);
-        draw_number(BOX_L_IN, ROW_HIGH + 1, g_high_score, 6, BANK_VALUE);
+        draw_number_blank(BOX_L_IN, ROW_HIGH + 1, g_high_score, 6, BANK_VALUE);
     }
 
     /* Rows 14-17 of the left panel: NEXT lodges here only when the right one
@@ -3521,6 +3534,18 @@ static void draw_pause_menu(void) {
 static bool pause_menu_input(uint8_t pressed, bool *leaving) {
     if (!g_pause_menu) return false;
 
+    /* START IS ALWAYS RESUME. It is the button that put the plaque up, and a
+     * player who presses it expects to be playing again — so it closes the
+     * menu and is handed STRAIGHT ON to the core, which is what actually
+     * unpauses. Without this it did nothing at all on the MUSIC row, which is
+     * a menu you cannot leave with the only button that means "leave". A is
+     * what takes a choice. */
+    if (!g_pause_confirm && (pressed & TENGEN_BTN_START)) {
+        g_pause_menu = false;
+        g_repaint = true;
+        return false;
+    }
+
     if (g_pause_confirm) {
         if (pressed & (TENGEN_BTN_LEFT | TENGEN_BTN_RIGHT))
             g_pause_yes = !g_pause_yes;
@@ -3532,6 +3557,8 @@ static bool pause_menu_input(uint8_t pressed, bool *leaving) {
             if (g_pause_yes) *leaving = true;
             else g_pause_confirm = false;
         }
+        /* The question keeps START, because there it is an answer and not a
+         * way out: the way out of it is NO. */
         return true;
     }
 
@@ -3548,7 +3575,7 @@ static bool pause_menu_input(uint8_t pressed, bool *leaving) {
         start_music(g_music);
         nes_audio_play(NES_SOUND_SCREEN_SWITCH);
     }
-    if (g_pause_row == PMENU_EXIT && (pressed & (TENGEN_BTN_A | TENGEN_BTN_START))) {
+    if (g_pause_row == PMENU_EXIT && (pressed & TENGEN_BTN_A)) {
         g_pause_confirm = true;
         g_pause_yes = false;   /* NO first: a pause menu does not lose games */
         nes_audio_play(NES_SOUND_SCREEN_SWITCH);
