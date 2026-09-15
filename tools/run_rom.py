@@ -835,16 +835,20 @@ LINK_TIMEOUT_FRAMES = 600   # TENGEN_LOBBY_TIMEOUT in src/tengen_link.h
 # odd-length lines and the play screen uses for the statistics. See
 # SCREENBLOCK_STATS in gba/main.c.
 SCREENBLOCK_OFFSET_ADDR = SCREENBLOCK_ADDR + 0x800
+# ...and screenblock 31, the histogram's, which outside a match carries the
+# one line the port wants two pixels higher than the grid (see
+# set_credit_layer in gba/main.c).
+SCREENBLOCK_LIFTED_ADDR = SCREENBLOCK_ADDR + 0x1800
 
 
 def tilemap_text(core, row, first=0, last=30):
-    """The row of the tilemap as text, ACROSS BOTH LAYERS.
+    """The row of the tilemap as text, ACROSS EVERY TEXT LAYER.
 
     The tileset's letters sit at their ASCII codes (see ascii_tile in
     gba/main.c), so a tile id IS a character. A menu line of odd length is
-    drawn on the offset layer instead of the main one — reading only the main
-    map would report an empty row and every menu check would quietly stop
-    checking anything.
+    drawn on the offset layer instead of the main one, and the GAME SELECT
+    credit on the lifted one — reading only the main map would report an empty
+    row and every menu check would quietly stop checking anything.
     """
     out = []
     for x in range(first, last):
@@ -852,6 +856,8 @@ def tilemap_text(core, row, first=0, last=30):
         tile = core.memory.u16[SCREENBLOCK_ADDR + off] & 0x3FF
         if not (32 <= tile < 127):
             tile = core.memory.u16[SCREENBLOCK_OFFSET_ADDR + off] & 0x3FF
+        if not (32 <= tile < 127):
+            tile = core.memory.u16[SCREENBLOCK_LIFTED_ADDR + off] & 0x3FF
         out.append(chr(tile) if 32 <= tile < 127 else " ")
     return "".join(out).strip()
 

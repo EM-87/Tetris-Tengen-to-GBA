@@ -159,6 +159,21 @@ static void set_offset_layer(int px) {
     REG_BG1HOFS = (uint16_t)(512 - px);
 }
 
+/* A LINE THAT SITS TWO PIXELS HIGHER THAN THE GRID, for the credit under
+ * GAME SELECT: on the tile grid it touches the frame's bottom band, and there
+ * is no row to spare above it.
+ *
+ * It rides the HISTOGRAM'S background, which is the only one of the four
+ * scrolled UP (STATS_LIFT_PX) and which carries nothing at all outside a
+ * match. Its three pixels across are not wanted here — this line's length is
+ * even, so it is already centred on the grid — so the scroll goes flat for
+ * the front end and back to the histogram's own when a board comes up. See
+ * draw_static_screen. */
+static void set_credit_layer(bool front_end) {
+    REG_BG3HOFS = front_end ? 0 : (uint16_t)(512 - STATS_SHIFT_PX);
+}
+
+
 #define MAP_W 32
 #define SCREEN_TW 30
 #define SCREEN_TH 20
@@ -1250,6 +1265,7 @@ static void draw_static_screen(void) {
     }
     draw_braid_panel(BOX_L_TX, BOX_W, true);
     draw_braid_panel(BOX_R_TX, BOX_W, false);
+    set_credit_layer(false);
     /* Back from whatever the title lent it; see set_offset_layer. */
     set_offset_layer(STATS_SHIFT_PX);
 }
@@ -2769,6 +2785,14 @@ static void draw_title_sprites(void) {
 /* Writes `text` centred in the frame, on whichever layer makes it land on the
  * middle. Both maps are cleared first, so a name that was odd last frame and
  * is even this one leaves nothing behind. */
+static void draw_text_lifted(int ty, const char *text, int bank) {
+    unsigned len = text_len(text);
+    int tx = MENU_IN_TX + ((int)MENU_IN_W - (int)len) / 2;
+    for (int x = 0; x < MENU_IN_W; x++) set_histogram_tile(MENU_IN_TX + x, ty, T_BLANK);
+    for (unsigned i = 0; i < len; i++)
+        set_histogram_tile(tx + (int)i, ty, WITH_BANK(ascii_tile(text[i]), bank));
+}
+
 static void draw_text_centred(int ty, const char *text, int bank) {
     unsigned len = text_len(text);
     int tx = MENU_IN_TX + ((int)MENU_IN_W - (int)len) / 2;
@@ -2821,7 +2845,8 @@ static void draw_game_select(uint8_t choice) {
      * The menu frame's black interior is columns 3-26 — twenty-four of them —
      * so the full "TETRIS BY ALEXEY PAJITNOV" (twenty-five) ran over the braid
      * at both ends. The word TETRIS is already six tiles tall above this. */
-    draw_text_centred(17, "BY ALEXEY PAJITNOV", BANK_NOTE);
+    set_credit_layer(true);
+    draw_text_lifted(17, "BY ALEXEY PAJITNOV", BANK_NOTE);
 }
 
 /* What the lobby is doing, while it does it. Two consoles reach this screen
@@ -2947,8 +2972,13 @@ static void draw_link_wait(const TengenLobby *lobby, int elapsed) {
  * So the columns are placed for a value of EIGHT or so — MUSIC's row then
  * centres on 119.5 exactly — and the one name that is longer runs on into the
  * right margin, where there is still a tile of air before the braid. */
-#define MENU_LABEL_TX  (MENU_IN_TX + 4)
-#define MENU_VALUE_TX  (MENU_LABEL_TX + 10)
+#define MENU_LABEL_TX  (MENU_IN_TX + 5)
+/* Nine, not ten: the longest tune's name is eleven characters and the block
+ * moving a column right would have run it flush against the braid. Pulling
+ * the value column back the same column keeps a tile of air there and tightens
+ * the two rows whose value is a single digit, which are the ones that read as
+ * left-heavy however well the widest row is centred. */
+#define MENU_VALUE_TX  (MENU_LABEL_TX + 9)
 #define MENU_CURSOR_TX (MENU_LABEL_TX - 2)
 /* ...and anything the value trails, two columns further on. */
 #define MENU_TAIL_GAP 2

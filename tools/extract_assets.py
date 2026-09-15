@@ -224,10 +224,21 @@ TITLE_COL_BLOCKS = (
 #
 # Its left neighbour, $7D at (13,15), is ONE pixel of the ball's left edge and
 # it does not come: row 11 column 15 is a solid bar of lettering.
+#
+# AND THE BALL'S LEFT EDGE COMES TOO. It is a tile of its own, $7D at (13,15):
+# one pixel wide and four tall, the sphere's lit left rim, and without it the
+# ball comes out flat-sided — which is what "a la esfera dorada le faltan dos
+# pixeles" was. Its logo cell is $6E at (11,15), the right half of a letter's
+# bottom serif; the serif loses eight pixels of its length and the letter's
+# stroke above it is untouched. Compositing the two instead was tried and is
+# worse: the cell can only carry ONE palette, and the cathedral's turns that
+# serif gold.
 TITLE_SPIRE_OVERLAY = (
     (12, 16, 10, 0x1D),
     (13, 16, 11, 0x73),
+    (13, 15, 11, 0x6E),
 )
+
 TITLE_BLANK_TILE = 0x1D
 
 TITLE_ROW_BLOCKS = (
@@ -1256,6 +1267,7 @@ def compose_title(nametable, attributes):
         i = rows.index(dst_row) * len(cols) + cols.index(src_col)
         tiles[i] = nametable[src_row * 32 + src_col]
         banks[i] = attribute_palette(attributes, src_col, src_row)
+
     return tiles, banks
 
 
@@ -1782,7 +1794,18 @@ def self_test() -> int:
         failures.append(f"lectura de atributos dio {got}, esperado (3, 2, 1, 0)")
 
     # The title composition must keep 30x20 and must not reorder columns.
-    title, title_banks = compose_title(bytes(range(256)) * 4, bytes(64))
+    #
+    # THE SPIRE'S GUARD HAS TO BE SATISFIED, not stepped around: the fake
+    # nametable below is a counter, so its logo cells hold whatever the count
+    # lands on rather than the tiles the overlay insists on finding there. The
+    # guard is the point of the overlay — it is what stops a different dump
+    # being quietly painted over — so the fixture plants the tiles it expects
+    # instead of the check being loosened. (Without this the self-test raised
+    # rather than reporting, and `make assets-check` had been failing on it.)
+    fake = bytearray(bytes(range(256)) * 4)
+    for _src_row, src_col, dst_row, expect in TITLE_SPIRE_OVERLAY:
+        fake[dst_row * 32 + src_col] = expect
+    title, title_banks = compose_title(bytes(fake), bytes(64))
     title_w = sum(e - s for s, e in TITLE_COL_BLOCKS)
     if len(title) != title_w * 20 or len(title_banks) != len(title):
         failures.append(f"la composicion del titulo dio {len(title)} tiles, "
@@ -1874,7 +1897,9 @@ def main() -> int:
         "screen_menu.h": emit_menu_header(menu_tiles, menu_palettes, src),
         "screen_title.h": emit_title_header(title_tiles, title_banks, src),
         "tiles_title.h": emit_tiles_header(
-            "kTitleTiles", "TILES_TITLE", convert_tiles(rom.chr_bank(2)), f"{src} [title]"),
+            "kTitleTiles", "TILES_TITLE",
+            convert_tiles(rom.chr_bank(2)),
+            f"{src} [title]"),
         "dancer_poses.h": emit_dancer_poses_header(
             poses, stage_rows, dancer_x, dancer_y, dancer_attr, f"{src} [dancers]"),
         "tiles_game.h": emit_tiles_header(
