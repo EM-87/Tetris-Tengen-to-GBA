@@ -88,4 +88,31 @@ static inline uint16_t rgb15(unsigned r, unsigned g, unsigned b) {
     return (uint16_t)((b << 10) | (g << 5) | r);
 }
 
+/* ----------------------------------------------------------------------- *
+ * The save memory
+ *
+ * A GBA cartridge can carry battery-backed SRAM at $0E000000, and this one
+ * does: it is how the port keeps the high-score table the NES cartridge could
+ * only hold until the power went off (see leader_load in gba/main.c).
+ *
+ * TWO RULES, and both of them bite silently. The bus to it is EIGHT BITS
+ * WIDE, so every access has to be a byte access — a halfword or word read
+ * comes back with the same byte repeated and a write of one corrupts its
+ * neighbours — and the code doing the accessing has to be compiled for it,
+ * which is why the accessors below take and return `unsigned char` through a
+ * volatile pointer rather than being memcpy'd. And an emulator or flash cart
+ * decides a game HAS save memory by finding one of a handful of magic strings
+ * in the ROM image, which is what kSaveSignature is for; without it the reads
+ * come back as open bus and the table quietly never survives.
+ * ----------------------------------------------------------------------- */
+#define MEM_SRAM ((volatile unsigned char *)0x0E000000)
+#define SRAM_SIZE 0x8000
+
+static inline unsigned char sram_read(unsigned offset) {
+    return MEM_SRAM[offset];
+}
+static inline void sram_write(unsigned offset, unsigned char value) {
+    MEM_SRAM[offset] = value;
+}
+
 #endif /* GBA_HW_H */

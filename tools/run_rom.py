@@ -1618,6 +1618,12 @@ def points_check(rom_path):
     return 0
 
 
+def _report(failures):
+    for f in failures:
+        print("FALLA:", f)
+    return 1 if failures else 0
+
+
 def leaderboard_check(rom_path):
     """THE HIGH SCORES TABLE, which the cartridge keeps in memory.
 
@@ -1700,6 +1706,28 @@ def leaderboard_check(rom_path):
                          f"{tilemap_text(core, LEADER_FIRST_TY, 0, 30)!r}")
     else:
         print("  las tres iniciales se teclean con izquierda/derecha y A")
+
+    # AND IT SURVIVES THE POWER GOING OFF, which is the one thing the NES
+    # cartridge wanted and could not have: its magic at $04F7 only carries the
+    # table across a RESET. Here it is in the GBA's battery-backed SRAM, under
+    # the same four letters, and core.reset() is the console being switched
+    # off and on again as far as that memory is concerned.
+    sram = bytes(core.memory.u8[0x0E000000 + i] for i in range(8))
+    if sram[:4] != b"LOGG":
+        failures.append(f"la tabla no se guarda en SRAM: {sram[:4]!r}")
+    else:
+        core.reset(); run(core, 40)
+        start_game(core)
+        to_gameover(core, 10)
+        if "BCD" not in rows(core)[0]:
+            failures.append("la tabla no sobrevive al apagado")
+        else:
+            print("  y sobrevive a apagar la consola, en la SRAM de la pila")
+        if failures:
+            return _report(failures)
+        print("OK: la tabla de records es la del cartucho, se escribe en ella, "
+               "y se guarda.")
+        return 0
 
     # And it survives the next game.
     press_start(core); run(core, 40)

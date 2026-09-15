@@ -1493,6 +1493,95 @@ static int g_leader_row = -1;      /* -1: nothing to type */
 static int g_leader_cursor;        /* 0..2 while typing */
 static uint8_t g_leader_blink;
 
+/* THE TABLE IS SAVED, which is the one thing the cartridge wanted and could
+ * not have. Its `reset` tests a four-byte magic at $04F7 — 'L','O','G','G' —
+ * and then validates every digit and initial before trusting what is in RAM
+ * (main.asm.txt:5644-5668), so the scores survive a RESET and nothing else.
+ * A GBA cartridge has battery-backed SRAM, so here the same magic, the same
+ * validation and a checksum behind them put the table in it, and it survives
+ * the power going off.
+ *
+ * The signature below is not decoration: an emulator or flash cart decides a
+ * game has save memory by finding one of a handful of exact strings in the
+ * ROM image. Without it every read comes back open bus and the table quietly
+ * never persists. It is `used` so the linker cannot drop it. */
+__attribute__((used, section(".rodata")))
+static const char kSaveSignature[] = "SRAM_V113";
+
+#define SAVE_MAGIC_LEN 4
+static const char kSaveMagic[SAVE_MAGIC_LEN] = { 'L', 'O', 'G', 'G' };
+/* magic, then one byte of checksum, then the entries. */
+#define SAVE_SUM_OFF SAVE_MAGIC_LEN
+#define SAVE_DATA_OFF (SAVE_MAGIC_LEN + 1)
+/* Four bytes of score, two of lines, three of initials. NINE: it was eight
+ * first, and the entries wrote over each other's initials — the magic and
+ * the checksum were fine, so the table simply never loaded. */
+#define SAVE_ENTRY_BYTES 9
+
+static uint8_t leader_checksum(void) {
+    uint8_t sum = 0xA5;
+    for (int i = 0; i < LEADER_ENTRIES; i++) {
+        const LeaderEntry *e = &g_leader[i];
+        for (int b = 0; b < 4; b++) sum = (uint8_t)(sum + (e->score >> (8 * b)));
+        sum = (uint8_t)(sum + (e->lines & 0xFF) + (e->lines >> 8));
+        for (int c = 0; c < LEADER_INITIALS; c++) sum = (uint8_t)(sum + e->initials[c]);
+        sum = (uint8_t)(sum * 3 + 1);
+    }
+    return sum;
+}
+
+static void leader_save(void) {
+    for (int i = 0; i < SAVE_MAGIC_LEN; i++)
+        sram_write((unsigned)i, (unsigned char)kSaveMagic[i]);
+    for (int i = 0; i < LEADER_ENTRIES; i++) {
+        const LeaderEntry *e = &g_leader[i];
+        unsigned at = SAVE_DATA_OFF + (unsigned)i * SAVE_ENTRY_BYTES;
+        for (int b = 0; b < 4; b++)
+            sram_write(at + (unsigned)b, (unsigned char)(e->score >> (8 * b)));
+        sram_write(at + 4, (unsigned char)(e->lines & 0xFF));
+        sram_write(at + 5, (unsigned char)(e->lines >> 8));
+        for (int c = 0; c < LEADER_INITIALS; c++)
+            sram_write(at + 6 + (unsigned)c, e->initials[c]);
+    }
+    sram_write(SAVE_SUM_OFF, leader_checksum());
+}
+
+/* ...and reading it back, with the cartridge's own suspicion: the magic, the
+ * checksum, and then every field checked for range before any of it is
+ * believed. Returns false if what is there is not a table, which is what a
+ * console that has never run this game looks like. */
+static bool leader_load(void) {
+    for (int i = 0; i < SAVE_MAGIC_LEN; i++)
+        if (sram_read((unsigned)i) != (unsigned char)kSaveMagic[i]) return false;
+
+    LeaderEntry got[LEADER_ENTRIES];
+    for (int i = 0; i < LEADER_ENTRIES; i++) {
+        unsigned at = SAVE_DATA_OFF + (unsigned)i * SAVE_ENTRY_BYTES;
+        uint32_t score = 0;
+        for (int b = 0; b < 4; b++)
+            score |= (uint32_t)sram_read(at + (unsigned)b) << (8 * b);
+        got[i].score = score;
+        got[i].lines = (uint16_t)(sram_read(at + 4) | (sram_read(at + 5) << 8));
+        for (int c = 0; c < LEADER_INITIALS; c++)
+            got[i].initials[c] = sram_read(at + 6 + (unsigned)c);
+
+        if (got[i].score > 999999 || got[i].lines > 999) return false;
+        for (int c = 0; c < LEADER_INITIALS; c++)
+            if (got[i].initials[c] >= LEADER_LETTERS) return false;
+        /* ...and it has to be sorted, or it is not this table. */
+        if (i && got[i].score > got[i - 1].score) return false;
+    }
+
+    LeaderEntry keep[LEADER_ENTRIES];
+    for (int i = 0; i < LEADER_ENTRIES; i++) { keep[i] = g_leader[i]; g_leader[i] = got[i]; }
+    if (leader_checksum() != sram_read(SAVE_SUM_OFF)) {
+        for (int i = 0; i < LEADER_ENTRIES; i++) g_leader[i] = keep[i];
+        return false;
+    }
+    g_high_score = g_leader[0].score;
+    return true;
+}
+
 /* @resetHighScores (main.asm.txt:5670-5700). Every digit '0' and every initial
  * 'A', and then the fifteen scores are built by counting DOWN from entry 0:
  * `tya; adc #$33`, which lands on 17000 for the first and 3000 for the last in
@@ -1603,6 +1692,7 @@ static void leader_submit(void) {
         g_leader_row = g_leader_queue[0];
         g_leader_blink = 0;
     }
+    leader_save();
 }
 
 /* One letter along the alphabet, wrapping both ways — L92BA
@@ -1660,6 +1750,9 @@ static bool leader_type(uint8_t held, uint8_t pressed) {
                 g_leader_queue[q - 1] = g_leader_queue[q];
             if (--g_leader_queued > 0) g_leader_row = g_leader_queue[0];
             else g_leader_row = -1;
+            /* A name is not a name until it is finished, so this is where it
+             * is written down. */
+            leader_save();
         }
     }
     return was_typing;
@@ -3700,8 +3793,10 @@ static void draw_match(bool *sweeping) {
 int main(void) {
     upload_tiles();
     upload_palettes();
-    /* The cartridge's cold-boot table. See leader_reset. */
+    /* What the battery kept, or the cartridge's cold-boot table if there is
+     * nothing there to keep. See leader_load. */
     leader_reset();
+    leader_load();
     set_field_palette_for_level(0);
     clear_screen();
 
