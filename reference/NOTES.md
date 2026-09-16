@@ -1142,12 +1142,45 @@ the harness:
   the whole fractional band including the polarity flip at 16, where the SLOW
   entry is the one row in four rather than the fast one.
 
+### COOPERATIVE too
+
+`make trace ... --coop` walks GAME SELECT down to COOPERATIVE and plays both
+pads — the second from the same generator started elsewhere, so the two are
+independent — and compares both players' pieces, both fall timers and the
+whole TWELVE-wide shared board. It runs to the end of a match: **2244 frames
+identical**, which puts the coop collision routine, the stagger and the shared
+field alongside everything 1 PLAYER already covered.
+
+Two things about coop that the harness had to learn, and neither is the
+port's:
+
+* **Its lookahead seed arrives a frame late.** In 1 PLAYER `savedRNGSeed` and
+  `player1RNGSeed` agree by the time the game starts. In COOPERATIVE
+  `savedRNGSeed` reads zero and the game spends a frame copying `rngSeed` into
+  both players' seeds before it deals, so the trace waits for `player1RNGSeed`
+  ($5C) to appear and starts counting there.
+* **Its deal frame decrements.** In 1 PLAYER the frame that deals leaves
+  `player1FallTimer` at 48. In COOPERATIVE the same frame deals for BOTH
+  players and then runs `L8320`'s `dec player1FallTimer,x` for both, leaving
+  47 — confirmed by logging every write to $6A with its PC:
+
+      $992D  $6A <- 20    getNextTetromino's own #$14
+      $994E  $6A <- 48    ...and the #$30 for a game's first piece
+      $9934  $64 <- 1     the piece
+      (the same three for player 2, x=1)
+      $8327  $6A <- 47    L8320's decrement, both players
+
+  `tengen_new_game` produces 48 in either mode, so the core is one frame young
+  at a coop match's start and the comparison drops that frame rather than
+  pretend otherwise. One frame, once, at the start of one mode; everything
+  after it matches exactly.
+
 ### What it does not model
 
 Cycle timing (a frame is a fixed count of instructions, which is plenty for a
 main loop written to finish inside one), sprite-0 hit, and the mapper's CHR
 banking, which only moves tiles about. None of them reach the game's own
-state, and the three thousand identical frames are the evidence.
+state, and thousands of identical frames in both modes are the evidence.
 
 ## Tetris Tengen XE, decoded record by record
 

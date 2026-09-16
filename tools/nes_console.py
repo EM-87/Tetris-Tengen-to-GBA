@@ -102,8 +102,9 @@ class NesConsole:
         self.nmi = self.bus.read(0xFFFA) | (self.bus.read(0xFFFB) << 8)
         self.frames = 0
 
-    def frame(self, buttons=0):
+    def frame(self, buttons=0, buttons2=0):
         self.bus.pad[0] = buttons
+        self.bus.pad[1] = buttons2
         cpu = self.cpu
         self.bus.vblank = True
         if self.bus._ctrl & 0x80:
@@ -115,9 +116,9 @@ class NesConsole:
             cpu.step()
         self.frames += 1
 
-    def run(self, count, buttons=0):
+    def run(self, count, buttons=0, buttons2=0):
         for _ in range(count):
-            self.frame(buttons)
+            self.frame(buttons, buttons2)
 
     def tap(self, name, hold=4, gap=10):
         self.run(hold, BTN[name])
@@ -130,8 +131,11 @@ class NesConsole:
     def state(self):
         return self.ram(0x29)
 
-    def start_1p_game(self):
+    def start_game(self, entry=0):
         """Title -> GAME TYPE -> LEVEL -> HANDICAP -> MUSIC -> playing.
+
+        `entry` is how far down GAME SELECT's five to go: 0 is 1 PLAYER and 2
+        is COOPERATIVE, in the order gameSelectArrowPpuAddrs lists them.
 
         Leaves the console ON THE GAME'S OWN FIRST FRAME, which matters: the
         cartridge deals its first piece during that frame, so anything that
@@ -139,8 +143,11 @@ class NesConsole:
         frames later.
         """
         self.run(60)
-        for _ in range(4):
-            self.tap("START")
+        self.tap("START")                 # title -> GAME SELECT
+        for _ in range(entry):
+            self.tap("DOWN")
+        for _ in range(3):
+            self.tap("START")             # level, handicap, music
         self.frame(BTN["START"])
         for _ in range(60):
             if self.state == GAMESTATE_PLAYING:

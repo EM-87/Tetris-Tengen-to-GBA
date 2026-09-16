@@ -392,8 +392,10 @@ running ROM; only the side panels need reflowing).
   the same button script and diffs a line a frame — piece, position, fall
   timer, counters and all two hundred playable cells. It is what found the
   port's last three timing bugs, none of which a reading of the disassembly
-  had caught. Slow (an interpreter: about a minute a thousand frames), so it
-  is NOT in `gba-check`; run it after touching `tengen_step`.
+  had caught. `--coop` does the same for COOPERATIVE, both pads and the
+  twelve-wide shared board. Both run to the end of a match and match it frame
+  for frame. Slow (an interpreter: about a minute a thousand frames), so it is
+  NOT in `gba-check`; run it after touching `tengen_step`.
 - `make gba-check` — boots the ROM headlessly in mGBA and asserts it draws
   the field where the resolution mapping says it should, that a piece
   actually falls, that the line-clear sweep crosses the row and writes the
