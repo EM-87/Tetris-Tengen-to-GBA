@@ -1061,30 +1061,49 @@ hands that restart the next entry; a linked match, which has no interlude,
 asks for it on the spot instead. It also means the music changes because you
 played well, which a timer could never manage.
 
-## Korobeiniki is not on this cartridge
+## Korobeiniki and Katyusha are not on this cartridge
 
-Worth stating plainly, because it is the one thing in this port that is not
-the ROM's. Tengen's four tunes are Loginska, Bradinsky, Karinka and Troika
-(`constants.asm.txt:39-42`). Korobeiniki — the pedlars' song from the 1860s
-that most people call "the Tetris theme", because Nintendo's Game Boy version
-used it — is not among them, and there is no arrangement of it anywhere in
-this ROM to extract.
+Worth stating plainly, because they are the only things in this port that are
+not the ROM's. Tengen's four tunes are Loginska, Bradinsky, Karinka and Troika
+(`constants.asm.txt:39-42`). Neither Korobeiniki — the pedlars' song from the
+1860s that most people call "the Tetris theme", because Nintendo's Game Boy
+version used it — nor Katyusha is among them, and there is no arrangement of
+either anywhere in this ROM to extract.
 
-So it is entered by hand, in `gba/korobeiniki.c`, as a fifth tune hidden
-behind L+R on the selection screen. Three consequences, all deliberate:
+**Kalinka needed nothing adding.** Karinka IS Kalinka (Larionov, 1860):
+Tengen's own transliteration of the title, played by the cartridge's own
+engine. Katyusha went in instead, which is a different song entirely.
 
-* **It does not go through the cartridge's engine.** Feeding it one would mean
+**And Katyusha is not public domain**, unlike the other two. Matvei Blanter
+wrote it in 1938 and died in 1990, so under life+70 the melody is protected in
+Russia and the EU until 2061; in the US its status turns on the restoration of
+Soviet-era works rather than on anything simple. Korobeiniki (Nekrasov's text,
+1861) and Kalinka (1860) are out of copyright everywhere. It is here because
+it was asked for, and `gba/handtunes.h` carries the same note where anyone
+editing the score will read it.
+
+**Its notes are not from memory.** Two independent public transcriptions agree
+on the melody bar the odd passing ornament: thesession.org tune 14315 (K:Amin,
+M:2/4) and John Chambers' 1999 posting of the Musica Viva setting (K:Em, the
+same tune a fourth down). What is in the file is those two in A minor, taking
+the plainer reading wherever they differ.
+
+Both are entered by hand, in `gba/handtunes.c`, hidden behind L+R on the
+selection screen. Three consequences, all deliberate:
+
+* **They do not go through the cartridge's engine.** Feeding it one would mean
   writing new data in a music format nobody has documented and patching it
   into the ROM image. That is exactly the kind of thing this project does not
   do, so the file is a small sequencer of its own writing the GBA's PSG.
-* **It shares, it does not replace.** Choosing it tells the cartridge's engine
+* **They share, they do not replace.** Choosing one tells the cartridge's engine
   to play `MUSIC_SILENCE` and leaves it running, so every sound EFFECT is
   still the ROM's — and, exactly as on the cartridge, an effect briefly steals
   a pulse channel from the music and the next note takes it back.
 * **PAUSE needs its own stop.** `MUSIC_SUSPEND` only reaches the cartridge's
-  engine. `make gba-check --korobeiniki` measures the sound registers to prove
-  the pause is real, that the tune actually changes pitch rather than sitting
-  on one note, and that the ROM's engine is still sounding underneath it.
+  engine. `run_rom.py --handtunes` measures the sound registers to prove the
+  pause is real, that each tune actually changes pitch rather than sitting on
+  one note, that the two are different scores and not one played twice, and
+  that the ROM's engine is still sounding underneath.
 
 The note table is not typed by ear either: a GBA pulse channel runs at
 `f = 131072 / (2048 - R)`, so `R = 2048 - 131072/f`, and the table is that

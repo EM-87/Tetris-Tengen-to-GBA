@@ -38,7 +38,7 @@
 #include "gba_hw.h"
 #include "palette.h"
 #include "nes_audio.h"
-#include "korobeiniki.h"
+#include "handtunes.h"
 #include "audio_prg.h"
 #include "link.h"
 #include "../src/tengen_core.h"
@@ -608,7 +608,7 @@ static bool shoulder_chord(void) {
 /* ...and ONE of them on its own, for the level screen's handicap: L belongs
  * to player 1's side of the pad and R to player 2's. Each keeps its own held
  * state so neither can swallow the other's press, and the caller checks the
- * chord first so reaching for the fifth tune buries nobody. */
+ * chord first so reaching for the hidden tunes buries nobody. */
 #define SHOULDER_L 0
 #define SHOULDER_R 1
 
@@ -2587,22 +2587,31 @@ static const uint8_t kMusicTracks[MUSIC_COUNT] = {
     NES_MUSIC_KARINKA, NES_MUSIC_TROIKA
 };
 
-/* THE FIFTH TUNE, WHICH IS NOT ON THE CARTRIDGE.
+/* THE TWO TUNES THAT ARE NOT ON THE CARTRIDGE.
  *
  * Korobeiniki is not one of Tengen's four — the game everybody hums it at is
- * Nintendo's Game Boy version — so there is nothing to extract and it is
- * entered by hand instead, in gba/korobeiniki.c, which is the one file here
- * that is not the ROM's. It stays hidden until L+R together on the selection
- * screen, and announces itself with SOUND_CHIRP the way the title's skin
- * does; until then the menu offers the cartridge's four and nothing hints
- * that there is a fifth.
+ * Nintendo's Game Boy version — and neither is Katyusha. There is nothing to
+ * extract for either, so both are entered by hand in gba/handtunes.c, which is
+ * the one file here that is not the ROM's. They stay hidden until L+R together
+ * on the selection screen, and announce themselves with SOUND_CHIRP the way
+ * the title's skin does; until then the menu offers the cartridge's four and
+ * nothing hints that there are more.
  *
- * It is a fifth ENTRY, never a fifth ROM track: kMusicTracks has four, and
+ * KALINKA IS ALREADY HERE and always was: Karinka, the cartridge's own third
+ * tune, is Tengen's transliteration of it (Larionov, 1860). Nothing needed
+ * adding for it, which is why the hand-entered list is two and not three.
+ *
+ * They are EXTRA ENTRIES, never extra ROM tracks: kMusicTracks has five, and
  * every place that starts music goes through start_music() below. */
 #define MUSIC_KOROBEINIKI MUSIC_COUNT
+#define MUSIC_KATIUSKA (MUSIC_COUNT + 1)
+#define MUSIC_IS_HANDTUNE(m) ((m) == MUSIC_KOROBEINIKI || (m) == MUSIC_KATIUSKA)
+#define MUSIC_HANDTUNE_OF(m) \
+    ((uint8_t)((m) == MUSIC_KOROBEINIKI ? HANDTUNE_KOROBEINIKI \
+                                        : HANDTUNE_KATIUSKA))
 
-/* AND A SIXTH ENTRY THAT IS NOT A TUNE. The same L+R that uncovers Korobeiniki
- * uncovers MUSIC MIX, which plays the five in turn instead of one of them over
+/* AND A LAST ENTRY THAT IS NOT A TUNE. The same L+R that uncovers the two
+ * uncovers MUSIC MIX, which plays them all in turn instead of one of them over
  * and over — the cure for a long game spent listening to Loginska.
  *
  * WHEN IT CHANGES, and why it is not "when the tune ends". These tunes loop,
@@ -2618,8 +2627,8 @@ static const uint8_t kMusicTracks[MUSIC_COUNT] = {
  * when they finish, so the mix simply hands that restart the next tune. It
  * also means the music changes because you played well, which a timer could
  * never manage. */
-#define MUSIC_MIX (MUSIC_COUNT + 1)
-#define MUSIC_UNLOCKED_COUNT (MUSIC_COUNT + 2)
+#define MUSIC_MIX (MUSIC_COUNT + 2)
+#define MUSIC_UNLOCKED_COUNT (MUSIC_COUNT + 3)
 static bool g_music_unlocked;
 
 /* THE ONE CHORD, AND IT IS ON THE MENUS.
@@ -2653,15 +2662,17 @@ static bool unlock_cheats(void) {
 
 static const char *const kMusicNames[MUSIC_UNLOCKED_COUNT] = {
     "NO MUSIC", "LOGINSKA", "BRADINSKY", "KARINKA", "TROIKA", "KOROBEINIKI",
-    "MUSIC MIX"
+    "KATIUSKA", "MUSIC MIX"
 };
 
-/* The rotation: the cartridge's four and the hand-entered one, which has
- * earned its place in it by the time anyone has found this. */
+/* The rotation: the cartridge's four and the two hand-entered ones, which
+ * have earned their place in it by the time anyone has found this. */
 /* KOROBEINIKI FIRST. The mix is only on offer to somebody who found the code,
- * so the tune the code is really about opens the first level, and the
- * cartridge's four follow it. */
-static const uint8_t kMixOrder[] = { MUSIC_KOROBEINIKI, 1, 2, 3, 4 };
+ * so the tune the code is really about opens the first level, and the rest
+ * follow it. */
+static const uint8_t kMixOrder[] = {
+    MUSIC_KOROBEINIKI, 1, 2, MUSIC_KATIUSKA, 3, 4
+};
 #define MIX_COUNT (sizeof kMixOrder / sizeof kMixOrder[0])
 static uint8_t g_mix_step;
 
@@ -2677,7 +2688,7 @@ static uint8_t music_choices(void) {
  * tune does nothing unless it is the one chosen. */
 static void audio_frame(void) {
     nes_audio_frame();
-    korobeiniki_frame();
+    handtune_frame();
 }
 
 /* MUSIC_SILENCE IS A STOP FOR ONE PRIORITY CLASS, AND THE TITLE THEME IS NOT
@@ -2720,7 +2731,7 @@ static void stop_music_class(uint8_t klass) {
 }
 
 static void stop_music(void) {
-    korobeiniki_stop();
+    handtune_stop();
     stop_music_class(NES_MUSIC_CLASS_TITLE);
     stop_music_class(NES_MUSIC_CLASS_GAME);
 }
@@ -2751,12 +2762,12 @@ static void stop_music(void) {
  * that is no tune (NO MUSIC) simply never lets it go at all. */
 static void start_music(uint8_t music) {
     if (music == MUSIC_MIX) music = mix_tune();
-    if (music == MUSIC_KOROBEINIKI) {
+    if (MUSIC_IS_HANDTUNE(music)) {
         stop_music();            /* the cartridge's engine steps aside */
-        korobeiniki_start();
+        handtune_start(MUSIC_HANDTUNE_OF(music));
         return;
     }
-    korobeiniki_stop();
+    handtune_stop();
     uint8_t track = kMusicTracks[music < MUSIC_COUNT ? music : 0];
     if (track == NES_MUSIC_SILENCE) {
         /* musicSelectTable's first entry is no tune at all. */
@@ -3659,9 +3670,9 @@ static void announce_step(TengenStepResult step) {
         idle_cossack_celebrate(rows);
     }
     if (step.leveled_up) {
-        /* The cartridge's level-up music takes over; the fifth tune stands
+        /* The cartridge's level-up music takes over; a hand-entered tune stands
          * down and start_music() puts it back when the dancers finish. */
-        korobeiniki_stop();
+        handtune_stop();
         nes_audio_play(NES_MUSIC_LEVELUP);
         /* MUSIC MIX turns over here, and here only. See MUSIC_MIX. */
         if (g_music == MUSIC_MIX) {
@@ -3685,7 +3696,7 @@ static void announce_step(TengenStepResult step) {
         }
     }
     if (step.topped_out) {
-        korobeiniki_stop();
+        handtune_stop();
         /* The game-over tune is class 8 like the title's, so the in-game
          * tune's own class has to be freed for it — which MUSIC_SILENCE does. */
         nes_audio_play(NES_MUSIC_SILENCE);
@@ -4175,7 +4186,7 @@ static void front_music(uint8_t which) {
          * that happen. LD0E4 refuses a class-8 song that is already in a slot
          * outright (main.asm.txt:8590-8597), so without this the theme would
          * simply carry on from wherever it was. */
-        korobeiniki_stop();
+        handtune_stop();
         stop_music_class(NES_MUSIC_CLASS_TITLE);
         nes_audio_play(NES_MUSIC_SILENCE);
         nes_audio_play(NES_MUSIC_TITLESCREEN);
@@ -4218,18 +4229,20 @@ static bool solo_play_frame(uint8_t buttons, uint8_t pressed, bool *quit) {
              * track of which state the engine is actually in. */
             nes_audio_play(g_session.game.paused ? NES_MUSIC_SUSPEND
                                                   : NES_MUSIC_RESUME);
-            /* MUSIC_SUSPEND only silences the cartridge's engine. The fifth
-             * tune has its own channels and has to be stopped and restarted
-             * with it, or PAUSE would leave it playing on its own.
+            /* MUSIC_SUSPEND only silences the cartridge's engine. The
+             * hand-entered tunes have their own channels and have to be
+             * stopped and restarted with it, or PAUSE would leave one playing
+             * on its own.
              *
-             * THE MIX COUNTS. Asking `g_music == MUSIC_KOROBEINIKI` misses the
-             * case where the tune playing is Korobeiniki because the MIX is on
-             * its turn — and the mix OPENS on it, so it was every first level
-             * of every mixed game: pause, and the fifth tune played on alone
-             * over the plaque. */
-            if (current_tune() == MUSIC_KOROBEINIKI) {
-                if (g_session.game.paused) korobeiniki_stop();
-                else korobeiniki_start();
+             * THE MIX COUNTS. Asking `g_music == MUSIC_KOROBEINIKI` missed the
+             * case where the tune playing is a hand-entered one because the
+             * MIX is on its turn — and the mix OPENS on Korobeiniki, so it was
+             * every first level of every mixed game: pause, and the tune
+             * played on alone over the plaque. */
+            uint8_t tune = current_tune();
+            if (MUSIC_IS_HANDTUNE(tune)) {
+                if (g_session.game.paused) handtune_stop();
+                else handtune_start(MUSIC_HANDTUNE_OF(tune));
             }
             /* The plaque has to be painted over on the way out, but this runs
              * mid-frame; six hundred tiles written into VRAM while the screen
@@ -4537,7 +4550,7 @@ int main(void) {
             /* ONE CALL EACH, and the results kept: these are edge detectors
              * with their own held state, so asking twice in a frame answers
              * "yes" and then "no" — which is how the handicap's first version
-             * quietly ate the fifth tune's chord. */
+             * quietly ate the hidden tunes' chord. */
             bool chord = shoulder_chord();
             bool tap_l = pressed_shoulder(SHOULDER_L);
             bool tap_r = pressed_shoulder(SHOULDER_R);
@@ -4574,7 +4587,7 @@ int main(void) {
             }
 
             /* One shoulder each, and only when they are NOT both down: the
-             * chord is the fifth tune's, and a player reaching for it should
+             * chord is the hidden tunes', and a player reaching for them should
              * not be burying anybody on the way. They work wherever the cursor
              * is — that is the point of naming them in the label. */
             if (!chord && (tap_l || tap_r)) {

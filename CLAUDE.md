@@ -184,16 +184,24 @@ running ROM; only the side panels need reflowing).
    All three skins fit one 256-tile window (512-767): they take turns in it,
    re-uploaded on each swap, so the count is bounded by cartridge space rather
    than by video memory.
-17. ~~Korobeiniki, and MUSIC MIX~~ — done. Korobeiniki is THE EXCEPTION to ground rule 1: it is
-   not on this cartridge (Tengen's four are Loginska, Bradinsky, Karinka and
-   Troika), so `gba/korobeiniki.c` is the one file here entered by hand rather
-   than extracted. It runs on its own sequencer over the GBA's PSG, never
-   through the ROM's engine, and shares the chip with it so the effects stay
-   the cartridge's. Hidden behind L+R on the selection screen, which uncovers
-   a sixth entry with it: MUSIC MIX, playing the five in turn and turning over
-   at every level-up. NOT at the end of a tune — only one of the four has a
-   loop these measurements can find, so a "song length" for the rest would be
-   invented. See reference/NOTES.md.
+17. ~~Korobeiniki, Katiuska and MUSIC MIX~~ — done. These two are THE EXCEPTION
+   to ground rule 1: neither is on this cartridge (Tengen's four are Loginska,
+   Bradinsky, Karinka and Troika), so `gba/handtunes.c` is the one file here
+   entered by hand rather than extracted. It runs its own sequencer over the
+   GBA's PSG, never through the ROM's engine, and shares the chip with it so
+   the effects stay the cartridge's. **KALINKA NEEDED NOTHING**: Karinka is
+   Tengen's transliteration of it and was always there. **KATIUSKA IS NOT
+   PUBLIC DOMAIN** — Korobeiniki (1860s) and Kalinka (Larionov, 1860) are, but
+   Katyusha is Blanter, 1938, and he died in 1990, so in Russia and the EU the
+   melody is in copyright until 2061. It is in because it was asked for, and
+   `handtunes.h` says so where anyone touching the file will read it. Its
+   notes are not from memory either: two independent public transcriptions
+   (thesession.org 14315 and John Chambers' Musica Viva posting) agree on it,
+   and the plainer reading is the one entered. All hidden behind L+R on the
+   selection screen, which uncovers a third entry with them: MUSIC MIX,
+   playing the six in turn and turning over at every level-up. NOT at the end
+   of a tune — only one of the four has a loop these measurements can find, so
+   a "song length" for the rest would be invented. See reference/NOTES.md.
 18. ~~The starting handicap~~ — done, `initHandicapGarbage` traced in full:
    three rows a step, each cell filled seven times in eight, and a guaranteed
    hole punched into the middle eight columns of any row that came out seven

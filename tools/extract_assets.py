@@ -747,9 +747,9 @@ def emit_audio_header(base, data, span, source):
 # nothing in the ROM ever needed one.
 #
 # The pause menu does: EXIT asks SURE? before it throws a game away, and a
-# question with no question mark is not a question. So this is the second
-# thing in the port that is entered by hand rather than extracted — the first
-# is Korobeiniki (gba/korobeiniki.c) — and it is kept honest the same way: it
+# question with no question mark is not a question. So this is the one piece of
+# ART in the port that is entered by hand rather than extracted — the tunes in
+# gba/handtunes.c are the others — and it is kept honest the same way: it
 # is declared here rather than smuggled into a generated header, it is built
 # to the ROM font's own metrics (ink in rows 1-7, two-pixel strokes, colour
 # index 1, column 7 clear), and it takes a slot the cartridge left EMPTY

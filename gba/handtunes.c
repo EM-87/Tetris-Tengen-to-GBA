@@ -1,12 +1,22 @@
 /*
- * korobeiniki.c — the fifth tune, entered by hand. See korobeiniki.h for why
- * this one file is not extracted from the cartridge like everything else.
+ * handtunes.c — the two tunes entered by hand. See handtunes.h for why this
+ * one file is not extracted from the cartridge like everything else, and for
+ * the copyright difference between the two.
  *
- * THE ARRANGEMENT. Korobeiniki is a folk song from the 1860s and long out of
- * copyright; what is written below is the traditional melody in A minor, in
- * the two-part shape every Tetris arrangement uses — a fast A section twice,
- * then a slower B section — with a plain root/fifth accompaniment underneath.
- * It is not a transcription of anyone's recording.
+ * THE ARRANGEMENTS. Both are written below as a melody and a plain root/fifth
+ * accompaniment, in A minor, in whatever sectional shape the song has; neither
+ * is a transcription of anyone's recording.
+ *
+ * Korobeiniki is the traditional melody in the two-part shape every Tetris
+ * arrangement uses — a fast A section twice, then a slower B section.
+ *
+ * Katyusha's melody is NOT from memory. Two independent public transcriptions
+ * agree on it note for note bar the odd passing ornament: thesession.org tune
+ * 14315 (K:Amin, M:2/4) and John Chambers' 1999 posting of the Musica Viva
+ * setting (K:Em, same tune a fourth down). What is below is those two in A
+ * minor, taking the plainer reading wherever they differ — Chambers' `GG` and
+ * `AA` rather than the session's turns `cd/c/` and `de/d/` — and both halves
+ * repeated, which is how both sources bar them.
  *
  * THE FREQUENCIES ARE NOT TYPED BY EAR. A GBA pulse channel runs at
  *
@@ -16,7 +26,7 @@
  * with A4 = 440 Hz, rounded. Anyone can check any row of it with a
  * calculator, which is the point.
  */
-#include "korobeiniki.h"
+#include "handtunes.h"
 
 #include "gba_hw.h"
 
@@ -108,13 +118,72 @@ static const Event kBassB[] = {
 };
 
 /* ----------------------------------------------------------------------- *
+ * KATYUSHA — Blanter, 1938. See handtunes.h on its copyright.
+ *
+ * A minor, 2/4, so every line below is one BAR of eight sixteenths rather
+ * than Korobeiniki's sixteen. Both halves repeat, which is four sections.
+ * The sources write it in eighths with the odd pair of sixteenths; the third
+ * and seventh bars of each half are where those fall, and they are the one
+ * place the two disagree (a turn against a repeated note), so the repeated
+ * note is what is here.
+ * ----------------------------------------------------------------------- */
+static const Event kKatiuskaA[] = {
+    {A4,6},{B4,2},                          /* Ras-tsve-ta-li...           */
+    {C5,6},{A4,2},
+    {C5,2},{C5,2},{B4,2},{A4,2},
+    {B4,4},{E4,4},
+    {B4,6},{C5,2},
+    {D5,6},{B4,2},
+    {D5,2},{D5,2},{C5,2},{B4,2},
+    {A4,8},
+};
+
+/* The chorus, and the leap to the top A is the whole point of it. */
+static const Event kKatiuskaB[] = {
+    {E5,4},{A5,4},
+    {G5,4},{A5,2},{G5,2},
+    {F5,2},{F5,2},{E5,2},{D5,2},
+    {E5,4},{A4,4},
+    {REST,2},{F5,4},{D5,2},
+    {E5,6},{C5,2},
+    {D5,2},{D5,2},{C5,2},{B4,2},
+    {A4,8},
+};
+
+/* The harmony is the sources' own chord marks, transposed: Am for three bars,
+ * then E7 to the half close, and in the chorus Am F / C A / Dm / Am / Dm / Am
+ * / E7 / Am. Root and fifth, one per half bar, as above. */
+static const Event kKatiuskaBassA[] = {
+    {A2,4},{E3,4},
+    {A2,4},{E3,4},
+    {A2,4},{E3,4},
+    {E3,4},{B2,4},
+    {E3,4},{B2,4},
+    {E3,4},{B2,4},
+    {E3,4},{B2,4},
+    {A2,4},{E3,4},
+};
+
+static const Event kKatiuskaBassB[] = {
+    {A2,4},{F3,4},
+    {C3,4},{A2,4},
+    {D3,4},{A3,4},
+    {A2,4},{E3,4},
+    {D3,4},{A3,4},
+    {A2,4},{E3,4},
+    {E3,4},{B2,4},
+    {A2,4},{E3,4},
+};
+
+/* ----------------------------------------------------------------------- *
  * The sequencer
  *
  * Two voices reading their own lists, each holding a note for its length.
  *
  * TEMPO. At 60Hz a sixteenth of N frames puts a crotchet at 900/N beats a
- * minute, so 6 frames is 150 and 7 is 128.6. This tune is played at 150; the
- * 7 it had was audibly a drag.
+ * minute, so 6 frames is 150 and 7 is 128.6. It is per tune: Korobeiniki is
+ * played at 150 (the 7 it had was audibly a drag) and Katyusha, which is a
+ * march and not a dance, at 128.6.
  *
  * ARTICULATION. Every note is cut one frame before its length runs out
  * instead of being left to a decaying envelope. At 150bpm an eighth note is
@@ -122,35 +191,56 @@ static const Event kBassB[] = {
  * through the eighths, smearing them together; a hard note-off is both
  * cleaner and independent of the tempo.
  * ----------------------------------------------------------------------- */
-#define FRAMES_PER_SIXTEENTH 6
 #define NOTE_OFF_FRAMES 1
 
-/* The A section twice, then B, then round again — the shape the tune has had
- * since long before anyone put it in a video game. */
 typedef struct {
     const Event *events;
     uint16_t count;
 } Section;
 
-static const Section kMelody[] = {
-    { kMelodyA, sizeof kMelodyA / sizeof kMelodyA[0] },
-    { kMelodyA, sizeof kMelodyA / sizeof kMelodyA[0] },
-    { kMelodyB, sizeof kMelodyB / sizeof kMelodyB[0] },
+#define SECTION(a) { a, sizeof a / sizeof a[0] }
+
+/* Korobeiniki: the A section twice, then B, then round again — the shape the
+ * tune has had since long before anyone put it in a video game. */
+static const Section kKoroMelody[] = {
+    SECTION(kMelodyA), SECTION(kMelodyA), SECTION(kMelodyB),
 };
-static const Section kBass[] = {
-    { kBassA, sizeof kBassA / sizeof kBassA[0] },
-    { kBassA, sizeof kBassA / sizeof kBassA[0] },
-    { kBassB, sizeof kBassB / sizeof kBassB[0] },
+static const Section kKoroBass[] = {
+    SECTION(kBassA), SECTION(kBassA), SECTION(kBassB),
 };
-#define SECTION_COUNT (sizeof kMelody / sizeof kMelody[0])
+
+/* Katyusha: both halves repeated, which is how both sources bar it. */
+static const Section kKatiuskaMelody[] = {
+    SECTION(kKatiuskaA), SECTION(kKatiuskaA),
+    SECTION(kKatiuskaB), SECTION(kKatiuskaB),
+};
+static const Section kKatiuskaBass[] = {
+    SECTION(kKatiuskaBassA), SECTION(kKatiuskaBassA),
+    SECTION(kKatiuskaBassB), SECTION(kKatiuskaBassB),
+};
 
 typedef struct {
-    uint8_t section;    /* which of the three */
+    const Section *melody;
+    const Section *bass;
+    uint8_t sections;
+    uint8_t frames_per_sixteenth;
+} Tune;
+
+static const Tune kTunes[HANDTUNE_COUNT] = {
+    [HANDTUNE_KOROBEINIKI] = { kKoroMelody, kKoroBass,
+                               sizeof kKoroMelody / sizeof kKoroMelody[0], 6 },
+    [HANDTUNE_KATIUSKA]    = { kKatiuskaMelody, kKatiuskaBass,
+                               sizeof kKatiuskaMelody / sizeof kKatiuskaMelody[0], 7 },
+};
+
+typedef struct {
+    uint8_t section;    /* which section of the tune */
     uint16_t index;     /* which event within it */
     uint16_t ticks;     /* frames left of the current note */
 } Voice;
 
 static Voice g_lead, g_bass;
+static const Tune *g_tune;
 static bool g_playing;
 
 /* Duty 2 (a square wave) for the lead, duty 1 for the bass so the two are
@@ -177,20 +267,22 @@ static int voice_step(Voice *v, const Section *score) {
     }
     if (v->index >= score[v->section].count) {
         v->index = 0;
-        v->section = (uint8_t)((v->section + 1) % SECTION_COUNT);
+        v->section = (uint8_t)((v->section + 1) % g_tune->sections);
     }
     const Event *e = &score[v->section].events[v->index++];
-    v->ticks = (uint16_t)(e->len * FRAMES_PER_SIXTEENTH - 1);
+    v->ticks = (uint16_t)(e->len * g_tune->frames_per_sixteenth - 1);
     return e->note;
 }
 
-void korobeiniki_start(void) {
+void handtune_start(uint8_t tune) {
+    if (tune >= HANDTUNE_COUNT) return;
+    g_tune = &kTunes[tune];
     voice_reset(&g_lead);
     voice_reset(&g_bass);
     g_playing = true;
 }
 
-void korobeiniki_stop(void) {
+void handtune_stop(void) {
     if (!g_playing) return;
     g_playing = false;
     /* Silence both, and leave the registers where the cartridge's engine
@@ -200,12 +292,12 @@ void korobeiniki_stop(void) {
     REG_SOUND2CNT_L = 0;     /* ...and channel 2's, which is its _L */
 }
 
-bool korobeiniki_playing(void) { return g_playing; }
+bool handtune_playing(void) { return g_playing; }
 
-void korobeiniki_frame(void) {
+void handtune_frame(void) {
     if (!g_playing) return;
 
-    int lead = voice_step(&g_lead, kMelody);
+    int lead = voice_step(&g_lead, g_tune->melody);
     if (lead == NOTE_RELEASE || lead == REST) {
         REG_SOUND1CNT_H = 0;
     } else if (lead != NOTE_HOLD) {
@@ -214,7 +306,7 @@ void korobeiniki_frame(void) {
         REG_SOUND1CNT_X = (uint16_t)(kNoteReg[lead] | 0x8000);
     }
 
-    int bass = voice_step(&g_bass, kBass);
+    int bass = voice_step(&g_bass, g_tune->bass);
     if (bass == NOTE_RELEASE || bass == REST) {
         REG_SOUND2CNT_L = 0;
     } else if (bass != NOTE_HOLD) {

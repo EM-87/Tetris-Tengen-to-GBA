@@ -1140,19 +1140,22 @@ def skin_check(rom_path):
 
 
 # ---------------------------------------------------------------------------
-# The fifth tune.
+# The tunes that are not on the cartridge.
 #
-# Korobeiniki is not on this cartridge — Tengen's four are Loginska, Bradinsky,
-# Karinka and Troika — so it is entered by hand in gba/korobeiniki.c and hidden
-# behind L+R on the selection screen. That makes it the one piece of content in
-# the port that was not extracted from the ROM, and the one piece of sound that
-# does not come out of the cartridge's own engine, so it is worth checking
-# rather than assuming:
+# Tengen's four are Loginska, Bradinsky, Karinka and Troika. Korobeiniki and
+# Katyusha are not among them, so both are entered by hand in gba/handtunes.c
+# and hidden behind L+R on the selection screen. That makes them the only
+# content in the port that was not extracted from the ROM, and the only sound
+# that does not come out of the cartridge's own engine, so they are worth
+# checking rather than assuming:
 #
-#   * the menu offers four tunes until the code is entered, and five after;
-#   * choosing it actually produces notes, and DIFFERENT notes over time (a
+#   * the menu offers the cartridge's five until the code is entered, and
+#     eight after — the two tunes and MUSIC MIX;
+#   * choosing one actually produces notes, and DIFFERENT notes over time (a
 #     stuck channel would still read as "sounding");
-#   * PAUSE silences it, which needs its own stop because MUSIC_SUSPEND only
+#   * the two are different tunes and not one score played twice, which is
+#     what a bad index into the tune table would look like;
+#   * PAUSE silences them, which needs its own stop because MUSIC_SUSPEND only
 #     reaches the cartridge's engine;
 #   * and the cartridge's engine is still running underneath, because the
 #     sound effects are still meant to be the ROM's.
@@ -2908,7 +2911,7 @@ def leaving_title_check(rom_path):
     return 0
 
 
-def korobeiniki_check(rom_path):
+def handtunes_check(rom_path):
     core, screen = load(rom_path)   # `screen` must stay alive; see load()
     failures = []
 
@@ -2929,8 +2932,9 @@ def korobeiniki_check(rom_path):
     for _ in range(10):
         seen.add(tilemap_text(core, MUSIC_ROW))
         tap(KEYS["RIGHT"])
-    if any("KOROBEINIKI" in row for row in seen):
-        failures.append("la cancion escondida se ofrece sin haber metido el codigo")
+    for hidden in ("KOROBEINIKI", "KATIUSKA"):
+        if any(hidden in row for row in seen):
+            failures.append(f"{hidden} se ofrece sin haber metido el codigo")
     if len(seen) != 5:
         failures.append(f"el menu ofrece {len(seen)} canciones, no 5: {sorted(seen)}")
     elif not any("NO MUSIC" in row for row in seen):
@@ -2951,18 +2955,22 @@ def korobeiniki_check(rom_path):
     else:
         print("  L+R descubre KOROBEINIKI y la deja elegida")
 
-    # The code uncovers TWO entries, not one: the fifth tune and MUSIC MIX,
-    # which plays the five in turn and turns over at every level-up.
+    # The code uncovers THREE entries, not one: the two hand-entered tunes and
+    # MUSIC MIX, which plays them all in turn and turns over at every level-up.
     unlocked = set()
-    for _ in range(14):
+    for _ in range(16):
         unlocked.add(tilemap_text(core, MUSIC_ROW))
         tap(KEYS["RIGHT"])
-    if len(unlocked) != 7:
-        failures.append(f"tras el codigo el menu ofrece {len(unlocked)}, no 7")
-    elif not any("MUSIC MIX" in row for row in unlocked):
-        failures.append("el codigo no descubre MUSIC MIX")
+    if len(unlocked) != 8:
+        failures.append(f"tras el codigo el menu ofrece {len(unlocked)}, no 8")
     else:
-        print(f"  tras el codigo: {len(unlocked)} entradas, con MUSIC MIX")
+        missing = [n for n in ("KATIUSKA", "MUSIC MIX")
+                   if not any(n in row for row in unlocked)]
+        if missing:
+            failures.append(f"el codigo no descubre {', '.join(missing)}")
+        else:
+            print(f"  tras el codigo: {len(unlocked)} entradas, "
+                  "con KATIUSKA y MUSIC MIX")
 
     # Back onto it, then into a game.
     for _ in range(10):
@@ -2999,7 +3007,7 @@ def korobeiniki_check(rom_path):
         for k, v in sound_state(core).items():
             worst = max(worst, v)
     if worst:
-        failures.append(f"en pausa la quinta cancion sigue sonando ({worst})")
+        failures.append(f"en pausa la cancion de mas sigue sonando ({worst})")
     else:
         print("  PAUSE la silencia igual que a las del cartucho")
 
@@ -3015,15 +3023,52 @@ def korobeiniki_check(rom_path):
         engine = max(engine, sound_state(core)["activos"])
     core.set_keys()
     if not engine:
-        failures.append("el motor del cartucho no sigue vivo bajo la quinta cancion")
+        failures.append("el motor del cartucho no sigue vivo bajo la cancion de mas")
     else:
         print("  el motor del cartucho sigue sonando debajo (los efectos son suyos)")
+
+    # THE SECOND HAND-ENTERED TUNE, on its own console. Katyusha is a
+    # different score and a different tempo, so "it plays" is not enough: the
+    # set of pitches it reaches has to be its own. Two tunes sharing one
+    # sequencer is exactly how a bad table index looks like nothing at all.
+    other, other_screen = load(rom_path)    # `other_screen` must stay alive
+    _ = other_screen
+    run(other, 8)
+    to_music_page(other, 8)
+    run(other, 8)
+    other.set_keys(KEYS["L"], KEYS["R"]); run(other, 4)
+    other.set_keys(); run(other, 10)
+    for _ in range(12):
+        if "KATIUSKA" in tilemap_text(other, MUSIC_ROW):
+            break
+        other.set_keys(KEYS["RIGHT"]); run(other, 4)
+        other.set_keys(); run(other, 8)
+    else:
+        failures.append("no pude dejar KATIUSKA elegida en el menu")
+    press_start(other)
+    run(other, 10)
+    other_io = other._native.memory.io
+    kat_pitches, kat_volumes = set(), set()
+    for _ in range(400):
+        other.run_frame()
+        kat_pitches.add(other_io[(REG_SOUND1CNT_X - 0x04000000) >> 1] & 0x7FF)
+        kat_volumes.add((other_io[(REG_SOUND1CNT_H - 0x04000000) >> 1] >> 12) & 0xF)
+    if max(kat_volumes) == 0:
+        failures.append("KATIUSKA no suena: el pulso 1 queda a volumen cero")
+    elif len(kat_pitches) < 6:
+        failures.append(f"KATIUSKA no cambia de nota: {len(kat_pitches)} tono(s)")
+    elif kat_pitches == pitches:
+        failures.append("KATIUSKA toca exactamente los tonos de KOROBEINIKI")
+    else:
+        print(f"  KATIUSKA es otra cancion: {len(kat_pitches)} tonos, "
+              f"{len(kat_pitches ^ pitches)} distintos de los de KOROBEINIKI")
 
     for f in failures:
         print(f"FALLA: {f}")
     if failures:
         return 1
-    print("OK: la quinta cancion esta escondida, suena, y no pisa al cartucho.")
+    print("OK: las dos canciones de mas estan escondidas, suenan, "
+          "y no pisan al cartucho.")
     return 0
 
 
@@ -3111,8 +3156,8 @@ def main():
                      help="check the cathedral overlay and the fireworks")
     ap.add_argument("--skin", action="store_true",
                      help="check the L/R title-skin easter egg")
-    ap.add_argument("--korobeiniki", action="store_true",
-                     help="check the hidden fifth tune")
+    ap.add_argument("--handtunes", "--korobeiniki", action="store_true",
+                     help="check the two hidden hand-entered tunes")
     ap.add_argument("--leave-title", action="store_true",
                      help="check the title leaves no sprites or music behind")
     ap.add_argument("--braid", action="store_true",
@@ -3161,8 +3206,8 @@ def main():
         sys.exit(title_check(args.rom))
     if args.skin:
         sys.exit(skin_check(args.rom))
-    if args.korobeiniki:
-        sys.exit(korobeiniki_check(args.rom))
+    if args.handtunes:
+        sys.exit(handtunes_check(args.rom))
     if args.leave_title:
         sys.exit(leaving_title_check(args.rom))
     if args.braid:
