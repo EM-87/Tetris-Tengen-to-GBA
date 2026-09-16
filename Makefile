@@ -125,6 +125,23 @@ assets:
 	@test -n "$(ROM)" || { echo "usage: make assets ROM=/path/to/tetris.nes [PROTO=\"proto_a.nes proto_b.nes ...\"]"; exit 1; }
 	python3 tools/extract_assets.py "$(ROM)" $(foreach p,$(PROTO),--proto "$(p)") -o gba/
 
+# THE PORT AGAINST THE CARTRIDGE ITSELF, frame by frame — not against the
+# disassembly, which is what everything else here measures. Boots an original
+# dump in tools/nes_console.py, plays a fixed script on both it and
+# src/tengen_core.c from the same seed, and diffs a line per frame. Slow (an
+# interpreter: about a minute per thousand frames), so it is not in
+# gba-check; reach for it after touching tengen_step.
+#   make trace ROM=/path/to/tetris.nes [FRAMES=3000]
+TRACE_CORE := $(BUILD)/trace_core
+
+$(TRACE_CORE): tools/trace_core.c $(CORE_SRC) $(CORE_HDR) | $(BUILD)
+	$(CC) $(CFLAGS) tools/trace_core.c $(CORE_SRC) -o $@
+
+.PHONY: trace
+trace: $(TRACE_CORE)
+	@test -n "$(ROM)" || { echo "usage: make trace ROM=/path/to/tetris.nes [FRAMES=3000]"; exit 1; }
+	python3 tools/trace_match.py "$(ROM)" --frames $(or $(FRAMES),3000) --core $(TRACE_CORE) --outdir $(BUILD)
+
 # Verifies the asset conversion's format handling without needing a ROM.
 .PHONY: assets-check
 assets-check:

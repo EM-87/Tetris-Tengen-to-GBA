@@ -385,6 +385,15 @@ running ROM; only the side panels need reflowing).
   `make gba` on a fresh clone. `PROTO` is optional and adds the title-skin
   easter egg; without it the port builds and runs the same, minus that.
 - `make assets-check` — verifies the asset conversion without needing a ROM.
+- `make trace ROM=/path/to/tetris.nes [FRAMES=3000]` — **THE PORT AGAINST THE
+  CARTRIDGE, NOT AGAINST THE DISASSEMBLY.** Boots an original dump in
+  `tools/nes_console.py`, walks its menus into a 1 PLAYER game, reads its
+  `savedRNGSeed`, seeds `src/tengen_core.c` with the same number, feeds both
+  the same button script and diffs a line a frame — piece, position, fall
+  timer, counters and all two hundred playable cells. It is what found the
+  port's last three timing bugs, none of which a reading of the disassembly
+  had caught. Slow (an interpreter: about a minute a thousand frames), so it
+  is NOT in `gba-check`; run it after touching `tengen_step`.
 - `make gba-check` — boots the ROM headlessly in mGBA and asserts it draws
   the field where the resolution mapping says it should, that a piece
   actually falls, that the line-clear sweep crosses the row and writes the

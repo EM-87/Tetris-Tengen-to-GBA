@@ -1,0 +1,143 @@
+"""THE PORT AGAINST THE CARTRIDGE, frame by frame.
+
+Every other check in this repository measures the port against the
+DISASSEMBLY — against a reading of what the ROM does. This one measures it
+against the ROM. tools/nes_console.py runs the whole cartridge, so:
+
+  * boot it, walk its four menus into a 1 PLAYER game at level 0, and read
+    savedRNGSeed out of its RAM;
+  * seed src/tengen_core.c with that same number and feed both the same
+    pseudo-random button script;
+  * write one line per frame from each — piece, orientation, row, column,
+    next, fall timer, level, lines, score, and all two hundred playable cells
+    — and diff them.
+
+THIS IS WHAT FOUND THE PORT'S LAST THREE TIMING BUGS, none of which any
+disassembly reading had caught: the 48-frame timer on a game's first piece,
+the whole frame a spawn costs, and the soft drop reloading the fall counter
+before the frame's own decrement rather than after it. A frame apiece, and
+invisible until the two were put side by side.
+
+    make trace ROM=/path/to/tetris.nes [FRAMES=3000]
+
+The cartridge side runs an interpreter, so it is not fast: about a minute per
+thousand frames. It is not part of `make gba-check` for that reason — it is
+the thing to reach for when the core's timing is in question, or after
+touching tengen_step.
+"""
+
+import argparse
+import os
+import subprocess
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from nes_console import NesConsole, GAMESTATE_PLAYING
+
+# The same nine lines as trace_core.c's generator. See the note there.
+BTN_LEFT, BTN_RIGHT, BTN_A, BTN_B, BTN_DOWN = 0x40, 0x80, 0x01, 0x02, 0x20
+
+
+def script(count, seed=12345):
+    out, s = [], seed
+    for _ in range(count):
+        s = (s * 1103515245 + 12345) & 0x7FFFFFFF
+        r = (s >> 16) % 10
+        out.append({0: BTN_LEFT, 1: BTN_RIGHT, 2: BTN_A, 3: BTN_B}.get(r, BTN_DOWN))
+    return out
+
+
+def digits(nes, addr, n):
+    v = 0
+    for i in range(n):
+        v = v * 10 + ((nes.ram(addr + i) - 0x30) & 0xF)
+    return v
+
+
+def field(nes):
+    """The ten playable columns of ROM rows 6..25.
+
+    player1Playfield is at $0600 as EIGHT BYTES A ROW — sixteen nibbles, of
+    which 0-2 and 13-15 are wall and 3-12 are the playfield. The port's own
+    field is twelve columns with one wall each side, so its columns 1..10 are
+    these nibbles 3..12.
+    """
+    out = []
+    for r in range(6, 26):
+        for c in range(1, 11):
+            nib = c + 2
+            b = nes.bus.ram[(0x600 + r * 8 + (nib >> 1)) & 0x7FF]
+            out.append("%X" % ((b >> 4) if (nib & 1) == 0 else (b & 0xF)))
+    return "".join(out)
+
+
+def cartridge_trace(rom, frames, out_path):
+    nes = NesConsole(rom)
+    nes.start_1p_game()
+    seed = nes.ram(0x5A) | (nes.ram(0x5B) << 8)
+    lines = ["seed %04X" % seed]
+    buttons = script(frames)
+    for f in range(frames):
+        nes.frame(buttons[f])
+        if nes.state != GAMESTATE_PLAYING:
+            lines.append("%d estado %02X" % (f, nes.state))
+            continue
+        lines.append("%d p%d o%d y%d x%d n%d t%d lvl%d L%d S%d %s" % (
+            f, nes.ram(0x64), nes.ram(0x68), nes.ram(0x60), nes.ram(0x62),
+            nes.ram(0x66), nes.ram(0x6A),
+            (10 if nes.ram(0x42C) != 0x30 else 0) + (nes.ram(0x42D) - 0x30),
+            digits(nes, 0x424, 4), digits(nes, 0x418, 6), field(nes)))
+    with open(out_path, "w") as fh:
+        fh.write("\n".join(lines) + "\n")
+    return seed
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("rom", help="an original Tengen Tetris dump")
+    ap.add_argument("--frames", type=int, default=3000)
+    ap.add_argument("--core", default="build/trace_core",
+                    help="the compiled tools/trace_core.c")
+    ap.add_argument("--outdir", default="build")
+    args = ap.parse_args()
+
+    rom_path = os.path.join(args.outdir, "trace_cartridge.txt")
+    print(f"corriendo el cartucho {args.frames} frames "
+          f"(un interprete; tarda ~1 min por cada mil)...")
+    seed = cartridge_trace(args.rom, args.frames, rom_path)
+    print(f"  savedRNGSeed = ${seed:04X}, escrito {rom_path}")
+
+    core_path = os.path.join(args.outdir, "trace_core.txt")
+    with open(core_path, "w") as fh:
+        subprocess.run([args.core, "%04X" % seed, str(args.frames)],
+                        stdout=fh, check=True)
+    print(f"  escrito {core_path}")
+
+    with open(rom_path) as fh:
+        rom_lines = fh.read().splitlines()
+    with open(core_path) as fh:
+        core_lines = fh.read().splitlines()
+
+    # The cartridge's frame 0 is its spawn frame, which tengen_new_game has
+    # already done on the core's side; its trace starts at frame 1 to match.
+    rom_lines = [l for l in rom_lines[1:] if not l.startswith("0 ")]
+    core_lines = core_lines[1:]
+
+    n = min(len(rom_lines), len(core_lines))
+    for i in range(n):
+        if rom_lines[i] != core_lines[i]:
+            print(f"FALLA: se separan en el frame {rom_lines[i].split()[0]}")
+            print(f"  cartucho: {rom_lines[i][:96]}")
+            print(f"  port:     {core_lines[i][:96]}")
+            return 1
+    if len(rom_lines) != len(core_lines):
+        print(f"FALLA: el cartucho dio {len(rom_lines)} lineas y el port "
+              f"{len(core_lines)}")
+        return 1
+    print(f"OK: el port y el cartucho juegan la misma partida, "
+          f"{n} frames identicos.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

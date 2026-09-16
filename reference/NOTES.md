@@ -1062,6 +1062,93 @@ hands that restart the next entry; a linked match, which has no interlude,
 asks for it on the spot instead. It also means the music changes because you
 played well, which a timer could never manage.
 
+## The port against the cartridge, frame by frame
+
+Everything else in this file measures the port against the DISASSEMBLY —
+against a reading of what the ROM does. `make trace ROM=...` measures it
+against the ROM.
+
+`tools/nes_cpu.py` was written to run PIECES of this cartridge: the sound
+engine, and `sendNametableToPPU`. It turns out to run the whole game, and
+only three things were missing, each of which took a few lines
+(`tools/nes_console.py`):
+
+* **A controller.** `pollController` ($A400) strobes $4016 and reads it eight
+  times, bit 0 into player 1. A shift register latched on the strobe.
+* **A vblank flag that CLEARS.** nes_cpu pins PPUSTATUS's bit 7 high so that
+  "wait for vblank" loops fall through. `enablePPURendering` ($A465) waits for
+  the opposite — for it to clear — so a flag pinned high is a loop the game
+  never leaves, and it never leaves its title screen.
+* **An NMI only when the cartridge asks.** PPUCTRL bit 7 is the enable and the
+  ROM clears it whenever it does not want interrupting. Firing one anyway runs
+  the handler at a moment the code is not ready for: with that bug the game
+  walked from its own title screen into GAMESTATE_PLAYING with nothing
+  touching the pad.
+
+With those, `tools/trace_match.py` boots a dump, walks its four menus into a
+1 PLAYER game, reads `savedRNGSeed` out of its RAM, seeds `src/tengen_core.c`
+with the same number, feeds both the same button script and diffs a line per
+frame: piece, orientation, row, column, next, fall timer, level, lines, score
+and all two hundred playable cells.
+
+### What it found
+
+Three timing faults, none of which any reading of the disassembly had caught,
+and each worth a frame:
+
+**The first piece of a game falls on a timer of 48, not 20.**
+`getNextTetromino` loads `#$14`, then finds `current` zero — nothing has been
+dealt yet — takes the `beq`, overwrites it with `#$30`, and goes round again
+with the piece it has just rolled. Every later spawn has a real `next` waiting
+and keeps the 20. The port pre-rolled `next` in `tengen_new_game` and set a
+flat 20, so its first piece started falling twenty-eight frames early.
+
+**A spawn costs a whole frame.** `activeGamePlay` ends
+
+    lda player1TetrominoCurrent,x
+    bne L8320               ; there is a piece: play it
+    jmp getNextTetromino    ; there is not: deal one, and that is the frame
+
+a `jmp`, not a `jsr`. The frame that deals a piece does nothing else: no
+input, and no decrement of the counter `L8320` would have touched. The port
+spawned inline from the lock path and from the end of the line-clear
+animation, so every piece in the game started falling one frame early.
+Locking now stores zero over the piece the way `L8417` does, and the frame
+after it deals.
+
+**The soft drop reloads the fall timer in the INPUT phase.** `jsr L9AEE` sits
+inside the soft-drop branch at `$8116`, which runs before the frame's own
+gravity decrement — so that decrement still takes one off what the reload just
+loaded. The port reloaded after it and ended every soft-drop frame a frame
+high: 33 where the cartridge had 32.
+
+With those three fixed the two agree for three thousand consecutive frames,
+board and all, through locks and scoring.
+
+### What it confirmed
+
+Two measurements are now unit tests in `tests/test_tengen.c`, so they outlive
+the harness:
+
+* **The pieces.** A real cartridge, from `savedRNGSeed` $C6F0, dealt
+  `L J L T S T T S O J L`. Seeding the port's generator with the same number
+  deals the same eleven — the RNG, the five steps a draw, the mask, the reroll
+  on zero and the piece numbering, all confirmed against the hardware's own
+  code. A brute force over all 65536 seeds finds exactly four that produce
+  that sequence: $C6F0 and the three differing only in bits eleven draws
+  cannot reach.
+* **The cadence.** Taken up with the cartridge's OWN level-up code, it falls
+  at 5 6 5 6 on level 10, 3 4 4 4 on 14, 4 3 3 3 on 16 and a flat 3 on 17 —
+  the whole fractional band including the polarity flip at 16, where the SLOW
+  entry is the one row in four rather than the fast one.
+
+### What it does not model
+
+Cycle timing (a frame is a fixed count of instructions, which is plenty for a
+main loop written to finish inside one), sprite-0 hit, and the mapper's CHR
+banking, which only moves tiles about. None of them reach the game's own
+state, and the three thousand identical frames are the evidence.
+
 ## Tetris Tengen XE, decoded record by record
 
 The mod is distributed as a ten-record IPS patch and described as adding two
