@@ -661,21 +661,45 @@ static void lock_piece(TengenGame *game, TengenPlayerSlot slot) {
     }
 }
 
+/* getNextTetromino (main.asm.txt:3688-3721), and the loop in it that this
+ * port had flattened away.
+ *
+ *     lda #$14 / sta fallTimer / sta dropRatePossible
+ *   @populateCurrent:
+ *     current = next ; roll a fresh next
+ *     lda current / bne @currentPopulated
+ *     lda #$30 / sta fallTimer / bne @populateCurrent
+ *   @currentPopulated:
+ *
+ * THE FIRST PIECE OF A GAME FALLS ON A TIMER OF $30, NOT $14. `next` is zero
+ * when a game begins — nothing has been dealt yet — so the first call takes
+ * the `beq` path, overwrites the 20 with 48, and goes round again with the
+ * piece it has just rolled. Every spawn after that has a real `next` waiting
+ * and keeps the 20.
+ *
+ * This port pre-rolled `next` in tengen_new_game and set a flat 20, so its
+ * first piece started falling twenty-eight frames early. MEASURED, not read:
+ * the cartridge was run in tools/nes_cpu.py and player1FallTimer reads 48 on
+ * the first frame of play. The two RNG draws are unchanged either way — the
+ * loop rolls once for the piece it throws away and once for the piece it
+ * keeps, which is the same two draws the pre-roll made.
+ *
+ * dropRatePossible is NOT touched by the second pass: it keeps its 20. */
 static void spawn_piece(TengenGame *game, TengenPlayerSlot slot) {
     TengenPlayerState *p = &game->player[slot];
-    p->piece.current = p->piece.next;
-    p->piece.next = roll_next_piece(&p->rng);
+    p->fall_timer = TENGEN_DROP_RATE_AT_SPAWN;
+    p->drop_rate_possible = TENGEN_DROP_RATE_AT_SPAWN;
+    do {
+        p->piece.current = p->piece.next;
+        p->piece.next = roll_next_piece(&p->rng);
+        if (p->piece.current == TT_NONE) p->fall_timer = TENGEN_FIRST_FALL_TIMER;
+    } while (p->piece.current == TT_NONE);
     p->piece.orientation = 0;
     p->piece.y = TENGEN_SPAWN_Y;
     /* main.asm.txt:3716-3720: 1P and 2P both spawn centred at entry [2];
      * only coop indexes the table by player so the two share a wide field. */
     p->piece.x = game->coop ? TENGEN_SPAWN_X[slot] : TENGEN_SPAWN_X[2];
-    /* main.asm.txt:3689-3691: both the fall timer and the soft-drop threshold
-     * start at 20 on spawn, before the level's own gravity value takes over
-     * on the first reload. */
-    p->fall_timer = TENGEN_DROP_RATE_AT_SPAWN;
     p->drop_repeat = 0;
-    p->drop_rate_possible = TENGEN_DROP_RATE_AT_SPAWN;
 
     /* Piece statistics (main.asm.txt:3730-3797, the tail of getNextTetromino).
      * Counted as the piece is DEALT, not as it locks, and only in 1P: the ROM
@@ -740,6 +764,18 @@ static const uint8_t kFractionalGravityMask[TENGEN_MAX_LEVEL_XE + 1] = {
      * mod's own entry 19 (1 frame) is never read. */
     0x01, 0x00
 };
+
+/* L9AEE's whole job: reload the fall timer from the level's table using the
+ * piece's row BEFORE it moves, and clamp the soft-drop threshold so soft
+ * dropping is never slower than plain gravity (main.asm.txt:4008-4011). Both
+ * of its callers are below — the soft drop and the natural gravity — and WHEN
+ * each calls it decides what the timer reads at the end of the frame. */
+static void reload_fall_timer(TengenPlayerState *p, const TengenGame *game) {
+    uint8_t reload = tengen_frames_per_row(p->level, p->piece.y, game->coop,
+                                            game->xe);
+    p->fall_timer = reload;
+    if (reload < p->drop_rate_possible) p->drop_rate_possible = reload;
+}
 
 /* Reproduces L9AEE: pick the fall-timer reload value for this level, taking
  * the piece's current row into account for the fractional levels. The ROM
@@ -900,7 +936,15 @@ void tengen_new_game(TengenGame *game, uint16_t seed, uint8_t start_level,
         p->start_level = start_level;
         p->level = start_level;
         p->game_active = (i == 0) || two_player || coop;
-        p->piece.next = roll_next_piece(&p->rng); /* pre-roll so spawn_piece's first "current = next" is meaningful */
+        /* NO PRE-ROLL, and this call IS the cartridge's first frame of play.
+         * initializeGameMode does not deal a piece: it leaves `current` at
+         * zero and the first frame of activeGamePlay takes the spawn branch.
+         * Doing that work here instead puts the game in exactly the state
+         * that frame leaves — piece dealt, fall timer 48, nothing
+         * decremented — so a caller's first tengen_step is the cartridge's
+         * SECOND frame, and every frame after it lines up. `next` is left at
+         * zero on the way in, which is what sends this spawn round
+         * getNextTetromino's own loop for that 48. See spawn_piece. */
         spawn_piece(game, (TengenPlayerSlot)i);
     }
 }
@@ -1100,9 +1144,9 @@ TengenStepResult tengen_step(TengenGame *game, TengenPlayerSlot slot, uint8_t he
                 p->long_bar_code_used = 0;
             }
 
-            spawn_piece(game, slot);
-            if (!tengen_position_valid(game, slot))
-                top_out(game, slot, &result);
+            /* NO SPAWN HERE. The piece was zeroed when it locked and the
+             * next frame deals its replacement; see activeGamePlay's spawn
+             * branch. */
         }
         p->held_last_frame = held_buttons;
         return result;
@@ -1115,6 +1159,33 @@ TengenStepResult tengen_step(TengenGame *game, TengenPlayerSlot slot, uint8_t he
      * (main.asm.txt:66-70), so a clear started before pausing still finishes.
      * Cheat-code entry happens in tengen_pause_input, not here. */
     if (game->paused) {
+        p->held_last_frame = held_buttons;
+        return result;
+    }
+
+    /* A SPAWN COSTS A WHOLE FRAME, and this port used to get that free.
+     *
+     * activeGamePlay (main.asm.txt:466-468) ends with
+     *
+     *     lda player1TetrominoCurrent,x
+     *     bne L8320               ; there is a piece: play it
+     *     jmp getNextTetromino    ; there is not: deal one, AND THAT IS THE FRAME
+     *
+     * A `jmp`, not a `jsr`: the frame that deals a piece does nothing else.
+     * No input reaches it, and the gravity counter L8320 would have
+     * decremented is left alone — so every piece in the game gets one frame
+     * of stillness before it starts falling, and the first piece of a game
+     * gets it on top of the 48 in TENGEN_FIRST_FALL_TIMER.
+     *
+     * This port spawned inline from the lock path and from the end of the
+     * line-clear animation, so each of its pieces started falling one frame
+     * early. MEASURED: on the cartridge's own first frame of play the piece
+     * is already dealt and player1FallTimer still reads 48; this port's read
+     * 47. One frame per piece does not sound like much until the difference
+     * is what a stack at level 17 does to you. */
+    if (p->piece.current == TT_NONE) {
+        spawn_piece(game, slot);
+        if (!tengen_position_valid(game, slot)) top_out(game, slot, &result);
         p->held_last_frame = held_buttons;
         return result;
     }
@@ -1168,6 +1239,15 @@ TengenStepResult tengen_step(TengenGame *game, TengenPlayerSlot slot, uint8_t he
             gravity_tick = true;
             if (p->drop_rate_possible >= 2) p->drop_rate_possible--;
             p->drop_repeat = 0;
+            /* AND THE RELOAD HAPPENS HERE, NOT WITH THE MOVE. `jsr L9AEE` is
+             * inside the soft-drop branch (main.asm.txt:216, $8116), which
+             * runs in the INPUT phase — so the natural-gravity decrement
+             * further down the frame still takes one off what it just
+             * loaded. Doing the reload after that decrement, which is what
+             * this did, left the timer a frame high after every soft-drop
+             * step: the cartridge ends such a frame on 32 where this ended on
+             * 33. Measured in a side-by-side trace of a real match. */
+            reload_fall_timer(p, game);
         }
     } else {
         p->drop_repeat = 0;
@@ -1177,19 +1257,12 @@ TengenStepResult tengen_step(TengenGame *game, TengenPlayerSlot slot, uint8_t he
     /* Natural gravity runs in parallel with soft drop rather than instead of
      * it: the ROM decrements this counter every frame in L8320 and OR's its
      * result into the same "move down" bit the soft drop sets, so a frame
-     * where both fire still moves the piece exactly one row. */
+     * where both fire still moves the piece exactly one row. Its own reload
+     * comes AFTER the decrement, because the decrement is what fired it. */
     if (p->fall_timer > 0) p->fall_timer--;
-    if (p->fall_timer == 0) gravity_tick = true;
-
-    if (gravity_tick) {
-        /* L9AEE reloads the fall timer from the level's gravity table using
-         * the piece's row BEFORE it moves, and clamps the soft-drop
-         * threshold so soft dropping is never slower than plain gravity
-         * (main.asm.txt:4008-4011). */
-        uint8_t reload = tengen_frames_per_row(p->level, p->piece.y, game->coop,
-                                                game->xe);
-        p->fall_timer = reload;
-        if (reload < p->drop_rate_possible) p->drop_rate_possible = reload;
+    if (p->fall_timer == 0) {
+        gravity_tick = true;
+        reload_fall_timer(p, game);
     }
 
     if (gravity_tick) {
@@ -1242,6 +1315,10 @@ TengenStepResult tengen_step(TengenGame *game, TengenPlayerSlot slot, uint8_t he
 
             lock_piece(game, slot);
             result.piece_locked = true;
+            /* L8417 (main.asm.txt:617-621) stores ZERO over the current piece
+             * as it plants it. That is what makes the next frame take
+             * activeGamePlay's spawn branch — see the note there. */
+            p->piece.current = TT_NONE;
 
             /* Completed rows are found now but do NOT vanish yet: the ROM
              * holds the game for lineClearTimerP1 frames while they animate
@@ -1259,9 +1336,8 @@ TengenStepResult tengen_step(TengenGame *game, TengenPlayerSlot slot, uint8_t he
                 return result;
             }
 
-            spawn_piece(game, slot);
-            if (!tengen_position_valid(game, slot))
-                top_out(game, slot, &result);
+            /* ...and again, no spawn here: `current` is already zero and the
+             * next frame is the one that deals. */
         }
     }
 

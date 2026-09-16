@@ -435,6 +435,12 @@ extern const uint8_t TENGEN_LEVEL_LINE_TENS[21];
 #define TENGEN_DROP_RATE_AT_SPAWN 20
 #define TENGEN_DROP_RATE_AFTER_RELEASE 5
 
+/* ...and what the FIRST piece of a game gets instead, which is not the same
+ * number (`lda #$30`, main.asm.txt:3698-3700). A game opens with a beat
+ * before the first piece moves, and it is more than twice the beat every
+ * later piece gets. See spawn_piece; measured on the cartridge at 48. */
+#define TENGEN_FIRST_FALL_TIMER 48
+
 /* Frames the piece waits before gravity pulls it down one row, for a given
  * level. `piece_y` matters because levels 10-17 alternate between two table
  * entries based on the piece's row, giving effectively fractional gravity

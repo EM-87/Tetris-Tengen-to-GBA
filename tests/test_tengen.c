@@ -56,6 +56,53 @@ static void test_rng_zero_seed_does_not_lock_up(void) {
     CHECK(saw_nonzero);
 }
 
+/* THE ELEVEN PIECES A REAL CARTRIDGE DEALT.
+ *
+ * Every other test here is the port against the DISASSEMBLY. This one is the
+ * port against the ROM itself: tools/nes_cpu.py will run the whole cartridge
+ * given a controller and a frame clock (a PPUSTATUS whose vblank flag clears
+ * when read, and an NMI fired only while PPUCTRL bit 7 is set), so the game
+ * was booted, driven through its four menus into a 1 PLAYER match, and played
+ * until it topped out. It reported savedRNGSeed = $C6F0 and dealt, in order:
+ *
+ *     L J L T S T T S O J L      (5 4 5 2 6 2 2 6 3 4 5)
+ *
+ * Seeding the port's generator with that same $C6F0 deals the same eleven.
+ * That is the RNG, the five steps per draw, the mask, the reroll on zero and
+ * the piece numbering, all confirmed end to end against the hardware's own
+ * code rather than against a reading of it.
+ *
+ * Only the first eleven, because the run held Down and topped out at level 0
+ * in about two thousand frames. Eleven is already far past coincidence: a
+ * 1-in-7 draw makes any particular eleven a 1-in-2e9 sequence, and a
+ * brute-force over all 65536 seeds finds exactly four that produce it — $C6F0,
+ * and the three that differ from it only in bits this many draws cannot
+ * reach. */
+static void test_deals_the_pieces_a_real_cartridge_dealt(void) {
+    static const uint8_t kCartridgePieces[] = {
+        TT_L, TT_J, TT_L, TT_T, TT_S, TT_T, TT_T, TT_S, TT_O, TT_J, TT_L
+    };
+    TengenGame game;
+    tengen_new_game(&game, 0xC6F0, 0, false, false, false);
+
+    /* new_game pre-rolls: `current` is the first draw and `next` the second,
+     * so the first two come off the spawn and the rest off the piece after
+     * it. Rather than play the match out, this walks the same generator the
+     * spawn walks — the player's own lookahead RNG, in the state new_game
+     * left it. */
+    CHECK(game.player[0].piece.current == kCartridgePieces[0]);
+    CHECK(game.player[0].piece.next == kCartridgePieces[1]);
+    TengenRng rng = game.player[0].rng;
+    for (unsigned i = 2; i < sizeof kCartridgePieces; i++) {
+        uint8_t v;
+        do {
+            for (int s = 0; s < 5; s++) v = tengen_rng_step(&rng);
+            v &= 7;
+        } while (v == 0);
+        CHECK(v == kCartridgePieces[i]);
+    }
+}
+
 static void test_piece_selector_never_returns_none_and_covers_all_seven(void) {
     /* Exercise roll_next_piece indirectly via tengen_new_game/spawn, across
      * many seeds, and confirm every piece id 1..7 shows up and TT_NONE (0)
@@ -588,10 +635,16 @@ static void test_long_bar_code_gives_an_i_once_per_level(void) {
 
 /* Drops one piece to the bottom of an empty field and returns the row it
  * settled on. */
+/* Down until the piece plants, AND ONE FRAME MORE: a lock leaves `current`
+ * at zero and the frame after it is the one that deals the replacement, the
+ * way activeGamePlay does (see tengen_core.c's spawn branch). Callers here
+ * want the board settled and the next piece in hand. */
 static int drop_one_piece(TengenGame *game) {
     for (int frame = 0; frame < 4000; frame++) {
-        if (tengen_step(game, TENGEN_PLAYER_1, TENGEN_BTN_DOWN).piece_locked)
+        if (tengen_step(game, TENGEN_PLAYER_1, TENGEN_BTN_DOWN).piece_locked) {
+            tengen_step(game, TENGEN_PLAYER_1, 0);
             return frame;
+        }
     }
     return -1;
 }
@@ -1851,6 +1904,40 @@ static void test_coop_uses_its_own_gentler_curve(void) {
     }
 }
 
+/* ...AND THE CADENCE A REAL CARTRIDGE FELL AT.
+ *
+ * Same method as test_deals_the_pieces_a_real_cartridge_dealt: the ROM was
+ * run in tools/nes_cpu.py, driven into a 1 PLAYER match, taken up with its
+ * OWN level-up code (Up Down Up Down Left Right B B A, then A to repeat), and
+ * the frames between one increment of player1TetrominoY and the next counted
+ * with nothing touching the pad. What it did:
+ *
+ *     level 10   5 6 5 6 5 6 ...      level 14   3 4 4 4 3 4 4 4 ...
+ *     level 16   4 3 3 3 4 3 3 3 ...  level 17   3 3 3 3 ...
+ *
+ * which is the whole fractional band, the level-16 polarity flip included —
+ * at 14 the FAST entry is the one row in four and at 16 it is the SLOW one,
+ * because the ROM's branch goes `beq` in one case and `bne` in the other.
+ * The port is asked for the same twelve rows in the same order. */
+static void test_falls_at_the_cadence_a_real_cartridge_fell_at(void) {
+    static const struct { uint8_t level; uint8_t frames[12]; } kMeasured[] = {
+        { 10, { 5, 6, 5, 6, 5, 6, 5, 6, 5, 6, 5, 6 } },
+        { 14, { 3, 4, 4, 4, 3, 4, 4, 4, 3, 4, 4, 4 } },
+        { 16, { 4, 3, 3, 3, 4, 3, 3, 3, 4, 3, 3, 3 } },
+        { 17, { 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3 } },
+    };
+    for (unsigned k = 0; k < sizeof kMeasured / sizeof kMeasured[0]; k++) {
+        uint8_t level = kMeasured[k].level;
+        /* The cartridge was measured from a piece that had just spawned, so
+         * row 0 of each run is TENGEN_SPAWN_Y and the rest follow it down. */
+        for (int i = 0; i < 12; i++) {
+            int8_t y = (int8_t)(TENGEN_SPAWN_Y + i);
+            CHECK(tengen_frames_per_row(level, y, false, false)
+                  == kMeasured[k].frames[i]);
+        }
+    }
+}
+
 static void test_gravity_clamps_above_max_level(void) {
     CHECK(tengen_frames_per_row(TENGEN_MAX_LEVEL, 0, false, false) ==
           tengen_frames_per_row(99, 0, false, false));
@@ -2183,6 +2270,7 @@ static void test_locked_cells_never_overwrite_the_walls(void) {
 int main(void) {
     test_rng_is_deterministic_and_never_stalls();
     test_rng_zero_seed_does_not_lock_up();
+    test_deals_the_pieces_a_real_cartridge_dealt();
     test_piece_selector_never_returns_none_and_covers_all_seven();
     test_spawn_position_matches_rom();
     test_o_piece_never_needs_a_kick();
@@ -2196,6 +2284,7 @@ int main(void) {
     test_gravity_curve_matches_rom_table();
     test_gravity_is_fractional_above_level_ten();
     test_coop_uses_its_own_gentler_curve();
+    test_falls_at_the_cadence_a_real_cartridge_fell_at();
     test_gravity_clamps_above_max_level();
     test_xe_changes_nothing_below_eighteen();
     test_xe_adds_two_levels();
