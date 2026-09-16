@@ -376,6 +376,35 @@ running ROM; only the side panels need reflowing).
    dead; and the level-up CODE still stops at 17, because the mod raises
    checkLevelUp's clamp and not the cheat's own at $B4F7.
 
+## What the port knowingly does NOT show
+
+Kept as a list rather than as scattered comments, because the last sweep found
+six credit lines that had gone missing without anyone noticing. Everything
+here is a decision; anything not on it that the cartridge shows and the port
+does not is a bug.
+
+- **"STATS", the heading over the 1P histogram** (row 6 of
+  `gameModeNametable1P`). The port relocated the cartridge's header strip into
+  the two boxes, and the right box's interior is eight columns by ten rows —
+  all of which the bars grow into. A heading would cost a row off every bar.
+  The seven piece icons under them say what it is.
+- **"HIGH SCORE" reads "HIGH"** in the 1P panel, for the same reason: the cell
+  is eight tiles wide and the phrase is ten. The number under it is the number
+  the cartridge puts there.
+- **Each dancer's choreography script.** Traced as far as the driver (`LB015`)
+  and no further; the port's dancers walk the pose table from staggered starts
+  instead of following their own programs. See reference/NOTES.md.
+- **The prototype cartridges' PIECE art**, which is flat solid squares at
+  `$01-$03` rather than the release's shaded joined blocks. How those builds
+  map a cell to a tile is not traced, so putting it in would be inventing it.
+- **The line counter's digit clamp** at 10000 (`main.asm.txt:3129-3133`). The
+  score's wrap at 999999 IS reproduced; reaching ten thousand lines in one
+  game is not a scenario worth carrying a bug for.
+- **One frame at the start of a COOPERATIVE match.** The cartridge's coop deal
+  frame decrements both fall timers and the port's does not — measured, and
+  written up with the PC that does it in reference/NOTES.md. One frame, once,
+  in one mode; every frame after it matches.
+
 ## Build
 
 - `make test` — native core tests, gcc only. The everyday loop.
