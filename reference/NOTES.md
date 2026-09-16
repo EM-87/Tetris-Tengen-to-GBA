@@ -126,7 +126,10 @@ preserve bug-for-bug.
 2. The 2P starting handicap: `initHandicapGarbage` (`main.asm.txt:3545-3598`)
    and its `garbageHeightData` at `$98A7` = `$B8,$A0,$88,$70`. The port's
    linked two-player game is a straight race with no handicap yet.
-3. The prototype dumps' own differences, for the mode that cycles them.
+3. The prototype dumps' PIECE art. Their title screens all ship now (L+R on
+   the title cycles them); the pieces in those builds are flat solid squares
+   at `$01-$03` rather than the release's shaded joined blocks, but how their
+   game maps a cell to a tile is not traced.
 4. The attract-mode demo, which is the only thing left that `computerMove`
    feeds and the port does not: `demoStart` at `frameCounterHigh` = 5.
 
@@ -392,22 +395,27 @@ bank 3, which holds the cathedral overlay at `$02`-`$13`, the sparkles at
 uploads it above the dancers' 256 tiles and installs `spritePalette1` for it,
 which is the set the title itself installs (main.asm.txt:4492-4494).
 
-## The prototype's title screen, and how it was found
+## The prototype title screens, and how they were got
 
-Tengen made this game twice: the prototype cartridges, from while the licence
-was still Nintendo's, carry a different title — "TENGEN PRESENTS / TETRIS"
-over another cathedral, gold-and-blue onion domes instead of gold-and-red, and
-a green fret border where the release has its blue braid. The port offers it
-as a skin: L or R on the title swaps between them, announced with
-`SOUND_CHIRP` ($10), one of the four effects `constants.asm.txt` marks "maybe
-unused" — so the egg speaks in the game's own voice with a sound the game
-itself never plays.
+Tengen made this game more than twice. Besides the release there are the
+prototype cartridges, and the three dumps to hand do NOT carry the same
+earlier title:
 
-### These builds are simpler than the release
+| Dump | Screen |
+| --- | --- |
+| `proto_a` | "TETRIS" over a Moscow skyline in a plain grey box, over four lines ending LICENSED BY NINTENDO OF AMERICA INC. — from before the lawsuit |
+| `proto_b` | "TENGEN PRESENTS / TETRIS" over St Basil's, gold-and-blue onion domes, in a green fret border where the release has its blue braid |
+| `proto_c` | the same cathedral and border with the logo replaced by a line of text: "THE SOVIET MIND GAME" |
 
-The release RLE-compresses its nametables and has to be RUN to unpack them
-(see the note on `sendNametableToPPU`). The prototype's upload routine is a
-flat four-page copy:
+The port offers all of them as skins: L+R on the title cycles the release and
+each dump given, announced with `SOUND_CHIRP` ($10), one of the four effects
+`constants.asm.txt` marks "maybe unused" — so the egg speaks in the game's own
+voice with a sound the game itself never plays.
+
+### Run the cartridge, do not search it
+
+The first pass at this searched the ROM. The prototype upload routine is a
+flat four-page copy —
 
     sta $3C / lda TABLE,y / sta $3D / bit PPUSTATUS
     lda #$20 / sta PPUADDR / lda #$00 / sta PPUADDR
@@ -415,63 +423,89 @@ flat four-page copy:
   @page:
     lda ($3C),y / sta PPUDATA / iny / bne @page / inc $3D / dex / bne @page
 
-so each screen is 960 plain bytes of nametable in the ROM. The routine's own
-pointer table holds five; rendering all five identified the title at `$A3C4`.
+— so in ONE of the dumps each screen is 960 plain bytes in the ROM, and
+rendering all five pointers in that routine's table by hand identified the
+title at `$A3C4`. It worked, and it was the wrong shape of answer. It needed
+the attribute table traced separately (the copy overwrites `$23C0`, then
+`$904D` uploads the real attributes there, RLE'd as (count, value) pairs from
+`$907D`; the blob's last 64 bytes are PROGRAM, which is what put the cathedral
+in stripes the first time) and the palette traced separately (four 16-byte
+sets at `$91E5`, and the title's is index 0 per its own setup at `$8C7C`, not
+the index 2 an earlier pass had picked by eye). And it left a note saying the
+other two dumps hid their screens in a format nothing recognised.
 
-### Everything else about it was traced, after being guessed wrong once
+The right method was already in this file, being used on the release:
+`read_screen` RUNS `sendNametableToPPU` rather than decompressing it here.
+`boot_prototype` does the same thing one level up — it runs the whole
+cartridge:
 
-Two things looked settled and were not, and both showed up as a picture that
-was merely *plausible* rather than right:
+- reset vector into `nes_cpu` with `ppu=True`, `strict=False`;
+- an NMI forced every 30000 instructions, because the reset code only STAGES
+  the palette in RAM and it is the vblank handler that sends it to `$3F00`;
+- 1.2M instructions, then read `$2000`-`$23FF` and `$3F00` back.
 
-**The attributes are not in the blob.** The copy moves four pages, so it does
-write over the attribute table at `$23C0` — but `$904D` then uploads the real
-attributes there, RLE'd as (count, value) pairs terminated by a zero count,
-from its own table at `$907D`. Taking the blob's last 64 bytes for attributes
-gives sixty-four bytes of PROGRAM, which is what put the cathedral in green
-and red stripes the first time this ran.
+No address to guess, no format to recognise, and nothing traced per dump. All
+three give up complete, distinct screens, and the capture is byte-identical at
+500k, 1M, 1.5M and 3M instructions — the ROM sits on its title waiting for
+Start.
 
-**The palette was picked by eye, and the eye was wrong.** There are four
-16-byte sets at `$91E5`; an earlier pass rendered the title under all four and
-kept the one that looked best. It looked best and it was `$9205`, index 2 —
-another screen's. The real answer is not a judgement call at all, because each
-screen's setup does the same three things with the SAME index (the title's is
-0, at `$8C7C`-`$8C92`):
+It is also more faithful for the dump the flat read DID handle: "TM (c)1987
+ACADEMYSOFT-ELORG." and "(c)1988 TENGEN." are written afterwards by a separate
+text routine, so the shipped skin had neither line and the composition was
+dropping both rows as blank.
 
-| Call | What it loads |
-| --- | --- |
-| `lda #0 / jsr $91C0` | palettes: `$91E5 + index*16` -> `$3F00` |
-| `lda #0 / jsr $93D9` | nametable: the index'th pointer in the table at `$9403` |
-| `lda #0 / jsr $904D` | attributes: the index'th entry of `$907D`, RLE |
+### Which pattern table
 
-Index 3 is not a background set at all: `$91E1,y` supplies the destination
-low byte, and only index 3's is `$10`, making it the sprite palettes at
-`$3F10`.
+Not PPUCTRL. All three upload their nametables during forced blank with
+PPUCTRL clear, and `proto_c` never sets bit 4 at all under this interpreter,
+though its screen plainly renders out of bank 1 (bank 0 gives it the in-game
+HUD's tiles as noise). So `proto_pattern_table` measures instead: a screen
+rendered from the wrong half of the CHR leaves tiles it USES blank, and the
+right half leaves only the two the screens really do use blank — `$00` for the
+black field and `$20` for the space in the text. That separates `proto_b`
+(10 blank-among-used in bank 0 against 2 in bank 1) and `proto_c` (27 against
+2); `proto_a` ties at 2 and 2, which is why the known dumps carry their
+pattern table in their recipe and the measurement is the fallback.
+
+### Fitting 32x30 into 30x20
+
+This part stays a judgement, so it is made by hand per screen and keyed to the
+MD5 of the captured 1024 bytes — the screen, not the file, so a redump or a
+rename still matches and an unknown screen is never squeezed by a recipe meant
+for another. Two columns come off all of them the same way (the outer column
+each side: the thin rule outside the fret, or nothing at all).
+
+- `proto_a` FITS. Eleven rows of picture and four of text, so all ten dropped
+  rows are blank: two above the box, two below, one under the last line.
+- `proto_b` wants to keep twenty-one. The four rows of thin spire and finial
+  go the way the release's own composition gives up its spire, and then ONE
+  row of cathedral — row 13, the shoulder where the central tower's tent
+  starts to widen. The blank row between PRESENTS and the logo deliberately
+  STAYS: buying it left the big letters' ascenders sitting inside the word
+  above.
+- `proto_c` has a taller heading and four rows of empty sky, so two of those
+  stay as breathing room and the spire goes whole.
+
+For a dump with no recipe, `auto_compose` drops only rows and columns that
+render entirely blank, taking from the middle of the longest run each time so
+the loss is spread; if it cannot find ten and two it refuses with a reason and
+the port builds with `SCREEN_PROTO_AVAILABLE 0`.
 
 ### What the port does and does not carry over
 
 The skin is only ever the PICTURE. The cathedral overlay and the fireworks
-stay on the release screen and are hidden on the prototype's, because they
-ARE the release's — their sprites are placed in NES pixels over the release
-cathedral, and the prototype's composition has neither the same rows nor an
-empty sky to burst in. Putting them there would be inventing something neither
-cartridge does.
+stay on the release screen and are hidden on the prototypes', because they ARE
+the release's — their sprites are placed in NES pixels over the release
+cathedral, and no prototype composition has the same rows or an empty sky to
+burst in. Putting them there would be inventing something no cartridge does.
 
-Its frame is two columns and two rows on every side — a thin outer rule with
-the fret inside it — so the two columns and ten rows the GBA lacks come off
-the outer rule (all four sides, symmetrically), the five blank rows under the
-cathedral, and three of the four rows of thin spires. The blank row between
-PRESENTS and the logo is deliberately NOT one of them: buying it left the big
-letters' ascenders sitting inside the word above.
-
-### Only this prototype
-
-Of the three dumps, only one stores its title flat at a findable address.
-The other two have differently shaped pointer tables and a brute-force scan of
-every 1024-byte window in both turned up no title screen, so getting theirs
-would need a disassembly of each, and none exists. `read_proto_title` refuses
-to guess: a dump without the expected first row is rejected with a reason
-rather than converted into 1024 bytes of noise, and the port then builds with
-`SCREEN_PROTO_AVAILABLE 0` and L/R simply have nothing to switch to.
+Each prototype brings a whole 256-tile pattern table of its own, and charblock
+0 has one 256-tile window free above the release title's (512-767). Only one
+title is ever on screen, so they take turns in that window: `upload_proto_tiles`
+refills it on each swap, after `clear_screen` has blanked the map, since 8KB is
+far more than a vblank holds and with the map blank none of it is visible while
+it is being written. That is what makes the number of skins a question of
+cartridge space rather than of video memory.
 
 ## The COMPUTER player, traced and ported
 

@@ -59,6 +59,12 @@ class Bus:
         self._addr = 0
         self._latch = 0
         self._ctrl = 0
+        # PPUCTRL as it stood the last time anything was written into a
+        # nametable. Bit 4 is the pattern table the background reads from, and
+        # asking for it AFTERWARDS is no good: a ROM that has finished drawing
+        # its screen may well go on to clear PPUCTRL (one of the prototypes
+        # does), which would say bank 0 for a screen drawn out of bank 1.
+        self.ctrl_at_nametable = None
 
     def read(self, addr):
         addr &= 0xFFFF
@@ -101,6 +107,7 @@ class Bus:
                     self.pal[a & 0x1F] = value
                 elif a >= 0x2000:
                     self.vram[a - 0x2000] = value
+                    self.ctrl_at_nametable = self._ctrl
                 self._addr = (self._addr + (32 if (self._ctrl & 0x04) else 1)) & 0x7FFF
             return
         if 0x4000 <= addr <= 0x4017:

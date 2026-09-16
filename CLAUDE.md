@@ -165,18 +165,25 @@ running ROM; only the side panels need reflowing).
    subroutines that fill `oamStaging` and touch nothing else, so they execute
    on the sound engine's own 6502 interpreter — which they have to, because
    the bursts call `setMusicOrSoundEffect`. See reference/NOTES.md.
-16. ~~The prototype title skin~~ — done, from a prototype dump: L or R on the
-   title swaps the release's screen for the Nintendo-licensed build's, with
-   its own cathedral, logo, fret border, tiles and palettes. Optional:
-   `make assets ROM=... PROTO=...`; without it the port builds with
-   `SCREEN_PROTO_AVAILABLE 0` and L/R do nothing. **NOT EVERY PROTOTYPE DUMP
-   HAS IT**: the screen the port knows lives at `$B000` of a TWO-bank PRG, and
-   the one-bank dumps are refused with a reason. Check
-   `SCREEN_PROTO_AVAILABLE` in the generated `gba/screen_proto.h` after
-   running `make assets` — building with the wrong dump looks exactly like
-   the feature having been broken. See reference/NOTES.md —
-   both the attribute table and the palette index were traced after being
-   guessed wrong first.
+16. ~~The prototype title skins~~ — done, from prototype dumps: L+R on the
+   title cycles the release's screen and one screen per dump given, each with
+   its own art, tiles and palettes. Optional and unlimited:
+   `make assets ROM=... PROTO="a.nes b.nes c.nes"`; with none of them the port
+   builds with `SCREEN_PROTO_AVAILABLE 0` and L+R does nothing. **THEY ARE
+   CAPTURED, NOT READ**: `boot_prototype` boots each dump on `nes_cpu` with a
+   PPU behind it and an NMI every 30000 instructions, then reads the
+   nametable, the attributes and the palette back — so there is no address to
+   guess and no storage format to recognise, and a dump this file has never
+   seen still gives up its screen. The first pass instead read one screen out
+   of a fixed address found by rendering an upload table by hand; it worked
+   for one dump, hid the other two (see item 29), and even for its own dump it
+   missed the two copyright lines, which are written by a separate text
+   routine and are not in the blob. What is still per-dump is the COMPOSITION
+   — which ten rows go, to fit 32x30 into 30x20 — and that is keyed to the
+   MD5 of the captured screen, with a blank-row fallback for an unknown one.
+   All three skins fit one 256-tile window (512-767): they take turns in it,
+   re-uploaded on each swap, so the count is bounded by cartridge space rather
+   than by video memory.
 17. ~~Korobeiniki, and MUSIC MIX~~ — done. Korobeiniki is THE EXCEPTION to ground rule 1: it is
    not on this cartridge (Tengen's four are Loginska, Bradinsky, Karinka and
    Troika), so `gba/korobeiniki.c` is the one file here entered by hand rather
@@ -329,19 +336,22 @@ running ROM; only the side panels need reflowing).
    tile set is ASCII-indexed but $3F is a LEFT ARROW, so `extract_assets.py`
    draws one into a slot the cartridge left empty and refuses to if the dump
    has art there.
-29. Still to do: the prototype PIECE art, and a prototype mode cycling more
-   than one dump. **WHAT THE THREE DUMPS ACTUALLY HAVE**, measured rather than
-   assumed: only `proto_b` carries the title screen this port can read (its
-   signature is at $A3C4 of a two-bank PRG). `proto_a` and `proto_c` are
-   one-bank builds whose screens are somewhere else in a format none of the
-   release's machinery recognises — the release's own decompressor
-   (`sendNametableToPPU`, which read_screen RUNS) does not appear in either,
-   so finding theirs means disassembling each build's own upload routine.
-   And the charblock caps it anyway: 256 tiles for the game, 256 for the
-   title, which leaves room for TWO prototype skins, not three. Their piece
-   art is there and is completely different — flat solid squares at $01-$03
-   rather than the release's shaded joined blocks — but how their game maps a
-   cell to a tile is not traced, so putting it in would be inventing it.
+29. **WHAT THE THREE DUMPS ACTUALLY HAVE** — measured by booting each one,
+   which is the correction to what stood here before. This entry used to say
+   "only `proto_b` carries the title screen this port can read" and that the
+   other two hid theirs in a format nothing recognised. Wrong, and wrong by
+   method: it had searched the ROMs for a flat nametable instead of asking the
+   ROMs to draw. All three have complete, distinct title screens —
+   `proto_a` is "TETRIS" over a Moscow skyline with LICENSED BY NINTENDO OF
+   AMERICA INC., from before the lawsuit; `proto_b` is "TENGEN PRESENTS /
+   TETRIS" over St Basil's in the green fret; `proto_c` is the same screen
+   with the logo replaced by "THE SOVIET MIND GAME". All three draw out of
+   CHR bank 1, and all three now ship. The charblock does not cap it either:
+   they share one window and are re-uploaded on the swap. Still to do: the
+   prototype PIECE art, which is there and is completely different — flat
+   solid squares at $01-$03 rather than the release's shaded joined blocks —
+   but how their game maps a cell to a tile is not traced, so putting it in
+   would be inventing it.
 
 ## Build
 

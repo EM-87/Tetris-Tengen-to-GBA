@@ -1020,6 +1020,11 @@ def title_check(rom_path):
 # rather than failing — SCREEN_PROTO_AVAILABLE is 0 and L/R do nothing.
 # ---------------------------------------------------------------------------
 
+# How far the chord is followed before a cycle that never comes home is called
+# broken. The number of skins is whatever the build was given, so this is a
+# ceiling rather than an expectation.
+LIMIT_SKINS = 12
+
 
 def skin_check(rom_path):
     core, screen = load(rom_path)           # `screen` must stay alive; see load()
@@ -1073,14 +1078,30 @@ def skin_check(rom_path):
     else:
         print("  los sprites del release (catedral y fuegos) se retiran con ella")
 
-    tap(KEYS["L"], KEYS["R"])
-    if frame_tiles() != release:
-        failures.append("otro L+R no devuelve la pantalla del release")
+    # HOWEVER MANY SKINS the build was given, the chord must walk all of them
+    # and come back — and each must be its OWN screen, not the same tiles
+    # twice, which is what a swap that forgot to re-upload the prototype's
+    # pattern table would look like.
+    seen = [release, proto]
+    for _ in range(LIMIT_SKINS):
+        tap(KEYS["L"], KEYS["R"])
+        now = frame_tiles()
+        if now == release:
+            break
+        if now in seen:
+            failures.append("dos skins del ciclo dibujan los mismos tiles")
+            break
+        seen.append(now)
     else:
-        print("  otro L+R vuelve al titulo del release")
+        failures.append(f"el ciclo de skins no vuelve al release en "
+                         f"{LIMIT_SKINS} acordes")
+    if not failures:
+        print(f"  el acorde recorre {len(seen) - 1} skin(s) distinta(s) y "
+               "vuelve al titulo del release")
 
     # ...and the choice must survive leaving the title and coming back.
     tap(KEYS["L"], KEYS["R"])
+    proto = frame_tiles()
     for name in ("START", "B"):
         core.set_keys(KEYS[name]); run(core, 4); core.set_keys(); run(core, 10)
     if frame_tiles() != proto:
@@ -1114,7 +1135,7 @@ def skin_check(rom_path):
         print(f"FALLA: {f}")
     if failures:
         return 1
-    print("OK: L y R cambian entre el titulo del release y el del prototipo.")
+    print("OK: L+R recorre el titulo del release y los de los prototipos.")
     return 0
 
 

@@ -684,16 +684,28 @@ static void upload_title_tiles(void) {
     for (unsigned i = 0; i < sizeof(kTitleTiles); i += 2) {
         dst[i / 2] = (uint16_t)(kTitleTiles[i] | (kTitleTiles[i + 1] << 8));
     }
-#if SCREEN_PROTO_AVAILABLE
-    /* The prototype's own bank, above the release's. Tile ids in a text-mode
-     * background are ten bits, so 512-767 is still addressable from
-     * charblock 0, and screenblock 28 starts well past it. */
-    vu16 *pdst = MEM_CHARBLOCK(CHARBLOCK) + PROTO_TILE_BASE * 16;
-    for (unsigned i = 0; i < sizeof(kProtoTiles); i += 2) {
-        pdst[i / 2] = (uint16_t)(kProtoTiles[i] | (kProtoTiles[i + 1] << 8));
-    }
-#endif
 }
+
+#if SCREEN_PROTO_AVAILABLE
+/* One prototype's tiles, into the bank above the release's. Tile ids in a
+ * text-mode background are ten bits, so 512-767 is still addressable from
+ * charblock 0, and screenblock 28 starts well past it.
+ *
+ * ONE SLOT, RE-FILLED — not one slot per dump. Each prototype brings a whole
+ * 256-tile pattern table of its own and only one title is ever on screen, so
+ * they take turns in the same 512-767 window rather than each asking for a
+ * bank the charblock does not have. That is what makes the number of skins a
+ * question of cartridge space instead of video memory. 8KB a swap is more
+ * than a vblank's worth of writes, which is why the caller clears the map
+ * first: with the map blank the tiles being rewritten are not on screen. */
+static void upload_proto_tiles(int skin) {
+    vu16 *dst = MEM_CHARBLOCK(CHARBLOCK) + PROTO_TILE_BASE * 16;
+    const uint8_t *src = kProtoTiles[skin];
+    for (unsigned i = 0; i < TILES_PROTO_BYTES; i += 2) {
+        dst[i / 2] = (uint16_t)(src[i] | (src[i + 1] << 8));
+    }
+}
+#endif
 
 /* The cartridge's whole sprite bank, uploaded once. Both the dancers and the
  * line-clear puff live in it, so every sprite tile id in this file is the
@@ -2829,13 +2841,17 @@ static void clear_screen(void) {
 /* ----------------------------------------------------------------------- *
  * THE TITLE, AND THE SKIN L/R SWITCHES TO
  *
- * Tengen shipped this game twice. The prototype cartridges — made while the
- * licence was still Nintendo's — carry a different title screen: another
- * cathedral, another logo, and a green fret where the release has its blue
- * braid. Both are the cartridges' own art, so L or R on the title swaps
- * between them, with SOUND_CHIRP for a doorbell — one of the four effects
- * constants.asm.txt marks "maybe unused", so the egg is announced in the
- * game's own voice by a sound the game itself never plays.
+ * Tengen shipped this game more than twice. Besides the release there are the
+ * prototype cartridges, and they do not all carry the SAME earlier title:
+ * one is "TENGEN PRESENTS / TETRIS" over St Basil's in a green fret where the
+ * release has its blue braid, one replaces that logo with "THE SOVIET MIND
+ * GAME", and one is older than either — "TETRIS" over a Moscow skyline, over
+ * four lines ending LICENSED BY NINTENDO OF AMERICA INC., from before the
+ * lawsuit. All of them are the cartridges' own art, so L+R on the title
+ * cycles through however many the build was given, with SOUND_CHIRP for a
+ * doorbell — one of the four effects constants.asm.txt marks "maybe unused",
+ * so the egg is announced in the game's own voice by a sound the game itself
+ * never plays.
  *
  * The skin is only ever the PICTURE. The cathedral overlay and the fireworks
  * stay on the release screen and are hidden on the prototype's, because they
@@ -2845,18 +2861,22 @@ static void clear_screen(void) {
  * neither cartridge does.
  *
  * If the port was built without a prototype dump, SCREEN_PROTO_AVAILABLE is 0
- * and L/R have nothing to switch to. See tools/extract_assets.py.
+ * and L+R has nothing to switch to. See tools/extract_assets.py.
  * ----------------------------------------------------------------------- */
-#define TITLE_SKIN_COUNT (SCREEN_PROTO_AVAILABLE ? 2 : 1)
+#define TITLE_SKIN_COUNT (1 + SCREEN_PROTO_COUNT)
 
+/* 0 is the release; 1..SCREEN_PROTO_COUNT index the prototypes in the order
+ * the dumps were given to extract_assets.py. */
 static uint8_t g_title_skin;
 
-/* The two screens are never up at once, so the prototype's palettes go in the
- * title's own four banks rather than asking for four more. */
+/* No two screens are ever up at once, so whichever prototype is showing puts
+ * its palettes in the title's own four banks rather than asking for four
+ * more. */
 static void install_title_palette(void) {
 #if SCREEN_PROTO_AVAILABLE
     upload_palette_set(PAL_TITLE_BASE,
-                        g_title_skin ? kRomPalette_bg_proto : kRomPalette_bg_title,
+                        g_title_skin ? kRomPalette_bg_proto[g_title_skin - 1]
+                                     : kRomPalette_bg_title,
                         MEM_PALETTE);
 #else
     upload_palette_set(PAL_TITLE_BASE, kRomPalette_bg_title, MEM_PALETTE);
@@ -2874,15 +2894,18 @@ static void draw_title(void) {
     g_title_dirty = false;
 #if SCREEN_PROTO_AVAILABLE
     if (g_title_skin) {
-        /* Thirty columns, no padding: the prototype's frame is two columns a
-         * side — a thin outer rule and the fret inside it — and the two the
-         * GBA lacks come off the rule, so the decoration survives whole. */
+        /* Thirty columns, no padding: the bordered prototypes' frames are two
+         * columns a side — a thin outer rule and the fret inside it — and the
+         * two the GBA lacks come off the rule, so the decoration survives
+         * whole. The unbordered one has empty columns there to spare. */
+        const uint8_t *tiles = kScreenProtoTiles[g_title_skin - 1];
+        const uint8_t *banks = kScreenProtoPalettes[g_title_skin - 1];
         for (int ty = 0; ty < SCREEN_PROTO_H_TILES; ty++) {
             for (int tx = 0; tx < SCREEN_PROTO_W; tx++) {
                 int i = ty * SCREEN_PROTO_W + tx;
                 set_map_tile(tx, ty,
-                              WITH_BANK(PROTO_TILE_BASE + kScreenProtoTiles[i],
-                                        PAL_TITLE_BASE + kScreenProtoPalettes[i]));
+                              WITH_BANK(PROTO_TILE_BASE + tiles[i],
+                                        PAL_TITLE_BASE + banks[i]));
             }
         }
         return;
@@ -4368,7 +4391,14 @@ int main(void) {
                 nes_audio_play(NES_SOUND_CHIRP);
                 vsync();
                 install_title_palette();
+                /* CLEAR FIRST, then the tiles: a skin swap rewrites the whole
+                 * 256-tile prototype bank, which is far more than a vblank
+                 * holds, and with the map already blank none of it is on
+                 * screen while it is being written. */
                 clear_screen();
+#if SCREEN_PROTO_AVAILABLE
+                if (g_title_skin) upload_proto_tiles(g_title_skin - 1);
+#endif
                 draw_title();
                 oam_hide_all();
                 audio_frame();
