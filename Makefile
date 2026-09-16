@@ -148,6 +148,7 @@ gba-check: $(GBA_ROM)
 	python3 tools/run_rom.py $(GBA_ROM) --skin
 	python3 tools/run_rom.py $(GBA_ROM) --handtunes
 	python3 tools/run_rom.py $(GBA_ROM) --xe
+	python3 tools/run_rom.py $(GBA_ROM) --credits
 	python3 tools/run_rom.py $(GBA_ROM) --leave-title
 	python3 tools/run_rom.py $(GBA_ROM) --braid
 	python3 tools/run_rom.py $(GBA_ROM) --handicap

@@ -120,18 +120,19 @@ preserve bug-for-bug.
 
 ## Suggested next disassembly targets (in priority order)
 
+Two of the four that stood here are DONE and were stale: the 2P starting
+handicap (`initHandicapGarbage`, traced in full and applied on both consoles
+of a linked match — `run_rom.py --handicap`) and the attract demo (`--demo`).
+What is genuinely left:
+
 1. Each dancer's choreography script (the pointer tables the driver at
    `main.asm.txt:6392-6499` walks) — the only part of the level-up
-   interlude still approximated.
-2. The 2P starting handicap: `initHandicapGarbage` (`main.asm.txt:3545-3598`)
-   and its `garbageHeightData` at `$98A7` = `$B8,$A0,$88,$70`. The port's
-   linked two-player game is a straight race with no handicap yet.
-3. The prototype dumps' PIECE art. Their title screens all ship now (L+R on
+   interlude still approximated. The port's dancers walk the pose table from
+   staggered starts instead of following their own programs.
+2. The prototype dumps' PIECE art. Their title screens all ship now (L+R on
    the title cycles them); the pieces in those builds are flat solid squares
    at `$01-$03` rather than the release's shaded joined blocks, but how their
    game maps a cell to a tile is not traced.
-4. The attract-mode demo, which is the only thing left that `computerMove`
-   feeds and the port does not: `demoStart` at `frameCounterHigh` = 5.
 
 ## The walls do not stop at the top of the visible field
 

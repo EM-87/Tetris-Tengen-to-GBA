@@ -1281,14 +1281,16 @@ def handicap_check(rom_path):
         core.set_keys(KEYS["DOWN"]); run(core, 4); core.set_keys(); run(core, 10)
         for _ in range(steps):
             core.set_keys(KEYS["L"]); run(core, 4); core.set_keys(); run(core, 8)
-        # One line now: "HANDICAP   n   r ROWS". The word BURIES was what got
-        # dropped to make the count fit beside the value.
+        # One line: "HANDICAP  r   ROWS", and r is the CARTRIDGE'S OWN NUMBER
+        # — its handicap screen offers 0, 3, 6, 9, 12, which are rows. The
+        # step (nought to four) is what the ROM counts in and is not on
+        # screen; the word BURIES went with it.
         row = tilemap_text(core, HANDICAP_ROW)
         if "HANDICAP" not in row:
             failures.append(f"la fila {HANDICAP_ROW} no es la del handicap: {row!r}")
-        if f"{steps}  {expect_rows} ROWS" not in row:
+        if f"HANDICAP {expect_rows}" not in row or "ROWS" not in row:
             failures.append(f"handicap {steps}: la fila dice {row!r}, "
-                             f"esperaba el valor y {expect_rows} ROWS")
+                             f"esperaba HANDICAP {expect_rows} ... ROWS")
         press_start(core); run(core, 40)      # into the game
         # Count the rows of the playfield that came up with anything in them.
         filled = 0
@@ -2580,6 +2582,92 @@ def falling_piece_check(rom_path):
 
 
 # ---------------------------------------------------------------------------
+# THE CREDITS, which this port had been dropping.
+#
+# The cartridge prints a credit in the bottom corner of each of its four
+# front-end screens — six lines in all, in the PPU patch chains at $A19B,
+# $A20E, $A280 and $A2DF. The port folded three of those screens into one, so
+# five of the six had nowhere to go and the sixth was never drawn; what stood
+# in their place was a line the port made up. They roll at the bottom of GAME
+# SELECT now, one at a time.
+#
+# The words are the cartridge's and this check holds them to that: all six,
+# spelled its way, PAZHITNOV and all.
+# ---------------------------------------------------------------------------
+CREDITS = [
+    ("LICENSED BY", "MIRRORSOFT LTD."),
+    ("CONCEPT BY", "ALEXEY PAZHITNOV"),
+    ("DESIGN BY", "VADIM GERASIMOV"),
+    ("PROGRAMMED BY", "ED LOGG"),
+    ("VIDEO GRAPHICS BY", "KRIS MOSER"),
+    ("AUDIO BY", "BRAD FULLER"),
+]
+CREDIT_TY = 16
+
+
+def credits_check(rom_path):
+    core, screen = load(rom_path)   # `screen` must stay alive; see load()
+    failures = []
+    run(core, 8)
+    press_start(core)               # title -> game select
+    run(core, 20)
+
+    # Long enough for every one of them to come round twice over.
+    seen = []
+    for _ in range(1600):
+        pair = (tilemap_text(core, CREDIT_TY).strip(),
+                tilemap_text(core, CREDIT_TY + 1).strip())
+        if not seen or pair != seen[-1]:
+            seen.append(pair)
+        core.run_frame()
+
+    def shown(role, name):
+        return any(role in a and name in b for a, b in seen)
+
+    missing = [f"{role} {name}" for role, name in CREDITS if not shown(role, name)]
+    if missing:
+        failures.append("no aparecen estos creditos del cartucho: "
+                         + "; ".join(missing))
+    else:
+        print(f"  los seis creditos del cartucho salen, uno a uno "
+              f"({len(seen)} cambios en 1600 frames)")
+
+    # The invented line is gone: the cartridge spells him PAZHITNOV, on its
+    # own level screen, and the port used to print a PAJITNOV of its own.
+    if any("PAJITNOV" in a or "PAJITNOV" in b for a, b in seen):
+        failures.append("sigue saliendo PAJITNOV, que no es como lo escribe el "
+                         "cartucho")
+
+    # ...and nothing of it touches the frame. The bottom braid starts at
+    # y=145; the credit's second line rides the lifted layer to clear it.
+    rows = pixels(screen)
+    braid = None
+    for y in range(120, 160):
+        lit = sum(1 for x in range(24, 216) if tuple(rows[y][x]) != (0, 0, 0))
+        if lit > 180:
+            braid = y
+            break
+    if braid is None:
+        failures.append("no encuentro el borde inferior del marco")
+    else:
+        ink = [y for y in range(120, braid)
+               if any(tuple(rows[y][x]) != (0, 0, 0) for x in range(24, 216))]
+        if ink and ink[-1] >= braid - 1:
+            failures.append(f"el credito toca la greca: tinta hasta y={ink[-1]}, "
+                             f"greca en y={braid}")
+        else:
+            print(f"  y la ultima linea deja aire sobre la greca "
+                  f"(tinta hasta y={ink[-1] if ink else '-'}, greca en y={braid})")
+
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: los creditos del cartucho estan, con sus palabras.")
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # TETRIS TENGEN XE, which rides the same L+R as the tunes and the pause menu.
 #
 # The mod is levels 18 and 19 and nothing else — see TENGEN_MAX_LEVEL_XE in
@@ -3203,10 +3291,13 @@ def link_check(rom_path):
         if want not in tilemap_text(core, GAME_SELECT_TY + i):
             failures.append(f"GAME SELECT no ofrece {want}")
 
-    # The credit sits under whatever the last entry is, at the foot of the
-    # frame, so it moves when an entry is added.
-    if "PAJITNOV" not in tilemap_text(core, 17):
-        failures.append("falta el credito a Pajitnov en GAME SELECT")
+    # The credits sit under whatever the last entry is, at the foot of the
+    # frame, so they move when an entry is added. Which one is up depends on
+    # the frame count, so this only asks that SOMETHING is there — the six of
+    # them are credits_check's business.
+    if not (tilemap_text(core, CREDIT_TY).strip()
+            and tilemap_text(core, CREDIT_TY + 1).strip()):
+        failures.append("faltan los creditos al pie de GAME SELECT")
 
     tap("DOWN")                       # 1 PLAYER -> 2 PLAYER
     # 2 PLAYER goes STRAIGHT to the cable now: on a link game only one of the
@@ -3266,6 +3357,8 @@ def main():
                      help="check the cathedral overlay and the fireworks")
     ap.add_argument("--skin", action="store_true",
                      help="check the L/R title-skin easter egg")
+    ap.add_argument("--credits", action="store_true",
+                     help="check the cartridge's six front-end credit lines")
     ap.add_argument("--xe", action="store_true",
                      help="check the Tetris Tengen XE level range behind the chord")
     ap.add_argument("--handtunes", "--korobeiniki", action="store_true",
@@ -3318,6 +3411,8 @@ def main():
         sys.exit(title_check(args.rom))
     if args.skin:
         sys.exit(skin_check(args.rom))
+    if args.credits:
+        sys.exit(credits_check(args.rom))
     if args.xe:
         sys.exit(xe_check(args.rom))
     if args.handtunes:

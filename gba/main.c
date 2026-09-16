@@ -3254,6 +3254,64 @@ static void draw_menu_frame(void) {
     }
 }
 
+/* ----------------------------------------------------------------------- *
+ * THE CREDITS, WHICH THIS PORT HAD BEEN DROPPING
+ *
+ * The cartridge puts a credit line in the bottom corner of every front-end
+ * screen, and it has four of them. Pulled out of the PPU patch chains at
+ * $A19B / $A20E / $A280 / $A2DF, which is where each screen's text lives:
+ *
+ *   GAME SELECT       LICENSED BY MIRRORSOFT LTD.      (row 24)
+ *   LEVEL SELECT      CONCEPT BY ALEXEY PAZHITNOV      (row 24)
+ *                     DESIGN BY VADIM GERASIMOV        (row 26)
+ *   HANDICAP SELECT   PROGRAMMED BY ED LOGG            (row 24)
+ *                     VIDEO GRAPHICS BY KRIS MOSER     (row 26)
+ *   MUSIC SELECT      AUDIO BY BRAD FULLER             (row 25)
+ *
+ * THE PORT WAS SHOWING NONE OF THEM. It folded the last three screens into
+ * one page, so five of the six lines had nowhere to go, and the sixth was
+ * simply never drawn. What stood here instead was a line this port made up —
+ * "BY ALEXEY PAJITNOV" — under a comment calling it "the credit the cartridge
+ * never printed". The cartridge printed it, spelled PAZHITNOV, on its level
+ * screen. Both the line and the claim are gone.
+ *
+ * SO THEY TAKE TURNS. Six credits, four frames' worth of screen corner, and
+ * two front-end screens to put them on: one at a time, changing every hundred
+ * frames or so, in the cartridge's own order and its own words. The only
+ * thing here that is not the cartridge's is the LINE BREAK — the menu box's
+ * black interior is twenty-six columns (MENU_IN_W) and three of the six lines
+ * are twenty-seven or twenty-eight characters, so each is split into the job
+ * and the name, which is uniform and loses nothing.
+ * ----------------------------------------------------------------------- */
+#define CREDIT_TY 16            /* ...and the name on CREDIT_TY + 1 */
+#define CREDIT_FRAMES 100
+
+static const char *const kCredits[][2] = {
+    { "LICENSED BY",       "MIRRORSOFT LTD."  },
+    { "CONCEPT BY",        "ALEXEY PAZHITNOV" },
+    { "DESIGN BY",         "VADIM GERASIMOV"  },
+    { "PROGRAMMED BY",     "ED LOGG"          },
+    { "VIDEO GRAPHICS BY", "KRIS MOSER"       },
+    { "AUDIO BY",          "BRAD FULLER"      },
+};
+#define CREDIT_COUNT (sizeof kCredits / sizeof kCredits[0])
+
+static uint8_t g_credit;
+static uint16_t g_credit_timer;
+
+/* One frame of it, and the drawing with it: this is called from a screen that
+ * redraws itself every frame, so writing the two rows every time costs nothing
+ * and needs no dirty flag. */
+static void draw_credits(void) {
+    if (++g_credit_timer >= CREDIT_FRAMES) {
+        g_credit_timer = 0;
+        g_credit = (uint8_t)((g_credit + 1) % CREDIT_COUNT);
+    }
+    set_credit_layer(true);
+    draw_text_lifted(CREDIT_TY, kCredits[g_credit][0], BANK_NOTE);
+    draw_text_lifted(CREDIT_TY + 1, kCredits[g_credit][1], BANK_NOTE);
+}
+
 #define GAME_SELECT_TY 10
 static void draw_game_select(uint8_t choice) {
     draw_menu_frame();
@@ -3265,23 +3323,7 @@ static void draw_game_select(uint8_t choice) {
     for (int i = 0; i < GAME_COUNT; i++)
         draw_text_centred(GAME_SELECT_TY + i, kGameNames[i],
                            i == choice ? BANK_HILITE : PAL_MENU_BASE + 3);
-    /* The credit the cartridge never printed. Tengen's title screen carries
-     * "(C)1987 ACADEMYSOFT-ELORG" — the Soviet institute, not the man — and
-     * the licensing fight that followed is the reason this cartridge was
-     * pulled from shelves. The port's title has no room for either line any
-     * more (the cathedral took it), so the credit lands here instead, and
-     * says who actually wrote the game.
-     *
-     * It sits closer to the two entries now, and alone: the line about the
-     * cable that used to be between them said nothing the player could act
-     * on — choosing 2 PLAYER leads to a screen that says so itself, and says
-     * it when it matters.
-     *
-     * The menu frame's black interior is columns 3-26 — twenty-four of them —
-     * so the full "TETRIS BY ALEXEY PAJITNOV" (twenty-five) ran over the braid
-     * at both ends. The word TETRIS is already six tiles tall above this. */
-    set_credit_layer(true);
-    draw_text_lifted(17, "BY ALEXEY PAJITNOV", BANK_NOTE);
+    draw_credits();
 }
 
 /* What the lobby is doing, while it does it. Two consoles reach this screen
@@ -3470,7 +3512,6 @@ static void draw_level_settings(int chosen, uint8_t start_level, uint8_t music,
     clear_both(MENU_IN_TX, MENU_BODY_TY, MENU_IN_W, MENU_BODY_H);
 
     char value[16];
-    char depth[16];
     unsigned n;
 
     n = append_number(value, 0, start_level);
@@ -3485,47 +3526,38 @@ static void draw_level_settings(int chosen, uint8_t start_level, uint8_t music,
      *
      * WHAT IT COSTS RIDES THE SAME LINE, because "2" says nothing until you
      * know it is two of the bands garbageHeightData lays down. The word
-     * BURIES is what gets dropped to make it fit: "12 ROWS" beside the value
-     * says the same thing in seven columns. In two players there are two
-     * counts and no room for them, so those keep a line of their own — and
-     * only while the cursor is on the field, since the rest of the time the
-     * row is better empty. */
-    n = append_number(value, 0, handicap[0]);
+     * BURIES is what gets dropped to make it fit: "ROWS" beside the value
+     * says the same thing in four columns.
+     *
+     * AND THE VALUE IS THE CARTRIDGE'S OWN NUMBER, not the step. Its handicap
+     * screen offers 0, 3, 6, 9 and 12 ($A280's patch chain writes exactly
+     * those five at column 15) — the ROWS, which is what the setting means.
+     * This showed the STEP, nought to four, and kept the rows in a note
+     * beside it; the step is an implementation detail of
+     * `garbageHeightData`'s four entries and not something the cartridge ever
+     * puts on screen. The internals still count in steps, because the ROM
+     * does; only the display changed. */
+    n = append_number(value, 0,
+                       (unsigned)handicap[0] * TENGEN_HANDICAP_ROWS_PER_STEP);
     if (two_player) {
         value[n++] = ' ';
-        n = append_number(value, n, handicap[1]);
+        n = append_number(value, n,
+                           (unsigned)handicap[1] * TENGEN_HANDICAP_ROWS_PER_STEP);
     }
     value[n] = '\0';
-    /* ...and only while the cursor is on the field: it is there to answer the
-     * question you are asking, and the rest of the time it is one more thing
-     * on the page. */
-    bool show_depth = !two_player && chosen == MENU_FIELD_HANDICAP;
-    if (show_depth) {
-        unsigned d = append_number(depth, 0,
-                                    (unsigned)handicap[0] * TENGEN_HANDICAP_ROWS_PER_STEP);
-        const char *unit = " ROWS";
-        while (*unit) depth[d++] = *unit++;
-        depth[d] = '\0';
-    }
-    draw_field_row(MENU_FIELD_HANDICAP, chosen, "HANDICAP", value,
-                    show_depth ? depth : NULL);
+    /* The unit, and only while the cursor is on the field: it is there to
+     * answer the question you are asking, and the rest of the time it is one
+     * more thing on the page. */
+    const char *unit = chosen == MENU_FIELD_HANDICAP ? "ROWS" : NULL;
+    draw_field_row(MENU_FIELD_HANDICAP, chosen, "HANDICAP", value, unit);
 
     draw_field_row(MENU_FIELD_MUSIC, chosen, "MUSIC", kMusicNames[music], NULL);
 
-    if (two_player && chosen == MENU_FIELD_HANDICAP) {
-        char row[32];
-        unsigned m = 0;
-        const char *lead = "BURIES ";
-        while (*lead) row[m++] = *lead++;
-        m = append_number(row, m, (unsigned)handicap[0] * TENGEN_HANDICAP_ROWS_PER_STEP);
-        const char *mid = " AND ";
-        while (*mid) row[m++] = *mid++;
-        m = append_number(row, m, (unsigned)handicap[1] * TENGEN_HANDICAP_ROWS_PER_STEP);
-        const char *tail = " ROWS";
-        while (*tail) row[m++] = *tail++;
-        row[m] = '\0';
-        draw_text_centred(MENU_FIELD_TY(MENU_FIELD_HANDICAP) + 1, row, BANK_NOTE);
-    }
+    /* THE LINE UNDER IT IS GONE WITH THE STEPS. It used to spell out "BURIES
+     * 3 AND 6 ROWS", because "1 2" said nothing; now the row itself reads
+     * "HANDICAP  3 6  ROWS" and repeating that under it would be saying the
+     * same thing twice. HANDICAP still keeps the row below it free — see
+     * MENU_FIELD_TY — so nothing else moved. */
 
     draw_text_centred(MENU_FOOT_TY, "PRESS START TO PLAY", BANK_NOTE);
 }
