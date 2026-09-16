@@ -1405,7 +1405,11 @@ static void draw_static_screen(void) {
 /* gameOverTiles, blitted where the cartridge blits it: nametable (4,12),
  * which is the middle of the playfield (gameOver1pPPUAddr1 = $2184,
  * gameOver1pColsRows1 = 6 columns by 4 rows, gameOverAttrs = palette 3). */
-#define GAMEOVER_TX (field_tx() + 2)
+/* CENTRED ON THE BOARD, and the board is not always ten columns wide. The
+ * plaque is six; `+ 2` centres it on a ten-wide field and leaves it a column
+ * left of centre on coop's twelve, which is what "game over no esta centrado"
+ * is. Measured off the field's own width instead. */
+#define GAMEOVER_TX (field_tx() + (field_cols() - SCREEN_1P_GAMEOVER_W) / 2)
 #define GAMEOVER_TY 4
 
 static void draw_game_over(void) {
@@ -2318,7 +2322,23 @@ static void draw_coop_panel(void) {
     draw_coop_text_counter(COOP_R_TX, COOP_LOWER_TY, "HIGH", g_high_score, 6);
     g_panel_layer = false;
 
-    hide_idle_cossack();
+    /* AND A COSSACK IN THE RIGHT PANEL'S TALL COMPARTMENT, which is the one
+     * NEXT has on the left and which coop had standing empty. It is the same
+     * figure HUD Stats keeps over its histogram, on the same rules: he stops
+     * when the board dies and when the plaque goes up, because there is
+     * nothing to keep time to, and he dances the whole level-up show through
+     * — though in coop the show has the real eight of them out on the ledges,
+     * so he stands down for it rather than competing with them. */
+    if (g_dancer_active) {
+        hide_idle_cossack();
+    } else {
+        bool alive = g_session.game.player[0].game_active &&
+                     !g_session.game.paused;
+        draw_idle_cossack(g_idle_frame, alive,
+                           COOP_R_TX, BRAID_T, COOP_PANEL_W,
+                           COOP_LEDGE_FIRST - BRAID_T);
+        if (alive) g_idle_frame++;
+    }
 }
 
 static void draw_panel(void) {
