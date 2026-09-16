@@ -85,12 +85,22 @@
  * PLAYFIELD, and the playfield's 160 pixels are the whole of the screen's
  * height with nothing to give at either end — scrolling BG0 would crop the
  * board, which is the one thing this port does not do. The box has no spare
- * tile row either: four counters of three rows each fill rows 2 to 13 and the
- * preview takes 14 to 17. So the counters get a layer of their own, scrolled
- * two pixels down, for the same reason and at the same price as the
- * statistics got theirs. The braid stays on BG0 and does not move. */
+ * tile row either. So the counters get a layer of their own, for the same
+ * reason and at the same price as the statistics got theirs. The braid stays
+ * on BG0 and does not move.
+ *
+ * TWO PIXELS **UP**, AND IT USED TO BE TWO DOWN. That was right while every
+ * counter hung under something: SCORE's ceiling was the braid and the other
+ * three had a rule, and two pixels down was what gave SCORE the same headroom
+ * as the rest. It is wrong now that they sit BETWEEN shelves, which is what
+ * the coop panel's compartments are: a label over a value is fifteen pixels
+ * of ink and the space between two shelves is twenty, so the block wants two
+ * and a half pixels at each end — and two pixels DOWN gave it six above and
+ * MINUS ONE below, which is a value whose last row of pixels is drawn on the
+ * shelf under it. Two up leaves two above and three below, which is the
+ * nearest a whole pixel gets to the middle. */
 #define SCREENBLOCK_PANEL 30
-#define PANEL_SHIFT_PX 2
+#define PANEL_SHIFT_PX (-2)
 
 /* A FOURTH MAP, so the histogram can stay where it was.
  *
@@ -217,6 +227,9 @@ static void set_credit_layer(bool front_end) {
  * side. Not boxes — the cartridge's coop screen leaves them open, with the
  * dancers' ledges ruled across them. See draw_coop_panel. */
 #define COOP_PANEL_W 7
+/* The cartridge's own first ledge, which is the bottom of the tall
+ * compartment. Screen 5 rules them three rows apart from here. */
+#define COOP_LEDGE_FIRST 8
 #define COOP_L_TX 0
 #define COOP_R_TX (SCREEN_TW - COOP_PANEL_W)
 
@@ -262,7 +275,11 @@ static void set_credit_layer(bool front_end) {
 #define BOX_L_W  (BOX_IN - 1)
 #define BOX_R_IN (BOX_R_TX + 2)      /* ...and right */
 #define BOX_TOP_IN 2                 /* first interior row */
-#define BOX_BOT_IN 17                /* last interior row */
+/* ...and the last one. Nineteen, not seventeen: the panels are inverted Ls
+ * open at the bottom now, so the interior runs to the screen's own edge. The
+ * histogram gets its two rows back with it — its icons stand on the last
+ * interior row and its bars grow up out of them. */
+#define BOX_BOT_IN (SCREEN_TH - 1)
 
 /* PALETTE BANKS.
  *
@@ -601,18 +618,6 @@ static bool pressed_shoulder(int which) {
     bool held = (keys & (which == SHOULDER_L ? KEY_L : KEY_R)) != 0;
     bool pressed = held && !was_held[which];
     was_held[which] = held;
-    return pressed;
-}
-
-/* ...and EITHER of them, for the title's skin switch — the user asked for
- * "L or R", and on the title there is no other use for them. Its own held
- * state, so a chord elsewhere cannot swallow this one's press. */
-static bool shoulder_either(void) {
-    static bool was_held;
-    uint16_t keys = (uint16_t)(~REG_KEYINPUT & KEY_MASK);
-    bool held = (keys & (KEY_L | KEY_R)) != 0;
-    bool pressed = held && !was_held;
-    was_held = held;
     return pressed;
 }
 
@@ -1143,6 +1148,18 @@ static void clear_both(int tx, int ty, int w, int h) {
  * rope cut lengthwise. So a box ten columns wide has a six-column interior,
  * and that single fact decides the whole HUD below.
  * ----------------------------------------------------------------------- */
+/* WHICH OF THE TWO THINGS THE RIGHT PANEL IS HOLDING — the piece histogram or
+ * the cartridge's vertical TETRIS banner. L+R swaps it in play; the frame is
+ * the same either way and only the shelf inside it differs, which is why this
+ * has to be visible to draw_static_screen. See the note above draw_banner.
+ *
+ * IT STARTS ON THE BANNER, because that is the cartridge's own screen: the
+ * vertical TETRIS is what a player who has seen this game remembers of it,
+ * and the histogram is the thing you go and ask for. It is also the harder
+ * way to play — no piece counts — which is why the level-up troupe is
+ * reserved for it (see g_idle_show). */
+static bool g_show_banner = true;
+
 #define BRAID_T 2                 /* the frame's thickness, in tiles */
 
 /* THE DANCERS' LEDGE, WHICH IS ALSO A SHELF.
@@ -1215,14 +1232,13 @@ static void draw_field_braid(int tx, const uint8_t run[1][2]) {
  * three rows apart, which leaves a tall cell at the top and pairs under it —
  * exactly five compartments, and the HUD has exactly five things to say.
  *
- * ONE ROW HIGHER THAN COOP'S RULES THEM, for a reason the coop screen never
- * has to face: it leaves its last compartment empty and this one puts the
- * HIGH SCORE in it. At the cartridge's own rows that pair is 18-19 — the last
- * two on the screen — and a six-digit number in row 19 sits flush against the
- * bottom of the console with not one pixel under it. Starting at 7 spends one
- * of the big cell's six rows to buy row 19 as air, and the big cell does not
- * miss it: three rows of content in five centres EXACTLY. */
-#define SHELF_FIRST 7
+ * The ROWS are the cartridge's as well — 8, 11, 14 and 17 — so the port's own
+ * panels and the coop screen's rule at the same heights. That puts the last
+ * compartment on rows 18-19, the last two on the screen, and a six-digit
+ * number there used to lose its bottom two rows of pixels off the console;
+ * the counters' layer moved two pixels UP (PANEL_SHIFT_PX) and it fits with
+ * room to spare. */
+#define SHELF_FIRST 8
 #define SHELF_STEP  3
 #define SHELF_COUNT 4
 /* The big cell, rows 2-7, and the four pairs at 9-10, 12-13, 15-16, 18-19. */
@@ -1230,42 +1246,39 @@ static void draw_field_braid(int tx, const uint8_t run[1][2]) {
 #define CELL_BIG_H  (SHELF_FIRST - BOX_TOP_IN)
 #define CELL_TY(n)  (SHELF_FIRST + (n) * SHELF_STEP + 1)
 
+/* AN INVERTED L, NOT A BOX. Rope along the top and down the side facing the
+ * board; the screen's own edge closes it outward and the bottom is simply
+ * open, which is what the cartridge's coop panels are. It was a closed
+ * rectangle either side until the panel became the coop screen's: a box
+ * leaves sixteen interior rows, and sixteen is one row short of four
+ * compartments and two short of the TETRIS banner's eighteen. Open, it is
+ * eighteen, and both of them fit.
+ *
+ * `shelves` adds the four ledges. The right panel takes its one separately —
+ * it depends on what that box is holding — so the flag is only about the
+ * four, never about the shape. */
 static void draw_braid_panel(int tx, int w, bool inner_right, bool shelves) {
     int ix = inner_right ? tx + w - BRAID_T : tx;   /* the inner run's column */
-    /* A shelved panel runs off the bottom of the screen, the way the coop
-     * screen's does: the fifth compartment IS the last two rows, so there is
-     * nowhere to put a bottom run and nothing for it to close. */
-    int bottom = shelves ? SCREEN_TH : SCREEN_TH - BRAID_T;
 
-    for (int dy = 0; dy < BRAID_T; dy++) {
-        for (int dx = 0; dx < BRAID_T; dx++) {
+    for (int dy = 0; dy < BRAID_T; dy++)
+        for (int dx = 0; dx < BRAID_T; dx++)
             set_map_tile(ix + dx, dy,
                           WITH_BANK(inner_right ? kBraidTR[dy][dx]
                                                 : kBraidTL[dy][dx], BRAID_BANK));
-            if (!shelves)
-                set_map_tile(ix + dx, SCREEN_TH - BRAID_T + dy,
-                              WITH_BANK(inner_right ? kBraidBR[dy][dx]
-                                                    : kBraidBL[dy][dx], BRAID_BANK));
-        }
-    }
     for (int x = 0; x < w; x++) {
         int cx = tx + x;
         if (cx >= ix && cx < ix + BRAID_T) continue;      /* the corners */
-        for (int dy = 0; dy < BRAID_T; dy++) {
+        for (int dy = 0; dy < BRAID_T; dy++)
             set_map_tile(cx, dy, WITH_BANK(kBraidTop[dy][0], BRAID_BANK));
-            if (!shelves)
-                set_map_tile(cx, SCREEN_TH - BRAID_T + dy,
-                              WITH_BANK(kBraidBottom[dy][0], BRAID_BANK));
-        }
     }
-    for (int y = BRAID_T; y < bottom; y++)
+    for (int y = BRAID_T; y < SCREEN_TH; y++)
         for (int dx = 0; dx < BRAID_T; dx++)
             set_map_tile(ix + dx, y,
                           WITH_BANK(inner_right ? kBraidRight[0][dx]
                                                 : kBraidLeft[0][dx], BRAID_BANK));
 
     int in_tx = inner_right ? tx : tx + BRAID_T;
-    clear_region(in_tx, BRAID_T, w - BRAID_T, bottom - BRAID_T);
+    clear_region(in_tx, BRAID_T, w - BRAID_T, SCREEN_TH - BRAID_T);
     if (!shelves) return;
     for (int i = 0; i < SHELF_COUNT; i++)
         draw_ledge(in_tx, SHELF_FIRST + i * SHELF_STEP, w - BRAID_T);
@@ -1365,19 +1378,25 @@ static void draw_static_screen(void) {
             set_map_tile(tx, ty, WITH_BANK(kScreen1pTiles[i], kScreen1pPalettes[i]));
         }
     }
-    /* THE LEFT PANEL IS THE COOP SCREEN'S NOW, shelves and all: one tall cell
-     * for NEXT and four short ones for the counters, ruled off with the
-     * cartridge's own ledge. The right one stays a closed box — it holds one
-     * thing, whichever it is, and a box is the right shape for that. */
+    /* BOTH PANELS ARE THE COOP SCREEN'S, and they are MIRRORS of each other:
+     * rope along the top and down the side facing the board, open at the
+     * bottom and at the screen's own edge. An inverted L either side of the
+     * playfield, which is what the cartridge's coop screen is and what the
+     * closed box on the right was not.
+     *
+     * Opening the right one is also what finally lets the TETRIS banner
+     * inside a frame. It is six letters of three rows each, eighteen rows
+     * with no padding anywhere in it; a closed box left sixteen, so the
+     * banner used to take the whole column and the rope with it. Rows 2-19
+     * of an open panel are eighteen exactly. */
     draw_braid_panel(BOX_L_TX, BOX_W, true, true);
     draw_braid_panel(BOX_R_TX, BOX_W, false, false);
-    /* ...and ONE shelf in the right box, on the left box's first row so the
-     * two line up across the board. Under it the piece histogram, over it
-     * whatever the right box is holding — the cossack in HUD Stats. Drawn
-     * here, with the frame, because that is what it is: a shelf a row lower
-     * than its neighbours on the other side of the screen reads as a mistake
-     * however good the reason. */
-    draw_ledge(BOX_R_IN, SHELF_FIRST, BOX_IN);
+    /* ...and ONE shelf in the right one, on the left panel's first row so the
+     * two line up across the board: over it whatever that box is holding, and
+     * under it the piece histogram. NOT in HUD Banner — there is nothing on
+     * either side of it to separate, and a line across the middle of a
+     * vertical TETRIS is a line across the middle of a vertical TETRIS. */
+    if (!g_show_banner) draw_ledge(BOX_R_IN, SHELF_FIRST, BOX_IN);
     set_credit_layer(false);
     /* Back from whatever the title lent it; see set_offset_layer. */
     set_offset_layer(STATS_SHIFT_PX);
@@ -1477,6 +1496,7 @@ static void draw_bonus_number(int ty, uint32_t value, int digits) {
 static void draw_bonus_static(void) {
     int tx = bonus_tx();
     clear_region(tx, 0, SCREEN_1P_BONUS_W, SCREEN_TH);
+    clear_panel_region(tx, 0, SCREEN_1P_BONUS_W, SCREEN_TH);
     for (int y = 0; y < SCREEN_1P_BONUS_H; y++)
         for (int x = 0; x < SCREEN_1P_BONUS_W; x++)
             set_map_tile(tx + x, y, WITH_BANK(kBonusTiles[y][x], BANK_LABEL));
@@ -1496,7 +1516,17 @@ static void draw_bonus_numbers(void) {
                            (uint32_t)g_bonus_shown[i] * TENGEN_BONUS_PER_CLEAR[i],
                            BONUS_VALUE_DIGITS);
     }
+    /* THE ONE ROW THAT RIDES THE COUNTERS' LAYER, two pixels above the grid.
+     * The ROM puts the total's figure at its own row 19 ($236A), and on a
+     * twenty-row screen that is the last one — the number sat flush against
+     * the bottom of the console with not a pixel under it. Two pixels up is
+     * two pixels of air. Only this row: lifting the whole table takes the
+     * same two pixels off the BONUS heading at the top, which is already
+     * cropped by the window the port reads the screen through. */
+    bool was = g_panel_layer;
+    g_panel_layer = true;
     draw_bonus_number(BONUS_TOTAL_VALUE_TY, g_bonus_total, BONUS_VALUE_DIGITS);
+    g_panel_layer = was;
 }
 
 /* The show is starting: take this level's counts and put the board away. */
@@ -1998,7 +2028,8 @@ static void draw_next_piece(int tx, int ty) {
  * and the histogram is the thing you go and ask for. It is also the harder
  * way to play — no piece counts — which is why the level-up troupe is
  * reserved for it (see g_idle_show). */
-static bool g_show_banner = true;
+/* (Declared up with draw_static_screen, which has to know which shape the
+ * right panel is before the panel itself is drawn.) */
 /* Frames the play screen has been up, for the idle cossack's slow sway. */
 static int g_idle_frame;
 /* True while the level-up show owns the right column; declared here because
@@ -2013,7 +2044,9 @@ static int g_dancer_elapsed;     /* frames since the show started, for the poses
  * the right-hand box has under NEXT — the one place the arithmetic comes out
  * even. */
 #define BANNER_TX (BOX_R_TX + 2 + (BOX_W - 2 - SCREEN_1P_BANNER_W) / 2)
-#define BANNER_TY 1
+/* Row 2, the panel's first interior row: eighteen letters' rows in the
+ * eighteen the open panel has. See draw_static_screen. */
+#define BANNER_TY BOX_TOP_IN
 
 static void draw_banner(void) {
     for (int y = 0; y < SCREEN_1P_BANNER_H; y++)
@@ -2044,12 +2077,12 @@ static void draw_banner(void) {
  * are one seven-tile strip, drawn interlocked across the tile boundaries — so
  * this is the only arrangement that shows them at all without cutting the
  * strip up. The bars grow up out of them, by the ROM's own arithmetic. */
-#define STATS_ICON_TY (BOX_BOT_IN - 1)                  /* rows 16-17 */
+#define STATS_ICON_TY (BOX_BOT_IN - 1)                  /* rows 18-19 */
 /* Straight under the box's one shelf, which is what closes the top of the
  * histogram's half of it. The shelf is the LEFT panel's first one, so the two
  * sides of the screen rule at the same height — see draw_static_screen. */
 #define STATS_TOP_TY (SHELF_FIRST + 1)
-#define STATS_BAR_ROWS (STATS_ICON_TY - STATS_TOP_TY)   /* eight of them */
+#define STATS_BAR_ROWS (STATS_ICON_TY - STATS_TOP_TY)   /* ten of them */
 #define STATS_BAR_FULL (SCREEN_1P_STATS_BAR_TILE + 7)
 #define BANK_STATS SCREEN_1P_STATS_BAR_BANK
 /* Seven tiles in eight columns, so one spare. It is not left at either end:
@@ -2120,12 +2153,12 @@ static void draw_stats(const TengenPlayerState *p) {
 #define ROW_LINES  CELL_TY(1)            /* 12, 13 */
 #define ROW_LEVEL  CELL_TY(2)            /* 15, 16 */
 #define ROW_HIGH   CELL_TY(3)            /* 18, 19 */
-/* NEXT IN THE BIG CELL, and centred in it — which is what six rows for three
- * rows of content buys, and what four never could. The block is a label over
- * a piece, three rows of the six, so it starts one and a half rows down;
- * rounded to the row it sits at 3, and the panel layer's own two pixels
- * happen to fall on the right side of the rounding. */
-#define ROW_NEXT   (CELL_BIG_TY + (CELL_BIG_H - 3) / 2)
+/* NEXT IN THE BIG CELL, and centred in it. The block is FOUR rows of the six
+ * — the word, a row of air, and the piece over two — so it starts one row
+ * down and finishes one row short, which is centred exactly. See
+ * draw_next_label_and_piece for why the row of air is there. */
+#define NEXT_BLOCK_H 4
+#define ROW_NEXT   (CELL_BIG_TY + (CELL_BIG_H - NEXT_BLOCK_H) / 2)
 /* ...and where the right box's own cell ends, in HUD Stats. Four rows for the
  * cossack and the ledge under him, with the histogram's bars starting where
  * they always did. */
@@ -2168,24 +2201,29 @@ static void draw_counter(int ty, int label_first, int label_count,
 
 /* NEXT, IN ITS OWN COMPARTMENT AND CENTRED IN IT.
  *
- * The block is a label (one row) over a piece (two): at orientation 0 every
- * one of the seven is two rows tall — kOrientationBitmap's second byte is $00
- * for all of them — so it is 23 pixels of content. The big cell is five rows,
- * forty pixels, which leaves eight and nine to share between top and bottom;
- * that is as centred as a tile grid gets, and it is why the cell is five rows
- * and not four (ten pixels of nothing under it, which is what "NEXT esta muy
- * arriba en su caja" was) or six.
+ * A ROW OF AIR BETWEEN THE WORD AND THE PIECE, and it is not decoration. At
+ * orientation 0 every one of the seven pieces is two rows tall
+ * (kOrientationBitmap's second byte is $00 for all of them) and the art fills
+ * its tiles to the top edge, so a piece drawn straight under the label has
+ * the label's baseline and the block's first row of pixels on consecutive
+ * scanlines — the word and the piece touching, which is what "Next y la pieza
+ * se solapan" is once you are looking for it. One blank row is eight pixels
+ * and it makes the two read as two things.
+ *
+ * Four rows of content in the compartment's six then centres exactly, which
+ * three never did.
  *
  * `tx` is the panel's INTERIOR left column, so both the word and the piece
- * are centred in the same eight columns the shelves span rather than measured
- * off the indented content column, which is what left them sitting left of
- * centre. */
-static void draw_next_label_and_piece(int tx, int ty) {
-    int label_tx = tx + (BOX_IN - HUD_LABEL_NEXT_W) / 2;
+ * are centred in the same columns the shelves span rather than measured off
+ * the indented content column, which is what left them sitting left of
+ * centre; `w` is that interior's width, because the coop panel's is seven
+ * where the port's own boxes are eight. */
+static void draw_next_label_and_piece(int tx, int ty, int w) {
+    int label_tx = tx + (w - HUD_LABEL_NEXT_W) / 2;
     for (int i = 0; i < HUD_LABEL_NEXT_W; i++)
         set_map_tile(label_tx + i, ty,
                       WITH_BANK(HUD_LABEL_TILE_BASE + 18 + i, BANK_LABEL));
-    draw_next_piece(tx + (BOX_IN - NEXT_CELL_W) / 2, ty + 1);
+    draw_next_piece(tx + (w - NEXT_CELL_W) / 2, ty + 2);
 }
 
 /* ----------------------------------------------------------------------- *
@@ -2212,10 +2250,21 @@ static void draw_next_label_and_piece(int tx, int ty) {
  * first piece to the last however differently the two play. Drawing it twice
  * would be drawing the same piece twice.
  * ----------------------------------------------------------------------- */
-#define COOP_NEXT_TY 2              /* label, then the piece on 3-4 */
-#define COOP_COUNTER_TY 6           /* label on 6, value on 7, ledge on 8 */
-#define COOP_LOWER_TY 9             /* between the first two ledges */
-#define COOP_TOP_TY 2               /* the right panel's first counter */
+/* THE SAME SHAPE AS THE OTHER TWO HUDS, which is the least this panel could
+ * be: it is the screen they were copied FROM. The cartridge's ledges fall on
+ * window rows 8, 11, 14 and 17, so the compartments are the six rows above
+ * the first and the pairs between the rest — NEXT in the tall one and a
+ * counter in each of the next two, on both sides, so the four line up in
+ * pairs across the board.
+ *
+ * NEXT had the top of the panel with LEVEL immediately under it before, which
+ * is four rows for three rows of content: the word and the piece with one
+ * pixel between them and nothing either side. That is "Next y la pieza se
+ * solapan" even before the two of them land on layers with different
+ * scrolls. */
+#define COOP_NEXT_TY ROW_NEXT       /* the same row as the other two HUDs */
+#define COOP_COUNTER_TY 9           /* between the first two ledges */
+#define COOP_LOWER_TY 12            /* ...and the next two */
 
 /* One counter in a seven-column panel: label, value, and no rule — the ledge
  * under it is the cartridge's own. */
@@ -2236,13 +2285,22 @@ static void draw_coop_text_counter(int tx, int ty, const char *label,
     draw_number_blank(tx + (COOP_PANEL_W - digits) / 2, ty + 1, value, digits, BANK_VALUE);
 }
 
+/* ON THE MAIN LAYER, like the other two HUDs, and that is the whole of why
+ * "NEXT y la pieza se solapan en ocasiones" — in coop and only in coop, and
+ * only for five pieces of seven. The label rides whatever layer the panel is
+ * on; the PIECE picks its own by width, because a preview an odd number of
+ * tiles wide is centred with the offset layer's three pixels (see
+ * draw_next_piece). Those two layers do not have the same vertical scroll, so
+ * the piece landed two pixels off its own word — which with one pixel between
+ * them is the word and the piece touching. Both on the grid, and there is no
+ * second scroll to disagree with. */
 static void draw_coop_next(int tx) {
-    clear_both(tx, COOP_NEXT_TY, COOP_PANEL_W, 3);
-    int label_tx = tx + (COOP_PANEL_W - HUD_LABEL_NEXT_W) / 2;
-    for (int i = 0; i < HUD_LABEL_NEXT_W; i++)
-        set_map_tile(label_tx + i, COOP_NEXT_TY,
-                      WITH_BANK(HUD_LABEL_TILE_BASE + 18 + i, BANK_LABEL));
-    draw_next_piece(tx + (COOP_PANEL_W - NEXT_CELL_W) / 2, COOP_NEXT_TY + 1);
+    bool was = g_panel_layer;
+    g_panel_layer = false;
+    clear_both(tx, BRAID_T, COOP_PANEL_W, COOP_LEDGE_FIRST - BRAID_T);
+    clear_panel_region(tx, BRAID_T, COOP_PANEL_W, COOP_LEDGE_FIRST - BRAID_T);
+    draw_next_label_and_piece(tx, COOP_NEXT_TY, COOP_PANEL_W);
+    g_panel_layer = was;
 }
 
 static void draw_coop_panel(void) {
@@ -2256,8 +2314,8 @@ static void draw_coop_panel(void) {
      * coop screen prints, and all a shared field has to say. */
     draw_coop_counter(COOP_L_TX, COOP_COUNTER_TY, HUD_LABEL_LEVEL, p->level, 2);
     draw_coop_counter(COOP_L_TX, COOP_LOWER_TY, HUD_LABEL_LINES, p->lines, 4);
-    draw_coop_counter(COOP_R_TX, COOP_TOP_TY, HUD_LABEL_SCORE, p->score, 6);
-    draw_coop_text_counter(COOP_R_TX, COOP_COUNTER_TY, "HIGH", g_high_score, 6);
+    draw_coop_counter(COOP_R_TX, COOP_COUNTER_TY, HUD_LABEL_SCORE, p->score, 6);
+    draw_coop_text_counter(COOP_R_TX, COOP_LOWER_TY, "HIGH", g_high_score, 6);
     g_panel_layer = false;
 
     hide_idle_cossack();
@@ -2292,7 +2350,7 @@ static void draw_panel(void) {
      * 40-pixel cell can be) and eleven against six. The preview's own layer
      * is held at the grid to match; see the note by REG_BG1VOFS below. */
     g_panel_layer = false;
-    draw_next_label_and_piece(BOX_L_TX, ROW_NEXT);
+    draw_next_label_and_piece(BOX_L_TX, ROW_NEXT, BOX_IN);
     g_panel_layer = true;
 
     draw_counter(ROW_SCORE, HUD_LABEL_SCORE, p->score, 6, 0);
@@ -2339,14 +2397,14 @@ static void draw_panel(void) {
      * doing. The box comes back when the banner goes away, through g_repaint. */
     if (g_show_banner) {
         /* THE BANNER IS ART, NOT A COUNTER: it goes on the main map, aligned
-         * to the screen, with the braid that frames the board. Both maps get
-         * wiped first — the panel's because the statistics box was there a
-         * frame ago, the main one because the box's own tiles were. */
+         * to the screen. Both borrowed maps are wiped first — the panel's
+         * because the statistics box was there a frame ago, the offset one
+         * because a preview may have been. The FRAME is not touched: it is
+         * the same inverted L in both HUDs now, drawn once with the screen. */
         g_panel_layer = false;
-        clear_region(BOX_R_TX + 2, 0, BOX_W - 2, SCREEN_TH);
-        clear_panel_region(BOX_R_TX + 2, 0, BOX_W - 2, SCREEN_TH);
+        clear_region(BOX_R_IN, BOX_TOP_IN, BOX_IN, SCREEN_TH - BOX_TOP_IN);
+        clear_panel_region(BOX_R_IN, BOX_TOP_IN, BOX_IN, SCREEN_TH - BOX_TOP_IN);
         clear_stats_layer();
-        draw_field_braid(BOX_R_TX, kBraidLeft);
         draw_banner();
         /* No shelf for him in HUD Banner: the column is the banner's. */
         hide_idle_cossack();
@@ -2531,6 +2589,35 @@ static const uint8_t kMusicTracks[MUSIC_COUNT] = {
 #define MUSIC_MIX (MUSIC_COUNT + 1)
 #define MUSIC_UNLOCKED_COUNT (MUSIC_COUNT + 2)
 static bool g_music_unlocked;
+
+/* THE ONE CHORD, AND IT IS ON THE MENUS.
+ *
+ * L+R together — the two buttons a NES pad never had, so the game proper can
+ * never see it — uncovers BOTH of the port's own extras at once: the hidden
+ * tunes (and the mix that plays them all) and the pause menu. It is rung on
+ * GAME SELECT or on LEVEL SETTINGS, which is where a player is already
+ * choosing things, and NOT during a match: in play the same chord swaps the
+ * HUD, and a chord that means two things depending on whether the plaque is
+ * up is a chord nobody can remember. It used to be rung on the pause plaque,
+ * which meant starting a game before you could ask for the menu that lets you
+ * leave one.
+ *
+ * A ONE-WAY DOOR, and it stays open until the console is switched off: a
+ * thing you discover is not a thing you should have to remember to do at the
+ * start of every game. The high scores are the only thing that outlives a
+ * power cycle.
+ *
+ * The title's skin is NOT behind this one. See the note where it is swapped:
+ * it is its own chord on its own screen and opens nothing else. */
+static bool g_pause_unlocked;
+
+static bool unlock_cheats(void) {
+    if (g_music_unlocked && g_pause_unlocked) return false;
+    g_music_unlocked = true;
+    g_pause_unlocked = true;
+    nes_audio_play(NES_SOUND_CHIRP);
+    return true;
+}
 
 static const char *const kMusicNames[MUSIC_UNLOCKED_COUNT] = {
     "NO MUSIC", "LOGINSKA", "BRADINSKY", "KARINKA", "TROIKA", "KOROBEINIKI",
@@ -3649,21 +3736,29 @@ static void refresh_palettes(void) {
  * out by palette rather than by an arrow — an arrow in a centred column is a
  * character that has to come from somewhere, and it pulls the line off
  * centre. */
-/* NINE ROWS, and every one of them is doing something. Seven had the three
- * lines of the column packed against each other and EXIT sitting on the box's
- * own floor; these two extra rows are the air between the tune and the way
- * out, and the air under the way out:
+/* FOURTEEN COLUMNS, AND THIRTEEN WOULD NOT CENTRE. This is the whole reason
+ * for the width: the box lands on the board, the board is ten columns at 10-19
+ * and its middle is therefore x=120 — the screen's own middle — and a box of
+ * ODD width on an even grid cannot be put there. Thirteen columns at column 8
+ * spans x 64..167, whose middle is 115.5: four and a half pixels left, which
+ * against a playfield you are looking straight at is not a subtlety. Fourteen
+ * at the same column spans 64..175 and its middle is 120 exactly.
  *
- *      row 1   PAUSE       two pixels lower than the grid; see draw_pmenu_line
- *      row 2   -
- *      row 3   MUSIC
- *      row 4   KOROBEINIKI
- *      row 5   -
- *      row 6   EXIT
- *      row 7   -
+ * What it costs is the PARITY of everything inside it — see draw_pmenu_line.
+ *
+ * TEN ROWS, one thing to a row and a blank between every pair:
+ *
+ *      row 1   -
+ *      row 2   PAUSE
+ *      row 3   -
+ *      row 4   MUSIC
+ *      row 5   KOROBEINIKI
+ *      row 6   -
+ *      row 7   EXIT
+ *      row 8   -
  */
-#define PMENU_W 13
-#define PMENU_H 9
+#define PMENU_W 14
+#define PMENU_H 10
 #define PMENU_TX ((SCREEN_TW - PMENU_W) / 2)
 #define PMENU_TY ((SCREEN_TH - PMENU_H) / 2)
 #define PMENU_IN_TX (PMENU_TX + 1)
@@ -3686,12 +3781,6 @@ static void refresh_palettes(void) {
 #define PMENU_EXIT  1
 #define PMENU_ROWS  2
 
-/* ONCE FOUND, IT STAYS FOUND — until the console is switched off. The chord
- * is a thing you discover, not a thing you should have to remember to do at
- * the start of every game; the same is true of the fifth tune's, and of which
- * HUD you like. The high scores are the only thing that outlives a power
- * cycle. */
-static bool g_pause_unlocked;
 static uint8_t g_pause_row;    /* which line the cursor is on */
 static bool g_pause_confirm;   /* ...and the SURE? question over the top of it */
 static bool g_pause_yes;
@@ -3717,27 +3806,30 @@ static void draw_box_frame(int tx, int ty, int w, int h) {
  * needs two of the four backgrounds, because a tile grid cannot centre
  * everything and the player can see the difference.
  *
- * ACROSS. The interior is ELEVEN columns, an odd number, so a word of ODD
- * length lands on the middle exactly and a word of EVEN length misses it by
+ * ACROSS. The interior is TWELVE columns, an even number, so a word of EVEN
+ * length lands on the middle exactly and a word of ODD length misses it by
  * half a tile — four pixels, and four pixels is what "sigue sin estar bien
  * centrado" looks like with MUSIC over LOGINSKA over EXIT. The offset layer
  * is three pixels right of the grid (STATS_SHIFT_PX), which is one pixel
- * short of that half tile, so an even-length line is drawn THERE and comes
- * out one pixel off centre instead of four. It is the same trick
- * draw_text_centred plays on the settings screen, with the parity the other
- * way round because that frame's interior is even.
+ * short of that half tile, so an odd-length line is drawn THERE and comes out
+ * one pixel off centre instead of four. It is the same trick
+ * draw_text_centred plays on the settings screen, and the same way round now
+ * that both frames have an even interior.
  *
- * DOWN. `lower` asks for the counters' layer, which is two pixels below the
- * grid (PANEL_SHIFT_PX) and nothing across — the only sub-tile nudge in the
- * vertical direction this port has. It is what takes two pixels of the gap
- * out from under the heading. It cannot be combined with the three across,
- * so it is only ever asked for on a line that centres exactly without them;
- * when the parity says otherwise, the centring wins. */
-static void draw_pmenu_line(int ty, const char *text, int bank, bool lower,
+ * (It was the other way round while the box was thirteen columns wide. It is
+ * fourteen because thirteen could not be centred on the board at all; see
+ * PMENU_W. Nothing here is free.)
+ *
+ * NOTHING SUB-TILE DOWNWARD, which is why every gap in this box is a whole
+ * blank row. The only vertical nudge the port has is the counters' layer and
+ * that is two pixels UP (PANEL_SHIFT_PX), which under a box's ceiling is the
+ * wrong direction; and it cannot be combined with the three across anyway, so
+ * the lines that would want it are exactly the ones that cannot have it. */
+static void draw_pmenu_line(int ty, const char *text, int bank,
                              bool cursor) {
     unsigned len = text_len(text);
     int tx = PMENU_IN_TX + ((int)PMENU_IN_W - (int)len) / 2;
-    bool offset = (len & 1u) == 0;
+    bool offset = (len & 1u) != 0;
 
     /* THE CURSOR IS AN ARROW, NOT A COLOUR. Picking the line out by palette
      * was this menu's first idea and it does not read: four words in four
@@ -3762,16 +3854,8 @@ static void draw_pmenu_line(int ty, const char *text, int bank, bool lower,
         uint16_t entry = (i == first && cursor) ? WITH_BANK(T_ARROW_R, bank)
                         : (i < tx) ? WITH_BANK(T_BLANK, bank)
                         : WITH_BANK(ascii_tile(text[i - tx]), bank);
-        if (offset) {
-            set_stats_tile(i, ty, entry);
-        } else if (lower) {
-            bool was = g_panel_layer;
-            g_panel_layer = true;
-            set_map_tile(i, ty, entry);
-            g_panel_layer = was;
-        } else {
-            set_map_tile(i, ty, entry);
-        }
+        if (offset) set_stats_tile(i, ty, entry);
+        else        set_map_tile(i, ty, entry);
     }
 }
 
@@ -3811,8 +3895,8 @@ static void draw_pause_menu(void) {
          * eight pixels of nothing between them. Both of them can only sit
          * where they do because EXIT is four letters and SURE? is five: see
          * draw_pmenu_line for why the parity decides which layer each gets. */
-        draw_pmenu_line(PMENU_TY + 2, "EXIT", BANK_LABEL, false, false);
-        draw_pmenu_line(PMENU_TY + 3, "SURE?", BANK_LABEL, true, false);
+        draw_pmenu_line(PMENU_TY + 2, "EXIT", BANK_LABEL, false);
+        draw_pmenu_line(PMENU_TY + 3, "SURE?", BANK_LABEL, false);
         /* THE TWO ANSWERS STACK, like everything else in this box. Side by
          * side they had the arrow sitting exactly between them — as far from
          * YES as from NO, which is an arrow that answers nothing. One to a
@@ -3822,18 +3906,18 @@ static void draw_pause_menu(void) {
          * (No lowercase in this tile set either — $61 up are the braid and
          * the border, which is why 'yes' came out as two stray marks — so
          * capitals and an arrow are all there is to say it with.) */
-        draw_pmenu_line(PMENU_TY + 5, "YES", BANK_LABEL, false, g_pause_yes);
-        draw_pmenu_line(PMENU_TY + 6, "NO", BANK_LABEL, false, !g_pause_yes);
+        draw_pmenu_line(PMENU_TY + 6, "YES", BANK_LABEL, g_pause_yes);
+        draw_pmenu_line(PMENU_TY + 7, "NO", BANK_LABEL, !g_pause_yes);
         return;
     }
     /* PAUSE keeps its own colour because it is the heading and not a choice;
      * the three lines under it are all one colour now, and the arrow is what
      * says where you are. */
-    draw_pmenu_line(PMENU_TY + 1, "PAUSE", BANK_NOTE, true, false);
-    draw_pmenu_line(PMENU_TY + 3, "MUSIC", BANK_LABEL, false,
+    draw_pmenu_line(PMENU_TY + 2, "PAUSE", BANK_NOTE, false);
+    draw_pmenu_line(PMENU_TY + 4, "MUSIC", BANK_LABEL,
                      g_pause_row == PMENU_MUSIC);
-    draw_pmenu_line(PMENU_TY + 4, kMusicNames[g_music], BANK_LABEL, false, false);
-    draw_pmenu_line(PMENU_TY + 6, "EXIT", BANK_LABEL, false,
+    draw_pmenu_line(PMENU_TY + 5, kMusicNames[g_music], BANK_LABEL, false);
+    draw_pmenu_line(PMENU_TY + 7, "EXIT", BANK_LABEL,
                      g_pause_row == PMENU_EXIT);
 }
 
@@ -4213,7 +4297,7 @@ int main(void) {
     REG_BG2CNT = BG_4BPP | BG_SIZE_32x32 | BG_CHARBLOCK(CHARBLOCK) |
                   BG_SCREENBLOCK(SCREENBLOCK_PANEL) | BG_PRIORITY(0);
     REG_BG2HOFS = 0;
-    REG_BG2VOFS = (uint16_t)(512 - PANEL_SHIFT_PX);
+    REG_BG2VOFS = (uint16_t)((512 - PANEL_SHIFT_PX) & 511);
     /* The histogram's layer: the offset layer's three pixels across, and none
      * of the counters' two down. See SCREENBLOCK_HISTOGRAM. */
     REG_BG3CNT = BG_4BPP | BG_SIZE_32x32 | BG_CHARBLOCK(CHARBLOCK) |
@@ -4254,7 +4338,12 @@ int main(void) {
             /* initializeTitleScreen ends with this (main.asm.txt:4489). */
             front_music(FRONT_TITLE_THEME);
             set_offset_layer(TITLE_LOGO_SHIFT_PX);
-            if (TITLE_SKIN_COUNT > 1 && shoulder_either()) {
+            /* L+R, NOT EITHER SHOULDER, and it is the only cheat on this
+             * screen: the skin is a thing you look at rather than a thing you
+             * play with, so it answers to the same chord as everything else
+             * and unlocks NOTHING — a player who finds the prototype title has
+             * not thereby found the hidden tunes. See unlock_cheats. */
+            if (TITLE_SKIN_COUNT > 1 && shoulder_chord()) {
                 g_title_skin = (uint8_t)((g_title_skin + 1) % TITLE_SKIN_COUNT);
                 nes_audio_play(NES_SOUND_CHIRP);
                 vsync();
@@ -4338,6 +4427,11 @@ int main(void) {
              * is worse than a menu that waits quietly. Leaving the cathedral
              * stops its music AND the fireworks' bangs with it. */
             front_music(FRONT_SILENCE);
+            if (shoulder_chord() && unlock_cheats()) {
+                /* Nothing on this page shows for it — the tunes are on the
+                 * next one and the menu is in a game — so the chirp is the
+                 * whole answer, and it is the same one the next page gives. */
+            }
             if (pressed & MENU_STEP) {
                 game_mode = (pressed & MENU_BACKWARD)
                     ? (uint8_t)((game_mode + GAME_COUNT - 1) % GAME_COUNT)
@@ -4442,14 +4536,12 @@ int main(void) {
                 moved = true;
             }
 
-            if (!g_music_unlocked && chord) {
-                /* L+R together — the two buttons a NES pad never had, so the
-                 * game proper can never see this. It uncovers TWO entries:
-                 * the fifth tune and the mix that plays all of them. */
-                g_music_unlocked = true;
+            if (chord && unlock_cheats()) {
+                /* This page can SHOW what was uncovered, so it does: the
+                 * cursor goes to MUSIC and the list opens on the first of the
+                 * hidden tunes. */
                 g_music = MUSIC_KOROBEINIKI;
-                menu_field = MENU_FIELD_MUSIC;   /* show what was uncovered */
-                nes_audio_play(NES_SOUND_CHIRP);
+                menu_field = MENU_FIELD_MUSIC;
             } else if (moved || (pressed & MENU_STEP)) {
                 nes_audio_play(NES_SOUND_MENU_SELECT);
             }
@@ -4808,18 +4900,12 @@ int main(void) {
          * the one that starts again. */
         /* ...and there is nothing to swap on a coop screen: it has no boxes,
          * and the banner's column is the middle of the board. */
-        /* L+R WHILE PAUSED UNCOVERS THE MENU, not the HUD swap: the plaque is
-         * covering the thing the swap would show, and a menu wants the only
-         * chord the pad has left. It is a one-way door — see g_pause_unlocked
-         * — so from here on the plaque IS the menu. */
+        /* IN PLAY THE CHORD ONLY SWAPS THE HUD, and uncovers nothing. It used
+         * to open the pause menu from the plaque, which put the one cheat
+         * that lets you LEAVE a game behind having already started one; both
+         * doors are on the menu screens now (see unlock_cheats), so in here
+         * the chord means one thing only. */
         if (screen == SCREEN_PLAYING && match_running &&
-            g_session.game.paused && shoulder_chord()) {
-            if (!g_pause_unlocked) nes_audio_play(NES_SOUND_SCREEN_SWITCH);
-            g_pause_unlocked = true;
-            g_pause_confirm = false;
-            g_pause_row = PMENU_MUSIC;
-            g_repaint = true;
-        } else if (screen == SCREEN_PLAYING && match_running &&
             !g_session.game.coop && !g_session.game.paused &&
             g_session.game.player[g_view].game_active && shoulder_chord()) {
             g_show_banner = !g_show_banner;

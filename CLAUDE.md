@@ -116,12 +116,23 @@ running ROM; only the side panels need reflowing).
    completed row and leaves SINGLE / DOUBLE / TRIPLE / TETRIS written where
    the blocks were. Timing (one column every other frame) lives in the core
    with a test; the drawing is in `gba/main.c`.
-11. ~~Pause and the long-bar/undo/level-up cheat codes~~ — done, traced in
+11. ~~Where the port's own cheats live~~ — ONE CHORD, ON THE MENUS. L+R on
+   GAME SELECT or on LEVEL SETTINGS uncovers the hidden tunes and the pause
+   menu together, and it is a one-way door until the console is switched off.
+   NOT in play: there the same chord swaps the HUD and uncovers nothing, and a
+   chord that means two things depending on whether the plaque is up is a
+   chord nobody can remember — it used to open the pause menu from the plaque,
+   which put the one cheat that lets you LEAVE a game behind having already
+   started one. The title's prototype skin is its own chord on its own screen
+   (L+R there too, since the release) and opens nothing else. `unlock_cheats`
+   in gba/main.c is the whole door; `--pausemenu` and `--skin` check both
+   halves, including that the game screen does NOT open it.
+12. ~~Pause and the long-bar/undo/level-up cheat codes~~ — done, traced in
    full. The three codes share one table and one cursor in the ROM, which is
    where their odd behaviours come from (a broken sequence swallows the press
    that broke it; a completed code re-fires on its last button); all of it is
    reproduced and tested rather than tidied up.
-12. ~~Audio~~ — done, and not the way the roadmap assumed. One thing about it
+13. ~~Audio~~ — done, and not the way the roadmap assumed. One thing about it
    is worth knowing before touching any of it: **MUSIC_SILENCE ($08) stops
    ONE PRIORITY CLASS, and the title theme is not in it.** The engine keeps
    eleven voice slots; the four in-game tunes hold class 7, which is what `$08`
@@ -137,7 +148,7 @@ running ROM; only the side panels need reflowing).
    recording made by the reference interpreter in `tools/nes_cpu.py`, frame
    by frame and byte for byte, and checks the whole thing still fits in a
    GBA frame.
-13. ~~2P~~ — done, over a LINK CABLE, and the CHOOSING COMES AFTER THE
+14. ~~2P~~ — done, over a LINK CABLE, and the CHOOSING COMES AFTER THE
    CONNECTING: 2 PLAYER goes straight to the lobby, the master reaches the
    level screen from there and the guest waits with a dancing cossack. The
    handshake parks at its greeting to allow it (`tengen_lobby_start_held` /
@@ -149,12 +160,12 @@ running ROM; only the side panels need reflowing).
    interrupt-driven so neither console can miss a transfer or send a stale
    word. `make gba-check` runs two mGBA cores with a cable between them and
    asserts their game state matches byte for byte. See reference/NOTES.md.
-14. ~~The title screen's cathedral overlay and fireworks~~ — done, and by the
+15. ~~The title screen's cathedral overlay and fireworks~~ — done, and by the
    same method as the audio: they are RUN, not reimplemented. Both are ROM
    subroutines that fill `oamStaging` and touch nothing else, so they execute
    on the sound engine's own 6502 interpreter — which they have to, because
    the bursts call `setMusicOrSoundEffect`. See reference/NOTES.md.
-15. ~~The prototype title skin~~ — done, from a prototype dump: L or R on the
+16. ~~The prototype title skin~~ — done, from a prototype dump: L or R on the
    title swaps the release's screen for the Nintendo-licensed build's, with
    its own cathedral, logo, fret border, tiles and palettes. Optional:
    `make assets ROM=... PROTO=...`; without it the port builds with
@@ -166,7 +177,7 @@ running ROM; only the side panels need reflowing).
    the feature having been broken. See reference/NOTES.md —
    both the attribute table and the palette index were traced after being
    guessed wrong first.
-16. ~~Korobeiniki, and MUSIC MIX~~ — done. Korobeiniki is THE EXCEPTION to ground rule 1: it is
+17. ~~Korobeiniki, and MUSIC MIX~~ — done. Korobeiniki is THE EXCEPTION to ground rule 1: it is
    not on this cartridge (Tengen's four are Loginska, Bradinsky, Karinka and
    Troika), so `gba/korobeiniki.c` is the one file here entered by hand rather
    than extracted. It runs on its own sequencer over the GBA's PSG, never
@@ -176,13 +187,13 @@ running ROM; only the side panels need reflowing).
    at every level-up. NOT at the end of a tune — only one of the four has a
    loop these measurements can find, so a "song length" for the rest would be
    invented. See reference/NOTES.md.
-17. ~~The starting handicap~~ — done, `initHandicapGarbage` traced in full:
+18. ~~The starting handicap~~ — done, `initHandicapGarbage` traced in full:
    three rows a step, each cell filled seven times in eight, and a guaranteed
    hole punched into the middle eight columns of any row that came out seven
    or more full. Two values on the HANDICAP screen (L for player 1, R for
    player 2), a lobby stage of their own on the cable, and the garbage drawn
    from a per-game RNG so one seed buries both consoles identically.
-18. ~~The settings screen~~ — done, and it has been all three shapes. The
+19. ~~The settings screen~~ — done, and it has been all three shapes. The
    cartridge walks FOUR menu gameStates, one setting each, with START between
    them, and its level list is a vertical column of ten with a cursor. Both
    are answers to "a television across a room"; a GBA's problem is 240x160 of
@@ -193,7 +204,7 @@ running ROM; only the side panels need reflowing).
    which are PRINTABLE because the tile set is ASCII-indexed. It has no
    parentheses, though — `$28`/`$29` are border art — so the handicap's note
    is separated by palette instead. Defaults: NO MUSIC and HUD Banner.
-19. ~~The HUD is the COOP screen's panel now~~ — and this is the shape to
+20. ~~The HUD is the COOP screen's panel now~~ — and this is the shape to
    know before moving anything in it. The port's left box used to be a closed
    rectangle of rope with the cartridge's grey header rule between the
    counters; it is the coop screen's panel instead, which is a better object
@@ -204,15 +215,25 @@ running ROM; only the side panels need reflowing).
    one home in both HUDs instead of moving between the boxes. The right box
    keeps one shelf on the same row, so the two sides rule at the same height,
    and in HUD Stats the cossack stands on it with the histogram below.
-   TWO THINGS THAT LOOK LIKE CONSTANTS AND ARE NOT: the shelves start one row
-   above coop's (the cartridge leaves its last compartment empty and this one
-   puts a six-digit number in it, which at coop's rows sits flush against the
-   bottom of the console), and NEXT alone is drawn on the MAIN layer — every
-   other thing in the panel rides the counters' layer two pixels down, and
-   those two pixels are the difference between centred in its cell and five
-   pixels low. `make gba-check --panel` measures all of it off the
-   framebuffer: four blue shelves, equal air under each, and NEXT centred.
-20. ~~FOUR backgrounds, each for a scroll the others cannot share~~ — done,
+   BOTH PANELS ARE INVERTED Ls, mirrors of each other: rope along the top and
+   down the side facing the board, open at the bottom and at the screen's own
+   edge. That is the coop screen's shape, and opening the right one is what
+   finally puts the eighteen-row TETRIS banner inside a frame — a closed box
+   left sixteen interior rows, which is why the banner used to take the whole
+   column and the rope with it. The only difference between the two HUDs is
+   that shelf: HUD Stats has one, HUD Banner has none.
+   THREE THINGS THAT LOOK LIKE CONSTANTS AND ARE NOT: the counters' layer is
+   two pixels **UP** (it was two down while every counter hung under a rule;
+   between shelves that put the value's last row of pixels ON the shelf); NEXT
+   alone is drawn on the MAIN layer, because the piece picks its own layer by
+   width and a preview two pixels off its own word is what "Next y la pieza se
+   solapan" was; and the NEXT block is FOUR rows, not three — a blank one
+   between the word and the piece, because the block art fills its tiles to
+   the top edge and a piece drawn straight under the label touches it.
+   `make gba-check --panel` measures all of it off the framebuffer: four blue
+   shelves found by colour, equal air under each, NEXT centred, and both ropes
+   reaching the last scanline.
+21. ~~FOUR backgrounds, each for a scroll the others cannot share~~ — done,
    and this is the shape to keep in mind before adding anything to the HUD: a
    scroll is one number per background, so anything whose ink is not centred
    in its tiles needs a layer of its own or it drags its neighbours with it.
@@ -222,7 +243,7 @@ running ROM; only the side panels need reflowing).
    histogram, three across and two UP so its icons clear the braid. SCORE's
    missing headroom and the histogram touching the frame were the same bug
    twice. `make gba-check --panel` measures both gaps off the framebuffer.
-21. ~~Coop~~ — and the thing to know before touching anything on a shared
+22. ~~Coop~~ — and the thing to know before touching anything on a shared
    board: **THE TWO FALLING PIECES ARE SOLID TO EACH OTHER, and the ordinary
    collision check cannot see that.** The playfield buffer holds settled
    blocks only, so the partner's falling piece is invisible to it and the two
@@ -241,34 +262,34 @@ running ROM; only the side panels need reflowing).
    already drawn, and the ROM's own eight coop dancer positions to stand on
    them. It goes over the cable like 2P, with the choice riding bit 8 of the
    lobby's CONFIG word. See reference/NOTES.md.
-22. ~~The COMPUTER player~~ — done, and with it all five of the cartridge's
+23. ~~The COMPUTER player~~ — done, and with it all five of the cartridge's
    GAME SELECT entries. `computerMove` is `src/tengen_ai.c`, transcribed byte
    for byte including the arithmetic that wraps; only the 28 bonus bytes are
    copied, since the profiles derive from the core's own bitmaps and a test
    checks that they do. `playModeTable` is what says which board each mode
    uses: VERSUS is a race like 2P, WITH COMPUTER is coop's shared twelve-wide
    board. Neither needs a cable. See reference/NOTES.md.
-23. ~~The attract demo~~ — done, and it is the same computer playing the same
+24. ~~The attract demo~~ — done, and it is the same computer playing the same
    game: `demoStart` is playMode 0 with the music suspended, reached off the
    title's own clock at frameCounterHigh 5 / low $20, with the computer on
    PLAYER 1 (the VS and WITH paths `inx` first, the demo does not). A press is
    the way out rather than a move. What ends it is the port's: the cartridge
    goes to a high-score table this port does not have, so the game over holds
    three seconds and the title comes back.
-24. ~~The HIGH SCORES table~~ — done, and SAVED: fifteen entries with their
+25. ~~The HIGH SCORES table~~ — done, and SAVED: fifteen entries with their
    lines and three initials, inserted the ROM's way (bottom up, equal scores
    go under), typed into with Left/Right and A, and kept in the GBA's
    battery-backed SRAM under the cartridge's own 'LOGG' magic — which on the
    NES only carried it across a RESET. A cold table is @resetHighScores', 17000
    down to 3000 in thousands, which is why HIGH SCORE opens at 017000.
-25. ~~The level's BONUS tally~~ — done. displayStatsP1 paints the playfield
+26. ~~The level's BONUS tally~~ — done. displayStatsP1 paints the playfield
    over with it while the cossacks dance, and L8EA2 counts it up one clear at
    a time ADDING TO THE SCORE: singles x100, doubles x400, triples x900,
    tetris x2500, all printed in the ROM's own strings.
-26. ~~The drop-point sprites~~ — done. Three digits beside the piece the moment
+27. ~~The drop-point sprites~~ — done. Three digits beside the piece the moment
    it lands, for $3C frames, at the HEIGHT it landed — which is the whole
    point, because this game pays by how high a piece comes to rest.
-27. ~~The pause menu~~ — the port's own, behind L+R on the plaque: the tune
+28. ~~The pause menu~~ — the port's own, behind L+R on the plaque: the tune
    (silence and the MIX included) and a way out that asks first. Built from
    the game-over plaque's nine-patch frame so it reads as part of the game.
    Two things it taught, both of them traps for anything added near it.
@@ -281,6 +302,13 @@ running ROM; only the side panels need reflowing).
    no title theme. It sends the RESUME itself now, FIRST in the ring so its
    own blip is not swallowed, and `make gba-check --quit-audio` walks that
    road and listens at every screen. See reference/NOTES.md.
+   **AND FOURTEEN COLUMNS WIDE, BECAUSE THIRTEEN CANNOT BE CENTRED.** The box
+   lands on the board, whose middle is x=120 — the screen's own — and a box of
+   odd width on an even grid cannot be put there: thirteen columns sits four
+   and a half pixels left, which against a playfield you are looking straight
+   at is not a subtlety. What that costs is the PARITY of every line inside
+   it, and with it the vertical nudge, so every gap in the box is a whole
+   blank row.
    **THE CURSOR IS AN ARROW AND START ALWAYS LEAVES.** Picking the line out
    by palette read as a colour scheme rather than as a cursor, so it is the
    cartridge's own `$3E` two columns left of the line, where the settings
@@ -301,7 +329,7 @@ running ROM; only the side panels need reflowing).
    tile set is ASCII-indexed but $3F is a LEFT ARROW, so `extract_assets.py`
    draws one into a slot the cartridge left empty and refuses to if the dump
    has art there.
-28. Still to do: the prototype PIECE art, and a prototype mode cycling more
+29. Still to do: the prototype PIECE art, and a prototype mode cycling more
    than one dump. **WHAT THE THREE DUMPS ACTUALLY HAVE**, measured rather than
    assumed: only `proto_b` carries the title screen this port can read (its
    signature is at $A3C4 of a two-bank PRG). `proto_a` and `proto_c` are

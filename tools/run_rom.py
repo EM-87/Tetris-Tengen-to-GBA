@@ -1035,8 +1035,8 @@ def skin_check(rom_path):
         return [core.memory.u16[SCREENBLOCK_ADDR + (r * 32 + c) * 2]
                 for r in range(2, 18) for c in (0, 1, SCREEN_TW_TILES - 1)]
 
-    def tap(key, settle=12):
-        core.set_keys(key)
+    def tap(*keys, settle=12):
+        core.set_keys(*keys)
         run(core, 4)
         core.set_keys()
         run(core, settle)
@@ -1044,17 +1044,27 @@ def skin_check(rom_path):
     run(core, 40)
     release = frame_tiles()
 
+    # L+R, NOT EITHER SHOULDER. It answers to the same chord as the port's
+    # other extras now, and one shoulder on its own must do nothing at all.
     tap(KEYS["L"])
+    if frame_tiles() != release:
+        failures.append("L a solas cambia la skin: deberia pedir L+R")
+    tap(KEYS["R"])
+    if frame_tiles() != release:
+        failures.append("R a solas cambia la skin: deberia pedir L+R")
+
+    tap(KEYS["L"], KEYS["R"])
     proto = frame_tiles()
     if proto == release:
-        print("  esta ROM se construyo sin prototipo: L y R no tienen skin que poner")
-        tap(KEYS["R"])
-        if frame_tiles() != release:
-            print("FALLA: R cambio algo que L no habia cambiado")
+        print("  esta ROM se construyo sin prototipo: L+R no tiene skin que poner")
+        for f in failures:
+            print(f"FALLA: {f}")
+        if failures:
             return 1
         print("OK: sin skin de prototipo, y el titulo no se rompe por pulsar L o R.")
         return 0
-    print("  L pone el marco del prototipo, que es de otros tiles")
+    print("  L+R pone el marco del prototipo, que es de otros tiles; "
+           "un hombro suelto no hace nada")
 
     # The release's fireworks and cathedral overlay belong to the release
     # picture; on the prototype's they must be gone.
@@ -1063,20 +1073,42 @@ def skin_check(rom_path):
     else:
         print("  los sprites del release (catedral y fuegos) se retiran con ella")
 
-    tap(KEYS["R"])
+    tap(KEYS["L"], KEYS["R"])
     if frame_tiles() != release:
-        failures.append("R no devuelve la pantalla del release")
+        failures.append("otro L+R no devuelve la pantalla del release")
     else:
-        print("  R vuelve al titulo del release")
+        print("  otro L+R vuelve al titulo del release")
 
     # ...and the choice must survive leaving the title and coming back.
-    tap(KEYS["L"])
+    tap(KEYS["L"], KEYS["R"])
     for name in ("START", "B"):
         core.set_keys(KEYS[name]); run(core, 4); core.set_keys(); run(core, 10)
     if frame_tiles() != proto:
         failures.append("la skin se pierde al salir del titulo y volver")
     else:
         print("  la skin se mantiene al salir del titulo y volver")
+
+    # AND IT OPENS NOTHING ELSE. The skin is its own chord on its own screen:
+    # a player who finds the prototype title has not thereby found the hidden
+    # tunes, which are still four until the chord is rung on a menu.
+    core.set_keys(KEYS["START"]); run(core, 4); core.set_keys(); run(core, 12)
+    core.set_keys(KEYS["START"]); run(core, 4); core.set_keys(); run(core, 16)
+    for _ in range(2):      # the cursor: LEVEL -> HANDICAP -> MUSIC
+        core.set_keys(KEYS["DOWN"]); run(core, 4); core.set_keys(); run(core, 8)
+    if "NO MUSIC" not in tilemap_text(core, MUSIC_ROW):
+        failures.append(f"la fila de MUSIC no dice NO MUSIC: "
+                         f"{tilemap_text(core, MUSIC_ROW)!r}")
+    else:
+        seen = set()
+        for _ in range(12):
+            core.set_keys(KEYS["RIGHT"]); run(core, 4); core.set_keys(); run(core, 8)
+            seen.add(tilemap_text(core, MUSIC_ROW))
+        if len(seen) != 5:
+            failures.append(f"el acorde del titulo destapo las canciones: "
+                             f"el menu ofrece {len(seen)}, no 5")
+        else:
+            print("  ...y no destapa nada mas: el menu sigue ofreciendo las "
+                   "cinco entradas del cartucho")
 
     for f in failures:
         print(f"FALLA: {f}")
@@ -1327,31 +1359,46 @@ def panel_check(rom_path):
                 print(f"  NEXT centrado en la celda grande: {above}px arriba, "
                        f"{below}px abajo")
 
-    # ...and the RIGHT box's histogram must clear the braid under it. The
-    # icons fill their two tiles to the last pixel, so on the tile grid alone
-    # they end one line short of the frame; the histogram has a background of
-    # its own precisely so it can be lifted clear (STATS_LIFT_PX).
+    # ...AND THE TWO PANELS ARE MIRRORS. Both are inverted Ls now — rope along
+    # the top and down the side facing the board, open at the bottom — so the
+    # right one's rope has to run to the screen's last line exactly as the
+    # left one's does, and the histogram standing in it has to reach the
+    # bottom without anything closing it off.
     core.set_keys(KEYS["L"], KEYS["R"])
     run(core, 5)
     core.set_keys()
     run(core, 40)
     rows = pixels(screen)
-    braid = next((y for y in range(140, 160)
-                  if all(rows[y][x] != (0, 0, 0) for x in range(176, 240))), None)
-    if braid is None:
-        failures.append("no se encuentra la greca de abajo del cajon derecho")
-    else:
-        last = max((y for y in range(100, braid)
-                    if any(rows[y][x] != (0, 0, 0) for x in range(176, 240))),
+
+    def rope(x0, x1):
+        """The lowest scanline the rope is drawn on in those columns.
+
+        Nearly all of them, not all: the braid's outermost pixel column is
+        transparent and shows the backdrop through, on both sides.
+        """
+        return max((y for y in range(100, SCREEN_H)
+                    if sum(1 for x in range(x0, x1)
+                           if rows[y][x] != (0, 0, 0)) >= (x1 - x0) - 2),
                    default=None)
-        if last is None:
-            failures.append("el cajon derecho no dibuja las estadisticas")
-        elif braid - last < 3:
-            failures.append(f"las estadisticas llegan a y={last} y la greca "
-                             f"empieza en y={braid}: se tocan")
-        else:
-            print(f"  las estadisticas acaban en y={last}, la greca empieza en "
-                   f"y={braid}: {braid - last - 1} pixeles de aire")
+
+    left, right = rope(64, 80), rope(160, 176)
+    if left != SCREEN_H - 1 or right != SCREEN_H - 1:
+        failures.append(f"la greca no llega al borde inferior en los dos "
+                         f"cajones: izq acaba en y={left}, der en y={right}")
+    else:
+        print("  las dos grecas bajan hasta la ultima linea: los cajones son "
+               "L invertidas, espejo la una de la otra")
+
+    icons = max((y for y in range(100, SCREEN_H)
+                 if any(rows[y][x] != (0, 0, 0) for x in range(176, 240))),
+                default=None)
+    if icons is None:
+        failures.append("el cajon derecho no dibuja las estadisticas")
+    elif icons < SCREEN_H - 4:
+        failures.append(f"las estadisticas acaban en y={icons} y el cajon "
+                         f"llega a {SCREEN_H - 1}: sobra panel debajo")
+    else:
+        print(f"  las estadisticas llegan a y={icons}, al pie del cajon")
 
     for f in failures:
         print("FALLA:", f)
@@ -1905,32 +1952,41 @@ def counters_check(rom_path):
 # question's second line ride the counters' layer two pixels down, the
 # even-length ones the offset layer three across — but tilemap_text reads all
 # four, so these are just rows.
-PMENU_H = 9
+PMENU_H = 10
 PMENU_TY = (SCREEN_H // TILE - PMENU_H) // 2
-PM_HEAD = PMENU_TY + 1       # PAUSE
-PM_MUSIC = PMENU_TY + 3      # MUSIC
-PM_TUNE = PMENU_TY + 4       # ...and the tune's name under it
-PM_EXIT = PMENU_TY + 6       # EXIT
+PM_HEAD = PMENU_TY + 2       # PAUSE
+PM_MUSIC = PMENU_TY + 4      # MUSIC
+PM_TUNE = PMENU_TY + 5       # ...and the tune's name under it
+PM_EXIT = PMENU_TY + 7       # EXIT
 PM_ASK = PMENU_TY + 2        # the question's EXIT
 PM_SURE = PMENU_TY + 3       # ...and its SURE?
-PM_ANSWER = PMENU_TY + 5     # YES, with NO under it
+PM_ANSWER = PMENU_TY + 6     # YES, with NO under it
 # The box's own columns, which is all a check about the box should read: the
 # rest of the row is the HUD, and the braid decodes as stray letters.
-PMENU_W_T = 13
+# FOURTEEN, not thirteen: an odd width cannot be centred on the board, and the
+# box lands on the board. See PMENU_W in gba/main.c.
+PMENU_W_T = 14
 PMENU_TX = (SCREEN_TW_TILES - PMENU_W_T) // 2
 PM_L = PMENU_TX + 1
 PM_R = PMENU_TX + PMENU_W_T - 1
 
 
 def pausemenu_check(rom_path):
-    """L+R ON THE PAUSE PLAQUE: the menu, and the two things it offers.
+    """THE PAUSE MENU, AND THE CHORD THAT IS NOT IN THE GAME.
 
     Not the cartridge's — its PAUSE is a plaque and nothing else — so what
-    this checks is that it behaves: that the chord opens it, that MUSIC really
-    changes the tune while the game is held, that EXIT asks before it does
-    anything, that NO comes back, and that YES leaves by the same road a
-    finished game leaves by. And that the cheat codes cannot be typed through
-    it, which is the one way it could break something that already worked.
+    this checks is that it behaves: that MUSIC really changes the tune while
+    the game is held, that EXIT asks before it does anything, that NO comes
+    back, and that YES leaves by the same road a finished game leaves by. And
+    that the cheat codes cannot be typed through it, which is the one way it
+    could break something that already worked.
+
+    THE CHORD IS RUNG ON THE MENUS, not on the plaque. L+R on GAME SELECT or
+    on LEVEL SETTINGS uncovers this menu and the hidden tunes together; in
+    play the same chord swaps the HUD and uncovers nothing, so a plaque that
+    has not been unlocked stays a plaque however long you hold the shoulders
+    on it. Both halves are checked: that the game screen does NOT open it, and
+    that the menu screen does.
     """
     off = game_offsets(rom_path)
     base, why = game_state_address(rom_path)
@@ -1940,8 +1996,6 @@ def pausemenu_check(rom_path):
 
     failures = []
     core, screen = load(rom_path)   # `screen` must stay alive; see load()
-    start_game(core)
-    run(core, 30)
 
     def tap(*names, hold=4, settle=12):
         core.set_keys(*[KEYS[n] for n in names]); run(core, hold)
@@ -1951,17 +2005,58 @@ def pausemenu_check(rom_path):
         """Only the pause box's own columns: see PM_L."""
         return tilemap_text(core, r, PM_L, PM_R)
 
+    # FIRST: a game with the chord never rung. The plaque must stay a plaque.
+    start_game(core)
+    run(core, 30)
     tap("START")
     if not core.memory.u8[base + off["paused"]]:
         failures.append("START no pausa")
     tap("L", "R")
+    if "PAUSE" in row(PM_HEAD) and "EXIT" in row(PM_EXIT):
+        failures.append("L+R en la partida abre el menu: el acorde es de los "
+                         "menus, y en juego solo cambia el HUD")
+    else:
+        print("  L+R en la partida no abre nada: el acorde ya no vive aqui")
+
+    # ...now ring it where it lives, and come back into a game.
+    core, screen = load(rom_path)
+    run(core, 8)
+    press_start(core); run(core, 10)    # title -> GAME SELECT
+    tap("L", "R")                        # the chord, on the first menu
+    press_start(core); run(core, 12)     # -> LEVEL SETTINGS
+    press_start(core); run(core, 30)     # -> play
+    tap("START")
     if ("PAUSE" not in row(PM_HEAD) or "MUSIC" not in row(PM_MUSIC)
             or "EXIT" not in row(PM_EXIT)):
-        failures.append(f"L+R no abre el menu de pausa: {row(PM_HEAD)!r} / "
-                         f"{row(PM_MUSIC)!r} / {row(PM_EXIT)!r}")
+        failures.append(f"el acorde en GAME SELECT no abre el menu de pausa: "
+                         f"{row(PM_HEAD)!r} / {row(PM_MUSIC)!r} / "
+                         f"{row(PM_EXIT)!r}")
         print("FALLA:", failures[-1])
         return 1
-    print("  L+R sobre la pausa abre el menu, en columna")
+    print("  L+R en GAME SELECT destapa el menu, y la pausa ya es el menu")
+
+    # AND THE BOX IS CENTRED ON THE BOARD, which an odd width cannot be: the
+    # playfield's ten columns run 10-19, so its middle is x=120, and so is the
+    # screen's. Measured off the framebuffer rather than off PMENU_TX, because
+    # what went wrong before was the arithmetic and not the drawing.
+    # Off the box's OWN tiles, not off lit pixels: the HUD panels are lit on
+    # this scanline too. $29/$2A/$2B are the game-over plaque's top-left, top
+    # and top-right, which is what the box is framed with.
+    top = [c for c in range(SCREEN_TW_TILES)
+           if (core.memory.u16[SCREENBLOCK_ADDR + (PMENU_TY * 32 + c) * 2] & 0x3FF)
+           in (0x29, 0x2A, 0x2B)]
+    if not top:
+        failures.append("no se encuentra el borde superior de la caja de pausa")
+    else:
+        x0, x1 = top[0] * TILE, (top[-1] + 1) * TILE
+        middle = (x0 + x1) / 2
+        if abs(middle - SCREEN_W / 2) > 1:
+            failures.append(f"la caja de pausa no esta centrada: va de x={x0} "
+                             f"a {x1 - 1}, centro {middle}, y la pantalla "
+                             f"{SCREEN_W / 2}")
+        else:
+            print(f"  la caja va de x={x0} a {x1 - 1}, centro {middle}: "
+                   f"centrada en el tablero")
 
     before = row(PM_TUNE)
     tap("RIGHT")
@@ -2142,6 +2237,7 @@ def quit_audio_check(rom_path):
 
     run(core, 8)
     tap("START"); run(core, 10)            # titulo -> GAME SELECT
+    tap("L", "R")                           # el acorde vive aqui ahora
     for _ in range(4):                      # -> WITH COMPUTER
         tap("DOWN")
     tap("START"); run(core, 12)             # -> LEVEL SETTINGS
@@ -2151,9 +2247,7 @@ def quit_audio_check(rom_path):
     tap("START"); run(core, 30)             # -> a jugar
 
     playing = heard(120)
-    tap("START"); run(core, 10)             # pausa
-    core.set_keys(KEYS["L"], KEYS["R"]); run(core, 6)
-    core.set_keys(); run(core, 12)          # ...y el menu secreto
+    tap("START"); run(core, 10)             # pausa, que ya es el menu
     tap("DOWN")                             # MUSIC -> EXIT
     tap("A")                                # -> la pregunta
     tap("RIGHT")                            # NO -> YES

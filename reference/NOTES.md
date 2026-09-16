@@ -864,25 +864,44 @@ compartment at the top and four short ones under it. Five compartments, and
 the HUD has exactly five things to say, so NEXT stopped moving between the
 two boxes and took the tall one for good.
 
-Three numbers in it are not free, and two of them look like constants:
+**BOTH PANELS ARE INVERTED Ls**, mirrors of each other: rope along the top and
+down the side facing the board, open at the bottom and at the screen's own
+edge. The right one was a closed box until the banner needed a frame — six
+letters of three rows each is eighteen rows with no padding anywhere in it,
+and a closed box leaves sixteen, which is why the vertical TETRIS used to take
+the whole column and the rope with it. Rows 2-19 of an open panel are eighteen
+exactly. The histogram got its two rows back at the same time: its icons stand
+on the last interior row, and that row is 19 now.
 
-* **the shelves start one row above coop's.** Screen 5 rules at window rows
-  8/11/14/17 and leaves its last compartment empty; this panel puts a
-  six-digit HIGH SCORE in it, and at those rows that pair is 18-19 — the
-  bottom of the screen, with the counters' layer two pixels below the grid, so
-  the number's last two rows of pixels fell off the console. Starting at 7
-  spends one of the big cell's six rows and buys row 19 as air.
-* **NEXT alone is drawn on the MAIN layer.** Everything else in the panel
-  rides the counters' layer (`PANEL_SHIFT_PX`, two pixels down) and should:
-  that is where SCORE's headroom under its shelf comes from. NEXT is 23 pixels
-  of content in a 40-pixel cell, and those two pixels are the difference
-  between nine above and eight below — centred — and eleven against six. The
-  preview's own layer (`BG1`) is held at the grid with it, because the label
-  is on the main one and a preview two pixels lower than its own word is what
-  an odd-width piece used to be.
-* **the right box keeps ONE shelf, on the left box's first row.** A shelf a
-  row lower than its neighbour across the board reads as a mistake however
-  good the reason. In HUD Stats the cossack stands on it — he used to be
+Four numbers in it are not free, and three of them look like constants:
+
+* **the counters' layer is two pixels UP, and it used to be two down.** Down
+  was right while every counter hung under something — SCORE's ceiling was the
+  braid and the other three had a rule, and the two pixels were what gave
+  SCORE the same headroom as the rest. Between SHELVES it is wrong: a label
+  over a value is fifteen pixels of ink and the space between two shelves is
+  twenty, so the block wants two and a half pixels at each end, and two down
+  gave it six above and MINUS ONE below — a value whose last row of pixels is
+  drawn on the shelf under it, which is "tocan el suelo de la balda". Two up
+  leaves two and three.
+* **NEXT alone is drawn on the MAIN layer.** Everything else rides the
+  counters' layer; NEXT does not, because the PIECE picks its own layer by
+  width (an odd-width preview is centred with the offset layer's three pixels)
+  and those two layers do not share a vertical scroll. A piece two pixels off
+  its own word, with one pixel between them, is the word and the piece
+  touching — which in coop, where the panel layer and the offset layer had
+  disagreed by two since they were given different scrolls, was a visible
+  overlap on five pieces of seven.
+* **the NEXT block is FOUR rows, not three.** A blank one between the word and
+  the piece. The block art fills its tiles to the top edge, so a piece drawn
+  straight under the label has the label's baseline and the block's first row
+  of pixels on consecutive scanlines. Four rows of content also centre exactly
+  in the compartment's six, which three never did.
+* **the right box keeps ONE shelf, on the left box's first row, and only in
+  HUD Stats.** A shelf a row lower than its neighbour across the board reads
+  as a mistake however good the reason; and a line across the middle of a
+  vertical TETRIS is a line across the middle of a vertical TETRIS, so HUD
+  Banner has none. In HUD Stats the cossack stands on it — he used to be
   parked in the bottom of the left panel under four counters — and the
   histogram's bars start under it.
 
