@@ -442,6 +442,10 @@ def lineclear_check(rom_path, row_count):
 # 12..19 of 32, which is the middle of the screen, and that relationship is
 # what the port keeps rather than the column number. gba/main.c derives these
 # the same way.
+# The braid's own mid blue, which the shelves are drawn in. Sampled rather
+# than named: it is palette bank 2 colour 2 of the cartridge's game set.
+BRAID_BLUE = (74, 156, 239)
+
 PAUSE_W = 8
 PAUSE_H = 2
 PAUSE_TX = (SCREEN_TW_TILES - PAUSE_W) // 2
@@ -1121,9 +1125,12 @@ TENGEN_ROM_ROW_ORIGIN = 6   # the ROM row the visible field starts at
 DEMO_START_FRAME = 5 * 256 + 0x20
 DEMO_WATCH_FRAMES = 2000
 
-MUSIC_ROW = 14                  # the MUSIC row of LEVEL SETTINGS
-LEVEL_ROW = 8                   # ...and the LEVEL one above it
+# LEVEL SETTINGS, two rows apart and hung off HANDICAP -- gba/main.c's
+# MENU_FIELD_TY(f) = 9 + 2f. Three rows apart read as three announcements
+# rather than as one block to choose from.
+LEVEL_ROW = 9
 HANDICAP_ROW = 11               # value AND, in one player, what it buries
+MUSIC_ROW = 13
 
 
 def to_music_page(core, settle=10):
@@ -1230,13 +1237,20 @@ def handicap_check(rom_path):
 
 
 def panel_check(rom_path):
-    """The four counters must have the SAME headroom.
+    """The left panel's five compartments: one shelf apart, and square in them.
 
-    SCORE used to have one pixel where LINES, LEVEL and HIGH had three, and
-    the counters cannot simply be moved: they share BG0 with a playfield whose
-    160 pixels are the whole screen. They ride their own background now,
-    scrolled two pixels down (SCREENBLOCK_PANEL in gba/main.c), which is a
-    thing that shows up as pixels or not at all — so this counts them.
+    The panel is the coop screen's now — a tall cell at the top for NEXT and
+    four short ones under it for the counters, ruled off with the cartridge's
+    own blue LEDGE instead of the 1P header grid's grey line. So there are
+    three things to measure and none of them is a constant in this file:
+
+      * the four counters open with the SAME air under their shelf. They ride
+        a background scrolled two pixels down (SCREENBLOCK_PANEL) precisely so
+        that SCORE, whose shelf is the braid, matches the other three;
+      * NEXT is CENTRED in the big cell, which is why it alone is drawn on the
+        main layer — two pixels of panel offset is the difference between
+        centred and five pixels low;
+      * and the shelves are the rope's blue, not the grid's grey.
     """
     core, screen = load(rom_path)
     start_game(core)
@@ -1247,31 +1261,71 @@ def panel_check(rom_path):
     def ink(y):
         return sum(1 for p in rows[y][16:80] if p != (0, 0, 0))
 
-    floor = min(ink(y) for y in range(14, 116))
-    solid = [y for y in range(14, 116) if ink(y) >= 60]   # braid run, or a rule
+    def content_ink(y):
+        """Lit pixels in the panel's CONTENT columns, clear of the braid."""
+        return sum(1 for p in rows[y][0:56] if p != (0, 0, 0))
 
-    # Each counter's headroom is the run of empty scanlines between whatever
-    # is above it — the braid for SCORE, a rule for the rest — and its label.
-    gaps = []
-    for y in range(14, 112):
-        if ink(y) < 60 and ink(y - 1) >= 60:
-            n = 0
-            while ink(y + n) <= floor:
-                n += 1
-            gaps.append((y, n))
+    def band(y):
+        """A shelf: the content columns lit wall to wall, with no gaps."""
+        return content_ink(y) == 56
 
     failures = []
-    if len(gaps) != 4:
-        failures.append(f"se esperaban 4 contadores, se ven {len(gaps)}: {gaps}")
-    elif len({n for _, n in gaps}) != 1:
-        failures.append("los contadores no tienen el mismo hueco por arriba: "
-                         + ", ".join(f"y={y} -> {n}px" for y, n in gaps))
-    else:
-        print(f"  los cuatro contadores abren con {gaps[0][1]} pixeles por arriba "
-               f"(en y={', '.join(str(y) for y, _ in gaps)})")
 
-    if not solid:
-        failures.append("no se ve ni una regla en el panel")
+    # The shelves, off the screen rather than off a row number. From y=16,
+    # which is under the braid's own bottom edge — that fills the width too.
+    shelves = [y for y in range(16, 160) if band(y)]
+    runs = []
+    for y in shelves:
+        if runs and y == runs[-1][-1] + 1:
+            runs[-1].append(y)
+        else:
+            runs.append([y])
+    if len(runs) != 4:
+        failures.append(f"se esperaban 4 baldas en el cajon izquierdo, se ven "
+                         f"{len(runs)}: {[r[0] for r in runs]}")
+    else:
+        colours = set().union(*({rows[y][x] for y in r for x in range(0, 56)}
+                                 for r in runs))
+        if BRAID_BLUE not in colours:
+            failures.append(f"las baldas no son azules como la greca: "
+                             f"{sorted(colours)}")
+        else:
+            print(f"  cuatro baldas azules, en y={[r[0] for r in runs]}")
+
+    # Each counter's headroom: from the bottom of its shelf to its label's ink.
+    floor = min(ink(y) for y in range(60, 158))
+    gaps = []
+    for r in runs:
+        y = r[-1] + 1
+        n = 0
+        while ink(y + n) <= floor:
+            n += 1
+        gaps.append((r[-1] + 1, n))
+
+    if len(gaps) == 4 and len({n for _, n in gaps}) != 1:
+        failures.append("los contadores no tienen el mismo hueco bajo su balda: "
+                         + ", ".join(f"y={y} -> {n}px" for y, n in gaps))
+    elif len(gaps) == 4:
+        print(f"  los cuatro contadores abren con {gaps[0][1]} pixeles bajo su "
+               f"balda (en y={', '.join(str(y) for y, _ in gaps)})")
+
+    # NEXT, centred in the big cell: from the braid's last row to the first
+    # shelf, with the label and the preview somewhere in between.
+    if runs:
+        # The cell runs from under the braid to the shelf's own tile row.
+        top, bot = 16, (runs[0][0] // TILE) * TILE
+        lit = [y for y in range(top, bot) if content_ink(y)]
+        if not lit:
+            failures.append("la celda grande del cajon izquierdo esta vacia: "
+                             "NEXT no se dibuja donde debe")
+        else:
+            above, below = lit[0] - top, bot - 1 - lit[-1]
+            if abs(above - below) > 1:
+                failures.append(f"NEXT no esta centrado en su celda: {above}px "
+                                 f"por arriba, {below}px por abajo")
+            else:
+                print(f"  NEXT centrado en la celda grande: {above}px arriba, "
+                       f"{below}px abajo")
 
     # ...and the RIGHT box's histogram must clear the braid under it. The
     # icons fill their two tiles to the last pixel, so on the tile grid alone
@@ -2709,7 +2763,7 @@ def leaving_title_check(rom_path):
     if chosen_row() != GAME_SELECT_TY:
         failures.append("no se puede volver a 1 PLAYER con SELECT")
     tap(KEYS["A"])
-    if "LEVEL" not in tilemap_text(core, 8):
+    if "LEVEL" not in tilemap_text(core, LEVEL_ROW):
         failures.append("A no confirma en GAME SELECT")
     else:
         print("  A confirma, ademas de START")

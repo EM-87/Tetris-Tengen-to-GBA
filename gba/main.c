@@ -1145,6 +1145,24 @@ static void clear_both(int tx, int ty, int w, int h) {
  * ----------------------------------------------------------------------- */
 #define BRAID_T 2                 /* the frame's thickness, in tiles */
 
+/* THE DANCERS' LEDGE, WHICH IS ALSO A SHELF.
+ *
+ * $9D is the blue bar the cartridge's coop screen rules across both panels
+ * every three rows, so its eight cossacks have something to stand on. It is
+ * also, as it happens, the best rule in the game: it is the same blue as the
+ * rope and it reads as a piece of the frame rather than as a line drawn over
+ * the background, which is what the 1P panel's grey $76 always looked like.
+ *
+ * So the port's own boxes use it too, and take the coop screen's spacing with
+ * it — see draw_braid_panel's `shelves`. */
+#define T_LEDGE 0x9D
+
+/* One shelf, `w` columns of it. */
+static void draw_ledge(int tx, int ty, int w) {
+    for (int x = 0; x < w; x++)
+        set_map_tile(tx + x, ty, WITH_BANK(T_LEDGE, BRAID_BANK));
+}
+
 /* The two columns of rope that frame the playfield, as a plain strip from top
  * to bottom. Used when the banner or the dancers take the rest of the column:
  * clearing around the box leaves its corners dangling, and the cartridge's own
@@ -1186,17 +1204,48 @@ static void draw_field_braid(int tx, const uint8_t run[1][2]) {
  *
  * The corners are only ever drawn on the board side, because that is the only
  * side that has one — the other simply runs off the screen. */
-static void draw_braid_panel(int tx, int w, bool inner_right) {
+/* SHELVES, AND WHERE THEY FALL. `shelves` opens the panel at the bottom and
+ * rules the cartridge's own ledges across it — which is the coop screen's
+ * frame, and the coop screen is the one the port did not design. Its panels
+ * are better than the boxes were: one tall cell at the top and four short
+ * ones under it, each a thing in its own compartment, with the shelf reading
+ * as part of the rope instead of a grey line ruled over the black.
+ *
+ * The PITCH is the cartridge's, not chosen here: screen 5 rules its ledges
+ * three rows apart, which leaves a tall cell at the top and pairs under it —
+ * exactly five compartments, and the HUD has exactly five things to say.
+ *
+ * ONE ROW HIGHER THAN COOP'S RULES THEM, for a reason the coop screen never
+ * has to face: it leaves its last compartment empty and this one puts the
+ * HIGH SCORE in it. At the cartridge's own rows that pair is 18-19 — the last
+ * two on the screen — and a six-digit number in row 19 sits flush against the
+ * bottom of the console with not one pixel under it. Starting at 7 spends one
+ * of the big cell's six rows to buy row 19 as air, and the big cell does not
+ * miss it: three rows of content in five centres EXACTLY. */
+#define SHELF_FIRST 7
+#define SHELF_STEP  3
+#define SHELF_COUNT 4
+/* The big cell, rows 2-7, and the four pairs at 9-10, 12-13, 15-16, 18-19. */
+#define CELL_BIG_TY BOX_TOP_IN
+#define CELL_BIG_H  (SHELF_FIRST - BOX_TOP_IN)
+#define CELL_TY(n)  (SHELF_FIRST + (n) * SHELF_STEP + 1)
+
+static void draw_braid_panel(int tx, int w, bool inner_right, bool shelves) {
     int ix = inner_right ? tx + w - BRAID_T : tx;   /* the inner run's column */
+    /* A shelved panel runs off the bottom of the screen, the way the coop
+     * screen's does: the fifth compartment IS the last two rows, so there is
+     * nowhere to put a bottom run and nothing for it to close. */
+    int bottom = shelves ? SCREEN_TH : SCREEN_TH - BRAID_T;
 
     for (int dy = 0; dy < BRAID_T; dy++) {
         for (int dx = 0; dx < BRAID_T; dx++) {
             set_map_tile(ix + dx, dy,
                           WITH_BANK(inner_right ? kBraidTR[dy][dx]
                                                 : kBraidTL[dy][dx], BRAID_BANK));
-            set_map_tile(ix + dx, SCREEN_TH - BRAID_T + dy,
-                          WITH_BANK(inner_right ? kBraidBR[dy][dx]
-                                                : kBraidBL[dy][dx], BRAID_BANK));
+            if (!shelves)
+                set_map_tile(ix + dx, SCREEN_TH - BRAID_T + dy,
+                              WITH_BANK(inner_right ? kBraidBR[dy][dx]
+                                                    : kBraidBL[dy][dx], BRAID_BANK));
         }
     }
     for (int x = 0; x < w; x++) {
@@ -1204,18 +1253,22 @@ static void draw_braid_panel(int tx, int w, bool inner_right) {
         if (cx >= ix && cx < ix + BRAID_T) continue;      /* the corners */
         for (int dy = 0; dy < BRAID_T; dy++) {
             set_map_tile(cx, dy, WITH_BANK(kBraidTop[dy][0], BRAID_BANK));
-            set_map_tile(cx, SCREEN_TH - BRAID_T + dy,
-                          WITH_BANK(kBraidBottom[dy][0], BRAID_BANK));
+            if (!shelves)
+                set_map_tile(cx, SCREEN_TH - BRAID_T + dy,
+                              WITH_BANK(kBraidBottom[dy][0], BRAID_BANK));
         }
     }
-    for (int y = BRAID_T; y < SCREEN_TH - BRAID_T; y++)
+    for (int y = BRAID_T; y < bottom; y++)
         for (int dx = 0; dx < BRAID_T; dx++)
             set_map_tile(ix + dx, y,
                           WITH_BANK(inner_right ? kBraidRight[0][dx]
                                                 : kBraidLeft[0][dx], BRAID_BANK));
 
-    clear_region(inner_right ? tx : tx + BRAID_T, BRAID_T, w - BRAID_T,
-                  SCREEN_TH - 2 * BRAID_T);
+    int in_tx = inner_right ? tx : tx + BRAID_T;
+    clear_region(in_tx, BRAID_T, w - BRAID_T, bottom - BRAID_T);
+    if (!shelves) return;
+    for (int i = 0; i < SHELF_COUNT; i++)
+        draw_ledge(in_tx, SHELF_FIRST + i * SHELF_STEP, w - BRAID_T);
 }
 
 /* The stage the level-up blit paints where the banner was. */
@@ -1285,6 +1338,23 @@ static void draw_static_screen(void) {
                                                 kScreenCoopPalettes[i]));
             }
         }
+        /* EXCEPT THE TWO TOP CORNERS, WHICH ARE CORNERS TO NOWHERE. The rope
+         * along the top of each panel ends, at the screen's own edge, in a
+         * piece that turns UP — $88 on the left and $8A on the right, against
+         * the plain run's $89. On the NES that is right: the rope framed the
+         * whole 256x240 screen and those two are where it turned to come back
+         * down the outside. Thirty columns of GBA cut that outside off, so
+         * what is left is a corner with nothing round it — a little step
+         * rising off the top of the screen for no reason.
+         *
+         * The run instead, so the rope leaves the screen the way it does in
+         * the port's own boxes: straight, and off the edge. */
+        for (int dy = 0; dy < BRAID_T; dy++) {
+            int i = (SCREEN_COOP_FIELD_TY + dy) * SCREEN_COOP_W + 1;
+            uint16_t run = WITH_BANK(kScreenCoopTiles[i], kScreenCoopPalettes[i]);
+            set_map_tile(0, dy, run);
+            set_map_tile(SCREEN_TW - 1, dy, run);
+        }
         set_offset_layer(STATS_SHIFT_PX);
         return;
     }
@@ -1295,8 +1365,19 @@ static void draw_static_screen(void) {
             set_map_tile(tx, ty, WITH_BANK(kScreen1pTiles[i], kScreen1pPalettes[i]));
         }
     }
-    draw_braid_panel(BOX_L_TX, BOX_W, true);
-    draw_braid_panel(BOX_R_TX, BOX_W, false);
+    /* THE LEFT PANEL IS THE COOP SCREEN'S NOW, shelves and all: one tall cell
+     * for NEXT and four short ones for the counters, ruled off with the
+     * cartridge's own ledge. The right one stays a closed box — it holds one
+     * thing, whichever it is, and a box is the right shape for that. */
+    draw_braid_panel(BOX_L_TX, BOX_W, true, true);
+    draw_braid_panel(BOX_R_TX, BOX_W, false, false);
+    /* ...and ONE shelf in the right box, on the left box's first row so the
+     * two line up across the board. Under it the piece histogram, over it
+     * whatever the right box is holding — the cossack in HUD Stats. Drawn
+     * here, with the frame, because that is what it is: a shelf a row lower
+     * than its neighbours on the other side of the screen reads as a mistake
+     * however good the reason. */
+    draw_ledge(BOX_R_IN, SHELF_FIRST, BOX_IN);
     set_credit_layer(false);
     /* Back from whatever the title lent it; see set_offset_layer. */
     set_offset_layer(STATS_SHIFT_PX);
@@ -1867,11 +1948,6 @@ static bool leader_type(uint8_t held, uint8_t pressed) {
  * scrolled three pixels for its own reasons (see SCREENBLOCK_STATS) and puts
  * them half a pixel the other side of centre. No new layer, no new art, and
  * the even widths stay on the main one where they are already right. */
-/* True while the whole NEXT block is on the offset layer — see
- * draw_next_label_and_piece. The preview's own half-tile choice defers to it:
- * one layer cannot be in two places. */
-static bool g_next_all_offset;
-
 static void draw_next_piece(int tx, int ty) {
     clear_region(tx, ty, NEXT_CELL_W, 3);
     for (int y = 0; y < 3; y++)
@@ -1891,7 +1967,7 @@ static void draw_next_piece(int tx, int ty) {
     if (last < first) return;
     int width = last - first + 1;
     int shift = (NEXT_CELL_W - width) / 2 - first;
-    bool offset_layer = g_next_all_offset || (width & 1) != 0;
+    bool offset_layer = (width & 1) != 0;
 
     /* Drawn from the same orientation bitmap and tile table the game logic
      * uses, so the preview cannot drift out of sync with what spawns. */
@@ -1969,10 +2045,11 @@ static void draw_banner(void) {
  * this is the only arrangement that shows them at all without cutting the
  * strip up. The bars grow up out of them, by the ROM's own arithmetic. */
 #define STATS_ICON_TY (BOX_BOT_IN - 1)                  /* rows 16-17 */
-/* One row later than the bars would otherwise start: row 6 is NEXT's rule,
- * which is what closes the top of the histogram's half of the box. */
-#define STATS_TOP_TY (BOX_TOP_IN + 5)                   /* bars from row 7 */
-#define STATS_BAR_ROWS (STATS_ICON_TY - STATS_TOP_TY)   /* ten of them */
+/* Straight under the box's one shelf, which is what closes the top of the
+ * histogram's half of it. The shelf is the LEFT panel's first one, so the two
+ * sides of the screen rule at the same height — see draw_static_screen. */
+#define STATS_TOP_TY (SHELF_FIRST + 1)
+#define STATS_BAR_ROWS (STATS_ICON_TY - STATS_TOP_TY)   /* eight of them */
 #define STATS_BAR_FULL (SCREEN_1P_STATS_BAR_TILE + 7)
 #define BANK_STATS SCREEN_1P_STATS_BAR_BANK
 /* Seven tiles in eight columns, so one spare. It is not left at either end:
@@ -2036,11 +2113,24 @@ static void draw_stats(const TengenPlayerState *p) {
  * level-up, the dancers' stage. A Tetris you cannot see the next piece in is
  * not a trade anybody wants to make for a decoration.
  * ----------------------------------------------------------------------- */
-#define ROW_SCORE  (BOX_TOP_IN)          /* 2: label, 3: value */
-#define ROW_LINES  (BOX_TOP_IN + 3)      /* 5, 6 */
-#define ROW_LEVEL  (BOX_TOP_IN + 6)      /* 8, 9 */
-#define ROW_HIGH   (BOX_TOP_IN + 9)      /* 11, 12 */
-#define ROW_NEXT   (BOX_TOP_IN)          /* 2 on the right, piece on 3-5 */
+/* One compartment each, in the order the cartridge's own 1P panel reads them.
+ * The shelves between are the frame's, drawn once with it, so a counter is
+ * only ever its two rows — see draw_braid_panel. */
+#define ROW_SCORE  CELL_TY(0)            /*  9: label, 10: value */
+#define ROW_LINES  CELL_TY(1)            /* 12, 13 */
+#define ROW_LEVEL  CELL_TY(2)            /* 15, 16 */
+#define ROW_HIGH   CELL_TY(3)            /* 18, 19 */
+/* NEXT IN THE BIG CELL, and centred in it — which is what six rows for three
+ * rows of content buys, and what four never could. The block is a label over
+ * a piece, three rows of the six, so it starts one and a half rows down;
+ * rounded to the row it sits at 3, and the panel layer's own two pixels
+ * happen to fall on the right side of the rounding. */
+#define ROW_NEXT   (CELL_BIG_TY + (CELL_BIG_H - 3) / 2)
+/* ...and where the right box's own cell ends, in HUD Stats. Four rows for the
+ * cossack and the ledge under him, with the histogram's bars starting where
+ * they always did. */
+#define ROW_DANCER   BOX_TOP_IN
+#define ROW_DANCER_H (SHELF_FIRST - BOX_TOP_IN)
 
 /* A label on one row and its value on the next, both inside the left box. */
 /* THE LABELS COME FROM A CLEANED COPY, not from the cartridge's tiles direct.
@@ -2054,22 +2144,6 @@ static void draw_label(int tx, int ty, int first, int count) {
     for (int i = 0; i < count; i++)
         set_map_tile(tx + i, ty,
                       WITH_BANK(HUD_LABEL_TILE_BASE + first + i, BANK_LABEL));
-}
-
-/* LABEL, VALUE, RULE — which is the cartridge's own shape. Its 1P panel reads
- * label, rule, value, rule down nametable rows 2-7, and the rule is tile $76.
- * The grey stubs that used to sit at the ends of each word were fragments of
- * the same grid; they are gone from the lettering and the rule they belonged
- * to is here instead. */
-/* THE RULE RUNS WALL TO WALL, and that is the point of it. The cartridge's
- * grid ruled the full width of its panel; a rule stopping one column short of
- * the screen's edge left the counters floating instead of sitting in
- * something. So its span is the panel's INTERIOR — eight columns from the
- * screen edge to the rope — which is one wider than the CONTENT's, because
- * the content is indented off the edge and the rule is not. */
-static void draw_rule(int tx, int ty) {
-    for (int x = 0; x < BOX_IN; x++)
-        set_map_tile(tx + x, ty, WITH_BANK(T_GRID_RULE, BANK_LABEL));
 }
 
 /* NO LEADING ZEROS, which is the cartridge's own and was missed here for a
@@ -2090,51 +2164,28 @@ static void draw_counter(int ty, int label_first, int label_count,
     draw_label(BOX_L_IN, ty, label_first, label_count);
     clear_region(BOX_L_IN, ty + 1, BOX_L_W, 1);
     draw_number_blank(BOX_L_IN + value_indent, ty + 1, value, digits, BANK_VALUE);
-    draw_rule(BOX_L_TX, ty + 2);
 }
 
-/* NEXT where it belongs, at the top of the right panel over the statistics —
- * and, when something else has that panel, in the left one under the
- * counters instead. `tx` is the panel's INTERIOR left column, so both the
- * word and the piece are centred in the same eight columns the rules span
- * rather than measured off the indented content column, which is what left
- * them sitting left of centre in either box. */
-/* NEXT, AND FOUR ROWS THAT WANT THREE.
+/* NEXT, IN ITS OWN COMPARTMENT AND CENTRED IN IT.
  *
- * The block is a label (one row) over a piece (two), and in the left panel it
- * lives in the four rows NEXT takes over when the banner does — twenty-four
- * pixels of content in thirty-two, so on the tile grid it can only sit at the
- * top with eight pixels of nothing under it. Centring it wants HALF A ROW, the
- * same half-tile problem as everything else on this screen.
+ * The block is a label (one row) over a piece (two): at orientation 0 every
+ * one of the seven is two rows tall — kOrientationBitmap's second byte is $00
+ * for all of them — so it is 23 pixels of content. The big cell is five rows,
+ * forty pixels, which leaves eight and nine to share between top and bottom;
+ * that is as centred as a tile grid gets, and it is why the cell is five rows
+ * and not four (ten pixels of nothing under it, which is what "NEXT esta muy
+ * arriba en su caja" was) or six.
  *
- * In HUD BANNER the offset layer is free: the statistics are not drawn and
- * the right panel is gone, so the whole block goes on it and the layer's
- * vertical scroll supplies the four pixels. It keeps the layer's horizontal
- * three as well, which is what the odd-width previews were already using, so
- * the label is centred for that offset rather than the main layer's. */
-#define NEXT_BANNER_VOFS_PX 4
-
-static void draw_next_label_and_piece(int tx, int ty, bool ruled, bool offset) {
-    g_next_all_offset = offset;
+ * `tx` is the panel's INTERIOR left column, so both the word and the piece
+ * are centred in the same eight columns the shelves span rather than measured
+ * off the indented content column, which is what left them sitting left of
+ * centre. */
+static void draw_next_label_and_piece(int tx, int ty) {
     int label_tx = tx + (BOX_IN - HUD_LABEL_NEXT_W) / 2;
-    for (int i = 0; i < HUD_LABEL_NEXT_W; i++) {
-        uint16_t entry = WITH_BANK(HUD_LABEL_TILE_BASE + 18 + i, BANK_LABEL);
-        if (offset) set_stats_tile(label_tx + i, ty, entry);
-        else        set_map_tile(label_tx + i, ty, entry);
-    }
+    for (int i = 0; i < HUD_LABEL_NEXT_W; i++)
+        set_map_tile(label_tx + i, ty,
+                      WITH_BANK(HUD_LABEL_TILE_BASE + 18 + i, BANK_LABEL));
     draw_next_piece(tx + (BOX_IN - NEXT_CELL_W) / 2, ty + 1);
-    g_next_all_offset = false;
-    /* THE RULE CLOSES THE CELL WHERE THE CONTENT ENDS, three rows down and
-     * not four. The block is a label over a piece: at orientation 0 every one
-     * of the seven is two rows tall — kOrientationBitmap's second byte is $00
-     * for all of them — so the content is 23 pixels and a four-row cell left
-     * ten of empty under it, which is what "NEXT esta muy arriba en su caja"
-     * is. Three rows fits it exactly, and gives the same rhythm the counters
-     * in the other box have: three pixels of air above the label, two below
-     * the last of the ink. Centring it inside the taller cell instead would
-     * want half a tile, and the offset layer is not free here — it is
-     * carrying the statistics. */
-    if (ruled) draw_rule(tx, ty + 3);
 }
 
 /* ----------------------------------------------------------------------- *
@@ -2223,6 +2274,27 @@ static void draw_panel(void) {
      * are drawn. See SCREENBLOCK_PANEL. */
     g_panel_layer = true;
 
+    /* THE LEFT PANEL, TOP TO BOTTOM: the preview in the big compartment and
+     * the four counters in the short ones. NEXT used to live over the
+     * histogram in the right box, which is where the cartridge puts it, and
+     * moved to the left one only when the banner took the right one over —
+     * two homes for one thing, and the emptier of the two boxes was always
+     * the one you were looking at. One home now, in both HUDs, and it is the
+     * compartment that was built for it. */
+    clear_both(BOX_L_TX, CELL_BIG_TY, BOX_IN, CELL_BIG_H);
+    clear_panel_region(BOX_L_TX, CELL_BIG_TY, BOX_IN, CELL_BIG_H);
+    /* ON THE MAIN LAYER, WHICH IS WHAT CENTRES IT. Everything else in this
+     * panel rides the counters' layer two pixels below the grid — that is
+     * where SCORE's headroom under the braid comes from — but NEXT is not a
+     * counter under a shelf, it is a block of content in a cell, and those
+     * two pixels are the difference between nine pixels of air above it and
+     * eight below (which is centred, as near as a 23-pixel block in a
+     * 40-pixel cell can be) and eleven against six. The preview's own layer
+     * is held at the grid to match; see the note by REG_BG1VOFS below. */
+    g_panel_layer = false;
+    draw_next_label_and_piece(BOX_L_TX, ROW_NEXT);
+    g_panel_layer = true;
+
     draw_counter(ROW_SCORE, HUD_LABEL_SCORE, p->score, 6, 0);
     draw_counter(ROW_LINES, HUD_LABEL_LINES, p->lines, 4, 1);
     draw_counter(ROW_LEVEL, HUD_LABEL_LEVEL, p->level, 2, 2);
@@ -2233,7 +2305,6 @@ static void draw_panel(void) {
          * the cartridge's is being displaced. */
         const TengenPlayerState *o = &g_session.game.player[g_view ^ 1];
         draw_text(BOX_L_IN, ROW_HIGH, "RIVAL", BANK_LABEL);
-        draw_rule(BOX_L_TX, ROW_HIGH + 2);
         clear_region(BOX_L_IN, ROW_HIGH + 1, BOX_L_W, 1);
         draw_number_blank(BOX_L_IN, ROW_HIGH + 1, o->score, 6, BANK_VALUE);
     } else {
@@ -2243,51 +2314,17 @@ static void draw_panel(void) {
          * statsDataAddresses (main.asm.txt:4100-4107), which is the top of
          * the HIGH SCORES table — see leader_reset. */
         draw_text(BOX_L_IN + 1, ROW_HIGH, "HIGH", BANK_LABEL);
-        draw_rule(BOX_L_TX, ROW_HIGH + 2);
         clear_region(BOX_L_IN, ROW_HIGH + 1, BOX_L_W, 1);
         draw_number_blank(BOX_L_IN, ROW_HIGH + 1, g_high_score, 6, BANK_VALUE);
     }
 
-    /* Rows 14-17 of the left panel: NEXT lodges here only when the right one
-     * is taken, and is blank otherwise.
-     *
-     * BOTH MAPS. The preview borrows the offset layer whenever its piece is an
-     * odd number of tiles wide, so clearing only the main one left the piece
-     * behind while its label went — which is a NEXT in both boxes at once, and
-     * only for five pieces of seven, which is why it looked like it depended
-     * on when you pressed L+R. */
-    clear_both(BOX_L_TX, BOX_TOP_IN + 12, BOX_IN, 4);
-    /* The offset layer carries the statistics and the odd-width previews, so
-     * it rides down with the counters; the banner's NEXT block wants four
-     * pixels more on top of that, and only while it is the one thing on the
-     * layer. */
-    REG_BG1VOFS = (uint16_t)(512 - PANEL_SHIFT_PX -
-                              (g_show_banner ? NEXT_BANNER_VOFS_PX : 0));
-    if (g_show_banner) {
-        draw_next_label_and_piece(BOX_L_TX, BOX_TOP_IN + 12, false, true);
-        hide_idle_cossack();
-    } else if (g_dancer_active && g_show_banner) {
-        /* The show has the real six of them out on the ledges. */
-        hide_idle_cossack();
-    } else {
-        /* HUD STATS: one cossack where NEXT would be. See IDLE_OAM_BASE.
-         *
-         * He stops for two things and they are the same thing — there is
-         * nothing to keep time to. A dead board freezes him where he stands,
-         * and so does PAUSE: a cossack swaying behind the plaque while the
-         * music is suspended is the one part of the screen that did not
-         * notice the game had stopped. */
-        bool alive = g_session.game.player[g_view].game_active &&
-                     !g_session.game.paused;
-        /* The interlude, danced solo: see g_idle_show. It runs off the show's
-         * own clock so it lasts exactly as long as the show does. */
-        g_idle_show = g_dancer_active;
-        draw_idle_cossack(g_idle_show ? (int)g_dancer_elapsed : g_idle_frame,
-                           alive || g_idle_show,
-                           BOX_L_TX, BOX_TOP_IN + 12, BOX_IN, 4);
-        g_idle_show = false;
-        if (alive) g_idle_frame++;
-    }
+    /* AND THE OFFSET LAYER STAYS ON THE GRID. It carries exactly one thing in
+     * a match — the preview, on the frames its piece is an odd number of
+     * tiles wide — and the preview's label is on the main layer, so a layer
+     * two pixels down meant the piece sat two pixels below its own word every
+     * other piece. It used to ride with the counters because NEXT used to be
+     * drawn with them; it is not any more. */
+    REG_BG1VOFS = 0;
 
     /* The right box: the banner, the statistics, or — in a race, where the
      * cartridge keeps no statistics either — nothing.
@@ -2311,23 +2348,46 @@ static void draw_panel(void) {
         clear_stats_layer();
         draw_field_braid(BOX_R_TX, kBraidLeft);
         draw_banner();
-    } else if (!g_session.game.two_player) {
-        draw_next_label_and_piece(BOX_R_IN, ROW_NEXT, true, false);
-        draw_stats(p);
+        /* No shelf for him in HUD Banner: the column is the banner's. */
+        hide_idle_cossack();
     } else {
-        /* A race keeps no piece histogram — the cartridge keeps none in 2P
-         * either — but the PREVIEW is not statistics, it is how you plan the
-         * next piece, and a player racing without one is playing a different
-         * game from the one at the other end of the cable. It stays. */
-        clear_region(BOX_R_IN, BOX_TOP_IN, BOX_IN, BOX_BOT_IN - BOX_TOP_IN + 1);
-        clear_stats_layer();
-        /* No rule under it: that line is what separates NEXT from the
-         * statistics, and there are none here for it to separate. */
-        draw_next_label_and_piece(BOX_R_IN, ROW_NEXT, false, false);
-        /* The rival topping out is the only news this box has left to carry,
-         * and it goes at the bottom of it, clear of the preview. */
-        if (!g_session.game.player[g_view ^ 1].game_active)
-            draw_text(BOX_R_IN + 2, BOX_BOT_IN - 1, "OUT", BANK_LABEL);
+        /* HUD STATS: THE COSSACK TAKES THE TOP OF THE RIGHT BOX, which is the
+         * cell NEXT used to have, and the histogram keeps the rest of it.
+         * He was tucked into the bottom of the left panel before, under four
+         * counters, where he had nothing round him and nothing to do with
+         * what was over him; here he has a compartment, a ledge under his
+         * feet and the piece counts below — which is a figure standing on a
+         * shelf watching the game, rather than a sprite parked in a gap.
+         *
+         * He stops for two things and they are the same thing — there is
+         * nothing to keep time to. A dead board freezes him where he stands,
+         * and so does PAUSE: a cossack swaying behind the plaque while the
+         * music is suspended is the one part of the screen that did not
+         * notice the game had stopped. */
+        bool alive = g_session.game.player[g_view].game_active &&
+                     !g_session.game.paused;
+        /* The interlude, danced solo: see g_idle_show. It runs off the show's
+         * own clock so it lasts exactly as long as the show does. */
+        g_idle_show = g_dancer_active;
+        draw_idle_cossack(g_idle_show ? (int)g_dancer_elapsed : g_idle_frame,
+                           alive || g_idle_show,
+                           BOX_R_IN, ROW_DANCER, BOX_IN, ROW_DANCER_H);
+        g_idle_show = false;
+        if (alive) g_idle_frame++;
+
+        clear_both(BOX_R_IN, ROW_DANCER, BOX_IN, ROW_DANCER_H);
+        if (!g_session.game.two_player) {
+            draw_stats(p);
+        } else {
+            /* A race keeps no piece histogram — the cartridge keeps none in
+             * 2P either. The rival topping out is the only news this box has
+             * left to carry, and it goes at the bottom of it. */
+            clear_region(BOX_R_IN, SHELF_FIRST + 1, BOX_IN,
+                          BOX_BOT_IN - SHELF_FIRST);
+            clear_stats_layer();
+            if (!g_session.game.player[g_view ^ 1].game_active)
+                draw_text(BOX_R_IN + 2, BOX_BOT_IN - 1, "OUT", BANK_LABEL);
+        }
     }
 
     g_panel_layer = false;
@@ -3168,11 +3228,20 @@ static void draw_link_wait(const TengenLobby *lobby, int elapsed) {
 #define MENU_BODY_TY 7
 #define MENU_BODY_H  11
 
-/* Three fields, three rows apart, so each has two blank rows to itself — the
- * whole point of the exercise. Row 16 is the last one with air under it: the
+/* Three fields, TWO rows apart and hung off the middle one. Three rows apart
+ * gave each of them two blank rows and that is a table with too much table in
+ * it: the three lines read as three separate announcements rather than as one
+ * block you are choosing from. Two rows still leaves a clear line of air
+ * between them, and the block closes up around HANDICAP — which is where the
+ * page's own middle already was, so it does not move and the other two come in
+ * to meet it.
+ *
+ * HANDICAP KEEPS THE ROW UNDER IT. In two players its two counts do not fit
+ * beside the value and take a line of their own at +1; MUSIC is at +2, so
+ * that line is still free. Row 16 is the last one with air under it: the
  * frame's bottom braid starts at y=145, so a line on row 17 ends one pixel
  * short of it. */
-#define MENU_FIELD_TY(f) (8 + (f) * 3)
+#define MENU_FIELD_TY(f) (9 + (f) * 2)
 #define MENU_FOOT_TY 16
 
 /* TWO COLUMNS, centred on what is USUALLY in them. Labels start at one column
@@ -4714,7 +4783,10 @@ int main(void) {
                 clear_stats_layer();
                 draw_field_braid(BOX_R_TX, kBraidLeft);
                 draw_dancer_stage();
-                draw_next_label_and_piece(BOX_L_TX, BOX_TOP_IN + 12, false, true);
+                /* Nothing here redraws NEXT any more and nothing has to: it
+                 * lives in the LEFT panel's top compartment in both HUDs now,
+                 * and the stage only ever touches the right column. It used to
+                 * be lodged in the rows the stage was about to take. */
                 draw_dancers(g_dancer_elapsed, g_dancer_cast);
             }
             audio_frame();

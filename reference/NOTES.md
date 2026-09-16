@@ -854,6 +854,49 @@ sentinel in the outer two only outside coop, so nothing there changed; what
 changed is that the port now reads the field's origin and width through
 `field_tx()` / `field_cols()` rather than off the 1P constants.
 
+### The panel the port uses is the COOP screen's, shelves and all
+
+The 1P panel the port started with was a closed box of rope with the
+cartridge's grey header rule (`$76`) between the counters. The coop screen's
+is better and it is the cartridge's own: open at the bottom, with the blue
+DANCERS' LEDGE (`$9D`) ruled across it every three rows — one tall
+compartment at the top and four short ones under it. Five compartments, and
+the HUD has exactly five things to say, so NEXT stopped moving between the
+two boxes and took the tall one for good.
+
+Three numbers in it are not free, and two of them look like constants:
+
+* **the shelves start one row above coop's.** Screen 5 rules at window rows
+  8/11/14/17 and leaves its last compartment empty; this panel puts a
+  six-digit HIGH SCORE in it, and at those rows that pair is 18-19 — the
+  bottom of the screen, with the counters' layer two pixels below the grid, so
+  the number's last two rows of pixels fell off the console. Starting at 7
+  spends one of the big cell's six rows and buys row 19 as air.
+* **NEXT alone is drawn on the MAIN layer.** Everything else in the panel
+  rides the counters' layer (`PANEL_SHIFT_PX`, two pixels down) and should:
+  that is where SCORE's headroom under its shelf comes from. NEXT is 23 pixels
+  of content in a 40-pixel cell, and those two pixels are the difference
+  between nine above and eight below — centred — and eleven against six. The
+  preview's own layer (`BG1`) is held at the grid with it, because the label
+  is on the main one and a preview two pixels lower than its own word is what
+  an odd-width piece used to be.
+* **the right box keeps ONE shelf, on the left box's first row.** A shelf a
+  row lower than its neighbour across the board reads as a mistake however
+  good the reason. In HUD Stats the cossack stands on it — he used to be
+  parked in the bottom of the left panel under four counters — and the
+  histogram's bars start under it.
+
+`make gba-check --panel` measures all of it off the framebuffer: four blue
+shelves, the same air under each, and NEXT centred in its cell.
+
+**And the coop screen's own two top corners are gone.** The rope along the top
+of each coop panel ends, at the screen's edge, in a piece that turns UP (`$88`
+left, `$8A` right, against the run's `$89`). On the NES that is right — the
+rope framed the whole 256x240 screen and those two are where it turned to come
+back down the outside — but thirty columns of GBA cut that outside off, so
+what was left was a corner with nothing round it. The run instead, so the rope
+leaves the screen straight, the way it does in the port's own boxes.
+
 ### The two falling pieces are solid to each other, and it takes a routine
 
 `checkCoopCollision` (`main.asm.txt:1827-1924`). This one is easy to miss

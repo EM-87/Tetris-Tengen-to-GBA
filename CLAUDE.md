@@ -74,7 +74,8 @@ running ROM; only the side panels need reflowing).
    sides and opens at the screen's edge — which is what buys an eight-column
    interior, and eight is what the seven-tile statistics strip needs to stay
    in one rank. The counters lose their individual frames (the box is the
-   frame) and are ruled off with the cartridge's own `$76`; the eighteen-row
+   frame) and are ruled off with the cartridge's own ledge (item 19 below —
+   it was the grey `$76` for a long time and that was the wrong line); the eighteen-row
    TETRIS banner does not fit at all and takes the column instead when L+R
    asks for it. A SECOND BACKGROUND, scrolled a few pixels, carries everything
    that is centred on the tile grid but whose ink is not centred inside its
@@ -192,7 +193,26 @@ running ROM; only the side panels need reflowing).
    which are PRINTABLE because the tile set is ASCII-indexed. It has no
    parentheses, though — `$28`/`$29` are border art — so the handicap's note
    is separated by palette instead. Defaults: NO MUSIC and HUD Banner.
-19. ~~FOUR backgrounds, each for a scroll the others cannot share~~ — done,
+19. ~~The HUD is the COOP screen's panel now~~ — and this is the shape to
+   know before moving anything in it. The port's left box used to be a closed
+   rectangle of rope with the cartridge's grey header rule between the
+   counters; it is the coop screen's panel instead, which is a better object
+   and is the cartridge's own: open at the bottom, ruled across with the blue
+   DANCERS' LEDGE ($9D) every three rows, which makes one tall compartment at
+   the top and four short ones under it. Five compartments, and the HUD has
+   exactly five things to say — NEXT, SCORE, LINES, LEVEL, HIGH — so NEXT has
+   one home in both HUDs instead of moving between the boxes. The right box
+   keeps one shelf on the same row, so the two sides rule at the same height,
+   and in HUD Stats the cossack stands on it with the histogram below.
+   TWO THINGS THAT LOOK LIKE CONSTANTS AND ARE NOT: the shelves start one row
+   above coop's (the cartridge leaves its last compartment empty and this one
+   puts a six-digit number in it, which at coop's rows sits flush against the
+   bottom of the console), and NEXT alone is drawn on the MAIN layer — every
+   other thing in the panel rides the counters' layer two pixels down, and
+   those two pixels are the difference between centred in its cell and five
+   pixels low. `make gba-check --panel` measures all of it off the
+   framebuffer: four blue shelves, equal air under each, and NEXT centred.
+20. ~~FOUR backgrounds, each for a scroll the others cannot share~~ — done,
    and this is the shape to keep in mind before adding anything to the HUD: a
    scroll is one number per background, so anything whose ink is not centred
    in its tiles needs a layer of its own or it drags its neighbours with it.
@@ -202,7 +222,7 @@ running ROM; only the side panels need reflowing).
    histogram, three across and two UP so its icons clear the braid. SCORE's
    missing headroom and the histogram touching the frame were the same bug
    twice. `make gba-check --panel` measures both gaps off the framebuffer.
-20. ~~Coop~~ — and the thing to know before touching anything on a shared
+21. ~~Coop~~ — and the thing to know before touching anything on a shared
    board: **THE TWO FALLING PIECES ARE SOLID TO EACH OTHER, and the ordinary
    collision check cannot see that.** The playfield buffer holds settled
    blocks only, so the partner's falling piece is invisible to it and the two
@@ -221,34 +241,34 @@ running ROM; only the side panels need reflowing).
    already drawn, and the ROM's own eight coop dancer positions to stand on
    them. It goes over the cable like 2P, with the choice riding bit 8 of the
    lobby's CONFIG word. See reference/NOTES.md.
-21. ~~The COMPUTER player~~ — done, and with it all five of the cartridge's
+22. ~~The COMPUTER player~~ — done, and with it all five of the cartridge's
    GAME SELECT entries. `computerMove` is `src/tengen_ai.c`, transcribed byte
    for byte including the arithmetic that wraps; only the 28 bonus bytes are
    copied, since the profiles derive from the core's own bitmaps and a test
    checks that they do. `playModeTable` is what says which board each mode
    uses: VERSUS is a race like 2P, WITH COMPUTER is coop's shared twelve-wide
    board. Neither needs a cable. See reference/NOTES.md.
-22. ~~The attract demo~~ — done, and it is the same computer playing the same
+23. ~~The attract demo~~ — done, and it is the same computer playing the same
    game: `demoStart` is playMode 0 with the music suspended, reached off the
    title's own clock at frameCounterHigh 5 / low $20, with the computer on
    PLAYER 1 (the VS and WITH paths `inx` first, the demo does not). A press is
    the way out rather than a move. What ends it is the port's: the cartridge
    goes to a high-score table this port does not have, so the game over holds
    three seconds and the title comes back.
-23. ~~The HIGH SCORES table~~ — done, and SAVED: fifteen entries with their
+24. ~~The HIGH SCORES table~~ — done, and SAVED: fifteen entries with their
    lines and three initials, inserted the ROM's way (bottom up, equal scores
    go under), typed into with Left/Right and A, and kept in the GBA's
    battery-backed SRAM under the cartridge's own 'LOGG' magic — which on the
    NES only carried it across a RESET. A cold table is @resetHighScores', 17000
    down to 3000 in thousands, which is why HIGH SCORE opens at 017000.
-24. ~~The level's BONUS tally~~ — done. displayStatsP1 paints the playfield
+25. ~~The level's BONUS tally~~ — done. displayStatsP1 paints the playfield
    over with it while the cossacks dance, and L8EA2 counts it up one clear at
    a time ADDING TO THE SCORE: singles x100, doubles x400, triples x900,
    tetris x2500, all printed in the ROM's own strings.
-25. ~~The drop-point sprites~~ — done. Three digits beside the piece the moment
+26. ~~The drop-point sprites~~ — done. Three digits beside the piece the moment
    it lands, for $3C frames, at the HEIGHT it landed — which is the whole
    point, because this game pays by how high a piece comes to rest.
-26. ~~The pause menu~~ — the port's own, behind L+R on the plaque: the tune
+27. ~~The pause menu~~ — the port's own, behind L+R on the plaque: the tune
    (silence and the MIX included) and a way out that asks first. Built from
    the game-over plaque's nine-patch frame so it reads as part of the game.
    Two things it taught, both of them traps for anything added near it.
@@ -281,7 +301,7 @@ running ROM; only the side panels need reflowing).
    tile set is ASCII-indexed but $3F is a LEFT ARROW, so `extract_assets.py`
    draws one into a slot the cartridge left empty and refuses to if the dump
    has art there.
-27. Still to do: the prototype PIECE art, and a prototype mode cycling more
+28. Still to do: the prototype PIECE art, and a prototype mode cycling more
    than one dump. **WHAT THE THREE DUMPS ACTUALLY HAVE**, measured rather than
    assumed: only `proto_b` carries the title screen this port can read (its
    signature is at $A3C4 of a two-bank PRG). `proto_a` and `proto_c` are
