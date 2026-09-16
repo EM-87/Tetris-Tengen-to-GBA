@@ -457,9 +457,20 @@ static const uint8_t kCheatCodes[] = {
  * (main.asm.txt:7051-7070 vs :3186-3191). */
 static void cheat_level_up(TengenGame *game, TengenPlayerSlot slot) {
     TengenPlayerState *p = &game->player[slot];
-    /* main.asm.txt:7059-7067 refuses to store a level of 18, digit by digit;
-     * with the cap at 17 that is exactly this. */
-    if (p->level >= TENGEN_MAX_LEVEL) return;
+    /* main.asm.txt:7059-7067 refuses to store a level of 18, and it refuses
+     * exactly that one: `cmp #'8' / bne store / cpy #'1' / beq ret` at $B4F7
+     * tests the RESULT's two digits, so every other step is allowed. With the
+     * cap at 17 that one refusal is the whole ceiling.
+     *
+     * XE DOES NOT TOUCH THIS CLAMP. Its ten records raise the one in
+     * checkLevelUp ($9573, '7' -> '9') and nothing else, so under XE the code
+     * still cannot get you from 17 to 18 — only playing can. Once play has,
+     * the digit test lets the code carry on, and 19 -> 20 with it: the mod's
+     * tables stop at 19 and its author plainly never went looking. So 17 is
+     * the ROM's refusal, reproduced, and the XE ceiling below is this port's,
+     * declared. */
+    if (p->level == TENGEN_MAX_LEVEL) return;
+    if (p->level >= TENGEN_LEVEL_CAP(game->xe)) return;
     p->level++;
     if (game->coop) game->player[slot ^ 1].level = p->level;
     p->fall_timer = 60; /* main.asm.txt:7075, `lda #$3C` */
@@ -689,18 +700,22 @@ static void spawn_piece(TengenGame *game, TengenPlayerSlot slot) {
  * transcription slip — the ROM's bytes really do bump back up there, and the
  * level 14/15/16 masks below lean on it to produce their averages. Kept
  * as-is; "fixing" it would make the port less faithful, not more. */
-static const uint8_t kFallTimerTable[18] = {
+static const uint8_t kFallTimerTable[TENGEN_MAX_LEVEL_XE + 1] = {
     0x21, 0x1C, 0x18, 0x14, 0x11, 0x0E, 0x0B, 0x09, /* 33 28 24 20 17 14 11 9 */
     0x07, 0x06, 0x05, 0x05, 0x04, 0x04, 0x03, 0x04, /*  7  6  5  5  4  4  3 4 */
-    0x03, 0x03                                       /*  3  3 */
+    0x03, 0x03,                                      /*  3  3 */
+    /* XE only, from the mod's replacement table at $FED0. Unreachable unless
+     * game->xe, because the cap is 17 without it. */
+    0x02, 0x01                                       /*  2  1 */
 };
 
 /* Coop uses its own, gentler table (L9B48, $9B48). Same 18 levels, and it
  * stays strictly monotonic. */
-static const uint8_t kFallTimerTableCoop[18] = {
+static const uint8_t kFallTimerTableCoop[TENGEN_MAX_LEVEL_XE + 1] = {
     0x21, 0x1C, 0x18, 0x14, 0x12, 0x11, 0x10, 0x0F, /* 33 28 24 20 18 17 16 15 */
     0x0E, 0x0D, 0x0C, 0x0B, 0x0A, 0x09, 0x08, 0x07, /* 14 13 12 11 10  9  8  7 */
-    0x06, 0x05                                       /*  6  5 */
+    0x06, 0x05,                                      /*  6  5 */
+    0x04, 0x03                                       /*  4  3, XE only ($FEE4) */
 };
 
 /* Fractional-gravity masks (L9B50, $9B50), indexed by level, only consulted
@@ -713,17 +728,26 @@ static const uint8_t kFallTimerTableCoop[18] = {
  *
  * Only indices 10..17 are ever read; 0..9 are filler so the index math
  * matches the ROM's without an offset. */
-static const uint8_t kFractionalGravityMask[18] = {
+static const uint8_t kFractionalGravityMask[TENGEN_MAX_LEVEL_XE + 1] = {
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0x01, 0x00, 0x01, 0x00, 0x03, 0x01, 0x03, 0x00
+    0x01, 0x00, 0x01, 0x00, 0x03, 0x01, 0x03, 0x00,
+    /* XE adds ONE mask byte, for level 18. LEVEL 19'S IS NOT IN THE PATCH:
+     * the mod's replacement block ends at $FF00, its mask pointer is $FEEE,
+     * so level 19 reads $FF01 — which the mod never writes and the cartridge
+     * leaves at zero. That is reproduced rather than tidied up, and it has a
+     * consequence: at level 19 the mask is 0, the level >= 16 branch always
+     * takes the dec, and the game runs on table[18] = 2 frames a row. The
+     * mod's own entry 19 (1 frame) is never read. */
+    0x01, 0x00
 };
 
 /* Reproduces L9AEE: pick the fall-timer reload value for this level, taking
  * the piece's current row into account for the fractional levels. The ROM
  * calls this BEFORE moving the piece down, so callers must pass the piece's
  * pre-move Y to stay frame-accurate. */
-uint8_t tengen_frames_per_row(uint8_t level, int8_t piece_y, bool coop) {
-    if (level > TENGEN_MAX_LEVEL) level = TENGEN_MAX_LEVEL;
+uint8_t tengen_frames_per_row(uint8_t level, int8_t piece_y, bool coop, bool xe) {
+    const uint8_t cap = TENGEN_LEVEL_CAP(xe);
+    if (level > cap) level = cap;
     const uint8_t *table = coop ? kFallTimerTableCoop : kFallTimerTable;
 
     uint8_t index = level;
@@ -756,7 +780,7 @@ uint8_t tengen_frames_per_row(uint8_t level, int8_t piece_y, bool coop) {
  *
  * Not modelled: in demo/title states the ROM substitutes a flat +10 for the
  * start level (main.asm.txt:3157-3160). That path never runs during play. */
-static uint8_t level_for_lines(uint32_t lines, uint8_t start_level) {
+static uint8_t level_for_lines(uint32_t lines, uint8_t start_level, bool xe) {
     const unsigned count = sizeof(TENGEN_LEVEL_LINE_THRESHOLDS) /
                             sizeof(TENGEN_LEVEL_LINE_THRESHOLDS[0]);
     /* The ROM's compare is on the hundreds and tens digits only (:3145-3151),
@@ -768,7 +792,7 @@ static uint8_t level_for_lines(uint32_t lines, uint8_t start_level) {
         passed++;
     }
     unsigned level = (unsigned)start_level + passed;
-    if (level > TENGEN_MAX_LEVEL) level = TENGEN_MAX_LEVEL;
+    if (level > TENGEN_LEVEL_CAP(xe)) level = TENGEN_LEVEL_CAP(xe);
     return (uint8_t)level;
 }
 
@@ -791,7 +815,8 @@ static uint8_t level_for_lines(uint32_t lines, uint8_t start_level) {
  * The award is computed as (level+1) * ((level+1) + rows_above_floor). The
  * level term reads oddly in the ROM — ones digit + 1, plus a flat 10 when the
  * tens digit is set — but since the level caps at 17 the tens digit is only
- * ever 0 or 1, so it works out to exactly level + 1 across the whole range. */
+ * ever 0 or 1, so it works out to exactly level + 1 across the whole range.
+ * XE's 18 and 19 do not change that: the tens digit is still 1. */
 static uint32_t add_lock_score(uint32_t score, uint8_t level, int lowest_hit_row,
                                 uint8_t drop_rate_possible,
                                 TengenStepResult *result) {
@@ -844,10 +869,12 @@ uint32_t tengen_level_bonus(const TengenGame *game, TengenPlayerSlot slot) {
     return total;
 }
 
-void tengen_new_game(TengenGame *game, uint16_t seed, uint8_t start_level, bool two_player, bool coop) {
+void tengen_new_game(TengenGame *game, uint16_t seed, uint8_t start_level,
+                      bool two_player, bool coop, bool xe) {
     memset(game, 0, sizeof(*game));
     game->two_player = two_player;
     game->coop = coop;
+    game->xe = xe;
 
     /* initPlayer1orCoopPlayfield (main.asm.txt:3468-3495): the wall columns
      * are written as solid nibbles in 1P/2P and left open in coop, which is
@@ -1063,7 +1090,8 @@ TengenStepResult tengen_step(TengenGame *game, TengenPlayerSlot slot, uint8_t he
 
             /* No score is awarded here on purpose: this game pays per piece
              * locked, not per line cleared (see add_lock_score). */
-            uint8_t new_level = level_for_lines(p->lines, p->start_level);
+            uint8_t new_level = level_for_lines(p->lines, p->start_level,
+                                                 game->xe);
             if (new_level > p->level) {
                 p->level = new_level;
                 result.leveled_up = true;
@@ -1158,7 +1186,8 @@ TengenStepResult tengen_step(TengenGame *game, TengenPlayerSlot slot, uint8_t he
          * the piece's row BEFORE it moves, and clamps the soft-drop
          * threshold so soft dropping is never slower than plain gravity
          * (main.asm.txt:4008-4011). */
-        uint8_t reload = tengen_frames_per_row(p->level, p->piece.y, game->coop);
+        uint8_t reload = tengen_frames_per_row(p->level, p->piece.y, game->coop,
+                                                game->xe);
         p->fall_timer = reload;
         if (reload < p->drop_rate_possible) p->drop_rate_possible = reload;
     }

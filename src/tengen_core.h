@@ -262,6 +262,11 @@ typedef struct {
     TengenPlayerState player[2];
     bool coop;
     bool two_player;
+    /* TETRIS TENGEN XE. See TENGEN_MAX_LEVEL_XE: levels 18 and 19 exist, and
+     * the fall-timer tables have the two entries each that the mod adds.
+     * Nothing else about the game changes, because nothing else about the
+     * game is what the mod changes. */
+    bool xe;
     /* gameState == GAMESTATE_PAUSED. Start toggles it (pauseOrUnpause,
      * main.asm.txt:7184-7215) and it is where the cheat codes are entered. */
     bool paused;
@@ -403,6 +408,28 @@ extern const uint8_t TENGEN_LEVEL_LINE_TENS[21];
  * length of the fall-timer table. */
 #define TENGEN_MAX_LEVEL 17
 
+/* ...and here, in TETRIS TENGEN XE.
+ *
+ * WHAT THAT MOD ACTUALLY IS, decoded record by record from the IPS rather
+ * than taken from its description (see reference/NOTES.md). It is TEN bytes
+ * of new code and three tables, and every one of them is about the same
+ * thing: levels 18 and 19. The clamp at main.asm.txt:3168-3170 goes from '7'
+ * to '9', the digit arithmetic learns to carry into a tens digit, and the
+ * three tables at $9B36/$9B48/$9B50 are replaced by longer ones at $FED0.
+ *
+ * LEVELS 0 THROUGH 17 ARE BYTE-IDENTICAL in both copies of both fall-timer
+ * tables, so there is NO drop-speed smoothing in it; nothing it patches is
+ * anywhere near the OAM or sprite code, so there is no graphical-glitch fix
+ * in it; and it does not touch the soft drop at all. Those three claims
+ * circulate with the mod and the patch does not contain them.
+ *
+ * So this is the whole of it here: a longer level range and two more entries
+ * per table. A game with `xe` false behaves exactly as before, because the
+ * entries past 17 are unreachable when the cap is 17. */
+#define TENGEN_MAX_LEVEL_XE 19
+#define TENGEN_LEVEL_CAP(xe) ((uint8_t)((xe) ? TENGEN_MAX_LEVEL_XE \
+                                             : TENGEN_MAX_LEVEL))
+
 /* Soft-drop repeat threshold at piece spawn, and the (lower) value it resets
  * to whenever Down stops being held alone. main.asm.txt:3689-3691, 213-216. */
 #define TENGEN_DROP_RATE_AT_SPAWN 20
@@ -413,13 +440,15 @@ extern const uint8_t TENGEN_LEVEL_LINE_TENS[21];
  * entries based on the piece's row, giving effectively fractional gravity
  * (e.g. level 15 averages 3.5 frames/row); pass the piece's row BEFORE the
  * move, which is when the ROM reads it. Coop mode uses a separate, gentler
- * table. */
-uint8_t tengen_frames_per_row(uint8_t level, int8_t piece_y, bool coop);
+ * table. `xe` raises the cap to 19 and reaches the two extra entries the
+ * Tetris Tengen XE tables add; see TENGEN_MAX_LEVEL_XE. */
+uint8_t tengen_frames_per_row(uint8_t level, int8_t piece_y, bool coop, bool xe);
 
 /* ----------------------------------------------------------------------- *
  * Game lifecycle
  * ----------------------------------------------------------------------- */
-void tengen_new_game(TengenGame *game, uint16_t seed, uint8_t start_level, bool two_player, bool coop);
+void tengen_new_game(TengenGame *game, uint16_t seed, uint8_t start_level,
+                      bool two_player, bool coop, bool xe);
 
 /* ----------------------------------------------------------------------- *
  * THE STARTING HANDICAP (VERIFIED, main.asm.txt:3536-3603)

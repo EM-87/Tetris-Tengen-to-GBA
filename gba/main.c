@@ -2569,8 +2569,17 @@ static void draw_pause_box(void) {
  * ----------------------------------------------------------------------- */
 /* Start levels run 0..9 and wrap at both ends, which is the range the ROM's
  * own menu allows: computerMoveSelectTable (main.asm.txt:4819) holds the wrap
- * limit per menu row, and menuPlayer1StartLevel's is 10. */
+ * limit per menu row, and menuPlayer1StartLevel's is 10.
+ *
+ * ...and 0..19 once the chord has been rung, which is TETRIS TENGEN XE — see
+ * TENGEN_MAX_LEVEL_XE in src/tengen_core.h for what that mod is and, just as
+ * importantly, what it is not. The mod's own way in is HOLD A AND PRESS START
+ * on the level screen, a second control on a screen that already has one
+ * because the cartridge's list is a column of ten fixed lines. This port's
+ * level is a number you wind up and down, so the extra ten simply continue
+ * it, behind the same L+R as the rest of the extras. */
 #define START_LEVEL_COUNT 10
+#define START_LEVEL_COUNT_XE 20
 
 /* The four in-game tunes, in the order the ROM's own music-select menu lists
  * them (constants.asm.txt:39-42). Chosen on the level-select screen with
@@ -2652,12 +2661,25 @@ static bool g_music_unlocked;
  * it is its own chord on its own screen and opens nothing else. */
 static bool g_pause_unlocked;
 
+/* THE THIRD THING THE CHORD OPENS. See TENGEN_MAX_LEVEL_XE in
+ * src/tengen_core.h: levels 18 and 19, which is the whole of Tetris Tengen
+ * XE once its ten records are decoded. It rides the same chord because it is
+ * the same kind of thing — something the cartridge can do and does not offer
+ * — and because it costs a player who never goes past level 17 nothing at
+ * all: the mod's tables are byte-identical to the cartridge's up to there. */
+static bool g_xe;
+
 static bool unlock_cheats(void) {
-    if (g_music_unlocked && g_pause_unlocked) return false;
+    if (g_music_unlocked && g_pause_unlocked && g_xe) return false;
     g_music_unlocked = true;
     g_pause_unlocked = true;
+    g_xe = true;
     nes_audio_play(NES_SOUND_CHIRP);
     return true;
+}
+
+static uint8_t start_level_choices(void) {
+    return (uint8_t)(g_xe ? START_LEVEL_COUNT_XE : START_LEVEL_COUNT);
 }
 
 static const char *const kMusicNames[MUSIC_UNLOCKED_COUNT] = {
@@ -4441,7 +4463,7 @@ int main(void) {
                 g_view = 0;
                 g_ai_active = true;
                 g_ai_slot = TENGEN_PLAYER_1;   /* the demo's computer is P1 */
-                tengen_new_game(&g_session.game, seed, 0, false, false);
+                tengen_new_game(&g_session.game, seed, 0, false, false, false);
                 tengen_ai_reset(&g_ai);
                 /* THE DEMO LOOKS AT A PIECE BEFORE IT MOVES IT. Nothing else
                  * separates the attract mode from a machine twitching the pad
@@ -4570,9 +4592,9 @@ int main(void) {
 
             if (moved) {
                 if (menu_field == MENU_FIELD_LEVEL) {
+                    uint8_t levels = start_level_choices();
                     start_level = (uint8_t)((start_level +
-                                              (back ? START_LEVEL_COUNT - 1 : 1))
-                                             % START_LEVEL_COUNT);
+                                              (back ? levels - 1 : 1)) % levels);
                 } else if (menu_field == MENU_FIELD_HANDICAP) {
                     /* In two players the pad reaches player 1's; the shoulders
                      * below are how player 2's is set, which is what the
@@ -4642,7 +4664,7 @@ int main(void) {
                      * the seed, the level and the tune to the other console,
                      * and both leave the lobby together. */
                     link_lobby_release(&lobby, seed, start_level, g_music, handicap,
-                                        game_mode == GAME_COOP);
+                                        game_mode == GAME_COOP, g_xe);
                     screen = SCREEN_LINK_WAIT;
                     vsync();
                     audio_frame();
@@ -4670,7 +4692,7 @@ int main(void) {
                  * them passed. */
                 g_ai_slot = TENGEN_PLAYER_2;
                 tengen_new_game(&g_session.game, seed, start_level,
-                                 g_ai_active, GAME_IS_COOP(game_mode));
+                                 g_ai_active, GAME_IS_COOP(game_mode), g_xe);
                 tengen_ai_reset(&g_ai);
                 /* IT DROPS ITS OWN PIECES NOW, AND LOOKS AT THEM FIRST.
                  * The ROM's computer never presses down, which costs nothing
@@ -4776,7 +4798,7 @@ int main(void) {
                 g_music = lobby.music < MUSIC_UNLOCKED_COUNT ? lobby.music : 0;
                 tengen_link_start(&g_session, lobby.seed, lobby.start_level,
                                    link_is_master() ? TENGEN_PLAYER_1 : TENGEN_PLAYER_2,
-                                   lobby.coop);
+                                   lobby.coop, lobby.xe);
                 swallow_held_buttons(&g_session.game);
                 /* Both consoles bury both boards from the one seed the lobby
                  * delivered, so the two fields match without another word on

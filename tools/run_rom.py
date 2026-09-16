@@ -461,6 +461,7 @@ KEYS = {"A": 0, "B": 1, "SELECT": 2, "START": 3,
         "R": 8, "L": 9}
 CODE_LEVEL_UP = "UP DOWN UP DOWN LEFT RIGHT B B A".split()
 CODE_LONG_BAR = "DOWN DOWN LEFT RIGHT LEFT RIGHT B A".split()
+CODE_UNDO = "LEFT DOWN RIGHT UP LEFT DOWN RIGHT B A".split()
 
 # Offsets into g_session.game, from the structs in src/tengen_core.h. The compiler is
 # arm-none-eabi with the EABI's default -fshort-enums, so a TengenTetromino is
@@ -568,6 +569,34 @@ def pause_check(rom_path):
                         f"{m.u8[base + OFF_CURRENT]}, esperaba 1 (I)")
     else:
         print("  codigo de barra larga: la pieza en juego pasa a ser la I")
+
+    # THE THIRD CODE. It is the one that needs a piece to have LANDED, because
+    # what it does is take the last locked piece back out of the field — so
+    # unpause, hold Down until something settles, and only then ask for it.
+    # Once per game and wiped by a line clear (L94E4), which is why this is the
+    # last of the three and on a board that has cleared nothing.
+    tap("START")
+    run(core, 4)
+    core.set_keys(KEYS["DOWN"])
+    run(core, 240)
+    core.set_keys()
+    run(core, 12)
+    field = base + off["field"]
+    settled = sum(1 for i in range(TENGEN_PF_WIDTH * TENGEN_PF_HEIGHT)
+                  if core.memory.u8[field + i])
+    tap("START")
+    run(core, 4)
+    tap("SELECT")           # a neutral press, as above
+    for button in CODE_UNDO:
+        tap(button)
+    undone = sum(1 for i in range(TENGEN_PF_WIDTH * TENGEN_PF_HEIGHT)
+                 if core.memory.u8[field + i])
+    if undone >= settled:
+        failures.append(f"el codigo de deshacer no saco la pieza del tablero: "
+                         f"{settled} celdas antes, {undone} despues")
+    else:
+        print(f"  codigo de deshacer: la ultima pieza vuelve al aire "
+               f"({settled} -> {undone} celdas)")
 
     tap("START")
     run(core, 4)
@@ -2550,6 +2579,87 @@ def falling_piece_check(rom_path):
     return 0
 
 
+# ---------------------------------------------------------------------------
+# TETRIS TENGEN XE, which rides the same L+R as the tunes and the pause menu.
+#
+# The mod is levels 18 and 19 and nothing else — see TENGEN_MAX_LEVEL_XE in
+# src/tengen_core.h, where its ten IPS records are accounted for one by one.
+# So there are three things to check and the first is the one that matters:
+#
+#   * before the chord the LEVEL field still stops at 9, which is the
+#     cartridge's own menu range;
+#   * after it, the field runs 0-19 and wraps there;
+#   * and a game started on 19 really starts on 19, which is the flag having
+#     reached the core rather than just the menu.
+# ---------------------------------------------------------------------------
+def xe_check(rom_path):
+    base, why = game_state_address(rom_path)
+    if base is None:
+        print(f"SALTADO: {why}")
+        return 0
+    core, screen = load(rom_path)   # `screen` must stay alive; see load()
+    failures = []
+
+    def tap(*names, settle=8):
+        core.set_keys(*[KEYS[n] for n in names])
+        run(core, 4)
+        core.set_keys()
+        run(core, settle)
+
+    def level_field():
+        text = tilemap_text(core, LEVEL_ROW)
+        digits = "".join(c for c in text.split("LEVEL", 1)[-1] if c.isdigit())
+        return digits
+
+    run(core, 8)
+    press_start(core); run(core, 10)
+    press_start(core); run(core, 10)          # LEVEL SETTINGS, cursor on LEVEL
+
+    seen = set()
+    for _ in range(24):
+        seen.add(level_field())
+        tap("RIGHT")
+    if seen != {str(n) for n in range(10)}:
+        failures.append(f"antes del acorde el nivel ofrece {sorted(seen)}, no 0-9")
+    else:
+        print("  antes del acorde: el nivel llega a 9, como en el cartucho")
+
+    # The chord leaves the cursor on MUSIC — that is what it does on this
+    # screen, so the tune it has just uncovered is the one under the arrow.
+    # One more DOWN wraps back round to LEVEL.
+    tap("L", "R", settle=10)
+    tap("DOWN")
+    seen = set()
+    for _ in range(40):
+        seen.add(level_field())
+        tap("RIGHT")
+    if seen != {str(n) for n in range(20)}:
+        failures.append(f"tras el acorde el nivel ofrece {len(seen)} valores, no 20: "
+                         f"{sorted(seen, key=int)}")
+    else:
+        print("  tras el acorde: 0-19, que es todo lo que anade Tetris Tengen XE")
+
+    # ...and it has to be the GAME's level, not just the menu's.
+    for _ in range(40):
+        if level_field() == "19":
+            break
+        tap("RIGHT")
+    press_start(core); run(core, 30)
+    off = game_offsets(rom_path)
+    level = core.memory.u8[base + off["level"]]
+    if level != 19:
+        failures.append(f"la partida empezo en el nivel {level}, no en el 19")
+    else:
+        print("  ...y la partida arranca de verdad en el nivel 19")
+
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: el acorde abre los niveles 18 y 19, y solo eso.")
+    return 0
+
+
 def menu_check(rom_path):
     """LEVEL SETTINGS: three fields, and nothing touching the braid.
 
@@ -3156,6 +3266,8 @@ def main():
                      help="check the cathedral overlay and the fireworks")
     ap.add_argument("--skin", action="store_true",
                      help="check the L/R title-skin easter egg")
+    ap.add_argument("--xe", action="store_true",
+                     help="check the Tetris Tengen XE level range behind the chord")
     ap.add_argument("--handtunes", "--korobeiniki", action="store_true",
                      help="check the two hidden hand-entered tunes")
     ap.add_argument("--leave-title", action="store_true",
@@ -3206,6 +3318,8 @@ def main():
         sys.exit(title_check(args.rom))
     if args.skin:
         sys.exit(skin_check(args.rom))
+    if args.xe:
+        sys.exit(xe_check(args.rom))
     if args.handtunes:
         sys.exit(handtunes_check(args.rom))
     if args.leave_title:

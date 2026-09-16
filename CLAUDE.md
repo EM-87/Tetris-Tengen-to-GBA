@@ -360,12 +360,27 @@ running ROM; only the side panels need reflowing).
    solid squares at $01-$03 rather than the release's shaded joined blocks —
    but how their game maps a cell to a tile is not traced, so putting it in
    would be inventing it.
+30. ~~Tetris Tengen XE~~ — done, behind the same L+R chord: levels 0-19 on the
+   settings screen, the mod's longer fall-timer and mask tables, and the cap
+   at 19 instead of 17. **AND THAT IS ALL THE MOD IS.** Its ten IPS records
+   were decoded one by one (reference/NOTES.md) and six of them are the
+   machinery for putting a two-digit level on a menu that is a fixed column of
+   ten lines — machinery this port does not need, because its level is a
+   number you wind. Levels 0-17 are BYTE-IDENTICAL in both of its replacement
+   fall-timer tables, so the "drop speed adjustment" it is described as having
+   is the two new levels and nothing else; it patches nothing near the OAM or
+   sprite code, so there is no glitch fix in it; and it does not touch the
+   soft drop at all. Two of its own mistakes are reproduced rather than tidied
+   up and both are pinned by tests: level 19's mask byte falls outside the
+   patch, so 19 runs on level 18's entry and the mod's own last table byte is
+   dead; and the level-up CODE still stops at 17, because the mod raises
+   checkLevelUp's clamp and not the cheat's own at $B4F7.
 
 ## Build
 
 - `make test` — native core tests, gcc only. The everyday loop.
 - `make gba` — cross-compiles `build/tengen.gba`.
-- `make assets ROM=/path/to/tetris.nes [PROTO=/path/to/prototype.nes]` —
+- `make assets ROM=/path/to/tetris.nes [PROTO="a.nes b.nes c.nes"]` —
   regenerates the graphics headers from a cartridge dump. Required once before
   `make gba` on a fresh clone. `PROTO` is optional and adds the title-skin
   easter egg; without it the port builds and runs the same, minus that.

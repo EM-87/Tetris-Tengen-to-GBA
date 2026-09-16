@@ -5,13 +5,13 @@
 #include <string.h>
 
 void tengen_link_start(TengenLink *link, uint16_t seed, uint8_t start_level,
-                        TengenPlayerSlot local_slot, bool coop) {
+                        TengenPlayerSlot local_slot, bool coop, bool xe) {
     memset(link, 0, sizeof(*link));
     /* two_player either way; `coop` is what decides whether that means two
      * separate ten-wide fields or one twelve-wide one between them. The ROM's
      * 2P is a race on independent boards (see the header); its COOPERATIVE
      * leaves the wall nibbles open and shares field[0]. */
-    tengen_new_game(&link->game, seed, start_level, true, coop);
+    tengen_new_game(&link->game, seed, start_level, true, coop, xe);
     link->local_slot = (uint8_t)local_slot;
     link->frame = 0;
     link->desynced = false;
@@ -94,13 +94,14 @@ void tengen_lobby_start_held(TengenLobby *lobby, uint16_t seed) {
 
 void tengen_lobby_release(TengenLobby *lobby, uint16_t seed,
                            uint8_t start_level, uint8_t music,
-                           const uint8_t handicap[2], bool coop) {
+                           const uint8_t handicap[2], bool coop, bool xe) {
     lobby->seed = seed;
     lobby->start_level = start_level;
     lobby->music = music;
     lobby->handicap[0] = handicap ? handicap[0] : 0;
     lobby->handicap[1] = handicap ? handicap[1] : 0;
     lobby->coop = coop;
+    lobby->xe = xe;
     lobby->hold = false;
 }
 
@@ -114,12 +115,16 @@ uint16_t tengen_lobby_word(const TengenLobby *lobby, bool master) {
         case TENGEN_LOBBY_SEED_LO:
             return tagged(TENGEN_LOBBY_SEED_LO, (uint16_t)(lobby->seed & 0xFF));
         case TENGEN_LOBBY_CONFIG:
-            /* Bits 0-3 the level, 4-7 the tune, and bit 8 says whether the
-             * two of them are sharing one board. */
+            /* Bits 0-4 the level, 5-8 the tune, bit 9 says whether the two
+             * of them are sharing one board, and bit 10 whether this is an XE
+             * game. FIVE bits for the level, not four: XE's range reaches 19,
+             * and a four-bit field would have silently handed the other
+             * console level 2 for level 18. */
             return tagged(TENGEN_LOBBY_CONFIG,
-                           (uint16_t)((lobby->start_level & 0x0F) |
-                                      ((lobby->music & 0x0F) << 4) |
-                                      (lobby->coop ? 0x100u : 0u)));
+                           (uint16_t)((lobby->start_level & 0x1F) |
+                                      ((lobby->music & 0x0F) << 5) |
+                                      (lobby->coop ? 0x200u : 0u) |
+                                      (lobby->xe ? 0x400u : 0u)));
         case TENGEN_LOBBY_HANDICAP:
             return tagged(TENGEN_LOBBY_HANDICAP,
                            (uint16_t)((lobby->handicap[0] & 0x0F) |
@@ -167,9 +172,10 @@ void tengen_lobby_apply(TengenLobby *lobby, bool master, bool got,
             lobby->seed = (uint16_t)((lobby->seed & 0xFF00) | (payload & 0xFF));
             break;
         case TENGEN_LOBBY_CONFIG:
-            lobby->start_level = (uint8_t)(payload & 0x0F);
-            lobby->music = (uint8_t)((payload >> 4) & 0x0F);
-            lobby->coop = (payload & 0x100u) != 0;
+            lobby->start_level = (uint8_t)(payload & 0x1F);
+            lobby->music = (uint8_t)((payload >> 5) & 0x0F);
+            lobby->coop = (payload & 0x200u) != 0;
+            lobby->xe = (payload & 0x400u) != 0;
             break;
         case TENGEN_LOBBY_HANDICAP:
             lobby->handicap[0] = (uint8_t)(payload & 0x0F);

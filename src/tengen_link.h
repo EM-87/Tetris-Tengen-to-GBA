@@ -60,7 +60,7 @@ typedef struct {
 /* Both machines call this with IDENTICAL seed and start level — the master
  * sends them across before the first frame — and their own slot. */
 void tengen_link_start(TengenLink *link, uint16_t seed, uint8_t start_level,
-                        TengenPlayerSlot local_slot, bool coop);
+                        TengenPlayerSlot local_slot, bool coop, bool xe);
 
 /* One frame. `local_buttons` is what this machine's player is holding;
  * `remote_word` is what arrived from the other machine. Returns false, and
@@ -104,7 +104,7 @@ typedef enum {
     TENGEN_LOBBY_HELLO   = 1,
     TENGEN_LOBBY_SEED_HI = 2,
     TENGEN_LOBBY_SEED_LO = 3,
-    TENGEN_LOBBY_CONFIG  = 4,   /* start level in bits 0-3, music in bits 4-7 */
+    TENGEN_LOBBY_CONFIG  = 4,   /* level 0-4, music 5-8, coop 9, XE 10 */
     /* A stage of its own rather than four spare bits of CONFIG: two handicaps
      * of nought to four need six bits and CONFIG has four left. One more
      * stop-and-wait turn costs two transfers, which is two sixtieths of a
@@ -127,6 +127,7 @@ typedef struct {
     uint8_t music;
     uint8_t handicap[2];   /* menuPlayer1Handicap / menuPlayer2Handicap */
     bool coop;           /* one twelve-wide board between them, not two */
+    bool xe;             /* the Tetris Tengen XE level range; see tengen_core.h */
     bool ready;          /* the handshake finished; the match may start */
     bool failed;         /* nothing answered for long enough to give up */
     uint8_t stage;       /* master: the tag in flight. slave: the last seen */
@@ -157,7 +158,7 @@ void tengen_lobby_start_held(TengenLobby *lobby, uint16_t seed);
  * handshake run on to GO. Does nothing on a lobby that was not held. */
 void tengen_lobby_release(TengenLobby *lobby, uint16_t seed,
                            uint8_t start_level, uint8_t music,
-                           const uint8_t handicap[2], bool coop);
+                           const uint8_t handicap[2], bool coop, bool xe);
 
 /* What this machine should put on the wire next. */
 uint16_t tengen_lobby_word(const TengenLobby *lobby, bool master);

@@ -1061,6 +1061,75 @@ hands that restart the next entry; a linked match, which has no interlude,
 asks for it on the spot instead. It also means the music changes because you
 played well, which a timer could never manage.
 
+## Tetris Tengen XE, decoded record by record
+
+The mod is distributed as a ten-record IPS patch and described as adding two
+levels **and** three engine improvements: a drop-speed adjustment, a fix for
+graphical glitches, and a change to the soft drop. The patch was decoded
+rather than taken at its word, and only the first of those four is in it.
+
+| Record | Address | Was | Is | What it does |
+| --- | --- | --- | --- | --- |
+| 1 | `$956A` | `69 30` | `65 31` | `ADC #'0'` becomes `ADC $31` — the level digit adds a base the new code puts in zero page, which is how a tens digit appears at all |
+| 2 | `$9573` | `37 90 02 A9 37` | `39 90 02 A9 39` | checkLevelUp's ones-digit clamp, `'7'` to `'9'`: **the level cap, 17 to 19** |
+| 3 | `$9651` | | `4C 30 FF EA EA` | `JMP $FF30` in the level renderer |
+| 4 | `$9B12` | `50 9B` | `EE FE` | mask table pointer (first of two) |
+| 5 | `$9B1C` | | 15 bytes | the second mask pointer and both fall-timer pointers: `$9B36`->`$FED0`, `$9B48`->`$FEE4` |
+| 6 | `$A030` | `56 9F` | `10 FF` | the level-select entry goes through the new code |
+| 7 | `$A247` | | 55 bytes | the menu line: `TO SELECT LEVELS 10-19 ... HOLD A AND PRESS START` |
+| 8 | `$FED0` | (zero) | 49 bytes | the three replacement tables |
+| 9 | `$FF10` | (zero) | 24 bytes | the level-select handler: A held -> `$31` = `':'`, else `'0'` |
+| 10 | `$FF30` | (zero) | 14 bytes | the tens digit for the on-screen level |
+
+**Records 1, 3, 6, 7, 9 and 10 are all one thing**: making a two-digit level
+selectable and displayable on a console whose level menu is a fixed column of
+ten lines. This port's level is a number you wind up and down, so none of that
+machinery is needed here — only what it is machinery *for*.
+
+### The three tables, and what they do and do not change
+
+The 49 bytes at `$FED0` are three tables end to end:
+
+| | Address | Bytes |
+| --- | --- | --- |
+| 1P/2P fall timers | `$FED0` | `33 28 24 20 17 14 11 9 7 6 5 5 4 4 3 4 3 3` **`2 1`** |
+| coop fall timers | `$FEE4` | `33 28 24 20 18 17 16 15 14 13 12 11 10 9 8 7 6 5` **`4 3`** |
+| fractional masks | `$FEEE`+level | `01 00 01 00 03 01 03 00` **`01`** |
+
+**Levels 0 through 17 are byte-identical to the cartridge's** in both
+fall-timer tables, and the masks for 10-17 are identical too. There is no
+drop-speed smoothing in this patch. Nothing it touches is anywhere near the
+OAM staging or the sprite code, so there is no graphical-glitch fix in it
+either, and it does not touch `main.asm.txt:184-216` or anything else the
+soft drop reads. Two new levels is the whole of it.
+
+### Two things the mod gets wrong, reproduced rather than tidied up
+
+**Level 19 never uses its own entry.** The mask pointer is `$FEEE` and the
+replacement block ends at `$FF00`, so level 18's mask is the last byte in it
+and level 19's would be at `$FF01` — which the patch never writes and the
+cartridge leaves at `$00`. L9AEE's level >= 16 branch decrements on a zero
+result, so level 19 always falls back to entry 18 and runs at a flat 2 frames
+a row. The `01` the mod put at the end of its own table is dead.
+
+**The level code still stops at 17.** There are TWO clamps in the cartridge:
+checkLevelUp's at `$9573`, which the patch raises, and the cheat's own at
+`$B4F7` (`cmp #'8' / bne / cpy #'1' / beq`), which it does not. So under XE
+the Up-Down-Up-Down-Left-Right-B-B-A code cannot get you from 17 to 18; only
+playing can. From 18 the same digit test happily lets it carry on, 19 and
+past — the port clamps there, because the mod's tables do not go further and
+that is this port's decision rather than the mod's behaviour.
+
+### In the port
+
+`game->xe`, set at `tengen_new_game`, behind the same L+R as the tunes and the
+pause menu. The tables in `src/tengen_core.c` carry the two extra entries each
+and the cap becomes `TENGEN_LEVEL_CAP(xe)`; everything below level 18 is
+bit-for-bit what it was, which is what a unit test asserts directly. The flag
+travels to the other console in the lobby's CONFIG word, which grew the level
+field from four bits to five on the way — nineteen does not fit in four, and a
+silent wrap to 3 is exactly the sort of thing that only shows up as a desync.
+
 ## Korobeiniki and Katyusha are not on this cartridge
 
 Worth stating plainly, because they are the only things in this port that are
