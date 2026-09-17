@@ -1193,7 +1193,16 @@ def skin_check(rom_path):
 # cartridge's first three; the last two want the COMPUTER player.
 GAME_SELECT_ROWS = 5
 GAME_SELECT_TY = 10             # ...and they start here, one row apart
-MENU_DIM_BANK = 11              # PAL_MENU_BASE + 3, the menu's plain white
+# The bank EVERY menu line is drawn in, chosen or not. It is bank 0 of
+# bgPalette1 -- kRomPalette_bg_menu's `0F 12 0F 0F`, the cartridge's menu BLUE.
+# Measured off the running cartridge: on its GAME SELECT all five entries come
+# out (48,50,236) to the pixel and the only white anywhere is the cursor
+# arrow's (236,238,236). It was PAL_MENU_BASE + 3 here for a long while, which
+# had the port writing the list in white and marking the choice in the ORANGE
+# that bank 1 holds for the credit line alone.
+MENU_TEXT_BANK = 8              # PAL_MENU_BASE + 0, the cartridge's menu blue
+# ...and the cursor's column, gba/main.c's GAME_SELECT_ARROW_TX.
+MENU_ARROW_TX = 5
 # The shared coop board starts one column further left than the ten-wide
 # one, because it is twelve wide (SCREEN_COOP_FIELD_TX in the generated
 # header, and COOP_FIELD_TX in gba/main.c).
@@ -2594,8 +2603,12 @@ def falling_piece_check(rom_path):
 # The words are the cartridge's and this check holds them to that: all six,
 # spelled its way, PAZHITNOV and all.
 # ---------------------------------------------------------------------------
+# MIRRORSOFT'S LINE IS DELIBERATELY NOT HERE. The cartridge spends its GAME
+# SELECT corner on a licensing notice for a company that folded in 1991; this
+# port spends it on whoever made the port. The other five are the people who
+# made the game and are held to the cartridge's own spelling.
 CREDITS = [
-    ("LICENSED BY", "MIRRORSOFT LTD."),
+    ("PORTED WITH CLAUDE", "BY EDUARDO MARTINEZ"),
     ("CONCEPT BY", "ALEXEY PAZHITNOV"),
     ("DESIGN BY", "VADIM GERASIMOV"),
     ("PROGRAMMED BY", "ED LOGG"),
@@ -3042,9 +3055,25 @@ def leaving_title_check(rom_path):
     else:
         print("  SELECT avanza desde el titulo, como START")
 
-    # The cursor is a PALETTE change, not a text one — the chosen entry is
-    # drawn in the menu's orange instead of its white — so this compares the
-    # whole map entries, palette bits and all, rather than the text.
+    # THE LIST IS ONE BLUE AND THE CURSOR IS THE ARROW. Measured off the
+    # cartridge: every entry on its GAME SELECT is (48,50,236), chosen or not,
+    # and the only white on the screen is the arrow. So this asserts the
+    # colour as well as the movement — the port had the list in white with the
+    # choice picked out in the CREDIT's orange, which is two mistakes wearing
+    # each other's clothes and neither of them shows up in a text comparison.
+    def entry_banks():
+        return {core.memory.u16[SCREENBLOCK_ADDR + (r * 32 + x) * 2] >> 12
+                for r in range(GAME_SELECT_TY, GAME_SELECT_TY + GAME_SELECT_ROWS)
+                for x in range(6, 26)
+                if core.memory.u16[SCREENBLOCK_ADDR + (r * 32 + x) * 2] & 0x3FF}
+
+    banks = entry_banks()
+    if banks != {MENU_TEXT_BANK}:
+        failures.append(f"las entradas de GAME SELECT no van todas en el azul "
+                        f"del cartucho (bancos {sorted(banks)})")
+    else:
+        print("  las cinco entradas van en el azul del cartucho, sin resaltado")
+
     def menu_rows():
         return [core.memory.u16[SCREENBLOCK_ADDR + (r * 32 + x) * 2]
                 for r in (GAME_SELECT_TY, GAME_SELECT_TY + 1)
@@ -3063,12 +3092,18 @@ def leaving_title_check(rom_path):
     # counting the entries — there are three now and there may be five when
     # the COMPUTER player lands.
     def chosen_row():
-        """Which GAME SELECT row is drawn in the highlight palette."""
+        """Which GAME SELECT row the cursor ARROW stands beside.
+
+        It used to be "which row is drawn in a palette of its own", and that
+        stopped being a question the moment the screen went back to the
+        cartridge's colours: there every entry is the same blue and the arrow
+        is the whole of the cursor. Asking about the palette instead answered
+        "the first row" for every row, which walked this check straight past a
+        cursor that was somewhere else entirely and pressed A on 2 PLAYER.
+        """
         for row in range(GAME_SELECT_TY, GAME_SELECT_TY + GAME_SELECT_ROWS):
-            banks = {core.memory.u16[SCREENBLOCK_ADDR + (row * 32 + x) * 2] >> 12
-                     for x in range(4, 26)
-                     if core.memory.u16[SCREENBLOCK_ADDR + (row * 32 + x) * 2] & 0x3FF}
-            if banks and banks != {MENU_DIM_BANK}:
+            e = core.memory.u16[SCREENBLOCK_ADDR + (row * 32 + MENU_ARROW_TX) * 2]
+            if e & 0x3FF:
                 return row
         return None
 

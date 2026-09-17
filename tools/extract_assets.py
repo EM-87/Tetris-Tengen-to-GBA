@@ -255,6 +255,18 @@ TITLE_SPIRE_LIFT = 1     # pixels DOWN, so the ball meets the tent
 
 TITLE_BLANK_TILE = 0x1D
 
+# THE PICTURE'S ROWS ARE NOT NEGOTIABLE, and the jewels are fixed elsewhere.
+#
+# This composition raises the cathedral so it reads WHOLE with the spire's
+# ball landing under the TETRIS logo, which took several passes to get right
+# (see TITLE_SPIRE_SPRITES). Rows 12-13 are what it gives up for that.
+#
+# Rows 12-13 are also unit 6 of the side border's two-row motif, which is the
+# gold ingot between an emerald and the ruby — so dropping them turned the
+# border into "emerald, ruby, ingot, emerald" when the cartridge's is
+# EMERALD, INGOT, RUBY, INGOT, EMERALD. The border is decoration in a column
+# the picture never uses, so it is REBUILT from the cartridge's own two units
+# after the fact rather than sliced out of these rows. See retile_jewels.
 TITLE_ROW_BLOCKS = (
     (2, 6),     # the braid's top band, then TENGEN
     (8, 12),    # the TETRIS logo
@@ -1322,6 +1334,13 @@ def _title_row(src_row):
     return rows.index(src_row)
 
 
+def title_interior(blocks, lo, hi):
+    """(first, last) composed index whose source index is within [lo, hi]."""
+    kept = [i for a, b in blocks for i in range(a, b)]
+    inside = [n for n, src in enumerate(kept) if lo <= src <= hi]
+    return (inside[0], inside[-1]) if inside else (0, len(kept) - 1)
+
+
 def compose_title(nametable, attributes):
     """32x30 title screen -> a 30x20 layout that keeps every element.
 
@@ -1358,7 +1377,76 @@ def compose_title(nametable, attributes):
         tiles[i] = nametable[src_row * 32 + src_col]
         banks[i] = attribute_palette(attributes, src_col, src_row)
 
+    retile_jewels(tiles, banks, nametable, attributes, cols, rows)
     return tiles, banks
+
+
+# ---------------------------------------------------------------------------
+# THE JEWELS, REBUILT RATHER THAN SLICED.
+#
+# The side border is a two-row motif: a unit is either a gold ingot or a
+# jewel, and the jewel's colour is its attribute bank. The cartridge's fifteen
+# units run
+#
+#     R . . . . E O R O E . . . . R      0 and 14 are the corner rubies
+#
+# a ruby dead centre with an emerald either side and an ingot between each —
+# EMERALD, INGOT, RUBY, INGOT, EMERALD.
+#
+# Slicing that out of TITLE_ROW_BLOCKS cannot work. The rows the picture needs
+# and the rows the border needs are not the same rows, and the picture wins:
+# dropping 12-13 is what raises the cathedral so it reads whole under the
+# logo. Those rows are also unit 6, the ingot between the emerald and the
+# ruby, so the sliced border came out "emerald, ruby, ingot, emerald" — a
+# pattern the cartridge does not have anywhere.
+#
+# So the border is not sliced, it is WRITTEN: the two units are read out of
+# the cartridge's own artwork and laid down in the order below. Nothing is
+# drawn that the cartridge does not draw; only the order is this port's, and
+# only in two columns the picture never reaches.
+#
+# TEN UNITS, and no arrangement of ten has a single centre one — the middle of
+# ten falls between units 4 and 5. The five-unit group goes at 2-6, which puts
+# the ruby at 4: half a unit, eight pixels, above the screen's middle, with
+# the extra ingot below. That is the vertical asymmetry this trade costs, and
+# it is in the border rather than in the picture.
+JEWEL_UNITS = ("ingot", "ingot", "emerald", "ingot", "ruby",
+               "ingot", "emerald", "ingot", "ingot", "ingot")
+# Which attribute bank is which stone, in bgPalette0: 1 is the reds, 2 the
+# golds, 3 the greens (see kRomPalette_bg_title).
+JEWEL_BANK = {"ruby": 1, "ingot": 2, "emerald": 3}
+# A unit that IS a jewel has this tile in its top-left; an ingot has the other.
+# Read off source row 0, where the top border runs J G G G G G J G G J G G G G G J.
+JEWEL_SRC_ROW = 0
+JEWEL_SRC_COL = {"jewel": 0, "ingot": 2}
+
+
+def retile_jewels(tiles, banks, nametable, attributes, cols, rows):
+    """Lay the cartridge's jewel and ingot units down the two side borders."""
+    art = {}
+    for kind, sc in JEWEL_SRC_COL.items():
+        art[kind] = [[nametable[r * 32 + sc + dc] for dc in range(2)]
+                      for r in range(JEWEL_SRC_ROW, JEWEL_SRC_ROW + 2)]
+    # The right border is the same two units mirrored; take its own artwork so
+    # the shading keeps facing outwards.
+    art_r = {}
+    for kind, sc in JEWEL_SRC_COL.items():
+        c = 30 if kind == "jewel" else 28
+        art_r[kind] = [[nametable[r * 32 + c + dc] for dc in range(2)]
+                        for r in range(JEWEL_SRC_ROW, JEWEL_SRC_ROW + 2)]
+    if len(rows) // 2 != len(JEWEL_UNITS):
+        raise ValueError(f"the border wants {len(JEWEL_UNITS)} units, "
+                         f"the layout has {len(rows) // 2}")
+    w = len(cols)
+    for u, kind in enumerate(JEWEL_UNITS):
+        bank = JEWEL_BANK[kind]
+        src = "ingot" if kind == "ingot" else "jewel"
+        for dr in range(2):
+            for dc in range(2):
+                left = (u * 2 + dr) * w + dc
+                right = (u * 2 + dr) * w + (w - 2 + dc)
+                tiles[left], banks[left] = art[src][dr][dc], bank
+                tiles[right], banks[right] = art_r[src][dr][dc], bank
 
 
 # ---------------------------------------------------------------------------
@@ -1848,6 +1936,16 @@ def emit_title_header(tiles, banks, source):
         " * row it ended up on, or 0xFF for a row the composition dropped.",
         " */",
         "#define SCREEN_TITLE_ROW_DROPPED 0xFF",
+        "",
+        "/* THE FRAME'S INTERIOR, in composed tiles: the black middle, inside",
+        " * the braid and the ingots. The title's border is four tiles thick on",
+        " * every side (source columns 0-3 and 28-31, rows 0-3 and 26-29), so",
+        " * this is wherever source 4-27 ended up. The fireworks are held",
+        " * inside it — see the note in gba/main.c. */",
+        f"#define SCREEN_TITLE_IN_TX0 {title_interior(TITLE_COL_BLOCKS, 4, 27)[0]}",
+        f"#define SCREEN_TITLE_IN_TX1 {title_interior(TITLE_COL_BLOCKS, 4, 27)[1]}",
+        f"#define SCREEN_TITLE_IN_TY0 {title_interior(TITLE_ROW_BLOCKS, 4, 25)[0]}",
+        f"#define SCREEN_TITLE_IN_TY1 {title_interior(TITLE_ROW_BLOCKS, 4, 25)[1]}",
         "static const uint8_t kTitleRowMap[30] = {",
         "    " + ", ".join(f"0x{v:02X}" for v in title_row_map()) + ",",
         "};",

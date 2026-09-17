@@ -1437,14 +1437,38 @@ static void draw_game_over(void) {
  * 1P screen are solidly bank 3). Same lettering, same colours. */
 #define BANK_LABEL 3
 #define BANK_VALUE 3
-/* The menu runs on bgPalette1, whose banks are not the game's: 3 there is the
- * white lettering and 1 is an orange that reads clearly against it, which is
- * what marks the chosen entry. */
-#define BANK_HILITE (PAL_MENU_BASE + 1)
-/* Anything a menu SAYS rather than offers: the handicap's depth, the line at
- * the foot, the credit. Bank 2's first colour is the menu's pale cyan against
- * bank 3's white, so it reads as a note and not as another choice. */
+/* THE MENU IS BLUE, and this port had it white with an orange cursor.
+ *
+ * bgPalette1's four banks, measured off the cartridge's own GAME SELECT with
+ * its attribute table:
+ *
+ *   bank 0  $12  the blue EVERY line of the menu is written in — the heading,
+ *                the five entries, all of it
+ *   bank 1  $27  the orange, and the only thing in it is the credit line
+ *                along the bottom
+ *   bank 2  $31  a pale blue
+ *   bank 3  $30  white
+ *
+ * The cartridge marks the chosen entry with a WHITE ARROW beside it and does
+ * not recolour anything. This port had written the list in bank 3's white and
+ * marked the choice in bank 1's orange — which is to say it used the credit's
+ * colour for the cursor and never used the menu's own colour at all.
+ *
+ * So: the body goes back to the cartridge's blue and the arrow is white the
+ * way the cartridge's is. AND NOTHING ELSE IS RECOLOURED. That was measured
+ * off the running cartridge rather than reasoned about — every entry on its
+ * GAME SELECT reads $12 blue to the pixel, chosen or not, and the only $30
+ * white anywhere on the screen is the arrow. A pale-blue "chosen" tone stood
+ * here for a while and it was still an invention: it is a second near-white
+ * beside a cursor that is already saying the same thing. */
+#define BANK_MENU (PAL_MENU_BASE + 0)   /* the cartridge's menu blue */
+#define BANK_ARROW (PAL_MENU_BASE + 3)  /* the cursor, white like its sprite */
+/* Anything a menu SAYS rather than offers: the handicap's unit, the line at
+ * the foot. The same pale blue as a value, because on the cartridge's own
+ * screens the ONLY white is the cursor and everything else is blue. */
 #define BANK_NOTE (PAL_MENU_BASE + 2)
+/* ...and the credits, in the one colour the cartridge uses for them. */
+#define BANK_CREDIT (PAL_MENU_BASE + 1)
 
 /* ----------------------------------------------------------------------- *
  * The level's BONUS tally
@@ -3061,6 +3085,9 @@ static void restart_title_sprites(void) {
  * of tiles from where the cartridge puts it; a firework has no business being
  * anywhere in particular, and it stays round. */
 #define TITLE_FIREWORK_FIRST 19   /* oamStaging $4C, LA9F7 */
+/* Half a burst at its widest, plus the sprite's own eight pixels. Measured on
+ * the cartridge: 45 sprites spanning x 167-215 and y 80-128, so 48 across. */
+#define TITLE_FIREWORK_R 28
 
 /* The nearest row the composition kept, for a NES row it may have dropped. */
 static int title_row_near(int nrow) {
@@ -3135,6 +3162,31 @@ static void draw_title_sprites(void) {
             if (col >= 0 && row >= 0) {
                 fw_dx = (pad + col) * 8 + (cx & 7) - cx;
                 fw_dy = row * 8 + (cy & 7) - cy;
+                /* AND IT STAYS INSIDE THE FRAME, which is where the cartridge
+                 * puts it. Its bursts go off in the black middle and the
+                 * braid contains them; this port was mapping the centre onto
+                 * the nearest kept row and column and letting the ring land
+                 * wherever that fell, which on a picture two columns narrower
+                 * than the cartridge's is sometimes over the braid.
+                 *
+                 * Clamped by the CENTRE, not per sprite: the burst grows from
+                 * 1 sprite to 45 over a ring 48 pixels across (measured on the
+                 * cartridge), and clamping a bounding box that is still
+                 * growing would walk the burst sideways as it opened. The
+                 * centre does not move, so a centre held one radius inside the
+                 * frame holds the whole ring inside it for the burst's whole
+                 * life. */
+                int want_x = cx + fw_dx, want_y = cy + fw_dy;
+                int lo_x = SCREEN_TITLE_IN_TX0 * 8 + TITLE_FIREWORK_R;
+                int hi_x = (SCREEN_TITLE_IN_TX1 + 1) * 8 - TITLE_FIREWORK_R;
+                int lo_y = SCREEN_TITLE_IN_TY0 * 8 + TITLE_FIREWORK_R;
+                int hi_y = (SCREEN_TITLE_IN_TY1 + 1) * 8 - TITLE_FIREWORK_R;
+                if (want_x < lo_x) want_x = lo_x;
+                if (want_x > hi_x) want_x = hi_x;
+                if (want_y < lo_y) want_y = lo_y;
+                if (want_y > hi_y) want_y = hi_y;
+                fw_dx = want_x - cx;
+                fw_dy = want_y - cy;
                 fw_placed = true;
             }
         }
@@ -3261,7 +3313,7 @@ static void draw_menu_frame(void) {
  * screen, and it has four of them. Pulled out of the PPU patch chains at
  * $A19B / $A20E / $A280 / $A2DF, which is where each screen's text lives:
  *
- *   GAME SELECT       LICENSED BY MIRRORSOFT LTD.      (row 24)
+ *   GAME SELECT       LICENSED BY MIRRORSOFT LTD.      (row 24, replaced)
  *   LEVEL SELECT      CONCEPT BY ALEXEY PAZHITNOV      (row 24)
  *                     DESIGN BY VADIM GERASIMOV        (row 26)
  *   HANDICAP SELECT   PROGRAMMED BY ED LOGG            (row 24)
@@ -3286,8 +3338,12 @@ static void draw_menu_frame(void) {
 #define CREDIT_TY 16            /* ...and the name on CREDIT_TY + 1 */
 #define CREDIT_FRAMES 100
 
+/* MIRRORSOFT IS NOT ON THIS LIST, and that is the one departure from the
+ * cartridge here. Its line was a licensing notice for a company that has not
+ * existed since 1991, and the slot goes to whoever made THIS. The five that
+ * remain are the people who made the game. */
 static const char *const kCredits[][2] = {
-    { "LICENSED BY",       "MIRRORSOFT LTD."  },
+    { "PORTED WITH CLAUDE", "BY EDUARDO MARTINEZ" },
     { "CONCEPT BY",        "ALEXEY PAZHITNOV" },
     { "DESIGN BY",         "VADIM GERASIMOV"  },
     { "PROGRAMMED BY",     "ED LOGG"          },
@@ -3308,21 +3364,35 @@ static void draw_credits(void) {
         g_credit = (uint8_t)((g_credit + 1) % CREDIT_COUNT);
     }
     set_credit_layer(true);
-    draw_text_lifted(CREDIT_TY, kCredits[g_credit][0], BANK_NOTE);
-    draw_text_lifted(CREDIT_TY + 1, kCredits[g_credit][1], BANK_NOTE);
+    draw_text_lifted(CREDIT_TY, kCredits[g_credit][0], BANK_CREDIT);
+    draw_text_lifted(CREDIT_TY + 1, kCredits[g_credit][1], BANK_CREDIT);
 }
 
+#define MENU_ARROW_R '>'   /* tile $3E, and ASCII agrees for this one */
+
 #define GAME_SELECT_TY 10
+/* One column left of VERSUS COMPUTER, the longest entry: it is fifteen
+ * characters centred in MENU_IN_W, so it starts at MENU_IN_TX + 5. */
+#define GAME_SELECT_ARROW_TX (MENU_IN_TX + 3)
 static void draw_game_select(uint8_t choice) {
     draw_menu_frame();
-    draw_text_centred(8, "GAME SELECT", PAL_MENU_BASE + 3);
+    draw_text_centred(8, "GAME SELECT", BANK_MENU);
     /* FIVE ENTRIES ON CONSECUTIVE ROWS, which is the cartridge's own shape:
      * gameSelectArrowPpuAddrs ($A0AB) is $220A,$222A,$224A,$226A,$228A — five
      * addresses one nametable row apart. Two rows apart was fine for two of
      * them and does not fit five under a logo six rows tall. */
     for (int i = 0; i < GAME_COUNT; i++)
-        draw_text_centred(GAME_SELECT_TY + i, kGameNames[i],
-                           i == choice ? BANK_HILITE : PAL_MENU_BASE + 3);
+        draw_text_centred(GAME_SELECT_TY + i, kGameNames[i], BANK_MENU);
+    /* AND THE ARROW, which this screen had been doing without. The cartridge
+     * marks its choice here exactly as it does on LEVEL SELECT — a white
+     * arrow in the column left of the list (gameSelectArrowPpuAddrs, $A0AB,
+     * five addresses one row apart) — and the port was leaning on colour
+     * alone. Its entries are centred rather than left-aligned, so the arrow
+     * goes a column clear of the longest of them. */
+    for (int ty = GAME_SELECT_TY; ty < GAME_SELECT_TY + GAME_COUNT; ty++)
+        set_map_tile(GAME_SELECT_ARROW_TX, ty, T_BLANK);
+    set_map_tile(GAME_SELECT_ARROW_TX, GAME_SELECT_TY + choice,
+                  WITH_BANK(ascii_tile(MENU_ARROW_R), BANK_ARROW));
     draw_credits();
 }
 
@@ -3359,24 +3429,24 @@ static void draw_guest_dancer(int elapsed) {
 
 static void draw_link_wait(const TengenLobby *lobby, int elapsed) {
     draw_menu_frame();
-    draw_text_centred(8, "LINK CABLE", PAL_MENU_BASE + 3);
+    draw_text_centred(8, "LINK CABLE", BANK_MENU);
 
     clear_both(MENU_IN_TX, 11, MENU_IN_W, 5);
     if (lobby->failed) {
         oam_hide_all();
-        draw_text_centred(11, "NO CABLE FOUND", BANK_HILITE);
-        draw_text_centred(14, "B TO GO BACK", PAL_MENU_BASE + 3);
+        draw_text_centred(11, "NO CABLE FOUND", BANK_NOTE);
+        draw_text_centred(14, "B TO GO BACK", BANK_MENU);
         return;
     }
     if (!link_connected()) {
         oam_hide_all();
-        draw_text_centred(11, "WAITING FOR PLAYER 2", PAL_MENU_BASE + 3);
-        draw_text_centred(14, "B TO GO BACK", PAL_MENU_BASE + 3);
+        draw_text_centred(11, "WAITING FOR PLAYER 2", BANK_MENU);
+        draw_text_centred(14, "B TO GO BACK", BANK_MENU);
         return;
     }
     /* Connected. The master has gone off to choose; this console is the guest,
      * so it says who it is and lets the cossack do the waiting. */
-    draw_text_centred(11, "YOU ARE PLAYER 2", BANK_HILITE);
+    draw_text_centred(11, "YOU ARE PLAYER 2", BANK_NOTE);
     draw_guest_dancer(elapsed);
 }
 
@@ -3421,7 +3491,6 @@ static void draw_link_wait(const TengenLobby *lobby, int elapsed) {
  * port plants for the pause menu. The left arrow is named by its tile. */
 #define T_ARROW_L    0x3F  /* main.asm.txt:4797 */
 #define T_ARROW_R    0x3E
-#define MENU_ARROW_R '>'   /* tile $3E, and ASCII agrees for this one */
 
 #define MENU_FIELD_LEVEL    0
 #define MENU_FIELD_HANDICAP 1
@@ -3490,13 +3559,13 @@ static void draw_field_row(int field, int chosen, const char *label,
     clear_both(MENU_IN_TX, ty, MENU_IN_W, 1);
     if (field == chosen)
         set_map_tile(MENU_CURSOR_TX, ty,
-                      WITH_BANK(ascii_tile(MENU_ARROW_R), BANK_HILITE));
+                      WITH_BANK(ascii_tile(MENU_ARROW_R), BANK_ARROW));
     for (int i = 0; label[i]; i++)
         set_map_tile(MENU_LABEL_TX + i, ty,
-                      WITH_BANK(ascii_tile(label[i]), PAL_MENU_BASE + 3));
+                      WITH_BANK(ascii_tile(label[i]), BANK_MENU));
     int tx = MENU_VALUE_TX;
     for (int i = 0; value[i]; i++, tx++)
-        set_map_tile(tx, ty, WITH_BANK(ascii_tile(value[i]), BANK_HILITE));
+        set_map_tile(tx, ty, WITH_BANK(ascii_tile(value[i]), BANK_MENU));
     if (tail) {
         tx += MENU_TAIL_GAP;
         for (int i = 0; tail[i]; i++, tx++)
