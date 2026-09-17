@@ -313,6 +313,19 @@ static void set_credit_layer(bool front_end) {
  * by staging the two players' pieces as sprites with a palette each. */
 #define PAL_PIECE2_BANK 14
 
+/* Anything a menu SAYS rather than offers: the handicap's unit, the line at
+ * the foot. The same pale blue as a value, because on the cartridge's own
+ * screens the ONLY white is the cursor and everything else is blue.
+ *
+ * A BANK OF ITS OWN, AND THE SKIN IS WHY. bgPalette1's bank 2 is where the
+ * menu frame's braid lives, so once a skin started recolouring that bank to
+ * the prototype's fret the notes went with it and PRESS START TO PLAY came up
+ * in the fret's red. Bank 15 is the one background palette nothing else
+ * claims — 0-3 are the game's, 4-7 the title's, 8-11 the menu's, 12-14 the
+ * falling piece, the preview and the partner's piece — so the note keeps the
+ * cartridge's pale blue whatever the frame is wearing. */
+#define BANK_NOTE 15
+
 /* The title screen has its own 256-tile set, uploaded above the game's so
  * both live in one charblock (512 tiles is exactly its 16KB). */
 #define TITLE_TILE_BASE 256
@@ -642,6 +655,13 @@ static void upload_palettes(void) {
     upload_palette_set(PAL_GAME_BASE, kRomPalette_bg_game, MEM_PALETTE);
     upload_palette_set(PAL_TITLE_BASE, kRomPalette_bg_title, MEM_PALETTE);
     upload_palette_set(PAL_MENU_BASE, kRomPalette_bg_menu, MEM_PALETTE);
+    /* The notes' own bank, filled from the menu set's bank 2 and then left
+     * alone for ever — see BANK_NOTE. */
+    {
+        vu16 *note = MEM_PALETTE + BANK_NOTE * 16;
+        for (int i = 0; i < 4; i++)
+            note[i] = nes_colour_to_gba(kRomPalette_bg_menu[2 * 4 + i]);
+    }
     vu16 *piece = MEM_PALETTE + PAL_PIECE_BANK * 16;
     piece[0] = nes_colour_to_gba(TENGEN_BACKDROP_INDEX);
     vu16 *next = MEM_PALETTE + PAL_NEXT_BANK * 16;
@@ -707,6 +727,11 @@ static void upload_proto_tiles(int skin) {
 }
 #endif
 
+/* Which bgPalette1 bank the MENU and HIGH SCORES frames draw their braid in —
+ * measured off the generated screens, where every frame tile is in bank 2 and
+ * nothing else on them is. */
+#define SKIN_MENU_BRAID_BANK (PAL_MENU_BASE + 2)
+
 #if SCREEN_PROTO_AVAILABLE && SCREEN_SKIN_PLAY
 /* A SKIN THAT DOES NOT STOP AT THE TITLE.
  *
@@ -733,12 +758,48 @@ static void upload_skin_play(int skin) {
     vu16 *base = MEM_CHARBLOCK(CHARBLOCK);
     for (int i = 0; i < SKIN_SLOT_COUNT; i++) {
         unsigned slot = kSkinSlots[i];
-        const uint8_t *src = skin < 0 ? &kGameTiles[slot * 32]
-                                      : &kSkinTiles[skin][i * 32];
+        /* THE TWO ABOVE 255 ARE THE PANEL'S OWN TOP RUN and have no art of
+         * their own in the cartridge's tile set — they take the release's
+         * $89/$8E, which is what the panel used before it needed a slot to
+         * itself. See SKIN_PANEL_RUN_BASE. */
+        const uint8_t *src;
+        if (skin >= 0) {
+            src = &kSkinTiles[skin][i * 32];
+        } else if (slot >= SKIN_PANEL_RUN_BASE) {
+            src = &kGameTiles[kSkinPanelRunRelease[slot - SKIN_PANEL_RUN_BASE] * 32];
+        } else {
+            src = &kGameTiles[slot * 32];
+        }
         vu16 *dst = base + slot * 16;
         for (int b = 0; b < 32; b += 2)
             dst[b / 2] = (uint16_t)(src[b] | (src[b + 1] << 8));
     }
+}
+
+/* The prototype's own banner art, into a window above everything else in the
+ * charblock (a text background addresses 1024 tiles; the HUD labels end at
+ * 789 and the panel's run pair at 801). Fifty-six tiles at most, 1792 bytes,
+ * so unlike the title's 8KB swap this needs no blank screen to hide behind. */
+#define SKIN_BANNER_BASE 832
+static void upload_skin_banner(int skin) {
+    if (skin < 0) return;          /* the release draws its own, from slot ids */
+    vu16 *dst = MEM_CHARBLOCK(CHARBLOCK) + SKIN_BANNER_BASE * 16;
+    const uint8_t *src = kSkinBannerArt[skin];
+    for (unsigned i = 0; i < (unsigned)kSkinBannerCount[skin] * 32; i += 2)
+        dst[i / 2] = (uint16_t)(src[i] | (src[i + 1] << 8));
+}
+
+/* The menus' logo gets a bank of its own, borrowed from the TITLE's four:
+ * no two screens are ever up at once, and install_title_palette fills all
+ * four again on every visit to the title, so the loan always comes back. It
+ * cannot share the frame's — proto_b draws its logo in the fret's bank and
+ * proto_c does not. */
+#define SKIN_LOGO_BANK (PAL_TITLE_BASE + 3)
+static void upload_skin_logo_palette(int skin) {
+    if (skin < 0) return;
+    vu16 *dst = MEM_PALETTE + SKIN_LOGO_BANK * 16;
+    for (int i = 0; i < 4; i++)
+        dst[i] = nes_colour_to_gba(kSkinLogoPalette[skin][i]);
 }
 
 /* ...and the colours the frame is drawn in. The braid's bank is the one thing
@@ -755,6 +816,17 @@ static void upload_skin_frame_palette(int skin) {
     int bank = skin < 0 ? BRAID_BANK - PAL_GAME_BASE : kSkinFrameBank[skin];
     vu16 *dst = MEM_PALETTE + BRAID_BANK * 16;
     for (int i = 0; i < 4; i++) dst[i] = nes_colour_to_gba(set[bank * 4 + i]);
+
+    /* AND THE MENUS' COPY OF IT. The menu frame and the HIGH SCORES frame are
+     * drawn from the same charblock slots but out of bgPalette1, bank 2 — so
+     * a skinned board and an unskinned menu were the same art in two colours.
+     * The release's own bank 2 goes back when the skin comes off. */
+    const uint8_t *mset = skin < 0 ? kRomPalette_bg_menu
+                                   : kRomPalette_bg_skin[skin];
+    int mbank = skin < 0 ? SKIN_MENU_BRAID_BANK - PAL_MENU_BASE
+                         : kSkinFrameBank[skin];
+    vu16 *mdst = MEM_PALETTE + SKIN_MENU_BRAID_BANK * 16;
+    for (int i = 0; i < 4; i++) mdst[i] = nes_colour_to_gba(mset[mbank * 4 + i]);
 }
 #endif
 
@@ -778,6 +850,8 @@ static void apply_skin(int skin) {
     if (skin == loaded) return;
     loaded = skin;
     upload_skin_play(skin);
+    upload_skin_banner(skin);
+    upload_skin_logo_palette(skin);
     upload_skin_frame_palette(skin);
 #else
     (void)skin;
@@ -811,6 +885,17 @@ static void skin_begin_match(bool linked) {
     /* ...and their RULES with their paint: the level every ten lines, no wall
      * kick, and rows that go the frame they complete. See proto_rules. */
     g_session.game.proto_rules = g_skin_on;
+}
+
+/* What the FRONT END should be wearing. Unlike the board it follows the
+ * title's choice directly: a menu is not a match, so there is no cable to
+ * keep in step and nothing to diverge. */
+static int front_skin(void) {
+#if SCREEN_PROTO_AVAILABLE && SCREEN_SKIN_PLAY
+    return g_title_skin ? (int)g_title_skin - 1 : -1;
+#else
+    return -1;
+#endif
 }
 
 /* ...and what the board should be wearing, from the title's own choice. */
@@ -1430,7 +1515,11 @@ static void draw_braid_panel(int tx, int w, bool inner_right, bool shelves) {
         int cx = tx + x;
         if (cx >= ix && cx < ix + BRAID_T) continue;      /* the corners */
         for (int dy = 0; dy < BRAID_T; dy++)
-            set_map_tile(cx, dy, WITH_BANK(kBraidBottom[dy][0], BRAID_BANK));
+            /* The panel's OWN run, not kBraidBottom — see SKIN_PANEL_RUN_BASE.
+             * Same art as kBraidBottom while no skin is on; a different one
+             * under a skin, where the menu's bottom border and this want
+             * different halves of the prototype's frame. */
+            set_map_tile(cx, dy, WITH_BANK(SKIN_PANEL_RUN_BASE + dy, BRAID_BANK));
     }
     for (int y = BRAID_T; y < SCREEN_TH; y++)
         for (int dx = 0; dx < BRAID_T; dx++)
@@ -1613,10 +1702,6 @@ static void draw_game_over(void) {
  * beside a cursor that is already saying the same thing. */
 #define BANK_MENU (PAL_MENU_BASE + 0)   /* the cartridge's menu blue */
 #define BANK_ARROW (PAL_MENU_BASE + 3)  /* the cursor, white like its sprite */
-/* Anything a menu SAYS rather than offers: the handicap's unit, the line at
- * the foot. The same pale blue as a value, because on the cartridge's own
- * screens the ONLY white is the cursor and everything else is blue. */
-#define BANK_NOTE (PAL_MENU_BASE + 2)
 /* ...and the credits, in the one colour the cartridge uses for them. */
 #define BANK_CREDIT (PAL_MENU_BASE + 1)
 
@@ -1983,6 +2068,12 @@ static void draw_leader_row(int row) {
 }
 
 static void draw_leaderboard(void) {
+    /* ...AND SO DOES THE HIGH SCORES PAGE, which was the visible half of this:
+     * it never asked for a skin either way, so after a skinned game it came up
+     * with whatever the board had left in the slots — the six the skin used to
+     * cover in the prototype's fret and the other eighteen still the blue
+     * braid. Half-changed. */
+    apply_skin(front_skin());
     for (int ty = 0; ty < SCREEN_LEADER_H_TILES; ty++)
         for (int tx = 0; tx < SCREEN_LEADER_W; tx++) {
             int i = ty * SCREEN_LEADER_W + tx;
@@ -2261,6 +2352,23 @@ static int g_dancer_elapsed;     /* frames since the show started, for the poses
 #define BANNER_TY BOX_TOP_IN
 
 static void draw_banner(void) {
+#if SCREEN_PROTO_AVAILABLE && SCREEN_SKIN_PLAY
+    /* THE PROTOTYPE'S OWN LETTERS, out of their own window. Not the release's
+     * slots recoloured: these builds draw each letter with tiles of their own
+     * where the release reuses one between letters, so the art cannot be
+     * handed over slot by slot. It goes in the FRAME's palette bank, which is
+     * where all three dumps put their banner. See upload_skin_banner. */
+    int skin = play_skin();
+    if (skin >= 0) {
+        for (int y = 0; y < SKIN_BANNER_H; y++)
+            for (int x = 0; x < SKIN_BANNER_W; x++)
+                set_map_tile(BANNER_TX + x, BANNER_TY + y,
+                              WITH_BANK(SKIN_BANNER_BASE +
+                                         kSkinBannerTiles[skin][y * SKIN_BANNER_W + x],
+                                         BRAID_BANK));
+        return;
+    }
+#endif
     for (int y = 0; y < SCREEN_1P_BANNER_H; y++)
         for (int x = 0; x < SCREEN_1P_BANNER_W; x++)
             set_map_tile(BANNER_TX + x, BANNER_TY + y,
@@ -3463,8 +3571,17 @@ static void draw_text_centred(int ty, const char *text, int bank) {
     }
 }
 
+/* Where the logo sits on the composed menu: rows 4-6, columns 3-26. That is
+ * the cartridge's own rows 10-12 and columns 4-27 after MENU_ROW_BLOCKS and
+ * MENU_COL_BLOCKS have taken the two columns and ten rows the GBA lacks. */
+#define SKIN_LOGO_TX 3
+#define SKIN_LOGO_TY 4
+
 static void draw_menu_frame(void) {
-    apply_skin(-1);     /* the menus are the cartridge's; see apply_skin */
+    /* THE MENUS WEAR IT TOO. Their frame is the same twenty-four charblock
+     * slots the board's is, and leaving them the release's made the chord
+     * change half the game. See front_skin. */
+    apply_skin(front_skin());
     set_offset_layer(MENU_TEXT_SHIFT_PX);
     for (int ty = 0; ty < SCREEN_MENU_H_TILES; ty++) {
         for (int tx = 0; tx < SCREEN_MENU_W; tx++) {
@@ -3473,6 +3590,21 @@ static void draw_menu_frame(void) {
                           WITH_BANK(kScreenMenuTiles[i], PAL_MENU_BASE + kScreenMenuPalettes[i]));
         }
     }
+#if SCREEN_PROTO_AVAILABLE && SCREEN_SKIN_PLAY
+    /* ...AND THE LOGO OVER THE TOP OF IT, when the skin has one of its own.
+     * The same six letters as the HUD banner, laid out the other way, so they
+     * come out of the same window. proto_a's menus carry no logo at all and
+     * keep the release's rather than a hole. See kSkinLogoHas. */
+    int skin = front_skin();
+    if (skin >= 0 && kSkinLogoHas[skin]) {
+        for (int y = 0; y < SKIN_LOGO_H; y++)
+            for (int x = 0; x < SKIN_LOGO_W; x++)
+                set_map_tile(SKIN_LOGO_TX + x, SKIN_LOGO_TY + y,
+                              WITH_BANK(SKIN_BANNER_BASE +
+                                         kSkinLogoTiles[skin][y * SKIN_LOGO_W + x],
+                                         SKIN_LOGO_BANK));
+    }
+#endif
 }
 
 /* ----------------------------------------------------------------------- *
@@ -4188,6 +4320,9 @@ static void refresh_palettes(void) {
 #define PMENU_ROWS  2
 
 static uint8_t g_pause_row;    /* which line the cursor is on */
+/* MUSIC MIX was chosen on the pause menu and left deliberately silent there,
+ * so the unpause owes the match a tune. See the note in pause_menu_input. */
+static bool g_mix_held;
 static bool g_pause_confirm;   /* ...and the SURE? question over the top of it */
 static bool g_pause_yes;
 
@@ -4410,9 +4545,27 @@ static bool pause_menu_input(uint8_t pressed, bool *leaving) {
          * the game is PAUSED, so the engine has been suspended and a track
          * handed to it now would sit there silent. Resume, then start. The
          * pause's own suspend goes back on when the menu is left, because
-         * tengen_pause_input resumes on the way out either way. */
+         * tengen_pause_input resumes on the way out either way.
+         *
+         * EXCEPT MUSIC MIX, WHICH HAS NOTHING TO PREVIEW. The selection
+         * screen already says so in as many words (see front_tune): the mix
+         * is a rotation that belongs to the match, not one tune to audition,
+         * so it goes quiet there like NO MUSIC does. This menu was starting
+         * whichever tune the rotation happened to be on, which is the one
+         * place in the port where the same choice sounded like two different
+         * things depending on which screen you made it from.
+         *
+         * Going quiet here means the match would come back silent, though —
+         * nothing restarts the engine on the way out of a pause — so the
+         * silence is remembered and spent on the unpause below. */
         nes_audio_play(NES_MUSIC_RESUME);
-        start_music(g_music);
+        if (g_music == MUSIC_MIX) {
+            stop_music();
+            g_mix_held = true;
+        } else {
+            start_music(g_music);
+            g_mix_held = false;
+        }
     }
     /* A TAKES THE CHOICE, and only A. START used to do it here as well and it
      * cost the menu its way out — see the note at the top. */
@@ -4589,6 +4742,12 @@ static bool solo_play_frame(uint8_t buttons, uint8_t pressed, bool *quit) {
                 nes_audio_play(NES_MUSIC_RESUME);
             else if (!g_session.game.proto_rules)
                 nes_audio_play(NES_MUSIC_SUSPEND);
+            /* ...and the mix, if the pause menu left it silent, starts here:
+             * this is the frame the match comes back. See g_mix_held. */
+            if (!g_session.game.paused && g_mix_held) {
+                g_mix_held = false;
+                start_music(g_music);
+            }
             /* MUSIC_SUSPEND only silences the cartridge's engine. The
              * hand-entered tunes have their own channels and have to be
              * stopped and restarted with it, or PAUSE would leave one playing

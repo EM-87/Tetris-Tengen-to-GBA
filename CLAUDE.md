@@ -380,8 +380,26 @@ running ROM; only the side panels need reflowing).
    so nothing downstream notices. **NOT OVER THE CABLE**: a linked match is
    two consoles comparing state byte for byte, and one of them in a
    prototype's clothes would diverge in the playfield itself, so
-   `skin_begin_match` refuses there. The MENUS ask for the release back too —
-   their frame comes out of the same slots in the cartridge's blue.
+   `skin_begin_match` refuses there. **THE MENUS AND THE HIGH SCORES PAGE WEAR
+   IT AS WELL**, which took three things a first pass got wrong: the frame is
+   TWENTY-FOUR tiles (four corners and four runs), not the six the board
+   happens to use, so replacing six left those screens two thirds blue braid
+   and one third green fret; the menu frame draws out of bgPalette1's bank 2,
+   so that bank needs the skin's colours too — and the NOTES had to move to a
+   bank of their own (15, the one nothing else claims) or PRESS START TO PLAY
+   came up in the fret's red; and the port's panels needed a top run of their
+   own above tile 255, because the one tile the release shares between "the
+   panel's top" and "the menu's bottom border" answers to two different
+   prototype runs.
+   **THE TETRIS BANNER AND THE MENU LOGO ARE THE SAME SIX LETTERS** — literally
+   the same 39 tiles in the release — so they change together, and they are
+   the one part of a skin that is NOT a slot swap: the release reuses a tile
+   between letters where these builds use a distinct one at each place, so the
+   art cannot be handed over slot by slot. The prototype's own tiles are packed
+   into a window of their own (SKIN_BANNER_BASE) and drawn by its own numbers.
+   The logo is SEARCHED for on each dump's menu — proto_b keeps it at rows
+   12-14 and proto_c at 10-12 — and proto_a has none at all, so its menus keep
+   the release's rather than a hole.
    **AND THE SKIN CARRIES RULES, not only paint** (`proto_rules`). The three
    differences that are gameplay rather than art, documented per build and
    agreeing across A, B and C: the level goes up every TEN lines instead of on

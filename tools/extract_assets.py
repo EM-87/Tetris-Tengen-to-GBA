@@ -1601,27 +1601,42 @@ PROTO_RECIPES = {
         "rows": _rows((4, 19), (24, 29)),
         "bank": 1,
     },
-    # "TENGEN PRESENTS / TETRIS" over St Basil's, in the green fret border —
-    # the skin this port already had, now with the two copyright lines the
-    # flat-blob method could not see. Everything here is wanted and twenty-one
-    # rows want to be kept, so ONE row of cathedral goes: row 13, the shoulder
-    # where the central tower's tent starts to widen. The four rows above it
-    # are the thin spire and its finial, which go the way the release's own
-    # composition gives up its spire; the blank row between PRESENTS and the
-    # logo STAYS, because buying it leaves the big letters' ascenders sitting
-    # in the word above.
+    # "TENGEN PRESENTS / TETRIS" over St Basil's, in the green fret border.
+    #
+    # THE CATHEDRAL COMES FIRST HERE, and the two copyright lines pay for it.
+    # This composition used to keep rows 24 and 26 — "TM (C)1987
+    # ACADEMYSOFT-ELORG." and "(C)1988 TENGEN." — and buy them by dropping
+    # rows 9 to 13, which is the whole of the central tower above its tent:
+    # the thin spike, the gold ball and the shoulder. The building came out
+    # beheaded, which is the one thing this screen cannot afford, because the
+    # cathedral IS the screen.
+    #
+    # So the copyright goes (rows 23-27) and the tower comes back. What is
+    # still given up is rows 9-10, the one-tile-wide spike ABOVE the ball —
+    # which is exactly what the release's own composition gives up, and for
+    # the same reason. Everything from the ball down is here.
+    #
+    # The blank row 5 between PRESENTS and the logo goes too; the big letters'
+    # ascenders do sit closer to the word above for it, and a whole tower is
+    # worth a row of air.
     "ac327eca3d9f9c169210adc9ccfe8344": {
         "label": "TENGEN PRESENTS TETRIS",
-        "rows": _rows((1, 9), (14, 23), (24, 25), (26, 27), (28, 29)),
+        "rows": _rows((1, 5), (6, 9), (11, 23), (28, 29)),
         "bank": 1,
     },
     # "TENGEN PRESENTS / THE SOVIET MIND GAME" over the same cathedral, which
-    # is the same screen with the logo replaced by a line of text. Its heading
-    # is one row taller and its sky four rows of nothing, so two of those stay
-    # as breathing room and the spire goes whole.
+    # is the same screen with the logo replaced by a line of text.
+    #
+    # THIS ONE KEEPS THE WHOLE TOWER, spike and all. Its heading is a line of
+    # text where proto_b has four rows of big letters, so dropping the same
+    # two copyright lines leaves room to spare: rows 10-23 are the cathedral
+    # entire, from the tip of the spike to the last course of the plinth, with
+    # a border row above and below. Its four rows of empty sky (6-9) are what
+    # pay for it, and sky is the one thing a screen can be short of without
+    # anybody noticing.
     "087bde3f4dd561c60fd03b65d7b21fca": {
         "label": "THE SOVIET MIND GAME",
-        "rows": _rows((1, 8), (14, 25), (26, 27), (28, 29)),
+        "rows": _rows((1, 6), (10, 24), (28, 29)),
         "bank": 1,
     },
 }
@@ -1723,13 +1738,46 @@ GAMESTATE_PLAYING = 0x00
 # says which release slot it answers to — a prototype's top-LEFT corner stands
 # over the tile its screen uses on the RIGHT of an open area, so it is the
 # release's kBraidHangRight.
+#
+# ALL TWENTY-FOUR OF THE FAMILY, because six was visibly not enough. The MENU
+# frame and the HIGH SCORES frame are complete two-tile-thick borders — four
+# corners, four runs — and a skin that replaced only the two walls and one run
+# left them two thirds in the release's blue braid and one third in the
+# prototype's green fret. Half-changed, and worse than either.
 SKIN_FRAME = (
-    ((0x89, 0x8E),             (10, 0, 1, 2)),   # the panel's top run
+    ((0x60, 0x61, 0x65, 0x66), (0, 0, 2, 2)),    # top-left corner
+    ((0x62, 0x67),             (10, 0, 1, 2)),   # the top run
+    ((0x63, 0x64, 0x68, 0x69), (30, 0, 2, 2)),   # top-right corner
     ((0x6A, 0x6B),             (0, 10, 2, 1)),   # the wall on the board's left
     ((0x73, 0x74),             (30, 10, 2, 1)),  # ...and on its right
+    ((0x87, 0x88, 0x8C, 0x8D), (0, 28, 2, 2)),   # bottom-left corner
+    ((0x89, 0x8E),             (10, 28, 1, 2)),  # the bottom run
+    ((0x8A, 0x8B, 0x8F, 0x90), (30, 28, 2, 2)),  # bottom-right corner
+    # ...and the two ELBOWS, which are the port's panels and nothing else. A
+    # prototype has no equivalent tile: it turns its banner box's walls down
+    # out of its own TOP corners, so those are what these answer to, and each
+    # corner therefore feeds TWO release slots. That is fine — the same art in
+    # two places — and it is why this cannot be a positional map from release
+    # tile numbers to prototype ones. See PANEL_RUN_SLOTS.
     ((0x95, 0x96, 0x99, 0x9A), (30, 0, 2, 2)),   # the elbow over the left wall
     ((0x97, 0x98, 0x9B, 0x9C), (0, 0, 2, 2)),    # ...and over the right one
 )
+# THE ONE TILE THAT HAS TWO JOBS, and the reason for a slot outside 0-255.
+#
+# The port's panels run their top edge in kBraidBottom ($89/$8E) because that
+# is the run the coop screen's elbows sit on. On the RELEASE that costs
+# nothing: the menu's bottom border is the same tile and the same art, so one
+# slot serves both. On a prototype it does not — the elbows come from its TOP
+# corners, so the panel wants its TOP run, while the menu's bottom border
+# still wants its BOTTOM run. One slot, two answers.
+#
+# So the panel's top run gets a pair of its own, above everything else in the
+# charblock (a text background addresses 1024 tiles and the HUD labels end at
+# 789). The release fills them with its own $89/$8E art, so nothing changes
+# when no skin is on.
+PANEL_RUN_SLOTS = (800, 801)
+PANEL_RUN_SOURCE = (10, 0, 1, 2)      # the prototype's TOP run
+PANEL_RUN_RELEASE = (0x89, 0x8E)      # ...and what the release puts there
 # The blocks, straight across: the cell's nibble is the tile in both. SEVEN of
 # them, and that is the whole difference between these builds and the release.
 #
@@ -1758,6 +1806,43 @@ SKIN_GARBAGE_SOURCE = 0x01
 # its play screen, which is that rule and nothing else.
 SKIN_LEDGE_SLOT = 0x9D
 SKIN_LEDGE_ROW = 3
+
+# THE TETRIS BANNER, WHICH CANNOT BE DONE BY OVERWRITING SLOTS.
+#
+# The release's vertical banner and its horizontal menu logo are the SAME 39
+# tiles — the cartridge lays the same six letters out both ways — so changing
+# those slots would change both at once, which is exactly what is wanted. The
+# trouble is that the release REUSES a tile between letters where a prototype
+# uses a distinct one at each position ($A3 alone stands at five places on
+# proto_b), so a positional release-to-prototype map is not a function: one
+# release slot would want five different pieces of art.
+#
+# So the banner is the other way round — the prototype's own tile NUMBERS,
+# drawn out of a window of its own art. Its fifty-odd tiles are packed into
+# SKIN_BANNER_BASE and the table below is indices into that.
+#
+# All three dumps put their banner where the release does, columns 14-17 and
+# rows 10-27, and all three draw it in attribute bank 2 — the same bank as
+# their frame, so it needs no palette of its own.
+BANNER_SRC_COLS = (14, 18)
+BANNER_SRC_ROWS = (10, 28)
+SKIN_BANNER_MAX = 64
+
+# ...AND THE HORIZONTAL LOGO ON THE MENUS, which is the same six letters laid
+# out the other way and, in the release, literally the same 39 tiles. So it
+# comes out of the same packed window as the banner.
+#
+# It is FOUND rather than located by a constant, because the three dumps do not
+# agree on where it is: proto_b puts it at rows 12-14 (it has TENGEN PRESENTS
+# above it) and proto_c at 10-12. The search is for a 3x24 block on the menu
+# screen every cell of which is a tile the banner uses — nothing else on those
+# screens is made of those tiles.
+#
+# proto_a HAS NO MENU LOGO AT ALL ("the main menu is totally missing its
+# logo"), so there is nothing to find and its menus keep the release's. A hole
+# where the logo goes would be faithful and would also just be a hole.
+LOGO_SHAPE = (3, 24)                  # rows, columns
+LOGO_MENU_PRESSES = 4                 # STARTs to try before giving up
 
 
 def boot_prototype_game(path):
@@ -1795,6 +1880,51 @@ def boot_prototype_game(path):
             1 if (nes.bus._ctrl & 0x10) else 0), None
 
 
+def find_skin_menu_logo(path, letters):
+    """The prototype's horizontal TETRIS logo: (grid of tile ids, its palette).
+
+    Returns None when the dump's menus have no logo, which is a real answer
+    for proto_a rather than a failure.
+
+    ITS OWN BANK, NOT THE FRAME'S. proto_b draws the logo in the same
+    attribute bank as its fret and proto_c does not — the two differ in their
+    shadow colours — so the bank is read off the screen and its four colours
+    travel with the grid.
+    """
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from nes_console import NesConsole, BTN
+
+    rows, cols = LOGO_SHAPE
+    nes = NesConsole(path)
+    nes.run(120)
+    for _ in range(LOGO_MENU_PRESSES):
+        nes.run(6, BTN["START"])
+        nes.run(60)
+        if nes.ram(GAMESTATE_ADDR) == GAMESTATE_PLAYING:
+            break               # walked past the menus; this dump has none
+        nt = bytes(nes.bus.vram[0:0x3C0])
+        at = bytes(nes.bus.vram[0x3C0:0x400])
+        for r0 in range(0, 30 - rows + 1):
+            for c0 in range(0, 32 - cols + 1):
+                cells = [nt[(r0 + dr) * 32 + c0 + dc]
+                         for dr in range(rows) for dc in range(cols)]
+                if not all(t in letters for t in cells):
+                    continue
+                # A run of one repeated tile is a blank band, not a logo.
+                if len(set(cells)) <= 8:
+                    continue
+                banks = {attribute_palette(at, c0 + dc, r0 + dr)
+                         for dr in range(rows) for dc in range(cols)}
+                if len(banks) != 1:
+                    continue
+                bank = banks.pop()
+                pal = bytes(nes.bus.pal[:16])
+                return ([[nt[(r0 + dr) * 32 + c0 + dc] for dc in range(cols)]
+                         for dr in range(rows)],
+                        [pal[bank * 4 + i] for i in range(4)])
+    return None
+
+
 def read_skin_play(path, chr_rom):
     """The prototype's frame and block art, in the release's tile slots."""
     got, why = boot_prototype_game(path)
@@ -1817,6 +1947,10 @@ def read_skin_play(path, chr_rom):
         for slot, tile in zip(release_slots, src):
             slots.append(slot)
             tiles.append(art(tile))
+    c0, r0, w, h = PANEL_RUN_SOURCE
+    for slot, dr in zip(PANEL_RUN_SLOTS, range(h)):
+        slots.append(slot)
+        tiles.append(art(nt[(r0 + dr) * 32 + c0]))
     for slot in SKIN_BLOCKS:
         slots.append(slot)
         tiles.append(art(slot))
@@ -1845,12 +1979,47 @@ def read_skin_play(path, chr_rom):
         return None, (f"{path}: el marco de su partida usa los bancos "
                       f"{sorted(banks)}, no uno solo")
     frame_bank = banks.pop()
+
+    # The banner, packed. Its attribute bank has to be the frame's or it would
+    # need a palette of its own; all three dumps oblige.
+    bcols, brows = range(*BANNER_SRC_COLS), range(*BANNER_SRC_ROWS)
+    bbanks = {attribute_palette(at, c, r) for r in brows for c in bcols}
+    if bbanks != {frame_bank}:
+        return None, (f"{path}: su banner usa los bancos {sorted(bbanks)} y su "
+                      f"marco el {frame_bank}")
+    order, index = [], {}
+    grid = []
+    for r in brows:
+        row = []
+        for c in bcols:
+            t = nt[r * 32 + c]
+            if t not in index:
+                index[t] = len(order)
+                order.append(t)
+            row.append(index[t])
+        grid.append(row)
+    if len(order) > SKIN_BANNER_MAX:
+        return None, (f"{path}: su banner usa {len(order)} tiles distintos y la "
+                      f"ventana tiene {SKIN_BANNER_MAX}")
+
+    # ...and the menu logo, out of the same window. A dump without one keeps
+    # the release's; see find_skin_menu_logo.
+    found = find_skin_menu_logo(path, set(order))
+    logo = logo_palette = None
+    if found is not None:
+        logo_src, logo_palette = found
+        logo = [[index[t] for t in row] for row in logo_src]
+
     return {
         "slots": slots,
         "tiles": tiles,
         "palette": palette,
         "frame_bank": frame_bank,
         "bank": bank,
+        "banner": grid,
+        "banner_art": [art(t) for t in order],
+        "logo": logo,
+        "logo_palette": logo_palette or [0x0F] * 4,
     }, None
 
 
@@ -2003,9 +2172,19 @@ def emit_skin_play(skins):
         " * put the same parts in the same places. */",
         "#define SCREEN_SKIN_PLAY 1",
         f"#define SKIN_SLOT_COUNT {len(slots)}",
-        "static const uint8_t kSkinSlots[SKIN_SLOT_COUNT] = {",
-        "    " + ", ".join(f"0x{s:02X}" for s in slots),
+        "/* The charblock slots a skin fills. Sixteen bits because two of them",
+        " * are above 255: the port's panels need a top run of their own, since",
+        " * the tile the release shares between that and the menu's bottom",
+        " * border answers to two different prototype runs. See PANEL_RUN_SLOTS",
+        " * in tools/extract_assets.py. */",
+        "static const uint16_t kSkinSlots[SKIN_SLOT_COUNT] = {",
+        "    " + ", ".join(f"0x{s:03X}" for s in slots),
         "};",
+        "/* ...and where the RELEASE's art for those two comes from, so putting",
+        " * the board back into the cartridge's clothes is the same loop. */",
+        f"#define SKIN_PANEL_RUN_BASE 0x{PANEL_RUN_SLOTS[0]:03X}",
+        "static const uint8_t kSkinPanelRunRelease[2] = { "
+        + ", ".join(f"0x{t:02X}" for t in PANEL_RUN_RELEASE) + " };",
         "/* ...and the colours its frame is drawn in, as an index into that",
         " * skin's own background palette above. */",
         "static const uint8_t kSkinFrameBank[SCREEN_PROTO_COUNT] = { "
@@ -2021,6 +2200,59 @@ def emit_skin_play(skins):
            "[SKIN_SLOT_COUNT * 32] = {",
            [[b for tile in p["tiles"] for b in tile] for p in plays],
            lambda b: f"0x{b:02X}", 16)
+
+    # The banner: its own art, packed, and a table of indices into it. Padded
+    # to one length so the C is a plain rectangular array; the count says how
+    # much of each is real.
+    width = max(len(p["banner_art"]) for p in plays)
+    lines += [
+        "",
+        "/* THE TETRIS BANNER, and the menu logo that shares its letters: the",
+        " * prototype's own art in a window of its own, because the release",
+        " * reuses one tile between letters where these use a distinct one at",
+        " * each place, so no map from release tile numbers can carry it. The",
+        " * indices below are into that window; the banner draws in the frame's",
+        " * palette bank, which is where all three dumps put it. */",
+        f"#define SKIN_BANNER_W {BANNER_SRC_COLS[1] - BANNER_SRC_COLS[0]}",
+        f"#define SKIN_BANNER_H {BANNER_SRC_ROWS[1] - BANNER_SRC_ROWS[0]}",
+        f"#define SKIN_BANNER_TILES {width}",
+        "static const uint8_t kSkinBannerCount[SCREEN_PROTO_COUNT] = { "
+        + ", ".join(str(len(p["banner_art"])) for p in plays) + " };",
+    ]
+    _table(lines,
+           "static const uint8_t kSkinBannerArt[SCREEN_PROTO_COUNT]"
+           "[SKIN_BANNER_TILES * 32] = {",
+           [[b for tile in p["banner_art"] for b in tile]
+            + [0] * (32 * (width - len(p["banner_art"]))) for p in plays],
+           lambda b: f"0x{b:02X}", 16)
+    _table(lines,
+           "static const uint8_t kSkinBannerTiles[SCREEN_PROTO_COUNT]"
+           "[SKIN_BANNER_H * SKIN_BANNER_W] = {",
+           [[i for row in p["banner"] for i in row] for p in plays],
+           str, 16)
+
+    rows, cols = LOGO_SHAPE
+    lines += [
+        "",
+        "/* The menus' horizontal logo, the same letters the other way round,",
+        " * out of the same window. Not every dump has one -- proto_a's menus",
+        " * carry no logo at all -- and the ones that do keep it in different",
+        " * rows, so it is SEARCHED for rather than read from a constant. A",
+        " * skin without one leaves the release's logo where it is. */",
+        f"#define SKIN_LOGO_W {cols}",
+        f"#define SKIN_LOGO_H {rows}",
+        "static const uint8_t kSkinLogoHas[SCREEN_PROTO_COUNT] = { "
+        + ", ".join("1" if p["logo"] else "0" for p in plays) + " };",
+    ]
+    _table(lines,
+           "static const uint8_t kSkinLogoTiles[SCREEN_PROTO_COUNT]"
+           "[SKIN_LOGO_H * SKIN_LOGO_W] = {",
+           [[i for row in (p["logo"] or [[0] * cols] * rows) for i in row]
+            for p in plays],
+           str, 16)
+    _table(lines,
+           "static const uint8_t kSkinLogoPalette[SCREEN_PROTO_COUNT][4] = {",
+           [p["logo_palette"] for p in plays], lambda b: f"0x{b:02X}", 4)
     return lines
 
 

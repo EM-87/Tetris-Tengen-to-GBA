@@ -165,6 +165,41 @@ and `TT_WALL` is 15 either way, so nothing downstream notices. **It is off over
 the cable**: a linked match is two consoles comparing state byte for byte, and
 one of them in a prototype's clothes would diverge in the playfield itself.
 
+### What a skin covers, and the three things that make it awkward
+
+The frame is **twenty-four tiles**, not the six the board happens to use: the
+menu frame and the HIGH SCORES frame are complete two-tile-thick borders, four
+corners and four runs, and replacing six of them left those screens two thirds
+in the release's blue braid and one third in the prototype's green fret.
+
+**The menu frame's palette is bgPalette1 bank 2**, so a skin has to recolour
+that as well as the game's bank 2 — and doing so dragged the NOTES with it,
+because they were sharing it. They have bank 15 now, the one background
+palette nothing else claims (0-3 game, 4-7 title, 8-11 menu, 12-14 the falling
+piece, the preview and the partner's), so PRESS START TO PLAY keeps the
+cartridge's pale blue whatever the frame is wearing.
+
+**One release tile does two jobs.** The port's panels run their top edge in
+kBraidBottom because that is the run the coop screen's elbows sit on, and the
+menu's bottom border is the same tile. On a prototype the elbows come from its
+TOP corners, so the panel wants its top run while the menu still wants its
+bottom one. The panel's got a pair of its own above tile 255 —
+`SKIN_PANEL_RUN_BASE` — which a text background can address (1024 tiles) and
+which the release fills with its own `$89`/`$8E` art, so nothing changes with
+no skin on.
+
+**And the banner is not a slot swap at all.** The vertical TETRIS in the HUD
+and the horizontal logo on the menus are the same six letters — literally the
+same 39 tiles in the release — so they change together; but the release REUSES
+a tile between letters where these builds use a distinct one at each place
+(`$A3` alone stands at five positions on proto_b), so no map from release tile
+numbers to prototype ones can carry it. The prototype's own tiles are packed
+into a window of their own and drawn by its own numbers. The logo is SEARCHED
+for on each dump's menu screen, as a 3x24 block made only of banner tiles,
+because the three do not agree on where it is — proto_b has it at rows 12-14
+and proto_c at 10-12 — and **proto_a has no menu logo at all**, so its menus
+keep the release's rather than a hole.
+
 ### ...and the RULES those builds play by
 
 `proto_rules`, the second flag. These are documented differences, per build,
@@ -555,16 +590,25 @@ rename still matches and an unknown screen is never squeezed by a recipe meant
 for another. Two columns come off all of them the same way (the outer column
 each side: the thin rule outside the fret, or nothing at all).
 
+**THE CATHEDRAL COMES FIRST, AND THE COPYRIGHT LINES PAY FOR IT.** Both
+St Basil's screens carry "TM (C)1987 ACADEMYSOFT-ELORG." and "(C)1988 TENGEN."
+across their bottom, five rows with the blanks, and both used to buy those by
+dropping the middle of the central tower — the spike, the gold ball and the
+shoulder — so the building came out beheaded. The cathedral IS the screen on
+those two, so the credit lines go and the tower comes back. `proto_a` keeps
+its text: it is the one signed "LICENSED BY NINTENDO OF AMERICA INC.", from
+before the lawsuit, and that line is the whole point of that dump.
+
 - `proto_a` FITS. Eleven rows of picture and four of text, so all ten dropped
   rows are blank: two above the box, two below, one under the last line.
-- `proto_b` wants to keep twenty-one. The four rows of thin spire and finial
-  go the way the release's own composition gives up its spire, and then ONE
-  row of cathedral — row 13, the shoulder where the central tower's tent
-  starts to widen. The blank row between PRESENTS and the logo deliberately
-  STAYS: buying it left the big letters' ascenders sitting inside the word
-  above.
-- `proto_c` has a taller heading and four rows of empty sky, so two of those
-  stay as breathing room and the spire goes whole.
+- `proto_b` gives up rows 9-10, the one-tile-wide spike ABOVE the ball — which
+  is exactly what the release's own composition gives up, and for the same
+  reason — plus the blank row between PRESENTS and the logo. Everything from
+  the ball down is there, and the ball lands directly under the Я.
+- `proto_c` keeps the tower WHOLE, spike and all: its heading is one line of
+  text where proto_b has four rows of big letters, so dropping the same two
+  credit lines leaves room to spare and its four rows of empty sky pay the
+  rest. Sky is the one thing a screen can be short of without anyone noticing.
 
 For a dump with no recipe, `auto_compose` drops only rows and columns that
 render entirely blank, taking from the middle of the longest run each time so

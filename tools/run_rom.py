@@ -1197,6 +1197,33 @@ def skin_check(rom_path):
                   for r in range(10, 20) for c in range(10, 20)} - {0}
         return wall, blocks
 
+    # ...AND THE FRONT END WEARS IT TOO. The menu frame and the HIGH SCORES
+    # frame are the same twenty-four charblock slots the board's is, so a skin
+    # that stopped at the board left them two thirds in the release's blue
+    # braid and one third in the prototype's fret — half-changed, which is
+    # worse than either. Counted by colour rather than by tile, because the
+    # slots are the same numbers in both and only the art in them differs.
+    def menu_colours(chords):
+        this, this_screen = load(rom_path)
+        _ = this_screen
+        run(this, 40)
+        for _i in range(chords):
+            this.set_keys(KEYS["L"], KEYS["R"]); run(this, 4)
+            this.set_keys(); run(this, 20)
+        press_start(this); run(this, 24)          # -> GAME SELECT
+        px = pixels(this_screen)
+        # The frame's own columns, top to bottom, down the left edge.
+        return [tuple(px[y][x] for x in range(0, 16)) for y in range(0, 160)]
+
+    plain_menu = menu_colours(0)
+    skin_menu = menu_colours(1)
+    same = sum(1 for a, b in zip(plain_menu, skin_menu) if a == b)
+    if same > len(plain_menu) // 4:
+        failures.append(f"la greca del MENU no cambia con la skin: {same} de "
+                         f"{len(plain_menu)} filas identicas")
+    else:
+        print("  ...y la greca de los menus cambia con ella")
+
     plain_frame, plain_blocks = stack_a_board(0)
     skin_frame, skin_blocks = stack_a_board(1)
 
@@ -2203,6 +2230,50 @@ def pausemenu_check(rom_path):
     else:
         print(f"  la musica se cambia sin salir: {before.strip()!r} -> "
                f"{row(PM_TUNE).strip()!r}")
+
+    # ...AND MUSIC MIX IS AS QUIET HERE AS IT IS ON THE SETTINGS SCREEN.
+    # There is no one tune to audition in a rotation, so the selection screen
+    # goes silent on it like it does on NO MUSIC; this menu was starting
+    # whichever tune the rotation happened to be on, which made the same
+    # choice sound like two different things depending on where you made it.
+    # And going quiet must not leave the MATCH quiet: nothing else restarts
+    # the engine on the way out of a pause, so the silence is spent on the
+    # unpause.
+    for _ in range(12):
+        if "MIX" in row(PM_TUNE):
+            break
+        tap("RIGHT")
+    if "MIX" not in row(PM_TUNE):
+        failures.append("el menu de pausa no ofrece MUSIC MIX")
+    else:
+        loud = 0
+        for _ in range(120):
+            core.run_frame()
+            st = sound_state(core)
+            loud |= st["activos"] | st["pulso 1"] | st["pulso 2"] | st["triangulo"]
+        if loud:
+            failures.append(f"MUSIC MIX suena en el menu de pausa "
+                             f"(canales {loud:#06b}); en el de niveles calla")
+        else:
+            print("  MUSIC MIX no suena aqui, igual que en la pantalla de "
+                  "seleccion")
+            # The match has to come back with it, though.
+            tap("START", settle=30)
+            back = 0
+            for _ in range(180):
+                core.run_frame()
+                st = sound_state(core)
+                if st["activos"] or st["pulso 1"] or st["pulso 2"] or st["triangulo"]:
+                    back += 1
+            if not back:
+                failures.append("tras elegir MUSIC MIX en la pausa la partida "
+                                 "vuelve muda")
+            else:
+                print(f"  ...y al reanudar la partida suena "
+                      f"({back}/180 frames)")
+            # Back into the menu for the checks below.
+            tap("START", settle=20)
+            tap("L", "R", settle=20)
 
     # THE CURSOR IS AN ARROW, and it has to be ON the line it marks and on no
     # other -- picking the line out by palette read as a colour scheme rather
