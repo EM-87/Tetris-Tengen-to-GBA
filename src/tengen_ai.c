@@ -255,6 +255,26 @@ void tengen_ai_choose(TengenAi *ai, const TengenGame *game,
     ai->target_x = y;
 }
 
+/* THE SAME CHOICE, MADE AGAIN FOR A PIECE ALREADY ON ITS WAY DOWN.
+ *
+ * WITH COMPUTER is one board with two pieces falling into it, and the
+ * cartridge calls computerMove for player 2 on EVERY spawn, the human's
+ * included (main.asm.txt:3740-3749 — the `txa`/`beq` that makes VERSUS ignore
+ * player 1's spawn is skipped for this mode). So when a human piece lands in
+ * the hole the computer was aiming at, the computer's next look at the board
+ * is the one that notices.
+ *
+ * The only difference from a spawn's own call is `settle`, which is this
+ * port's and not the ROM's: a piece halfway down that suddenly stops dead for
+ * a quarter of a second reads as a hang, not as a decision. So the clock
+ * carries on. */
+void tengen_ai_rechoose(TengenAi *ai, const TengenGame *game,
+                         TengenPlayerSlot slot) {
+    uint8_t elapsed = ai->since_spawn;
+    tengen_ai_choose(ai, game, slot);
+    ai->since_spawn = elapsed;
+}
+
 uint8_t tengen_ai_buttons(TengenAi *ai, const TengenGame *game,
                            TengenPlayerSlot slot, uint8_t frame_counter) {
     const TengenPlayerState *p = &game->player[slot];

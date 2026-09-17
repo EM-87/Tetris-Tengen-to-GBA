@@ -1198,7 +1198,7 @@ static void draw_ledge(int tx, int ty, int w) {
  * screen has a plain strip here anyway.
  *
  * THE RUN MUST BE THE PANEL'S OWN. This strip replaces the right panel's left
- * side, so it is kBraidLeft — the same tile draw_braid_panel puts there. Hand
+ * side, so it is kBraidRight — the same tile draw_braid_panel puts there. Hand
  * it the other one and the weave changes direction every time L+R is pressed,
  * which is exactly what it used to do. */
 static void draw_field_braid(int tx, const uint8_t run[1][2]) {
@@ -1211,25 +1211,40 @@ static void draw_field_braid(int tx, const uint8_t run[1][2]) {
  * board, and the screen's own edge closing it outward. `inner_right` says
  * which side of the panel the board is on.
  *
- * WHICH TILES, AND WHY THAT WAY ROUND. The rope is woven and the weave leans,
- * so its four runs and four corners only fit each other one way. THE PANEL IS
- * A BOX, and the tile is chosen by which side OF THE BOX it is on, not by
- * which side of the board:
+ * WHICH TILES, AND WHY THAT WAY ROUND — and this is the entry that was
+ * WRONG for a long time, in a way that showed on every frame of every game.
  *
- *   left panel  (cols 0-9)   rope on its RIGHT side  -> kBraidRight, TR / BR
- *   right panel (cols 20-29) rope on its LEFT side   -> kBraidLeft,  TL / BL
+ * The rope's fret is chiral. $6A $6B, the cartridge's LEFT wall, has its
+ * hooks opening RIGHT; $73 $74, its RIGHT wall, opens LEFT. So on the
+ * cartridge BOTH walls of the playfield have their indentations pointing IN,
+ * at the board. This port used to pick the tile by which side OF THE PANEL
+ * the rope was on — $73 $74 for a panel with the board on its right — which
+ * put the fret of both walls pointing outwards, away from the board, at the
+ * HUD. The one thing in the port the board is meant to be 1:1 about, framed
+ * inside out.
  *
- * Choosing by the board instead — the run beside the board's left edge taking
- * the cartridge's own left-border tiles — puts each vertical run back where
- * the ROM has it, but then the corners it meets are the mirror of it and the
- * weave visibly breaks at every one of them. The box wins: it is a box now,
- * and its own four pieces have to agree with each other.
+ * It was done that way because of the CORNERS: the screen's own $9E $64 /
+ * $9F $69 turns a top run down into $73 $74 and there is no mirror of it, so
+ * a left panel with $6A $6B under that corner breaks the weave at the turn.
  *
- * What that costs is one thing, and it is paid where nobody looks: the rope
- * beside the playfield is the mirror of the cartridge's. What it must NOT
- * cost is the weave changing direction when the HUD does, so anything that
- * redraws these columns as a plain strip has to use the panel's own tile —
- * see draw_field_braid's callers.
+ * THE CARTRIDGE HAS THE CORNERS. They are not on the screen's border, they
+ * are where the header's bottom rule hangs the banner box's walls off itself
+ * — kBraidHangLeft ($95 $96 / $99 $9A) turns a run coming from the LEFT down
+ * into $6A $6B, kBraidHangRight ($97 $98 / $9B $9C) turns one coming from the
+ * RIGHT down into $73 $74 — and the run they belong to is kBraidBottom, the
+ * rule itself. The COOP screen builds exactly this port's layout out of the
+ * three: a twelve-wide field walled $6A $6B and $73 $74, hung off that rule
+ * at columns 8-9 and 22-23, with an open panel either side. And those rows
+ * ARE the port's rows 0-1 — the window starts at nametable row 8 — so this
+ * is not a lookalike assembled from spare parts, it is the cartridge's own
+ * screen at the very rows the port draws.
+ *
+ *   left panel  (cols 0-9)   board on its RIGHT -> kBraidLeft,  HangLeft
+ *   right panel (cols 20-29) board on its LEFT  -> kBraidRight, HangRight
+ *
+ * What it must NOT cost is the weave changing direction when the HUD does,
+ * so anything that redraws these columns as a plain strip has to use the
+ * panel's own tile — see draw_field_braid's callers.
  *
  * The corners are only ever drawn on the board side, because that is the only
  * side that has one — the other simply runs off the screen. */
@@ -1275,19 +1290,20 @@ static void draw_braid_panel(int tx, int w, bool inner_right, bool shelves) {
     for (int dy = 0; dy < BRAID_T; dy++)
         for (int dx = 0; dx < BRAID_T; dx++)
             set_map_tile(ix + dx, dy,
-                          WITH_BANK(inner_right ? kBraidTR[dy][dx]
-                                                : kBraidTL[dy][dx], BRAID_BANK));
+                          WITH_BANK(inner_right ? kBraidHangLeft[dy][dx]
+                                                : kBraidHangRight[dy][dx],
+                                     BRAID_BANK));
     for (int x = 0; x < w; x++) {
         int cx = tx + x;
         if (cx >= ix && cx < ix + BRAID_T) continue;      /* the corners */
         for (int dy = 0; dy < BRAID_T; dy++)
-            set_map_tile(cx, dy, WITH_BANK(kBraidTop[dy][0], BRAID_BANK));
+            set_map_tile(cx, dy, WITH_BANK(kBraidBottom[dy][0], BRAID_BANK));
     }
     for (int y = BRAID_T; y < SCREEN_TH; y++)
         for (int dx = 0; dx < BRAID_T; dx++)
             set_map_tile(ix + dx, y,
-                          WITH_BANK(inner_right ? kBraidRight[0][dx]
-                                                : kBraidLeft[0][dx], BRAID_BANK));
+                          WITH_BANK(inner_right ? kBraidLeft[0][dx]
+                                                : kBraidRight[0][dx], BRAID_BANK));
 
     int in_tx = inner_right ? tx : tx + BRAID_T;
     clear_region(in_tx, BRAID_T, w - BRAID_T, SCREEN_TH - BRAID_T);
@@ -1907,11 +1923,33 @@ static void leader_letter_step(int delta) {
         g_leader_undo[g_leader_undo_n++] = (uint8_t)g_leader_cursor;
 }
 
-/* How long the page stands there once there is nothing left to type. The
- * cartridge counts player1FallTimer down every fourth frame from whatever the
- * game over left of it; five seconds is the same order and is a round number
- * a player can wait out — and any button cuts it short. */
-#define LEADER_HOLD_FRAMES 300
+/* HOW LONG EACH OF THE TWO PAGES STANDS THERE, and both are the cartridge's
+ * own, counted on its own clock — which nobody would guess at, because both
+ * come out of the SAME byte being used for two things.
+ *
+ * GAME OVER. The top-out writes one value into two places
+ * (main.asm.txt:605-607): `lda #GAMESTATE_GAMEOVER` / `sta gameState` /
+ * `sta player1FallTimer` — so the fall timer starts at $F9, 249, because that
+ * is what the state number happens to be. L9205 then decrements it on every
+ * OTHER frame (`lsr a` / `bcs` on frameCounterLow) and jumps to the high
+ * scores at zero: 498 frames, eight and a third seconds.
+ *
+ * HIGH SCORES. initializeLeaderboard does NOT reload that timer — it sets
+ * player2FallTimer to $0A and leaves player1's alone (main.asm.txt:2963-2995),
+ * and player1's is the zero the countdown above just arrived at. So L91F8's
+ * first `dec` UNDERFLOWS to 255, and at one decrement every fourth frame
+ * (`and #$03`) the page holds for 1020 frames, seventeen seconds.
+ *
+ * Measured on the cartridge to be sure, by burying the field and watching
+ * gameState: $F9 at frame 48, $F8 at 546, the title at 1571 — 498 and 1025,
+ * the five being where the frame counter's phase falls.
+ *
+ * This port used to wait for a BUTTON on the game over and hold the table for
+ * three hundred frames, which is the wrong way round on both counts: the
+ * plaque never left on its own and the page left too soon. A button still
+ * cuts either short. */
+#define GAMEOVER_HOLD_FRAMES 498
+#define LEADER_HOLD_FRAMES 1020
 #define LEADER_DAS 10
 
 /* ONE FRAME OF TYPING, and the controls are NOT the cartridge's.
@@ -3657,6 +3695,9 @@ static void draw_level_settings(int chosen, uint8_t start_level, uint8_t music,
 static TengenAi g_ai;
 static uint8_t g_ai_slot = TENGEN_PLAYER_2;
 static TengenTetromino g_ai_last_piece;
+/* ...and the OTHER player's, which in WITH COMPUTER is a reason to think
+ * again. See ai_input. */
+static TengenTetromino g_ai_last_partner;
 static uint8_t g_ai_frame;
 
 /* THE ATTRACT DEMO, which is the same computer playing the same game with
@@ -3674,15 +3715,25 @@ static uint8_t g_ai_frame;
 static bool g_demo;
 /* How long the demo lingers on its own GAME OVER before the title comes back.
  * The cartridge goes to its high-score table here and from there to the title
- * on another timer; this port has no leaderboard, so it takes the shorter
- * road and says so. */
+ * on another timer; the attract mode does NOT take that road in this port —
+ * a score nobody played for has no business on the board — so it takes the
+ * shorter one, three seconds, and says so. A real game's own two holds are
+ * the cartridge's; see GAMEOVER_HOLD_FRAMES. */
 #define DEMO_GAMEOVER_FRAMES 180
 static int g_demo_over_frames;
 
 /* And how long it looks at a new piece before it touches it — see `settle` on
- * TengenAi. Half a second: long enough to read as a decision being made, short
- * enough that even a level-9 piece still reaches the column it picked. */
-#define DEMO_SETTLE_FRAMES 30
+ * TengenAi. ZERO, which is the cartridge's: its computer shifts off
+ * frameCounterLow alone (`and #$07`, main.asm.txt:4170-4176) and will yank a
+ * piece sideways on the very frame it spawns.
+ *
+ * It was half a second for a while, on the argument that an instant twitch
+ * reads as a machine rather than as somebody playing. What it actually reads
+ * as is a SLOWER computer — thirty frames a piece, a good fifth of the demo's
+ * pace at level 0 — and the attract mode is the one place where the port's
+ * computer is put side by side with the cartridge's in a player's memory.
+ * Fidelity wins; the twitch is the cartridge's twitch. */
+#define DEMO_SETTLE_FRAMES 0
 /* ...and the computer's own, in a game with a player in it, where it is also
  * the throttle on how fast it fills a shared board. See where it is set. */
 #define AI_SETTLE_FRAMES 0
@@ -3829,13 +3880,55 @@ static void announce_step(TengenStepResult step) {
 
 /* One frame of the computer's input, for whichever player it is. It
  * re-chooses on every new piece, which is where getNextTetromino calls
- * computerMove (main.asm.txt:3735, 3749). */
+ * computerMove (main.asm.txt:3735, 3749).
+ *
+ * AND IN "WITH COMPUTER" IT THINKS AGAIN WHEN THE HUMAN DOES, WHICH IS THE
+ * WHOLE OF ITS COOP MANNERS.
+ *
+ * Those two call sites are not symmetrical, and the difference is one `txa` /
+ * `beq`. getNextTetromino runs for whichever player just got a piece, and at
+ * its end (main.asm.txt:3740-3749):
+ *
+ *      lda menuGameMode
+ *      cmp #MENU_GAMEMODE_VS      ; $03
+ *      bcc return                 ; 2 PLAYER, COOPERATIVE: no computer
+ *      bne L9992                  ; $04 WITH COMPUTER: always
+ *      txa                        ; $03 VERSUS...
+ *      beq return                 ; ...only when the computer itself spawned
+ *  L9992:
+ *      ldx #$01
+ *      jmp computerMove
+ *
+ * So in VERSUS — two separate boards — the computer plans once per piece of
+ * its own and the human's spawns are none of its business. In WITH COMPUTER,
+ * where both play into ONE twelve-wide field, EVERY spawn calls computerMove
+ * for player 2, the human's included: the moment a human piece locks and the
+ * next appears, the computer re-reads the board and re-picks a column for the
+ * piece it is still holding. That is how the cartridge notices that the hole
+ * it was aiming for has just been filled in, which is what this port did not
+ * do — it committed on spawn and shoved its piece down on top of whatever had
+ * arrived in the meantime.
+ *
+ * The re-plan goes through tengen_ai_rechoose, which is the same choice with
+ * the settle clock left running: a piece halfway down that stops dead for a
+ * quarter of a second reads as a hang, not as a decision. */
 static uint8_t ai_input(void) {
     TengenPlayerSlot slot = (TengenPlayerSlot)g_ai_slot;
-    if (g_session.game.player[slot].piece.current != g_ai_last_piece) {
-        g_ai_last_piece = g_session.game.player[slot].piece.current;
+    TengenPlayerSlot other = (TengenPlayerSlot)(g_ai_slot ^ 1);
+    TengenTetromino mine = g_session.game.player[slot].piece.current;
+    TengenTetromino theirs = g_session.game.player[other].piece.current;
+
+    if (mine != g_ai_last_piece) {
         tengen_ai_choose(&g_ai, &g_session.game, slot);
+    } else if (g_session.game.coop && theirs != g_ai_last_partner &&
+                theirs != TT_NONE && mine != TT_NONE) {
+        /* The shared board, and only there. `coop` is what playModeTable
+         * makes of WITH COMPUTER; a race is two boards and what lands on the
+         * other one is not news. */
+        tengen_ai_rechoose(&g_ai, &g_session.game, slot);
     }
+    g_ai_last_piece = mine;
+    g_ai_last_partner = theirs;
     return tengen_ai_buttons(&g_ai, &g_session.game, slot, g_ai_frame++);
 }
 
@@ -4488,6 +4581,7 @@ int main(void) {
 
     Screen screen = SCREEN_TITLE;
     int leader_frames = 0;
+    int over_frames = 0;
     uint8_t start_level = 0;
     /* menuPlayer1Handicap / menuPlayer2Handicap ($04F3-$04F4). */
     uint8_t handicap[2] = { 0, 0 };
@@ -4573,6 +4667,7 @@ int main(void) {
                  * pace, which is the pace it is meant to be showing off. */
                 g_ai.settle = DEMO_SETTLE_FRAMES;
                 g_ai_last_piece = TT_NONE;
+                g_ai_last_partner = TT_NONE;
                 g_ai_frame = 0;
                 points_clear();
                 g_demo_over_frames = 0;
@@ -4586,6 +4681,7 @@ int main(void) {
                 g_dance_frames = 0;
                 screen = SCREEN_PLAYING;
                 match_running = true;
+                over_frames = 0;
                 /* MUSIC_SUSPEND, which is demoStart's own second act
                  * (main.asm.txt:3220-3221): the attract mode is silent but
                  * for the game's effects. */
@@ -4810,6 +4906,7 @@ int main(void) {
                 g_ai.soft_drop = true;
                 g_ai.settle = AI_SETTLE_FRAMES;
                 g_ai_last_piece = TT_NONE;
+                g_ai_last_partner = TT_NONE;
                 g_ai_frame = 0;
                 points_clear();
                 swallow_held_buttons(&g_session.game);
@@ -4829,6 +4926,7 @@ int main(void) {
                 g_dance_frames = 0;
                 screen = SCREEN_PLAYING;
                 match_running = true;
+                over_frames = 0;
                 g_front_tune = FRONT_NOTHING;
                 start_music(g_music);
                 vsync();
@@ -4918,6 +5016,7 @@ int main(void) {
                 link_play_begin();
                 screen = SCREEN_PLAYING;
                 match_running = true;
+                over_frames = 0;
                 g_front_tune = FRONT_NOTHING;
                 start_music(g_music);
                 /* The lobby's cossack is four sprites nothing on the play
@@ -5059,7 +5158,7 @@ int main(void) {
                  * showing between the ledges. */
                 clear_region(BOX_R_TX + 2, 0, BOX_W - 2, SCREEN_TH);
                 clear_stats_layer();
-                draw_field_braid(BOX_R_TX, kBraidLeft);
+                draw_field_braid(BOX_R_TX, kBraidRight);
                 draw_dancer_stage();
                 /* Nothing here redraws NEXT any more and nothing has to: it
                  * lives in the LEFT panel's top compartment in both HUDs now,
@@ -5181,9 +5280,20 @@ int main(void) {
          * on the HIGH SCORES page with a score nobody played for. The demo
          * sees itself out above. */
         bool own_board_dead = !g_session.game.player[g_view].game_active;
+        /* AND THE PLAQUE LEAVES ON ITS OWN, WHICH IS THE CARTRIDGE'S WAY.
+         * Its game over is a countdown to the high scores, not a prompt (see
+         * GAMEOVER_HOLD_FRAMES); the port sat on the plaque until somebody
+         * pressed something, so a game you lost and walked away from stayed
+         * lost on the screen. The counter runs only once EVERY board is dead
+         * — the ROM enters $F9 on `player1GameActive ORA player2GameActive`
+         * reaching zero (main.asm.txt:599-607), so in VERSUS the winner plays
+         * on and nothing is counting. */
+        bool over_expired = false;
+        if (!g_demo && !match_running && !quit_match)
+            over_expired = ++over_frames >= GAMEOVER_HOLD_FRAMES;
         /* ...and EXIT on the pause menu takes the same road, so a game you
          * quit still puts its score on the board. */
-        if (!g_demo && (quit_match ||
+        if (!g_demo && (quit_match || over_expired ||
                          ((!match_running || own_board_dead) &&
                           (pressed & GAMEOVER_RESTART)))) {
             g_pause_confirm = false;

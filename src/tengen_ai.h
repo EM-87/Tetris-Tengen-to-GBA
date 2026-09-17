@@ -71,6 +71,14 @@ void tengen_ai_reset(TengenAi *ai);
 void tengen_ai_choose(TengenAi *ai, const TengenGame *game,
                        TengenPlayerSlot slot);
 
+/* ...and the same choice for a piece that is already falling, which is what
+ * WITH COMPUTER's shared board needs: there the ROM calls computerMove for
+ * the computer on the HUMAN'S spawns too, so a hole filled in under it is
+ * noticed. Identical but for the settle clock, which keeps running. See the
+ * note on the implementation. */
+void tengen_ai_rechoose(TengenAi *ai, const TengenGame *game,
+                         TengenPlayerSlot slot);
+
 /* ...and this turns that into one frame of controller input. The cadence is
  * the ROM's: a shift every eighth frame and a rotation every sixteenth
  * (main.asm.txt:4170-4202, and the comment there says so in as many words).

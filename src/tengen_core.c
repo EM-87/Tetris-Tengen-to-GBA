@@ -1053,13 +1053,35 @@ static void apply_das(uint8_t held, uint8_t new_presses, TengenButton dir_btn,
     }
 }
 
+/* AUTO-ROTATE, AND THE RESET THAT WAS READ RIGHT OFF THE PAGE AND MISSED.
+ *
+ * Hold A or B and the piece keeps turning. The counter charges to $0F
+ * (main.asm.txt:157-166 for B, 171-180 for A) and then the ROM ORs the button
+ * into the synthesised press mask — and FALLS THROUGH into @BNotPressed,
+ * whose two instructions are `lda #$00` / `sta autoRotateCounterP1,x`. The
+ * branch that skips that store is the one taken while the counter is still
+ * UNDER fifteen (`bcc L80D5`). So firing zeroes the counter and the next turn
+ * is fifteen frames away: four a second, not sixty.
+ *
+ * This file used to say "verified: no reload, fires every frame once charged"
+ * and it was wrong — the fall-through is easy to miss because the label it
+ * falls into is named for the opposite case. Measured on the cartridge, with
+ * B held from a standing start, the piece turns on frames 1, 15, 30, 45 and
+ * 60 and $01AE reads 0 on each of them.
+ *
+ * It is NOT the DAS pattern next door: apply_das reloads to 5 of 11, so a
+ * held direction repeats every six frames after the first. Rotation reloads
+ * to nothing, so its charge and its repeat are the same fifteen. */
 static void apply_autorotate(uint8_t held, uint8_t new_presses, TengenButton btn,
                               uint8_t *counter, bool *fire) {
     *fire = false;
     if (!(held & btn)) { *counter = 0; return; }
     if (new_presses & btn) *fire = true;
     (*counter)++;
-    if (*counter >= TENGEN_AUTOROTATE_CHARGE) *fire = true; /* verified: no reload, fires every frame once charged */
+    if (*counter >= TENGEN_AUTOROTATE_CHARGE) {
+        *fire = true;
+        *counter = 0;
+    }
 }
 
 /* A BOARD TOPS OUT, AND IN COOP IT TAKES BOTH PLAYERS WITH IT.

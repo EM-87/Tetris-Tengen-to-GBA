@@ -398,7 +398,10 @@ extern const uint8_t TENGEN_LEVEL_LINE_TENS[21];
  * That fast retry is what unsticks two players standing on each other: every
  * refused shift runs the fall-timer stagger. */
 #define TENGEN_DAS_CHARGE_BLOCKED 9
-#define TENGEN_AUTOROTATE_CHARGE 15 /* frames held before auto-rotate kicks in (fires every frame after) */
+/* Both the charge AND the repeat: the ROM zeroes the counter on every fire
+ * (main.asm.txt:157-166), so a held rotate button turns the piece four times
+ * a second and no faster. See apply_autorotate. */
+#define TENGEN_AUTOROTATE_CHARGE 15
 
 /* ----------------------------------------------------------------------- *
  * Gravity and soft drop (VERIFIED, main.asm.txt:184-216, 3970-4025)

@@ -1651,9 +1651,20 @@ def computer_check(rom_path):
         return [[core.memory.u8[addr + y * TENGEN_PF_WIDTH + x]
                  for x in range(TENGEN_PF_WIDTH)] for y in range(TENGEN_PF_HEIGHT)]
 
+    # HOW LONG TO WATCH, AND WHY IT IS NOT LONGER. This used to run six
+    # thousand frames — a hundred seconds at level 0 — which was fine while a
+    # finished game sat on its plaque for ever. It does not any more: the
+    # plaque counts down to the high scores and the high scores count down to
+    # the title (GAMEOVER_HOLD_FRAMES), and from the title the attract demo's
+    # own clock starts a fresh 1 PLAYER game, whose player-2 field is walled.
+    # So a board that filled up before the sample came back with forty cells
+    # in the second field and this read it as "two boards". Long enough for
+    # the computer to stack a corner, short enough that it is still stacking.
+    WATCH = 2500
+
     # VERSUS: two boards. The computer plays its own; ours stays as it was
     # apart from the piece gravity drops on it.
-    core, screen = start(3, 6000)
+    core, screen = start(3, WATCH)
     comp = board(core, 1)
     cols = {x for row in comp for x in range(1, TENGEN_PF_WIDTH - 1) if row[x]}
     cells = sum(1 for row in comp for x in range(1, TENGEN_PF_WIDTH - 1) if row[x])
@@ -1666,11 +1677,14 @@ def computer_check(rom_path):
         print(f"  VERSUS: el ordenador asento {cells} celdas en {len(cols)} columnas")
 
     # WITH: one twelve-wide board, and the computer plays into it.
-    core2, screen2 = start(4, 6000)
+    core2, screen2 = start(4, WATCH)
     shared = board(core2, 0)
     other = sum(1 for row in board(core2, 1) for v in row if v)
     wide = sum(1 for row in shared if row[0] or row[TENGEN_PF_WIDTH - 1])
-    if other:
+    if "HIGH SCORES" in tilemap_text(core2, LEADER_HEAD_TY, 0, 30):
+        failures.append("la partida de WITH COMPUTER ya habia terminado cuando "
+                         "se miro el tablero: no prueba nada")
+    elif other:
         failures.append(f"WITH COMPUTER usa dos campos ({other} celdas en el "
                          "segundo): deberia compartir uno")
     elif not any(v for row in shared for v in row):
@@ -2432,8 +2446,13 @@ def gameover_check(rom_path):
             continue
 
         # Nothing may move behind the plaque — not the computer, not anybody.
+        # UNDER THE PLAQUE'S OWN CLOCK, though: it now leaves for the high
+        # scores after 498 frames on its own (GAMEOVER_HOLD_FRAMES, and the
+        # cartridge's own number), so this has to say its piece before then.
+        # 240 + 150 + the chord below is comfortably inside it whatever frame
+        # the board actually died on.
         before = (board_cells(core, 0), board_cells(core, 1))
-        run(core, 600)
+        run(core, 150)
         after = (board_cells(core, 0), board_cells(core, 1))
         if after != before:
             failures.append(f"{name}: despues del game over se siguio jugando "
@@ -2462,6 +2481,45 @@ def gameover_check(rom_path):
             continue
         print(f"  {name}: el tablero muere, todo se para, y START lleva a la "
                "tabla y al titulo")
+
+    # ...AND NEITHER PAGE NEEDS A BUTTON. The cartridge's game over is a
+    # countdown, not a prompt: $F9 goes into player1FallTimer as well as into
+    # gameState, one decrement every other frame takes 498 to reach zero, and
+    # the high scores then underflow the same byte to 255 and hold for 1020
+    # at one decrement every fourth. Measured on the cartridge by burying its
+    # field and watching gameState: $F9 at frame 48, $F8 at 546, the title at
+    # 1571. This port waited for a button on the first and let go of the
+    # second after 300 frames.
+    #
+    # Counted in blocks of 30 frames, so the tolerance below is a block and a
+    # half either way rather than a promise about a single frame.
+    core, _screen = enter(0)
+    bury(core, 0, False)
+    dead_at = None
+    to_table = to_title = None
+    for tick in range(120):                   # 3600 frames, sixty seconds
+        run(core, 30)
+        if dead_at is None:
+            if not player(core, 0, "active"):
+                dead_at = tick * 30
+            continue
+        if to_table is None:
+            if "HIGH SCORES" in tilemap_text(core, LEADER_HEAD_TY, 0, 30):
+                to_table = tick * 30 - dead_at
+            continue
+        if title_face(core) == face:
+            to_title = tick * 30 - dead_at - to_table
+            break
+
+    for what, got, want in (("el game over", to_table, 498),
+                             ("la tabla", to_title, 1020)):
+        if got is None:
+            failures.append(f"{what} no se va solo, hay que pulsar algo")
+        elif abs(got - want) > 45:
+            failures.append(f"{what} dura {got} frames y el cartucho {want}")
+        else:
+            print(f"  {what} se va solo tras {got} frames "
+                  f"(el cartucho, {want})")
 
     for f in failures:
         print("FALLA:", f)
@@ -2859,6 +2917,43 @@ def braid_check(rom_path):
         failures.append("al volver del banner la greca no queda como estaba")
     else:
         print("  al volver del banner la caja queda como estaba")
+
+    # ...AND THEY MUST BE THE CARTRIDGE'S OWN WALLS, THIS WAY ROUND. Mirrors
+    # of each other is not enough: swap the pair and they are still mirrors,
+    # and that is exactly the state this port shipped in for a long time --
+    # the fret of both walls pointing OUT at the HUD instead of in at the
+    # board. The rope's fret is chiral, so which tile goes on which side is
+    # the whole of it.
+    #
+    # The numbers are the cartridge's, read off its own nametable: the 1P
+    # screen walls its playfield with $6A $6B at columns 0-1 and $73 $74 at
+    # 12-13, and the coop screen hangs the same two off the header's rule with
+    # $95 $96 / $99 $9A and $97 $98 / $9B $9C. The port uploads the background
+    # tiles at their own indices, so these are the map entries as well.
+    WALL_L, WALL_R = (0x6A, 0x6B), (0x73, 0x74)
+    HANG_L = ((0x95, 0x96), (0x99, 0x9A))
+    HANG_R = ((0x97, 0x98), (0x9B, 0x9C))
+
+    def row_tiles(ty, x0, n):
+        return tuple(core.memory.u16[SCREENBLOCK_ADDR + (ty * 32 + x0 + i) * 2]
+                      & 0x3FF for i in range(n))
+
+    for name, tx, want in (("izquierda", 8, WALL_L), ("derecha", 20, WALL_R)):
+        got = row_tiles(10, tx, 2)
+        if got != want:
+            failures.append(
+                f"la pared {name} del campo es {[hex(t) for t in got]} y el "
+                f"cartucho pone {[hex(t) for t in want]}")
+        else:
+            print(f"  la pared {name} del campo es la del cartucho, "
+                  f"${want[0]:02X} ${want[1]:02X}")
+    for name, tx, want in (("izquierdo", 8, HANG_L), ("derecho", 20, HANG_R)):
+        got = (row_tiles(0, tx, 2), row_tiles(1, tx, 2))
+        if got != want:
+            failures.append(
+                f"el codo del panel {name} no es el del cartucho: {got}")
+    if not failures:
+        print("  y los dos codos son los de la regla de cabecera del cartucho")
 
     for f in failures:
         print("FALLA:", f)

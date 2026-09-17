@@ -1087,6 +1087,56 @@ static void test_a_lobby_hands_straight_over_to_a_matching_pair_of_games(void) {
  * The COMPUTER player
  * ----------------------------------------------------------------------- */
 
+/* IT LOOKS AGAIN WHEN THE BOARD MOVES UNDER IT.
+ *
+ * WITH COMPUTER is one twelve-wide board with two pieces falling into it, and
+ * the cartridge calls computerMove for the computer on EVERY spawn — the
+ * human's too (main.asm.txt:3740-3749; the `txa`/`beq` that makes VERSUS skip
+ * player 1's spawn is not on this path). This port planned once, on its own
+ * spawn, and then shoved the piece down wherever it had decided, on top of
+ * whatever the human had put there in the meantime.
+ *
+ * Built so the answer is not a matter of taste: the board is solid but for
+ * ONE open column, so the flush candidate there is the only placement worth
+ * anything. Fill that column in and the choice has to move.
+ */
+static void test_the_computer_replans_when_its_column_is_taken(void) {
+    TengenGame game;
+    TengenAi ai;
+    uint8_t first, second;
+
+    tengen_new_game(&game, 4242, 0, true, true, false);   /* coop, with AI */
+    tengen_ai_reset(&ai);
+
+    /* Four rows of floor across the whole twelve-wide board, with column 3
+     * left open to the bottom. */
+    for (int row = TENGEN_PF_HEIGHT - 4; row < TENGEN_PF_HEIGHT; row++)
+        for (int col = 0; col < TENGEN_PF_WIDTH; col++)
+            game.field[0].cell[row][col] =
+                (col == 3) ? TENGEN_CELL_EMPTY : (uint8_t)TT_I;
+
+    game.player[TENGEN_PLAYER_2].piece.current = TT_I;
+    game.player[TENGEN_PLAYER_2].piece.orientation = 0;
+    tengen_ai_choose(&ai, &game, TENGEN_PLAYER_2);
+    first = ai.target_x;
+
+    /* The piece is on its way down and the settle is over. */
+    ai.settle = 30;
+    ai.since_spawn = 100;
+
+    /* ...and the human drops something into the one column that was open. */
+    for (int row = TENGEN_PF_HEIGHT - 4; row < TENGEN_PF_HEIGHT; row++)
+        game.field[0].cell[row][3] = (uint8_t)TT_O;
+
+    tengen_ai_rechoose(&ai, &game, TENGEN_PLAYER_2);
+    second = ai.target_x;
+
+    CHECK(first != second);
+    /* And the clock it was already running on is not restarted, or the piece
+     * would stand still for half a second every time the human locked one. */
+    CHECK(ai.since_spawn == 100);
+}
+
 static void test_the_computers_piece_table_derives_from_the_bitmaps(void) {
     /* computerMoveSelectTableOffsetBy18's profile bytes are each column's
      * bottom RELATIVE TO THE PIECE'S LEFTMOST OCCUPIED COLUMN, times eight.
@@ -1853,6 +1903,47 @@ static void test_das_charges_before_repeating(void) {
     CHECK(game.player[0].piece.x == x_after_first_repeat - 1);
 }
 
+/* A HELD ROTATE BUTTON TURNS FOUR TIMES A SECOND, NOT SIXTY.
+ *
+ * The ROM charges autoRotateCounterP1 to $0F, fires, and falls straight
+ * through into the `lda #$00` / `sta autoRotateCounterP1,x` that the
+ * not-pressed case shares (main.asm.txt:157-166). The port read the
+ * fall-through as belonging to the not-pressed case alone and left the
+ * counter charged, so a held button spun the piece every frame — which is
+ * what a real console showed and what this pins. Measured on the cartridge:
+ * with B held from a standing start it turns on frames 1, 15, 30, 45, 60.
+ *
+ * The piece is an S, which has two orientations and no wall kick to confuse
+ * the count, parked in mid-air with the gravity of level 0 (33 frames a row,
+ * so nothing lands inside the window). */
+static void test_held_rotate_repeats_every_fifteen_frames(void) {
+    TengenGame game;
+    tengen_new_game(&game, 0, 0, false, false, false);
+    game.player[0].piece.current = TT_S;
+    game.player[0].piece.x = 6;
+    game.player[0].piece.y = 2;
+    game.player[0].piece.orientation = 0;
+
+    int turns[8], n = 0;
+    uint8_t last = game.player[0].piece.orientation;
+    for (int f = 0; f < 60 && n < 8; f++) {
+        tengen_step(&game, TENGEN_PLAYER_1, TENGEN_BTN_B);
+        if (game.player[0].piece.orientation != last) {
+            turns[n++] = f;
+            last = game.player[0].piece.orientation;
+        }
+    }
+    CHECK(n == 5);
+    CHECK(turns[0] == 0);   /* the fresh press, before any charge */
+    CHECK(turns[1] == 14);  /* ...and then one every fifteen frames */
+    CHECK(turns[2] == 29);
+    CHECK(turns[3] == 44);
+    CHECK(turns[4] == 59);
+    /* ...and the counter is back at zero after the last of them, which is the
+     * whole of the difference from DAS, whose reload is to 5 of 11. */
+    CHECK(game.player[0].auto_rotate_counter_b == 0);
+}
+
 static void test_gravity_curve_matches_rom_table(void) {
     /* possibleFallTimerTable, main.asm.txt:4016-4019. Levels 0-9 are a
      * straight lookup with no row dependence. */
@@ -2281,6 +2372,7 @@ int main(void) {
     test_line_clear_detects_and_collapses();
     test_level_up_thresholds_match_rom_table();
     test_das_charges_before_repeating();
+    test_held_rotate_repeats_every_fifteen_frames();
     test_gravity_curve_matches_rom_table();
     test_gravity_is_fractional_above_level_ten();
     test_coop_uses_its_own_gentler_curve();
@@ -2322,6 +2414,7 @@ int main(void) {
     test_a_lobby_hands_straight_over_to_a_matching_pair_of_games();
     test_the_wire_word_survives_a_round_trip();
     test_the_computers_piece_table_derives_from_the_bitmaps();
+    test_the_computer_replans_when_its_column_is_taken();
     test_the_computer_reads_the_board_in_the_roms_own_units();
     test_the_computer_picks_a_placement_and_walks_to_it();
     test_the_computer_keeps_playing_and_does_not_bury_itself();

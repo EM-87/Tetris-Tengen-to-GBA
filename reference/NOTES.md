@@ -72,7 +72,7 @@ the level-up rule were all initially plausible-looking and wrong — so treat
 | Piece selector ("reroll on 0 of 8", no anti-repeat) | `main.asm.txt:3688-3703` (`getNextTetromino`) | Step the RNG 5 times (`genNextPseudoRandom5x`), mask to 0..7, reroll while the result is 0. **There is no check against the previously dealt piece.** This is a real, documented Tengen quirk (unlike the Nintendo-published NES Tetris) and is why Tengen can deal long same-piece or S/Z droughts. |
 | Both players' RNGs share a seed at game start | `main.asm.txt:3319-3326` | `player1RNGSeed`/`player2RNGSeed`/`savedRNGSeed` are all copied from the same `rngSeed` when a game starts. |
 | DAS timing | `main.asm.txt:96-150` (`doSomethingWithInputDuringGameplay`) | A shift fires from two sources OR'd together: the fresh press (the caller hands the edge bits in via `player1ControllerNew`, `main.asm.txt:82`) and the DAS repeat. The counter increments on **every** frame the direction is held, the press frame included — so the first repeat lands on the 11th frame *of the hold*, not 11 frames after it. On firing it reloads to **5, not 0**, which is what makes every subsequent repeat 6 frames apart. Encoded as `TENGEN_DAS_CHARGE_FIRST`/`TENGEN_DAS_CHARGE_REPEAT`. |
-| Auto-rotate | `main.asm.txt:153-183` | Holding B (`autoRotateCounterP1/2`) or A (`autoRotateClockwiseP1/2`) for 15 frames (`$0F`) starts auto-rotating. Unlike DAS, **the counter is never reloaded down** once past 15 — it fires again *every single frame* thereafter for as long as the button is held (until release resets it to 0). This is the source of Tengen's well-known "hold a button and the piece spins wildly" behavior. B increments orientation (this file calls that "clockwise"); A decrements it ("counter-clockwise") — the ROM's own variable names for these two counters are reversed from what they do, which is worth remembering if `main.asm.txt` is read again later. |
+| Auto-rotate | `main.asm.txt:153-183` | Holding B (`autoRotateCounterP1/2`) or A (`autoRotateClockwiseP1/2`) charges a counter; at 15 frames (`$0F`) the ROM ORs the button into the synthesised press mask and the piece turns. **AND THEN THE COUNTER GOES BACK TO ZERO, so the repeat is every fifteen frames — four turns a second.** The reset is a FALL-THROUGH and is easy to miss: after `tya`/`ora`/`tay` the code runs straight into `@BNotPressed`, whose whole body is `lda #$00` / `sta autoRotateCounterP1,x`; the branch that skips it (`bcc L80D5`) is the one taken while the counter is still under fifteen. This row used to claim the opposite — "never reloaded down, fires every single frame" — and the port implemented that, which is why a held button spun the piece unrenderably fast. Measured on the cartridge (`nes_console`, B held from a standing start): it turns on frames 1, 15, 30, 45, 60 and `$01AE` reads 0 on each. Not the DAS pattern next door either, which reloads to 5 of 11 and so repeats every 6. B increments orientation (this file calls that "clockwise"); A decrements it ("counter-clockwise") — the ROM's own variable names for these two counters are reversed from what they do, which is worth remembering if `main.asm.txt` is read again later. |
 | Wall kick | `main.asm.txt:538-575` | Traced via the actual carry-flag convention of `checkPositionAndClearFlagsOnCarrySet` (confirmed by reading `main.asm.txt:1017-1073`: the routine returns **carry SET = valid position**, via the `$2D` sentinel — `$2D` starts at `$FF`/negative and a `bmi`+`sec` path returns carry set only when no collision was ever recorded during the scan). With that convention, rotation is: try the new orientation in place → if valid, keep it; else shift one column **left** and try the same new orientation → if valid, keep both; else revert orientation and position entirely. It never tries right. This matches the wiki quote already sitting in `notes.txt.txt:160`: *"Because basic rotation can fail when a piece is against the right wall, but not when the same piece is against the left wall, this game will wallkick one square to the left if basic rotation fails."* — including the (real, faithfully reproduced) oddity that it still only ever tries left even flush against the left wall, where a left kick can't possibly help. |
 | Level-up thresholds | `main.asm.txt:1473-1478` (`bonusLinesTable`), **and its two readers at `:1482-1487` and `:3145-3151`** | Bytes decode as ASCII digit pairs: 03,06,09,12,15,20,25,30,...,95. **THOSE PAIRS ARE HUNDREDS-AND-TENS, NOT TENS-AND-ONES.** Both readers compare them against `player1LinesHundreds` and `player1LinesTens` — the top two digits of the line counter — so the ones digit never enters the test and "03" means the first total whose tens digit is 3: **thirty lines**. The real curve is **30, 60, 90, 120, 150, then every 50 to 950**, which is also what the ROM's own comment above the table says ("first check at X03X, then every 30 lines until X150 at which point it's every 50 lines"). Reading the pairs as tens-and-ones gives 3, 6, 9 ... 95 — a level every three lines — and that is what this port shipped with until it was caught; the table is 21 entries either way, which is why the count matched while every value was ten times too small. `TENGEN_LEVEL_LINE_THRESHOLDS` now holds the line totals and `TENGEN_LEVEL_LINE_TENS` the ROM's own pairs. |
 | **Level is recomputed, not incremented** | `main.asm.txt:3140-3186` | On every line clear the ROM walks `bonusLinesTable` from the start, counts how many thresholds the running line total has reached, and sets the level to `start_level + that count` — committing it only if it's higher than the current level. This is not equivalent to stepping the level by one per clear: a clear that crosses two thresholds at once advances two levels. The start level offsets the whole curve, and the ones digit is clamped at '7' so the result never exceeds 17. |
@@ -173,6 +173,30 @@ right-hand cap, and `$79` is not a cap** — it is an unrelated block, which is
 what the grey stubs beside SCORE / LINES / LEVEL were. The header strip's real
 rules run the width of the NES screen and are junctions of a grid the port has
 no room for.
+
+**AND THE PLAQUE IS A COUNTDOWN, NOT A PROMPT — on a timer that is the state
+number itself.** The top-out writes one value into two places
+(`main.asm.txt:605-607`):
+
+    lda #GAMESTATE_GAMEOVER   ; $F9
+    sta gameState
+    sta player1FallTimer      ; ...and so the timer starts at 249
+
+`L9205` (`:2667-2673`) then decrements that byte on every OTHER frame
+(`lsr a` / `bcs` on `frameCounterLow`) and jumps to `initializeLeaderboard` at
+zero: **498 frames, 8.3 seconds**, with no button involved.
+
+`initializeLeaderboard` (`:2963-2995`) sets `player2FallTimer` to `$0A` and
+**does not touch player1's**, which is the zero the countdown just arrived at.
+So `L91F8`'s (`:2653-2657`) first `dec` UNDERFLOWS to 255, and at one
+decrement every fourth frame (`and #$03`) the HIGH SCORES page holds for
+**1020 frames, 17 seconds**, before `initializeTitleScreen`.
+
+Measured on the cartridge rather than taken on trust — field buried,
+`gameState` watched: `$F9` at frame 48, `$F8` at 546, the title at 1571, so
+498 and 1025, the five being where the frame counter's phase falls. The port
+used to wait for a button on the plaque and let go of the table after 300
+frames, which is the wrong way round on both counts.
 
 ## The menu loses two columns, and not from the middle
 
@@ -590,7 +614,38 @@ three, which is the same as one step the other way. It never presses DOWN — th
 computer does not soft-drop, so every piece it places takes the whole of
 gravity to land. Playing it out on the host it lasts forty to ninety pieces and
 clears a handful of lines before burying itself, which is about what the
-cartridge's does.
+cartridge's does. It also has **no settling delay of any kind**: the shift is
+off `frameCounterLow` alone, so a piece can be yanked sideways on the very
+frame it spawns. The port gave the attract demo a thirty-frame pause on the
+argument that an instant twitch reads as a machine; what it actually reads as
+is a slower computer, and it is gone.
+
+**AND IN "WITH COMPUTER" IT RE-PLANS ON THE HUMAN'S SPAWNS TOO** — which is
+the whole of its manners on a shared board, and hangs on one `txa`/`beq`.
+`getNextTetromino` ends (`:3740-3749`) with
+
+```
+    lda menuGameMode
+    cmp #MENU_GAMEMODE_VS      ; $03
+    bcc return                 ; 2 PLAYER, COOPERATIVE: no computer at all
+    bne L9992                  ; $04 WITH COMPUTER: always
+    txa                        ; $03 VERSUS...
+    beq return                 ; ...only when the computer itself spawned
+L9992:
+    ldx #$01
+    jmp computerMove
+```
+
+VERSUS is two separate boards, so player 1's spawn is none of the computer's
+business and the `beq` sends it home. WITH COMPUTER is ONE twelve-wide field,
+and there the branch is skipped: every spawn, the human's included, calls
+`computerMove` for player 2 — which re-reads the board and re-picks a column
+for the piece the computer is **still holding**. That is how the cartridge
+notices that the hole it was aiming at has just been filled in. The port
+committed on its own spawn and never looked again, so it planted its piece on
+top of whatever the human had put there; `tengen_ai_rechoose` is that second
+look, identical to the first but for the port's own settle clock, which keeps
+running rather than restarting a piece halfway down.
 
 ## The attract demo
 

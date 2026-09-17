@@ -917,6 +917,21 @@ def read_banner(nametable, attributes):
 # the HUD: a ten-column box spends four columns on its frame and leaves six.
 BRAID_CORNERS = {           # (column, row) of each corner's top-left tile
     "tl": (0, 0), "tr": (30, 0), "bl": (0, 28), "br": (30, 28),
+    # THE TWO JUNCTIONS THE ROPE HANGS A WALL FROM, and the reason the port's
+    # panels can be the cartridge's own shape rather than a mirror of it.
+    #
+    # Rows 8-9 of the 1P screen rule the bottom of the header across the whole
+    # width, and where the banner box's two walls start the rule TURNS DOWN
+    # into them: $95 $96 / $99 $9A at columns 18-19 above a $6A $6B wall, and
+    # $97 $98 / $9B $9C at columns 12-13 above a $73 $74 one. The COOP screen
+    # has the same two at columns 8-9 and 22-23 -- the same rule, the same
+    # turn, and there it is hanging the walls of a twelve-wide field with an
+    # open panel either side, which is exactly the port's layout.
+    #
+    # They are named for the wall they carry, because that is what picks them:
+    # a panel with the board on its right ends its top run in "hang_left" and
+    # runs $6A $6B down from it.
+    "hang_left": (18, 8), "hang_right": (12, 8),
 }
 BRAID_RUNS = {              # a repeating cell of each side, and its shape
     "top": ((10, 0), (1, 2)),      # one column, two rows
@@ -1297,6 +1312,16 @@ def emit_screen_header(tiles, palettes, keep_cols, source, stats):
         + ", ".join("{ " + ", ".join(f"0x{v:02X}" for v in row) + " }"
                     for row in braid[0][name]) + " };"
         for name in ("tl", "tr", "bl", "br")
+    ] + [
+        "/* ...and the two junctions the header's rule turns down into a wall",
+        " * at: named for the wall they carry. See BRAID_CORNERS in",
+        " * tools/extract_assets.py. */",
+    ] + [
+        f"static const uint8_t kBraidHang{name.split('_')[1].capitalize()}"
+        "[2][2] = { "
+        + ", ".join("{ " + ", ".join(f"0x{v:02X}" for v in row) + " }"
+                    for row in braid[0][name]) + " };"
+        for name in ("hang_left", "hang_right")
     ] + [
         "/* One repeating cell of each side: the top and bottom are one column",
         " * by two rows, the sides two columns by one row. */",
