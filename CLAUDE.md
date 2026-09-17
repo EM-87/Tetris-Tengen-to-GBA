@@ -355,11 +355,33 @@ running ROM; only the side panels need reflowing).
    TETRIS" over St Basil's in the green fret; `proto_c` is the same screen
    with the logo replaced by "THE SOVIET MIND GAME". All three draw out of
    CHR bank 1, and all three now ship. The charblock does not cap it either:
-   they share one window and are re-uploaded on the swap. Still to do: the
-   prototype PIECE art, which is there and is completely different — flat
-   solid squares at $01-$03 rather than the release's shaded joined blocks —
-   but how their game maps a cell to a tile is not traced, so putting it in
-   would be inventing it.
+   they share one window and are re-uploaded on the swap.
+31. ~~AND THE SKIN DOES NOT STOP AT THE TITLE~~ — done, and it cost no new
+   draw path at all. Each prototype plays on a screen of its own: a GREEN
+   FRET where the release has its blue braid, and blocks that are flat or
+   striped squares rather than shaded joined ones. Both come across as
+   TWENTY-TWO TILE SLOTS re-uploaded in place (704 bytes, well inside a
+   vblank) plus one palette bank, so the same `set_map_tile` calls draw the
+   same tile ids and different art comes out. The frame is lifted off each
+   dump's play screen BY POSITION — the three number their tiles quite
+   differently, $93-$9A in two of them and $08-$17 in the third, but all
+   three put the same parts in the same places — and the two elbows the
+   port's panels need come from where a prototype hangs its banner box off
+   the header rule, exactly as the release's do.
+   **THE ONE THING THAT IS NOT COSMETIC IS THE CELL ENCODING**, and it is
+   measured rather than assumed: the release has fourteen joined-block
+   graphics at $01-$0E and `kTileIds` picks one per cell; the prototypes have
+   SEVEN, one per tetromino, and write all four of a piece's cells with it.
+   Proto_b was left playing itself and its playfield watched — every piece
+   that settled wrote four cells of ONE value, never four of four. So
+   `piece_id_cells` on TengenGame makes `lock_piece` store the piece's id, and
+   `piece_cell_tile` in gba/main.c does the same for the falling piece and the
+   preview. Occupancy is `cell != 0` everywhere and TT_WALL is 15 either way,
+   so nothing downstream notices. **NOT OVER THE CABLE**: a linked match is
+   two consoles comparing state byte for byte, and one of them in a
+   prototype's clothes would diverge in the playfield itself, so
+   `skin_begin_match` refuses there. The MENUS ask for the release back too —
+   their frame comes out of the same slots in the cartridge's blue.
 30. ~~Tetris Tengen XE~~ — done, behind the same L+R chord: levels 0-19 on the
    settings screen, the mod's longer fall-timer and mask tables, and the cap
    at 19 instead of 17. **AND THAT IS ALL THE MOD IS.** Its ten IPS records
@@ -394,9 +416,10 @@ does not is a bug.
 - **Each dancer's choreography script.** Traced as far as the driver (`LB015`)
   and no further; the port's dancers walk the pose table from staggered starts
   instead of following their own programs. See reference/NOTES.md.
-- **The prototype cartridges' PIECE art**, which is flat solid squares at
-  `$01-$03` rather than the release's shaded joined blocks. How those builds
-  map a cell to a tile is not traced, so putting it in would be inventing it.
+- **A skinned board over the LINK CABLE.** A skin changes what a settled cell
+  holds (roadmap 31), and a linked match is two consoles comparing state byte
+  for byte, so one of them wearing a prototype's clothes would be a real
+  divergence. The title's skin still cycles; a 2P board stays the release's.
 - **The line counter's digit clamp** at 10000 (`main.asm.txt:3129-3133`). The
   score's wrap at 999999 IS reproduced; reaching ten thousand lines in one
   game is not a scenario worth carrying a bug for.

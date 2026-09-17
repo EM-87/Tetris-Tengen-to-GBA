@@ -707,6 +707,136 @@ static void upload_proto_tiles(int skin) {
 }
 #endif
 
+#if SCREEN_PROTO_AVAILABLE && SCREEN_SKIN_PLAY
+/* A SKIN THAT DOES NOT STOP AT THE TITLE.
+ *
+ * The prototypes play on screens of their own — a green fret where the
+ * release has its blue braid, and blocks that are flat or striped squares
+ * rather than its shaded joined ones — and the skin used to be the title art
+ * and nothing else.
+ *
+ * WHAT MAKES THIS CHEAP is that all four builds draw a settled cell with the
+ * cell's own nibble as the tile index (measured on proto_b, playfield RAM
+ * against nametable; see tools/extract_assets.py). So there is no second
+ * layout, no second draw path and no second set of tile numbers: a skin is
+ * TWENTY-TWO TILE SLOTS re-uploaded in place. The same set_map_tile calls
+ * draw the same ids and different art comes out.
+ *
+ * Which twenty-two: the seven blocks, the panel's top run, the two walls, the
+ * two elbows over them, and the shelf. 704 bytes, well inside a vblank, so
+ * unlike the title's 8KB swap this needs no blank screen to hide behind.
+ *
+ * Skin 0 is the release, and putting it back is the same loop reading the
+ * release's own tile data — which is why kGameTiles stays around rather than
+ * being uploaded once and forgotten. */
+static void upload_skin_play(int skin) {
+    vu16 *base = MEM_CHARBLOCK(CHARBLOCK);
+    for (int i = 0; i < SKIN_SLOT_COUNT; i++) {
+        unsigned slot = kSkinSlots[i];
+        const uint8_t *src = skin < 0 ? &kGameTiles[slot * 32]
+                                      : &kSkinTiles[skin][i * 32];
+        vu16 *dst = base + slot * 16;
+        for (int b = 0; b < 32; b += 2)
+            dst[b / 2] = (uint16_t)(src[b] | (src[b + 1] << 8));
+    }
+}
+
+/* ...and the colours the frame is drawn in. The braid's bank is the one thing
+ * a skinned board needs from the prototype's palette; the blocks keep the
+ * release's per-level colours, which cycle every ten levels and are the same
+ * mechanism in every build.
+ *
+ * kRomPalette_bg_skin, NOT kRomPalette_bg_proto: a build's title palette and
+ * its game palette are two separate uploads, and taking the title's here put
+ * proto_b's green fret on the screen in the blue and red of its cathedral. */
+static void upload_skin_frame_palette(int skin) {
+    const uint8_t *set = skin < 0 ? kRomPalette_bg_game
+                                  : kRomPalette_bg_skin[skin];
+    int bank = skin < 0 ? BRAID_BANK - PAL_GAME_BASE : kSkinFrameBank[skin];
+    vu16 *dst = MEM_PALETTE + BRAID_BANK * 16;
+    for (int i = 0; i < 4; i++) dst[i] = nes_colour_to_gba(set[bank * 4 + i]);
+}
+#endif
+
+/* WHICH SKIN THE TILE SLOTS ARE HOLDING RIGHT NOW. 0 is the release; 1..N
+ * index the prototypes in the order the dumps were given to
+ * extract_assets.py. The title cycles it with L+R and the board follows,
+ * which is the whole of "the skin does not stop at the title". */
+static uint8_t g_title_skin;
+
+/* Puts the board into (or back out of) a prototype's clothes. Cheap enough to
+ * call on every repaint — it compares first and does nothing when the slots
+ * already hold what is wanted. `skin` is -1 for the release.
+ *
+ * THE MENUS ASK FOR THE RELEASE BACK. Their frame is drawn out of the same
+ * charblock slots as the board's, but in the MENU palette bank, so a
+ * prototype's fret would be there in the cartridge's blue. The board is where
+ * a skin belongs; see the callers. */
+static void apply_skin(int skin) {
+#if SCREEN_PROTO_AVAILABLE && SCREEN_SKIN_PLAY
+    static int loaded = -1;
+    if (skin == loaded) return;
+    loaded = skin;
+    upload_skin_play(skin);
+    upload_skin_frame_palette(skin);
+#else
+    (void)skin;
+#endif
+}
+
+/* Whether the BOARD is in a skin at the moment, which is not quite the same
+ * question as which title screen is up.
+ *
+ * NOT OVER THE CABLE. A skinned board stores the piece's id in a settled cell
+ * where the release stores a joined-block tile (see piece_id_cells), and a
+ * linked match is two consoles simulating the same game and comparing state
+ * byte for byte. One of them wearing a prototype's clothes and the other not
+ * would be a divergence in the playfield itself, not just on the screen. The
+ * title's skin still cycles; the board simply stays the release's for a 2P
+ * match, which is also the only mode where the other player did not choose
+ * it. */
+static bool g_skin_on;
+
+/* Called as a match starts: decides whether this one is skinned, and tells
+ * the core to store its cells the way the skin's art is indexed. `linked` is
+ * a match over the cable, which never is — see g_skin_on. */
+static void skin_begin_match(bool linked) {
+#if SCREEN_PROTO_AVAILABLE && SCREEN_SKIN_PLAY
+    g_skin_on = !linked && g_title_skin != 0;
+#else
+    (void)linked;
+    g_skin_on = false;
+#endif
+    g_session.game.piece_id_cells = g_skin_on;
+}
+
+/* ...and what the board should be wearing, from the title's own choice. */
+static int play_skin(void) {
+#if SCREEN_PROTO_AVAILABLE && SCREEN_SKIN_PLAY
+    return (g_skin_on && g_title_skin) ? (int)g_title_skin - 1 : -1;
+#else
+    return -1;
+#endif
+}
+
+/* WHICH TILE ONE CELL OF A PIECE IS DRAWN WITH, and it is not the same
+ * question in the two builds.
+ *
+ * The release has fourteen block graphics and kTileIds picks one per cell so
+ * that four squares read as one joined shape. The prototypes have seven, one
+ * per tetromino, and draw all four cells with it — measured, by letting
+ * proto_b play itself and watching the playfield: every piece that settled
+ * wrote four cells of ONE value, never four of four.
+ *
+ * So under a skin the tile is the piece's own id. This is the falling piece
+ * and the preview; the settled field is the same rule inside the core, where
+ * lock_piece is what writes it (see piece_id_cells). */
+static uint8_t piece_cell_tile(TengenTetromino piece, uint8_t orientation,
+                                int occupied_index) {
+    if (play_skin() >= 0) return (uint8_t)piece;
+    return tengen_tile_id_for_cell(piece, orientation, occupied_index);
+}
+
 /* The cartridge's whole sprite bank, uploaded once. Both the dancers and the
  * line-clear puff live in it, so every sprite tile id in this file is the
  * ROM's own index. */
@@ -1364,6 +1494,7 @@ static void draw_number_blank(int tx, int ty, uint32_t value, int digits, int ba
  * playfield keeps the frame it had; the rope simply carries on round the HUD
  * instead of stopping. */
 static void draw_static_screen(void) {
+    apply_skin(play_skin());
     if (g_session.game.coop) {
         /* COOP IS THE CARTRIDGE'S OWN SCREEN, whole. There is no reflow to do
          * and no boxes to close: screen 5 already puts a twelve-wide field in
@@ -2083,7 +2214,7 @@ static void draw_next_piece(int tx, int ty) {
     for (int r = 0; r < 4; r++) {
         for (int c = 0; c < 4; c++) {
             if (!tengen_piece_occupies(next, 0, r, c)) continue;
-            uint8_t tile = tengen_tile_id_for_cell(next, 0, occupied);
+            uint8_t tile = piece_cell_tile(next, 0, occupied);
             occupied++;
             if (r >= 3) continue;
             uint16_t entry = WITH_BANK(tile, PAL_NEXT_BANK);
@@ -2611,7 +2742,7 @@ static void draw_field(void) {
             if (cells[i].row < 0) continue;
             int col = cells[i].col - field_col0();
             if (col < 0 || col >= field_cols()) continue;
-            uint8_t tile = tengen_tile_id_for_cell(current, sp->piece.orientation, i);
+            uint8_t tile = piece_cell_tile(current, sp->piece.orientation, i);
             set_map_tile(field_tx() + col, FIELD_TY + cells[i].row,
                           WITH_BANK(tile, bank));
         }
@@ -2959,10 +3090,6 @@ static void clear_screen(void) {
  * and L+R has nothing to switch to. See tools/extract_assets.py.
  * ----------------------------------------------------------------------- */
 #define TITLE_SKIN_COUNT (1 + SCREEN_PROTO_COUNT)
-
-/* 0 is the release; 1..SCREEN_PROTO_COUNT index the prototypes in the order
- * the dumps were given to extract_assets.py. */
-static uint8_t g_title_skin;
 
 /* No two screens are ever up at once, so whichever prototype is showing puts
  * its palettes in the title's own four banks rather than asking for four
@@ -3334,6 +3461,7 @@ static void draw_text_centred(int ty, const char *text, int bank) {
 }
 
 static void draw_menu_frame(void) {
+    apply_skin(-1);     /* the menus are the cartridge's; see apply_skin */
     set_offset_layer(MENU_TEXT_SHIFT_PX);
     for (int ty = 0; ty < SCREEN_MENU_H_TILES; ty++) {
         for (int tx = 0; tx < SCREEN_MENU_W; tx++) {
@@ -4682,6 +4810,7 @@ int main(void) {
                 screen = SCREEN_PLAYING;
                 match_running = true;
                 over_frames = 0;
+                skin_begin_match(false);
                 /* MUSIC_SUSPEND, which is demoStart's own second act
                  * (main.asm.txt:3220-3221): the attract mode is silent but
                  * for the game's effects. */
@@ -4927,6 +5056,7 @@ int main(void) {
                 screen = SCREEN_PLAYING;
                 match_running = true;
                 over_frames = 0;
+                skin_begin_match(false);
                 g_front_tune = FRONT_NOTHING;
                 start_music(g_music);
                 vsync();
@@ -5017,6 +5147,7 @@ int main(void) {
                 screen = SCREEN_PLAYING;
                 match_running = true;
                 over_frames = 0;
+                skin_begin_match(true);
                 g_front_tune = FRONT_NOTHING;
                 start_music(g_music);
                 /* The lobby's cossack is four sprites nothing on the play

@@ -267,6 +267,25 @@ typedef struct {
      * Nothing else about the game changes, because nothing else about the
      * game is what the mod changes. */
     bool xe;
+    /* A SETTLED CELL HOLDS THE PIECE'S OWN ID, NOT A JOINED-BLOCK TILE.
+     *
+     * Purely cosmetic, and it is the PROTOTYPE cartridges' way of drawing a
+     * board rather than the release's. The release has fourteen block
+     * graphics at $01-$0E and kTileIds picks one per cell so a locked piece
+     * reads as a single joined shape; the prototype builds have seven, one
+     * per tetromino — $01-$03 flat and $04-$07 striped — and draw all four of
+     * a piece's cells with the same one, which is how they tell seven pieces
+     * apart on a board with one palette to share.
+     *
+     * The port's skins are those builds' art, so a skinned board has to store
+     * what their art is indexed by. Nothing downstream notices: occupancy is
+     * `cell != 0` everywhere, the ids 1-7 are as nonzero as the tiles 1-14
+     * were, and TT_WALL is 15 in either case. The caller sets it after
+     * tengen_new_game, which clears it; `make trace` never does, so the
+     * cartridge comparison still sees the cartridge's own tile numbers.
+     *
+     * See kSkinSlots in the generated gba/screen_proto.h. */
+    bool piece_id_cells;
     /* gameState == GAMESTATE_PAUSED. Start toggles it (pauseOrUnpause,
      * main.asm.txt:7184-7215) and it is where the cheat codes are entered. */
     bool paused;

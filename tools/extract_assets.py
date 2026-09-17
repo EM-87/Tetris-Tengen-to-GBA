@@ -1682,6 +1682,178 @@ def compose_proto_title(screen: bytes, rows, cols):
     return tiles, banks
 
 
+# ---------------------------------------------------------------------------
+# A SKIN IS NOT ONLY A TITLE SCREEN.
+#
+# Each prototype plays on a screen of its own — a GREEN FRET where the release
+# has its blue braid, its own background colour, and BLOCKS that are flat or
+# striped squares rather than the release's shaded joined ones. None of that
+# had ever been read, on the grounds (recorded in CLAUDE.md) that "how their
+# game maps a cell to a tile is not traced".
+#
+# IT IS TRACED NOW, AND IT IS THE SAME RULE: a cell's nibble IS its tile
+# index. Measured by letting proto_b play itself for three thousand frames and
+# putting its playfield RAM beside its nametable — $2 drew $02, $3 drew $03,
+# $5 drew $05, $6 drew $06, every one of them in palette bank 0, exactly as the
+# release does it. So the port needs no new drawing code for a skinned
+# playfield: it needs the ART THAT LIVES IN THOSE SLOTS.
+#
+# Which is what this does. The prototype is walked into a game, its play screen
+# is read back, and a handful of its tiles are lifted out BY POSITION and
+# handed to the release's own tile numbers. Nothing in gba/main.c changes: the
+# same set_map_tile calls draw the same tile ids, and a skin swap is a re-upload
+# of twenty-odd slots.
+#
+# WHY BY POSITION. The three dumps number their tiles completely differently —
+# proto_a and proto_b frame the screen with $93-$9A, proto_c with $08-$17 —
+# but all three put the same PARTS in the same PLACES, because all three draw
+# a two-tile-thick border round a 32x30 screen. So the corner at (0,0) is the
+# corner at (0,0) in any of them.
+SKIN_PLAY_PRESSES = 10        # how many STARTs to try before giving up
+SKIN_PLAY_SETTLE = 50         # ...and how long to wait after each
+GAMESTATE_ADDR = 0x29
+GAMESTATE_PLAYING = 0x00
+
+# The release slot(s) each piece of the prototype's frame is handed to, and
+# where on its play screen that piece is. Read row-major within the block.
+#
+# The two ELBOWS are the pair this port needed and the screen border does not
+# have: a run arriving from one side and turning DOWN into a wall. The
+# prototypes have them at their own top corners, and the wall each one carries
+# says which release slot it answers to — a prototype's top-LEFT corner stands
+# over the tile its screen uses on the RIGHT of an open area, so it is the
+# release's kBraidHangRight.
+SKIN_FRAME = (
+    ((0x89, 0x8E),             (10, 0, 1, 2)),   # the panel's top run
+    ((0x6A, 0x6B),             (0, 10, 2, 1)),   # the wall on the board's left
+    ((0x73, 0x74),             (30, 10, 2, 1)),  # ...and on its right
+    ((0x95, 0x96, 0x99, 0x9A), (30, 0, 2, 2)),   # the elbow over the left wall
+    ((0x97, 0x98, 0x9B, 0x9C), (0, 0, 2, 2)),    # ...and over the right one
+)
+# The blocks, straight across: the cell's nibble is the tile in both. SEVEN of
+# them, and that is the whole difference between these builds and the release.
+#
+# The release has FOURTEEN block graphics, $01-$0E, and kTileIds in
+# src/tengen_core.c picks one per cell so that a locked piece reads as one
+# smooth JOINED shape rather than as four separate squares. The prototypes
+# have seven — one per TETROMINO — and draw all four of a piece's cells with
+# the same one: $01-$03 are flat solid squares and $04-$07 are striped, which
+# is how they tell seven pieces apart on a board that has one palette to
+# share. Their $08 and up is not block art at all; it is lettering in proto_b
+# and the green fret itself in proto_c, which is what a first pass at this got
+# on the screen by taking fourteen.
+SKIN_BLOCKS = tuple(range(1, 8))
+# ...and the GARBAGE, which is not a piece and so has no tile of its own in
+# either build. initHandicapGarbage writes $F into a cell (TENGEN_CELL_WALL),
+# and the release has art there; a prototype's seven stop at $07, so without
+# this a handicapped skinned board came up with the release's shaded blocks
+# buried under the prototype's flat ones. It takes the prototype's $01, the
+# plain solid square, which is what a buried row is.
+SKIN_GARBAGE_SLOT = 0x0F
+SKIN_GARBAGE_SOURCE = 0x01
+# The SHELF. The port rules its panels with the coop screen's dancers' ledge
+# ($9D), and a prototype has no coop screen to take one from. What it does
+# have is the rule under SCORE / LINES / LEVEL, a horizontal line run right
+# across the header — so the shelf is the tile that repeats most in row 3 of
+# its play screen, which is that rule and nothing else.
+SKIN_LEDGE_SLOT = 0x9D
+SKIN_LEDGE_ROW = 3
+
+
+def boot_prototype_game(path):
+    """Walk a prototype dump into a GAME and read its play screen back.
+
+    Returns (nametable, attributes, palette, pattern_table) or (None, reason).
+    START is pressed until gameState says PLAYING, checking BEFORE each press
+    so the one that starts the game is never followed by the one that pauses
+    it: these builds walk a different number of menus each (proto_c has a
+    HANDICAP screen the other two do not), and counting presses would need a
+    recipe per dump.
+    """
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from nes_console import NesConsole, BTN
+
+    nes = NesConsole(path)
+    nes.run(120)
+    for _ in range(SKIN_PLAY_PRESSES):
+        if nes.ram(GAMESTATE_ADDR) == GAMESTATE_PLAYING:
+            break
+        nes.run(6, BTN["START"])
+        nes.run(SKIN_PLAY_SETTLE)
+    if nes.ram(GAMESTATE_ADDR) != GAMESTATE_PLAYING:
+        return None, (f"{path} no llego a una partida en "
+                      f"{SKIN_PLAY_PRESSES} pulsaciones de START")
+    nes.run(30)
+    nt = bytes(nes.bus.vram[0:0x3C0])
+    at = bytes(nes.bus.vram[0x3C0:0x400])
+    if not any(nt):
+        return None, f"{path} llego a jugar con la pantalla en blanco"
+    # PPUCTRL bit 4 says which half of the CHR the background reads from, and
+    # unlike the title screens' uploads this one is read while the screen is
+    # actually being drawn, so it is simply true.
+    return (nt, at, bytes(nes.bus.pal[:16]),
+            1 if (nes.bus._ctrl & 0x10) else 0), None
+
+
+def read_skin_play(path, chr_rom):
+    """The prototype's frame and block art, in the release's tile slots."""
+    got, why = boot_prototype_game(path)
+    if got is None:
+        return None, why
+    nt, at, palette, bank = got
+    if (bank + 1) * CHR_BANK > len(chr_rom):
+        return None, f"{path} no tiene banco CHR {bank} para su pantalla de juego"
+    chr_bank = chr_rom[bank * CHR_BANK:(bank + 1) * CHR_BANK]
+
+    def art(tile):
+        return pixels_to_gba_4bpp(tile_2bpp_to_pixels(
+            chr_bank[tile * NES_TILE_BYTES:(tile + 1) * NES_TILE_BYTES]))
+
+    slots, tiles = [], []
+    for release_slots, (c0, r0, w, h) in SKIN_FRAME:
+        src = [nt[(r0 + dr) * 32 + c0 + dc] for dr in range(h) for dc in range(w)]
+        if len(src) != len(release_slots):
+            raise ValueError("SKIN_FRAME entry does not match its slot count")
+        for slot, tile in zip(release_slots, src):
+            slots.append(slot)
+            tiles.append(art(tile))
+    for slot in SKIN_BLOCKS:
+        slots.append(slot)
+        tiles.append(art(slot))
+    slots.append(SKIN_GARBAGE_SLOT)
+    tiles.append(art(SKIN_GARBAGE_SOURCE))
+    # The header's rule, as the panel shelf. Ignore the blank.
+    row = [nt[SKIN_LEDGE_ROW * 32 + c] for c in range(32)]
+    counts = {}
+    for t in row:
+        if t:
+            counts[t] = counts.get(t, 0) + 1
+    if not counts:
+        return None, f"{path}: la fila {SKIN_LEDGE_ROW} de su partida esta vacia"
+    slots.append(SKIN_LEDGE_SLOT)
+    tiles.append(art(max(counts, key=counts.get)))
+
+    # THE FRAME'S OWN COLOURS. Every one of its tiles has to be in one
+    # attribute bank or the port cannot hand it one; the release's border is
+    # the same way and read_braid_frame says so too.
+    banks = set()
+    for _slots, (c0, r0, w, h) in SKIN_FRAME:
+        for dr in range(h):
+            for dc in range(w):
+                banks.add(attribute_palette(at, c0 + dc, r0 + dr))
+    if len(banks) != 1:
+        return None, (f"{path}: el marco de su partida usa los bancos "
+                      f"{sorted(banks)}, no uno solo")
+    frame_bank = banks.pop()
+    return {
+        "slots": slots,
+        "tiles": tiles,
+        "palette": palette,
+        "frame_bank": frame_bank,
+        "bank": bank,
+    }, None
+
+
 def read_prototype(path):
     """One skin, as a dict, or (None, reason) if this dump cannot give one."""
     try:
@@ -1713,6 +1885,9 @@ def read_prototype(path):
     if (bank + 1) * CHR_BANK > len(chr_rom):
         return None, f"{path} no tiene banco CHR {bank}"
     tiles, banks = compose_proto_title(screen, rows, cols)
+    play, play_why = read_skin_play(path, chr_rom)
+    if play is None:
+        print(f"  {path}: sin pantalla de juego ({play_why})")
     return {
         "label": label,
         "how": how,
@@ -1722,6 +1897,7 @@ def read_prototype(path):
         "palette": palette,
         "chr": convert_tiles(chr_rom[bank * CHR_BANK:(bank + 1) * CHR_BANK]),
         "bank": bank,
+        "play": play,
     }, None
 
 
@@ -1782,8 +1958,70 @@ def emit_proto_header(skins, notes):
            "static const uint8_t kProtoTiles[SCREEN_PROTO_COUNT]"
            "[TILES_PROTO_BYTES] = {",
            [s["chr"] for s in skins], lambda b: f"0x{b:02X}", 16)
+    lines += emit_skin_play(skins)
     lines += ["#endif /* SCREEN_PROTO_H */", ""]
     return "\n".join(lines)
+
+
+def emit_skin_play(skins):
+    """The part of a skin that is not its title: the frame and the blocks."""
+    plays = [s.get("play") for s in skins]
+    if not all(plays):
+        return [
+            "",
+            "/* AT LEAST ONE DUMP WOULD NOT GIVE UP ITS PLAY SCREEN, so no skin",
+            " * changes the board. The title skins above still work; this is the",
+            " * one part of the feature that is all or nothing, because a board",
+            " * half in one build's colours and half in another's is worse than",
+            " * either. */",
+            "#define SCREEN_SKIN_PLAY 0",
+            "",
+        ]
+    slots = plays[0]["slots"]
+    for p in plays[1:]:
+        if p["slots"] != slots:
+            raise ValueError("the skins disagree about which slots they fill")
+    lines = [
+        "",
+        "/* THE PLAY SCREEN'S OWN COLOURS, which are NOT the title's. Read off",
+        " * the PPU while the dump was actually playing, because that is the",
+        " * only place they exist: a build's title palette and its game palette",
+        " * are two different uploads, and using the title's here put proto_b's",
+        " * green fret on the screen in the blue and red of its cathedral. */",
+    ]
+    _table(lines,
+           "static const uint8_t kRomPalette_bg_skin[SCREEN_PROTO_COUNT][16] = {",
+           [p["palette"] for p in plays], lambda b: f"0x{b:02X}", 16)
+    lines += [
+        "",
+        "/* THE BOARD'S OWN SKIN: the tiles a prototype puts in the RELEASE's",
+        " * slots, so nothing in gba/main.c has to know a skin is on. A cell's",
+        " * nibble is its tile index in these builds exactly as it is in the",
+        " * release (measured; see tools/extract_assets.py), and the frame is",
+        " * lifted off their play screens by POSITION rather than by number,",
+        " * because the three of them number their tiles quite differently and",
+        " * put the same parts in the same places. */",
+        "#define SCREEN_SKIN_PLAY 1",
+        f"#define SKIN_SLOT_COUNT {len(slots)}",
+        "static const uint8_t kSkinSlots[SKIN_SLOT_COUNT] = {",
+        "    " + ", ".join(f"0x{s:02X}" for s in slots),
+        "};",
+        "/* ...and the colours its frame is drawn in, as an index into that",
+        " * skin's own background palette above. */",
+        "static const uint8_t kSkinFrameBank[SCREEN_PROTO_COUNT] = { "
+        + ", ".join(str(p["frame_bank"]) for p in plays) + " };",
+    ]
+    lines += [
+        "/* One skin's art, flat: thirty-two bytes a slot, in kSkinSlots'",
+        " * order. Flat rather than [SKIN_SLOT_COUNT][32] so the initialiser",
+        " * needs no inner braces. */",
+    ]
+    _table(lines,
+           "static const uint8_t kSkinTiles[SCREEN_PROTO_COUNT]"
+           "[SKIN_SLOT_COUNT * 32] = {",
+           [[b for tile in p["tiles"] for b in tile] for p in plays],
+           lambda b: f"0x{b:02X}", 16)
+    return lines
 
 
 def emit_proto_absent_header(why):

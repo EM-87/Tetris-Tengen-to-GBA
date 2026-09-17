@@ -644,8 +644,12 @@ static void lock_piece(TengenGame *game, TengenPlayerSlot slot) {
     for (int r = 0; r < 4; r++) {
         for (int c = 0; c < 4; c++) {
             if (!tengen_piece_occupies(p->piece.current, p->piece.orientation, r, c)) continue;
-            uint8_t tile = tengen_tile_id_for_cell(p->piece.current, p->piece.orientation,
-                                                    occupied_index);
+            /* The prototypes' way, when a skin asks for it: one tile for the
+             * whole piece, the piece's own id. See piece_id_cells. */
+            uint8_t tile = game->piece_id_cells
+                ? (uint8_t)p->piece.current
+                : tengen_tile_id_for_cell(p->piece.current, p->piece.orientation,
+                                           occupied_index);
             occupied_index++;
 
             int visible_row = p->piece.y + r - TENGEN_ROM_ROW_ORIGIN;

@@ -1087,6 +1087,61 @@ static void test_a_lobby_hands_straight_over_to_a_matching_pair_of_games(void) {
  * The COMPUTER player
  * ----------------------------------------------------------------------- */
 
+/* A SKINNED BOARD STORES THE PIECE, NOT THE JOINED-BLOCK TILE.
+ *
+ * The release has fourteen block graphics and kTileIds picks one per cell so
+ * four squares read as one shape; the prototype cartridges have seven, one
+ * per tetromino, and draw all four cells with it. Measured on proto_b by
+ * letting it play itself and watching its playfield: every piece that settled
+ * wrote four cells of ONE value, never four of four.
+ *
+ * So `piece_id_cells` makes lock_piece store the piece's id, and this pins
+ * both halves of it — the release's four different tiles, and the skin's four
+ * identical ones — because the difference is invisible in a screenshot of a
+ * single square and very visible across a board.
+ */
+static void test_a_skin_stores_one_tile_for_the_whole_piece(void) {
+    for (int skinned = 0; skinned < 2; skinned++) {
+        TengenGame game;
+        tengen_new_game(&game, 777, 0, false, false, false);
+        game.piece_id_cells = skinned != 0;
+        /* The S in its first orientation: four cells, two rows, and in the
+         * release four DIFFERENT tiles ($0B,$03,$01,$0C). */
+        game.player[0].piece.current = TT_S;
+        game.player[0].piece.orientation = 0;
+        game.player[0].piece.x = 6;
+        game.player[0].piece.y = TENGEN_PF_HEIGHT + TENGEN_ROM_ROW_ORIGIN - 4;
+
+        /* Drop it to the floor and let it lock. */
+        for (int i = 0; i < 400; i++) {
+            tengen_step(&game, TENGEN_PLAYER_1, TENGEN_BTN_DOWN);
+            if (game.player[0].piece.current != TT_S) break;
+        }
+
+        uint8_t seen[16] = {0};
+        int cells = 0;
+        for (int row = 0; row < TENGEN_PF_HEIGHT; row++)
+            for (int col = 1; col < TENGEN_PF_WIDTH - 1; col++) {
+                uint8_t v = game.field[0].cell[row][col];
+                if (v == TENGEN_CELL_EMPTY) continue;
+                cells++;
+                if (v < 16) seen[v] = 1;
+            }
+        int distinct = 0;
+        for (int i = 1; i < 16; i++) distinct += seen[i];
+
+        CHECK(cells == 4);
+        if (skinned) {
+            /* One tile, and it is the piece. */
+            CHECK(distinct == 1);
+            CHECK(seen[TT_S] == 1);
+        } else {
+            /* The cartridge's own four, which are not all the same. */
+            CHECK(distinct > 1);
+        }
+    }
+}
+
 /* IT LOOKS AGAIN WHEN THE BOARD MOVES UNDER IT.
  *
  * WITH COMPUTER is one twelve-wide board with two pieces falling into it, and
@@ -2415,6 +2470,7 @@ int main(void) {
     test_the_wire_word_survives_a_round_trip();
     test_the_computers_piece_table_derives_from_the_bitmaps();
     test_the_computer_replans_when_its_column_is_taken();
+    test_a_skin_stores_one_tile_for_the_whole_piece();
     test_the_computer_reads_the_board_in_the_roms_own_units();
     test_the_computer_picks_a_placement_and_walks_to_it();
     test_the_computer_keeps_playing_and_does_not_bury_itself();

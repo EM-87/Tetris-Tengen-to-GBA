@@ -1161,11 +1161,70 @@ def skin_check(rom_path):
             print("  ...y no destapa nada mas: el menu sigue ofreciendo las "
                    "cinco entradas del cartucho")
 
+    # ...AND IT REACHES THE BOARD, which is the half of the feature that was
+    # missing for a long time: the skin was the title art and nothing else,
+    # and the player who had gone looking for it got the release's blue braid
+    # and shaded blocks the moment the game started.
+    #
+    # Measured off the tilemap on both counts. The FRAME: the panel's wall
+    # beside the board and the elbow over it are the release's own $6A $6B /
+    # $95 $96 slots in either skin — the art in them changes, not the number —
+    # so this compares the PIXELS of those columns instead. The BLOCKS: a
+    # prototype writes all four cells of a settled piece with ONE tile (its
+    # piece id) where the release writes up to four different joined-block
+    # graphics, so a stacked board in a skin has fewer distinct tile ids in it.
+    def stack_a_board(chords):
+        """A fresh console taken into a game with `chords` skin swaps first,
+        with enough soft drop behind it to leave a stack to look at.
+
+        Returns the pixels of the board's left wall and the set of tile ids
+        the settled blocks are drawn with.
+        """
+        this, this_screen = load(rom_path)
+        _ = this_screen                      # must stay alive; see load()
+        run(this, 40)
+        for _i in range(chords):
+            this.set_keys(KEYS["L"], KEYS["R"]); run(this, 4)
+            this.set_keys(); run(this, 20)
+        press_start(this); run(this, 20)      # title -> GAME SELECT
+        press_start(this); run(this, 20)      # -> LEVEL SETTINGS
+        press_start(this); run(this, 60)      # -> playing
+        this.set_keys(KEYS["DOWN"]); run(this, 700)
+        this.set_keys(); run(this, 40)
+        px = pixels(this_screen)
+        wall = [tuple(px[y][x] for x in range(64, 80)) for y in range(16, 144)]
+        blocks = {this.memory.u16[SCREENBLOCK_ADDR + (r * 32 + c) * 2] & 0x3FF
+                  for r in range(10, 20) for c in range(10, 20)} - {0}
+        return wall, blocks
+
+    plain_frame, plain_blocks = stack_a_board(0)
+    skin_frame, skin_blocks = stack_a_board(1)
+
+    same = sum(1 for a, b in zip(plain_frame, skin_frame) if a == b)
+    if same > len(plain_frame) // 4:
+        failures.append(f"la greca del tablero no cambia con la skin: "
+                         f"{same} de {len(plain_frame)} filas identicas")
+    else:
+        print("  ...y la greca del tablero es la del prototipo, no la trenza")
+    if not plain_blocks or not skin_blocks:
+        failures.append("no se asento nada: esta comprobacion no prueba nada")
+    elif skin_blocks - set(range(1, 8)):
+        failures.append(f"la skin asienta tiles fuera de $01-$07 "
+                         f"({sorted(skin_blocks)}): sus bloques solo llegan a $07")
+    elif not (plain_blocks - set(range(1, 8))):
+        failures.append("el release no asento ningun tile por encima de $07: "
+                         "los dos modos estarian usando la misma codificacion")
+    else:
+        print(f"  ...y sus piezas son una sola por tetromino "
+              f"({sorted(skin_blocks)}) donde el release usa "
+              f"{len(plain_blocks)} graficos unidos")
+
     for f in failures:
         print(f"FALLA: {f}")
     if failures:
         return 1
-    print("OK: L+R recorre el titulo del release y los de los prototipos.")
+    print("OK: L+R recorre el titulo del release y los de los prototipos, "
+          "y la skin llega al tablero.")
     return 0
 
 

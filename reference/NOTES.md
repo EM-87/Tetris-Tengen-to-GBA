@@ -129,10 +129,42 @@ What is genuinely left:
    `main.asm.txt:6392-6499` walks) — the only part of the level-up
    interlude still approximated. The port's dancers walk the pose table from
    staggered starts instead of following their own programs.
-2. The prototype dumps' PIECE art. Their title screens all ship now (L+R on
-   the title cycles them); the pieces in those builds are flat solid squares
-   at `$01-$03` rather than the release's shaded joined blocks, but how their
-   game maps a cell to a tile is not traced.
+2. WHICH of a prototype's seven block tiles belongs to WHICH tetromino.
+   That the rule is "one tile for the whole piece" is measured and shipped
+   (below); which id maps to which square or stripe pattern in those builds
+   is not, so the port uses its own piece ids and the textures come out
+   permuted against the dumps'. Every tetromino still has its own, which is
+   what the art is for.
+
+## The prototypes' PIECE ART, and the one thing about it that is not cosmetic
+
+Their title screens ship (L+R on the title cycles them) and so does the rest
+of their look — the green fret round the board and the flat or striped blocks
+(CLAUDE.md roadmap 31). The frame is twenty-two tile slots re-uploaded in
+place, so it needs no new draw path at all.
+
+**THE CELL ENCODING IS NOT THE RELEASE'S, THOUGH.** The release has FOURTEEN
+block graphics at `$01-$0E` and `kTileIds` (`main.asm.txt:1125-1150`) picks one
+per cell so that four squares read as one joined shape; the prototypes have
+SEVEN, one per tetromino — `$01-$03` flat and `$04-$07` striped — and write all
+four of a piece's cells with the same one, which is how they tell seven pieces
+apart on a board with a single palette to share.
+
+Measured rather than assumed, by the same method as everything else here:
+proto_b was left playing itself on `nes_console` and its playfield watched
+against its nametable. Two findings, and the first hid the second for a while:
+
+* the FALLING piece is written into the playfield buffer in these builds
+  (as `$1`) where the release draws it as a sprite, so a frame-by-frame diff
+  reports every new group of four as `$1` and says nothing about the lock;
+* and every piece that settled wrote four cells of ONE value — never four of
+  four, which is what the release does.
+
+`piece_id_cells` on `TengenGame` is that, and it is the only part of a skin
+the core knows about. Occupancy is `cell != 0` everywhere and `TT_WALL` is 15
+either way, so nothing downstream notices. **It is off over the cable**: a
+linked match is two consoles comparing state byte for byte, and one of them in
+a prototype's clothes would diverge in the playfield itself.
 
 ## The walls do not stop at the top of the visible field
 
