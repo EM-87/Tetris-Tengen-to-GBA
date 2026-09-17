@@ -224,6 +224,13 @@ typedef struct {
 /* main.asm.txt:1192-1197: the timer starts at $1D in 1P/2P and $21 in coop. */
 #define TENGEN_LINE_CLEAR_FRAMES      29
 #define TENGEN_LINE_CLEAR_FRAMES_COOP 33
+/* ...and what the PROTOTYPE builds hold for instead, which is nothing: their
+ * rows go the frame they complete, with no sweep across them and no word
+ * written where they were. See proto_rules. */
+#define TENGEN_LINE_CLEAR_FRAMES_PROTO 1
+/* Their level curve, too: every ten lines, flat, where the release walks
+ * TENGEN_LEVEL_LINE_THRESHOLDS. */
+#define TENGEN_PROTO_LINES_PER_LEVEL 10
 
 /* THE SWEEP
  *
@@ -286,6 +293,29 @@ typedef struct {
      *
      * See kSkinSlots in the generated gba/screen_proto.h. */
     bool piece_id_cells;
+    /* THE PROTOTYPE BUILDS' RULES, which are not only their paint.
+     *
+     * The three dumps this port skins from are earlier games, not the release
+     * in other colours, and the differences that are RULES rather than art are
+     * these three. They are documented per build on TCRF and they agree across
+     * A, B and C, which is why they are one flag rather than three tables:
+     *
+     *   TENGEN_PROTO_LINES_PER_LEVEL — the level goes up every TEN lines, not
+     *     on the release's 30 / 60 / 90 / 120 / 150-then-every-50 curve.
+     *   NO WALL KICK — "blocks often cannot be turned when they are pressed
+     *     against the wall". The release kicks one column left and these do
+     *     not kick at all, which is exactly what that sentence describes.
+     *   NO LINE-CLEAR ANIMATION — the rows go instantly, with no sweep and no
+     *     SINGLE / DOUBLE / TRIPLE / TETRIS written where they were.
+     *
+     * What is NOT here, deliberately, is the SHAPE of their front end: they
+     * offer only 1 PLAYER and 2 PLAYER, four difficulty steps instead of ten
+     * levels, and no handicap or music menus. Those would take away things
+     * this port has and a player chose, on a chord rung at the title, so they
+     * are left to a decision rather than assumed. See CLAUDE.md roadmap 31.
+     *
+     * The caller sets this after tengen_new_game, which clears it. */
+    bool proto_rules;
     /* gameState == GAMESTATE_PAUSED. Start toggles it (pauseOrUnpause,
      * main.asm.txt:7184-7215) and it is where the cheat codes are entered. */
     bool paused;

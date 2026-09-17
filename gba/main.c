@@ -808,6 +808,9 @@ static void skin_begin_match(bool linked) {
     g_skin_on = false;
 #endif
     g_session.game.piece_id_cells = g_skin_on;
+    /* ...and their RULES with their paint: the level every ten lines, no wall
+     * kick, and rows that go the frame they complete. See proto_rules. */
+    g_session.game.proto_rules = g_skin_on;
 }
 
 /* ...and what the board should be wearing, from the title's own choice. */
@@ -3985,7 +3988,12 @@ static void announce_step(TengenStepResult step) {
              * per frame, so it is heard first and this follows it. */
             if (g_linked) start_music(g_music);
         }
-        if (!g_linked) {
+        /* NO COSSACKS IN A PROTOTYPE'S GAME. Those builds go up a level and
+         * carry straight on — no dancers, no BONUS tally — and the interlude
+         * is one of the release's later additions. The level-up jingle above
+         * still plays: it is a sound, not a show, and their level-up is not
+         * silent. See proto_rules. */
+        if (!g_linked && !g_session.game.proto_rules) {
             g_dancer_active = true;
             g_dancer_timer = DANCER_TIMER_START;
             bonus_begin();
@@ -4571,8 +4579,16 @@ static bool solo_play_frame(uint8_t buttons, uint8_t pressed, bool *quit) {
              * (main.asm.txt:7204-7211) — the same pair the front end uses to
              * go quiet, through the same two helpers so the port never loses
              * track of which state the engine is actually in. */
-            nes_audio_play(g_session.game.paused ? NES_MUSIC_SUSPEND
-                                                  : NES_MUSIC_RESUME);
+            /* ...EXCEPT IN A PROTOTYPE'S GAME, where "pausing in-game doesn't
+             * mute the music" — the plaque goes up and the tune plays on.
+             * Only the SUSPEND is skipped, never the resume: a game that was
+             * paused before the skin was chosen, or one whose engine is
+             * already gagged for any other reason, still has to be let go of.
+             * See proto_rules. */
+            if (!g_session.game.paused)
+                nes_audio_play(NES_MUSIC_RESUME);
+            else if (!g_session.game.proto_rules)
+                nes_audio_play(NES_MUSIC_SUSPEND);
             /* MUSIC_SUSPEND only silences the cartridge's engine. The
              * hand-entered tunes have their own channels and have to be
              * stopped and restarted with it, or PAUSE would leave one playing
@@ -4585,8 +4601,14 @@ static bool solo_play_frame(uint8_t buttons, uint8_t pressed, bool *quit) {
              * played on alone over the plaque. */
             uint8_t tune = current_tune();
             if (MUSIC_IS_HANDTUNE(tune)) {
-                if (g_session.game.paused) handtune_stop();
-                else handtune_start(MUSIC_HANDTUNE_OF(tune));
+                /* ...and they follow the engine, including into a prototype's
+                 * pause, where it is not silenced at all: a hand tune stopping
+                 * over a plaque the cartridge's own tune plays through would
+                 * be the two halves of the machine disagreeing. */
+                if (g_session.game.paused && !g_session.game.proto_rules)
+                    handtune_stop();
+                else if (!g_session.game.paused)
+                    handtune_start(MUSIC_HANDTUNE_OF(tune));
             }
             /* The plaque has to be painted over on the way out, but this runs
              * mid-frame; six hundred tiles written into VRAM while the screen

@@ -382,6 +382,22 @@ running ROM; only the side panels need reflowing).
    prototype's clothes would diverge in the playfield itself, so
    `skin_begin_match` refuses there. The MENUS ask for the release back too —
    their frame comes out of the same slots in the cartridge's blue.
+   **AND THE SKIN CARRIES RULES, not only paint** (`proto_rules`). The three
+   differences that are gameplay rather than art, documented per build and
+   agreeing across A, B and C: the level goes up every TEN lines instead of on
+   the release's 30/60/90/120-then-every-50 curve; there is NO WALL KICK, which
+   is what "blocks often cannot be turned when they are pressed against the
+   wall" describes (the release kicks one column left, these do not kick at
+   all); and a completed row goes the frame it completes, with no sweep across
+   it and no SINGLE / DOUBLE / TRIPLE / TETRIS written where it was. Two more
+   live in the front end: no cossacks and no BONUS tally at a level-up — those
+   builds carry straight on — and PAUSE does not silence the music.
+   What is deliberately NOT taken is the SHAPE of their front end: only
+   1 PLAYER and 2 PLAYER, four difficulty steps instead of ten levels, no
+   handicap and no music menu. Taking those away on a chord rung at the title
+   would remove things this port has and a player chose, so they wait for a
+   decision. Likewise their GAME OVER plaque's blue border, which is a palette
+   this port has not captured.
 30. ~~Tetris Tengen XE~~ — done, behind the same L+R chord: levels 0-19 on the
    settings screen, the mod's longer fall-timer and mask tables, and the cap
    at 19 instead of 17. **AND THAT IS ALL THE MOD IS.** Its ten IPS records
@@ -392,11 +408,16 @@ running ROM; only the side panels need reflowing).
    fall-timer tables, so the "drop speed adjustment" it is described as having
    is the two new levels and nothing else; it patches nothing near the OAM or
    sprite code, so there is no glitch fix in it; and it does not touch the
-   soft drop at all. Two of its own mistakes are reproduced rather than tidied
-   up and both are pinned by tests: level 19's mask byte falls outside the
-   patch, so 19 runs on level 18's entry and the mod's own last table byte is
-   dead; and the level-up CODE still stops at 17, because the mod raises
-   checkLevelUp's clamp and not the cheat's own at $B4F7.
+   soft drop at all. **Two of its own mistakes ARE MENDED, and this is the one
+   place in the project where something deliberately does not behave as its
+   source does.** They are not the cartridge's quirks — they are a patch that
+   stops one address short, and each one breaks the only thing the mod exists
+   to do: level 19's mask byte falls outside the patch, so 19 ran on level
+   18's entry with the mod's own last table byte dead; and the level-up CODE
+   stopped at 17, because the mod raises checkLevelUp's clamp and not the
+   cheat's own at $B4F7. Both fixes are `xe`-only — with the flag off the
+   cartridge is untouched — and both are pinned by tests, with what the mod
+   actually does written down beside them.
 
 ## What the port knowingly does NOT show
 

@@ -1087,6 +1087,110 @@ static void test_a_lobby_hands_straight_over_to_a_matching_pair_of_games(void) {
  * The COMPUTER player
  * ----------------------------------------------------------------------- */
 
+/* THE PROTOTYPE BUILDS' RULES, which are not only their paint.
+ *
+ * Three differences documented across dumps A, B and C, and they agree, which
+ * is why they are one flag. Each is checked against the release's behaviour in
+ * the same test, because "it changed" is the claim and a one-sided assertion
+ * would pass on a flag that did nothing.
+ */
+static void test_the_prototype_rules(void) {
+    /* 1. THE LEVEL GOES UP EVERY TEN LINES, flat, where the release's first
+     *    step is at thirty and the curve opens out to fifty after 150. Driven
+     *    through a real clear rather than by poking the rule: both games are
+     *    put on 29 lines and given one more, which takes the release over its
+     *    first threshold and the prototypes over their third. */
+    CHECK(TENGEN_LEVEL_LINE_THRESHOLDS[0] == 30);
+    for (int proto = 0; proto < 2; proto++) {
+        TengenGame game;
+        tengen_new_game(&game, 91, 0, false, false, false);
+        game.proto_rules = proto != 0;
+        game.player[0].lines = 29;
+        for (int col = 1; col < TENGEN_PF_WIDTH - 1; col++)
+            if (col != 5 && col != 6)
+                game.field[0].cell[TENGEN_PF_HEIGHT - 1][col] = (uint8_t)TT_I;
+        game.player[0].piece.current = TT_O;
+        game.player[0].piece.orientation = 0;
+        game.player[0].piece.x = 7;
+        game.player[0].piece.y = TENGEN_SPAWN_Y;
+        for (int f = 0; f < 4000; f++)
+            if (tengen_step(&game, TENGEN_PLAYER_1, TENGEN_BTN_DOWN).lines_collapsed)
+                break;
+        CHECK(game.player[0].lines == 30);
+        /* One level for the release, three for the prototypes. */
+        CHECK(game.player[0].level == (proto ? 3 : 1));
+    }
+
+    /* 2. NO WALL KICK. The release kicks one column LEFT when a rotation will
+     *    not fit; these builds do not kick at all, which is what "blocks often
+     *    cannot be turned when they are pressed against the wall" is. Counted
+     *    across every column rather than staged at one, so the claim is the
+     *    general one and not a lucky placement: the release can turn in
+     *    strictly more places, and every place the prototypes can, it can. */
+    {
+        int plain_ok = 0, proto_ok = 0, proto_kicked = 0;
+        for (int piece = TT_I; piece < TENGEN_TETROMINO_COUNT; piece++) {
+            for (uint8_t o = 0; o < 4; o++) {
+                for (int8_t x = 0; x < TENGEN_PF_WIDTH + 4; x++) {
+                    bool got[2];
+                    for (int proto = 0; proto < 2; proto++) {
+                        TengenGame game;
+                        tengen_new_game(&game, 5, 0, false, false, false);
+                        game.proto_rules = proto != 0;
+                        game.player[0].piece.current = (TengenTetromino)piece;
+                        game.player[0].piece.orientation = o;
+                        game.player[0].piece.x = x;
+                        game.player[0].piece.y = 10;
+                        got[proto] = tengen_try_rotate(&game, TENGEN_PLAYER_1,
+                                                        true);
+                        if (proto && got[1] &&
+                            game.player[0].piece.x != x) proto_kicked++;
+                    }
+                    plain_ok += got[0];
+                    proto_ok += got[1];
+                    /* Never the other way round: taking the kick away can only
+                     * refuse rotations, never allow one. */
+                    CHECK(!(got[1] && !got[0]));
+                }
+            }
+        }
+        CHECK(proto_ok < plain_ok);
+        CHECK(proto_kicked == 0);
+    }
+
+    /* 3. THE ROWS GO INSTANTLY: no sweep to cross them and no word left where
+     *    they were. The release holds the game for 29 frames while it does. */
+    for (int proto = 0; proto < 2; proto++) {
+        TengenGame game;
+        tengen_new_game(&game, 91, 0, false, false, false);
+        game.proto_rules = proto != 0;
+        for (int col = 1; col < TENGEN_PF_WIDTH - 1; col++)
+            if (col != 5 && col != 6)
+                game.field[0].cell[TENGEN_PF_HEIGHT - 1][col] = (uint8_t)TT_I;
+        game.player[0].piece.current = TT_O;
+        game.player[0].piece.orientation = 0;
+        game.player[0].piece.x = 7;
+        game.player[0].piece.y = TENGEN_SPAWN_Y;
+
+        int found = -1;
+        for (int f = 0; f < 4000 && found < 0; f++)
+            if (tengen_step(&game, TENGEN_PLAYER_1, TENGEN_BTN_DOWN).lines_cleared)
+                found = f;
+        CHECK(found >= 0);
+        CHECK(game.player[0].line_clear_timer ==
+              (proto ? TENGEN_LINE_CLEAR_FRAMES_PROTO
+                     : TENGEN_LINE_CLEAR_FRAMES));
+
+        int frames = 0;
+        bool collapsed = false;
+        for (; frames < 200 && !collapsed; frames++)
+            collapsed = tengen_step(&game, TENGEN_PLAYER_1, 0).lines_collapsed;
+        CHECK(collapsed);
+        CHECK(frames == (proto ? TENGEN_LINE_CLEAR_FRAMES_PROTO
+                                : TENGEN_LINE_CLEAR_FRAMES));
+    }
+}
+
 /* A SKINNED BOARD STORES THE PIECE, NOT THE JOINED-BLOCK TILE.
  *
  * The release has fourteen block graphics and kTileIds picks one per cell so
@@ -2113,13 +2217,14 @@ static void test_xe_adds_two_levels(void) {
     CHECK(tengen_frames_per_row(18, 0, false, true) == 3);
     CHECK(tengen_frames_per_row(18, 1, false, true) == 2);
 
-    /* LEVEL 19 IS THE MOD'S OWN OFF-BY-ONE, pinned here so nobody "fixes" it.
-     * Its mask would be at $FF01 and the patch stops at $FF00, so it reads the
-     * cartridge's zero; the level >= 16 branch always takes the dec; and the
-     * game runs on entry 18 for ever. The mod's entry 19 (1 frame) is dead. */
-    for (int8_t y = 0; y < 8; y++) {
-        CHECK(tengen_frames_per_row(19, y, false, true) == 2);
-    }
+    /* LEVEL 19 WAS THE MOD'S OWN OFF-BY-ONE AND THIS PORT MENDS IT. Its mask
+     * would be at $FF01 and the patch stops at $FF00, so on the mod it reads
+     * the cartridge's zero, the level >= 16 branch always takes the dec, and
+     * the game runs on entry 18 for ever with the mod's own entry 19 (1
+     * frame) dead. Given the byte the pattern asks for, 19 alternates between
+     * entries 19 and 18 exactly as 18 alternates between 18 and 17. */
+    CHECK(tengen_frames_per_row(19, 0, false, true) == 2);
+    CHECK(tengen_frames_per_row(19, 1, false, true) == 1);
 
     /* Coop's table is plain: no masks at all, 4 and 3 frames. */
     for (int8_t y = 0; y < 4; y++) {
@@ -2128,21 +2233,29 @@ static void test_xe_adds_two_levels(void) {
     }
 }
 
-/* The level code stops at 17 EVEN IN XE, because the mod does not patch its
- * clamp ($B4F7) — only checkLevelUp's. Play is the only way past 17. */
-static void test_xe_level_code_still_stops_at_seventeen(void) {
+/* THE LEVEL CODE REACHES THE MOD'S OWN LEVELS, which on the mod it cannot:
+ * XE raises checkLevelUp's clamp and forgets the cheat's own at $B4F7, so
+ * there the code stops dead at 17 and only playing gets you to 18. A mod
+ * whose entire content is two more levels, with its own level cheat unable to
+ * reach them, is an oversight; this port mends it. Without XE the cartridge's
+ * refusal stands, because there the tables really do end at 17. */
+static void test_xe_level_code_reaches_the_mods_own_levels(void) {
     TengenGame game;
-    tengen_new_game(&game, 91, TENGEN_MAX_LEVEL, false, false, true);
+
+    /* The cartridge, untouched: 17 is the ceiling the ROM refuses at. */
+    tengen_new_game(&game, 91, TENGEN_MAX_LEVEL, false, false, false);
     game.paused = true;
     CHECK(enter_code(&game, kLevelUpButtons, 9) == TENGEN_CHEAT_LEVEL_UP);
     CHECK(game.player[0].level == TENGEN_MAX_LEVEL);
 
-    /* ...but from 18, which only play reaches, the digit test lets it move. */
-    tengen_new_game(&game, 91, 18, false, false, true);
+    /* Under XE the code walks 17 -> 18 -> 19 and stops at the top of the
+     * mod's tables. */
+    tengen_new_game(&game, 91, TENGEN_MAX_LEVEL, false, false, true);
     game.paused = true;
     CHECK(enter_code(&game, kLevelUpButtons, 9) == TENGEN_CHEAT_LEVEL_UP);
+    CHECK(game.player[0].level == 18);
+    CHECK(press_code_button(&game, TENGEN_BTN_A) == TENGEN_CHEAT_LEVEL_UP);
     CHECK(game.player[0].level == TENGEN_MAX_LEVEL_XE);
-    /* And stops at the top of the mod's tables. */
     CHECK(press_code_button(&game, TENGEN_BTN_A) == TENGEN_CHEAT_LEVEL_UP);
     CHECK(game.player[0].level == TENGEN_MAX_LEVEL_XE);
 }
@@ -2435,7 +2548,7 @@ int main(void) {
     test_gravity_clamps_above_max_level();
     test_xe_changes_nothing_below_eighteen();
     test_xe_adds_two_levels();
-    test_xe_level_code_still_stops_at_seventeen();
+    test_xe_level_code_reaches_the_mods_own_levels();
     test_xe_travels_over_the_cable();
     test_soft_drop_requires_down_alone();
     test_soft_drop_accelerates_while_held();
@@ -2471,6 +2584,7 @@ int main(void) {
     test_the_computers_piece_table_derives_from_the_bitmaps();
     test_the_computer_replans_when_its_column_is_taken();
     test_a_skin_stores_one_tile_for_the_whole_piece();
+    test_the_prototype_rules();
     test_the_computer_reads_the_board_in_the_roms_own_units();
     test_the_computer_picks_a_placement_and_walks_to_it();
     test_the_computer_keeps_playing_and_does_not_bury_itself();

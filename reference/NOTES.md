@@ -160,11 +160,34 @@ against its nametable. Two findings, and the first hid the second for a while:
 * and every piece that settled wrote four cells of ONE value — never four of
   four, which is what the release does.
 
-`piece_id_cells` on `TengenGame` is that, and it is the only part of a skin
-the core knows about. Occupancy is `cell != 0` everywhere and `TT_WALL` is 15
-either way, so nothing downstream notices. **It is off over the cable**: a
-linked match is two consoles comparing state byte for byte, and one of them in
-a prototype's clothes would diverge in the playfield itself.
+`piece_id_cells` on `TengenGame` is that. Occupancy is `cell != 0` everywhere
+and `TT_WALL` is 15 either way, so nothing downstream notices. **It is off over
+the cable**: a linked match is two consoles comparing state byte for byte, and
+one of them in a prototype's clothes would diverge in the playfield itself.
+
+### ...and the RULES those builds play by
+
+`proto_rules`, the second flag. These are documented differences, per build,
+and A, B and C agree on all of them, which is why they are one flag and not
+three tables. In the core:
+
+| | the release | the prototypes |
+|---|---|---|
+| level up | 30, 60, 90, 120, then every 50 (`TENGEN_LEVEL_LINE_THRESHOLDS`) | every **ten** lines, flat |
+| rotation against a wall | kicks one column LEFT | **no kick at all** — "blocks often cannot be turned when they are pressed against the wall" is exactly the absence of it |
+| a completed row | held 29 frames while a sweep crosses it and writes SINGLE / DOUBLE / TRIPLE / TETRIS | goes the frame it completes |
+
+and two in the front end: a level-up brings **no cossacks and no BONUS tally**
+(those builds carry straight on; the jingle still plays, because it is a sound
+and not a show), and **PAUSE does not silence the music**.
+
+**What is deliberately not taken** is the SHAPE of their front end — only
+1 PLAYER and 2 PLAYER, four difficulty steps (BEGINNER / INTERMEDIATE /
+ADVANCED / EXPERT = levels 0, 3, 6, 9) instead of ten levels, no handicap and
+no music menu — because taking those away on a chord rung at the title would
+remove things this port has and a player chose. Same for the GAME OVER
+plaque's blue border and their HIGH SCORE opening at 0 rather than 17000.
+All of them are a decision away, not a trace away.
 
 ## The walls do not stop at the top of the visible field
 
@@ -1311,22 +1334,35 @@ OAM staging or the sprite code, so there is no graphical-glitch fix in it
 either, and it does not touch `main.asm.txt:184-216` or anything else the
 soft drop reads. Two new levels is the whole of it.
 
-### Two things the mod gets wrong, reproduced rather than tidied up
+### Two things the mod gets wrong, AND THE PORT MENDS BOTH
 
-**Level 19 never uses its own entry.** The mask pointer is `$FEEE` and the
+They were reproduced for a while, on the usual principle. They are not the
+cartridge's quirks, though — they are a patch that stops one address short —
+and both of them break the one thing the mod exists to do, so the port fixes
+them. **This is the only place in the project where something is deliberately
+not as its source behaves**, and each fix is `xe`-only: with the flag off the
+cartridge is untouched, and the two levels do not exist to get wrong.
+
+**Level 19 never used its own entry.** The mask pointer is `$FEEE` and the
 replacement block ends at `$FF00`, so level 18's mask is the last byte in it
 and level 19's would be at `$FF01` — which the patch never writes and the
 cartridge leaves at `$00`. L9AEE's level >= 16 branch decrements on a zero
-result, so level 19 always falls back to entry 18 and runs at a flat 2 frames
-a row. The `01` the mod put at the end of its own table is dead.
+result, so on the mod level 19 always falls back to entry 18 and runs at a
+flat 2 frames a row, with the `01` at the end of its own table dead. A mod
+whose entire content is two more levels, one of which is a copy of the other,
+is half of what it says. The port gives level 19 the `$01` the pattern asks
+for — the same byte level 18 got — so 19 alternates entries 19 and 18, one
+frame and two, exactly as 18 alternates 18 and 17.
 
-**The level code still stops at 17.** There are TWO clamps in the cartridge:
-checkLevelUp's at `$9573`, which the patch raises, and the cheat's own at
-`$B4F7` (`cmp #'8' / bne / cpy #'1' / beq`), which it does not. So under XE
-the Up-Down-Up-Down-Left-Right-B-B-A code cannot get you from 17 to 18; only
-playing can. From 18 the same digit test happily lets it carry on, 19 and
-past — the port clamps there, because the mod's tables do not go further and
-that is this port's decision rather than the mod's behaviour.
+**The level CODE could not reach them.** There are TWO clamps in the
+cartridge: checkLevelUp's at `$9573`, which the patch raises, and the cheat's
+own at `$B4F7` (`cmp #'8' / bne / cpy #'1' / beq`), which it does not. So on
+the mod the Up-Down-Up-Down-Left-Right-B-B-A code cannot get you from 17 to
+18 — only playing can — while from 18 the same digit test happily lets it
+carry on past the end of the mod's tables. Under `xe` the port drops that
+refusal and lets the level cap be the only ceiling: 17 -> 18 -> 19 and stop.
+Without `xe` the ROM's refusal at 17 stands, because there it is the ROM's own
+design and the tables really do end.
 
 ### In the port
 

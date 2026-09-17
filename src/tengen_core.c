@@ -361,10 +361,17 @@ bool tengen_try_rotate(TengenGame *game, TengenPlayerSlot slot, bool clockwise) 
     piece->orientation = new_orientation;
     if (check_position(game, slot, NULL)) return true;
 
-    piece->x = (int8_t)(piece->x - 1);
-    if (check_position(game, slot, NULL)) return true;
+    /* AND THE PROTOTYPES DO NOT KICK AT ALL. "Blocks often cannot be turned
+     * when they are pressed against the wall" is how their builds are
+     * described, and this is what that sentence is: the single-column left
+     * kick below is the release's, and without it a piece flush against
+     * either wall simply refuses to turn. See proto_rules. */
+    if (!game->proto_rules) {
+        piece->x = (int8_t)(piece->x - 1);
+        if (check_position(game, slot, NULL)) return true;
+        piece->x = (int8_t)(piece->x + 1);
+    }
 
-    piece->x = (int8_t)(piece->x + 1);
     piece->orientation = old_orientation;
     return false;
 }
@@ -463,13 +470,19 @@ static void cheat_level_up(TengenGame *game, TengenPlayerSlot slot) {
      * cap at 17 that one refusal is the whole ceiling.
      *
      * XE DOES NOT TOUCH THIS CLAMP. Its ten records raise the one in
-     * checkLevelUp ($9573, '7' -> '9') and nothing else, so under XE the code
-     * still cannot get you from 17 to 18 — only playing can. Once play has,
-     * the digit test lets the code carry on, and 19 -> 20 with it: the mod's
-     * tables stop at 19 and its author plainly never went looking. So 17 is
-     * the ROM's refusal, reproduced, and the XE ceiling below is this port's,
-     * declared. */
-    if (p->level == TENGEN_MAX_LEVEL) return;
+     * checkLevelUp ($9573, '7' -> '9') and nothing else, so on the mod itself
+     * the code still cannot get you from 17 to 18 — only playing can — while
+     * from 18 the digit test lets it carry straight on past the end of the
+     * mod's own tables.
+     *
+     * THIS PORT FIXES THAT TOO, for the same reason as the level-19 mask
+     * above: a mod whose entire content is "two more levels" leaving its own
+     * level cheat unable to reach them is an oversight, not a quirk. Under
+     * `xe` the cap is the only ceiling, so the code walks 17 -> 18 -> 19 and
+     * stops there. WITHOUT `xe` nothing changes: the cartridge's own refusal
+     * at 17 stands, because there the refusal is the ROM's own design and the
+     * tables really do end. */
+    if (!game->xe && p->level == TENGEN_MAX_LEVEL) return;
     if (p->level >= TENGEN_LEVEL_CAP(game->xe)) return;
     p->level++;
     if (game->coop) game->player[slot ^ 1].level = p->level;
@@ -762,11 +775,23 @@ static const uint8_t kFractionalGravityMask[TENGEN_MAX_LEVEL_XE + 1] = {
     /* XE adds ONE mask byte, for level 18. LEVEL 19'S IS NOT IN THE PATCH:
      * the mod's replacement block ends at $FF00, its mask pointer is $FEEE,
      * so level 19 reads $FF01 — which the mod never writes and the cartridge
-     * leaves at zero. That is reproduced rather than tidied up, and it has a
-     * consequence: at level 19 the mask is 0, the level >= 16 branch always
-     * takes the dec, and the game runs on table[18] = 2 frames a row. The
-     * mod's own entry 19 (1 frame) is never read. */
-    0x01, 0x00
+     * leaves at zero. At a mask of 0 the level >= 16 branch always takes the
+     * dec, so level 19 runs on table[18] = 2 frames a row for ever and the
+     * mod's own entry 19 (1 frame) is dead.
+     *
+     * THIS PORT FIXES IT rather than reproducing it, which is a deliberate
+     * departure and the only one in the XE code. The reasoning: the mod's
+     * whole content is "levels 18 and 19 exist" (see TENGEN_MAX_LEVEL_XE),
+     * and the missing byte means one of its two levels does not. It is not a
+     * quirk anybody could play around or come to like — it is a patch that
+     * stops one address short, and it makes the mod half of what it says it
+     * is. $01 is the byte the pattern asks for, the same one level 18 got:
+     * level 19 then alternates table[19] and table[18], one frame and two,
+     * for an effective 1.5 — exactly the relationship 18 has with 17.
+     *
+     * The other half of this is in cheat_level_up, and it is the same story:
+     * the mod raises checkLevelUp's clamp and forgets the cheat's own. */
+    0x01, 0x01
 };
 
 /* L9AEE's whole job: reload the fall timer from the level's table using the
@@ -820,9 +845,19 @@ uint8_t tengen_frames_per_row(uint8_t level, int8_t piece_y, bool coop, bool xe)
  *
  * Not modelled: in demo/title states the ROM substitutes a flat +10 for the
  * start level (main.asm.txt:3157-3160). That path never runs during play. */
-static uint8_t level_for_lines(uint32_t lines, uint8_t start_level, bool xe) {
+static uint8_t level_for_lines(uint32_t lines, uint8_t start_level, bool xe,
+                                bool proto) {
     const unsigned count = sizeof(TENGEN_LEVEL_LINE_THRESHOLDS) /
                             sizeof(TENGEN_LEVEL_LINE_THRESHOLDS[0]);
+    /* THE PROTOTYPES CLIMB EVERY TEN LINES, flat. The release's curve — 30,
+     * 60, 90, 120, then every 50 — came later; these builds simply divide.
+     * See proto_rules. */
+    if (proto) {
+        unsigned level = (unsigned)start_level +
+                          (unsigned)(lines / TENGEN_PROTO_LINES_PER_LEVEL);
+        if (level > TENGEN_LEVEL_CAP(xe)) level = TENGEN_LEVEL_CAP(xe);
+        return (uint8_t)level;
+    }
     /* The ROM's compare is on the hundreds and tens digits only (:3145-3151),
      * so `lines >= T` with T already in lines is the same test as its
      * `lines/10 >= T/10` — the ones digit cannot change the answer, because
@@ -1161,7 +1196,7 @@ TengenStepResult tengen_step(TengenGame *game, TengenPlayerSlot slot, uint8_t he
             /* No score is awarded here on purpose: this game pays per piece
              * locked, not per line cleared (see add_lock_score). */
             uint8_t new_level = level_for_lines(p->lines, p->start_level,
-                                                 game->xe);
+                                                 game->xe, game->proto_rules);
             if (new_level > p->level) {
                 p->level = new_level;
                 result.leveled_up = true;
@@ -1354,8 +1389,12 @@ TengenStepResult tengen_step(TengenGame *game, TengenPlayerSlot slot, uint8_t he
             uint32_t cleared = tengen_find_full_rows(field);
             if (cleared) {
                 p->clearing_rows = cleared;
-                p->line_clear_timer = game->coop ? TENGEN_LINE_CLEAR_FRAMES_COOP
-                                                  : TENGEN_LINE_CLEAR_FRAMES;
+                /* The prototypes take their rows the frame they complete;
+                 * the sweep and the word came later. See proto_rules. */
+                p->line_clear_timer =
+                    game->proto_rules ? TENGEN_LINE_CLEAR_FRAMES_PROTO
+                    : game->coop      ? TENGEN_LINE_CLEAR_FRAMES_COOP
+                                      : TENGEN_LINE_CLEAR_FRAMES;
                 result.lines_cleared = true;
                 result.rows_cleared_mask = cleared;
                 p->held_last_frame = held_buttons;
