@@ -51,8 +51,21 @@ enum {
  * engine. */
 void handtune_start(uint8_t tune);
 
-/* Releases the two pulse channels. The engine's next write reclaims them. */
+/* Releases the two pulse channels and forgets the tune. The engine's next
+ * write reclaims them. */
 void handtune_stop(void);
+
+/* PAUSE, NOT STOP. Silences the channels but leaves the two voices standing
+ * where they are, so handtune_resume picks the melody up on the next note
+ * instead of starting it again from the first bar. This is what a pause owes
+ * a tune, and what the cartridge's own MUSIC_SUSPEND/MUSIC_RESUME pair gives
+ * the tracks its engine plays. */
+void handtune_suspend(void);
+void handtune_resume(void);
+
+/* Which tune is loaded — HANDTUNE_COUNT when none is, including after a stop.
+ * Lets a caller tell "carry on with this one" from "change to that one". */
+uint8_t handtune_current(void);
 
 /* One frame of the sequencer. Safe to call when stopped (it does nothing). */
 void handtune_frame(void);

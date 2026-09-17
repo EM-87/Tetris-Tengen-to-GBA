@@ -1611,17 +1611,26 @@ PROTO_RECIPES = {
     # beheaded, which is the one thing this screen cannot afford, because the
     # cathedral IS the screen.
     #
-    # So the copyright goes (rows 23-27) and the tower comes back. What is
-    # still given up is rows 9-10, the one-tile-wide spike ABOVE the ball —
-    # which is exactly what the release's own composition gives up, and for
-    # the same reason. Everything from the ball down is here.
+    # So the copyright goes (rows 23-27) and the tower comes back.
     #
-    # The blank row 5 between PRESENTS and the logo goes too; the big letters'
-    # ascenders do sit closer to the word above for it, and a whole tower is
-    # worth a row of air.
+    # Measured scanline by scanline over the tower's columns, the gold reads:
+    # a one-pixel spike from row 9 line 3, then the BALL from row 10 line 3 to
+    # row 11 line 3, then the red tent. A window that starts at row 11 — which
+    # is what this kept at first — therefore enters halfway down the ball and
+    # cuts it in two, which is exactly what it was reported as. The ball needs
+    # row 10, and row 10 costs a row that twenty does not have.
+    #
+    # PRESENTS pays for it, and the release says so: its own composition drops
+    # rows 6-7, "PRESENTS" and "THE SOVIET MIND GAME", to raise the same
+    # cathedral until the same ball sits whole under the same logo. This screen
+    # now keeps the frame's top course, TENGEN, the TETRIS logo, and the
+    # cathedral entire from the ball down to the last course of its plinth.
+    # What is given up is the word PRESENTS, the blank row under it, and the
+    # bare spike above the ball — the three least of the screen, and the same
+    # three the finished game gave up.
     "ac327eca3d9f9c169210adc9ccfe8344": {
         "label": "TENGEN PRESENTS TETRIS",
-        "rows": _rows((1, 5), (6, 9), (11, 23), (28, 29)),
+        "rows": _rows((1, 4), (6, 9), (10, 23), (28, 29)),
         "bank": 1,
     },
     # "TENGEN PRESENTS / THE SOVIET MIND GAME" over the same cathedral, which
@@ -2002,13 +2011,29 @@ def read_skin_play(path, chr_rom):
         return None, (f"{path}: su banner usa {len(order)} tiles distintos y la "
                       f"ventana tiene {SKIN_BANNER_MAX}")
 
-    # ...and the menu logo, out of the same window. A dump without one keeps
-    # the release's; see find_skin_menu_logo.
+    # ...and the menu logo, out of the same window.
+    #
+    # THE HORIZONTAL LOGO IS THE VERTICAL BANNER LAID ON ITS SIDE. The banner
+    # is six letters stacked, each a boxed block three rows tall and four
+    # columns wide; the logo is the same six blocks in a row, 3x24. That is
+    # not a guess: built this way and compared with the logo the menus really
+    # draw, the two come out tile for tile identical in proto_b, in proto_c
+    # AND in the release — see the logosynth probe.
+    #
+    # Which matters for proto_a, whose menus draw no logo at all: its grey
+    # banner has the six letters like the others, so its logo is built rather
+    # than read, and it wears its own art instead of borrowing the release's.
+    # Its colours are the banner's own, off the play screen, because there is
+    # no menu screen to read them from.
     found = find_skin_menu_logo(path, set(order))
-    logo = logo_palette = None
     if found is not None:
         logo_src, logo_palette = found
         logo = [[index[t] for t in row] for row in logo_src]
+    else:
+        rows_per, cols_per = LOGO_SHAPE[0], LOGO_SHAPE[1] // 6
+        logo = [[grid[(i // cols_per) * rows_per + dr][i % cols_per]
+                 for i in range(LOGO_SHAPE[1])] for dr in range(rows_per)]
+        logo_palette = [palette[frame_bank * 4 + i] for i in range(4)]
 
     return {
         "slots": slots,
@@ -2235,10 +2260,11 @@ def emit_skin_play(skins):
     lines += [
         "",
         "/* The menus' horizontal logo, the same letters the other way round,",
-        " * out of the same window. Not every dump has one -- proto_a's menus",
-        " * carry no logo at all -- and the ones that do keep it in different",
-        " * rows, so it is SEARCHED for rather than read from a constant. A",
-        " * skin without one leaves the release's logo where it is. */",
+        " * out of the same window. The dumps that draw one keep it in",
+        " * different rows, so it is SEARCHED for rather than read from a",
+        " * constant; proto_a's menus draw none, so its logo is BUILT by laying",
+        " * the six blocks of its banner side by side, which is provably what",
+        " * the other three are. Every skin therefore has one. */",
         f"#define SKIN_LOGO_W {cols}",
         f"#define SKIN_LOGO_H {rows}",
         "static const uint8_t kSkinLogoHas[SCREEN_PROTO_COUNT] = { "

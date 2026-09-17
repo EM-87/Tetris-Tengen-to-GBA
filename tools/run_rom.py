@@ -1079,14 +1079,15 @@ def skin_check(rom_path):
     run(core, 40)
     release = frame_tiles()
 
-    # L+R, NOT EITHER SHOULDER. It answers to the same chord as the port's
-    # other extras now, and one shoulder on its own must do nothing at all.
+    # L+R LA ENCUENTRA; L Y R A SOLAS LA MANEJAN DESPUES. Antes de que suene
+    # el acorde, un gatillo suelto no hace absolutamente nada: la skin es algo
+    # que se descubre, y el titulo no se cambia por apoyar un dedo.
     tap(KEYS["L"])
     if frame_tiles() != release:
-        failures.append("L a solas cambia la skin: deberia pedir L+R")
+        failures.append("L a solas cambia la skin sin haber sonado el acorde")
     tap(KEYS["R"])
     if frame_tiles() != release:
-        failures.append("R a solas cambia la skin: deberia pedir L+R")
+        failures.append("R a solas cambia la skin sin haber sonado el acorde")
 
     tap(KEYS["L"], KEYS["R"])
     proto = frame_tiles()
@@ -1099,7 +1100,7 @@ def skin_check(rom_path):
         print("OK: sin skin de prototipo, y el titulo no se rompe por pulsar L o R.")
         return 0
     print("  L+R pone el marco del prototipo, que es de otros tiles; "
-           "un hombro suelto no hace nada")
+           "antes del acorde un hombro suelto no hace nada")
 
     # The release's fireworks and cathedral overlay belong to the release
     # picture; on the prototype's they must be gone.
@@ -1108,13 +1109,13 @@ def skin_check(rom_path):
     else:
         print("  los sprites del release (catedral y fuegos) se retiran con ella")
 
-    # HOWEVER MANY SKINS the build was given, the chord must walk all of them
-    # and come back — and each must be its OWN screen, not the same tiles
-    # twice, which is what a swap that forgot to re-upload the prototype's
-    # pattern table would look like.
+    # HOWEVER MANY SKINS the build was given, R must walk all of them and come
+    # back — and each must be its OWN screen, not the same tiles twice, which
+    # is what a swap that forgot to re-upload the prototype's pattern table
+    # would look like.
     seen = [release, proto]
     for _ in range(LIMIT_SKINS):
-        tap(KEYS["L"], KEYS["R"])
+        tap(KEYS["R"])
         now = frame_tiles()
         if now == release:
             break
@@ -1124,13 +1125,30 @@ def skin_check(rom_path):
         seen.append(now)
     else:
         failures.append(f"el ciclo de skins no vuelve al release en "
-                         f"{LIMIT_SKINS} acordes")
+                         f"{LIMIT_SKINS} pulsaciones de R")
     if not failures:
-        print(f"  el acorde recorre {len(seen) - 1} skin(s) distinta(s) y "
-               "vuelve al titulo del release")
+        print(f"  tras el acorde, R recorre {len(seen) - 1} skin(s) distinta(s) "
+               "y vuelve al titulo del release")
+
+    # ...Y L VUELVE, que es de lo que iba el cambio: con cuatro skins, volver a
+    # la que acabas de pasar no puede costar dar la vuelta a las otras tres.
+    order = seen + [release]
+    tap(KEYS["R"])
+    if frame_tiles() != order[1]:
+        failures.append("R no avanza a la primera skin desde el release")
+    tap(KEYS["L"])
+    if frame_tiles() != release:
+        failures.append("L no vuelve a la skin anterior")
+    else:
+        tap(KEYS["L"])
+        if frame_tiles() != order[-2]:
+            failures.append("L desde el release no da la vuelta a la ultima skin")
+        else:
+            print("  L retrocede y R avanza, y la lista da la vuelta por los dos "
+                   "lados")
 
     # ...and the choice must survive leaving the title and coming back.
-    tap(KEYS["L"], KEYS["R"])
+    tap(KEYS["R"])
     proto = frame_tiles()
     for name in ("START", "B"):
         core.set_keys(KEYS[name]); run(core, 4); core.set_keys(); run(core, 10)
@@ -1288,6 +1306,10 @@ GAME_SELECT_TY = 10             # ...and they start here, one row apart
 # had the port writing the list in white and marking the choice in the ORANGE
 # that bank 1 holds for the credit line alone.
 MENU_TEXT_BANK = 8              # PAL_MENU_BASE + 0, the cartridge's menu blue
+# ...and the one white on these screens, the cursor's: gba/main.c's BANK_ARROW.
+# The handicap's chosen number borrows it, which is what says which of the two
+# the pad is moving.
+MENU_ARROW_BANK = 11            # PAL_MENU_BASE + 3
 # ...and the cursor's column, gba/main.c's GAME_SELECT_ARROW_TX.
 MENU_ARROW_TX = 5
 # The shared coop board starts one column further left than the ten-wide
@@ -1312,6 +1334,8 @@ DEMO_WATCH_FRAMES = 2000
 LEVEL_ROW = 9
 HANDICAP_ROW = 11               # value AND, in one player, what it buries
 MUSIC_ROW = 13
+# Vueltas de sobra para dar la lista de canciones entera, destapada o no.
+MUSIC_COUNT_MAX = 14
 
 
 def to_music_page(core, settle=10):
@@ -1375,8 +1399,12 @@ def handicap_check(rom_path):
         press_start(core); run(core, 10)      # -> LEVEL SETTINGS
         # The cursor onto HANDICAP, which is what puts the depth line up.
         core.set_keys(KEYS["DOWN"]); run(core, 4); core.set_keys(); run(core, 10)
+        # EL MANDO, NO LOS GATILLOS. La NES no tenia L ni R, asi que la pagina
+        # se maneja con los cuatro botones que si tenia: arriba/abajo mueven el
+        # cursor, izquierda/derecha cambian el valor, y SELECT (abajo) elige
+        # cual de los dos numeros en una carrera.
         for _ in range(steps):
-            core.set_keys(KEYS["L"]); run(core, 4); core.set_keys(); run(core, 8)
+            core.set_keys(KEYS["RIGHT"]); run(core, 4); core.set_keys(); run(core, 8)
         # One line: "HANDICAP  r   ROWS", and r is the CARTRIDGE'S OWN NUMBER
         # — its handicap screen offers 0, 3, 6, 9, 12, which are rows. The
         # step (nought to four) is what the ROM counts in and is not on
@@ -1411,12 +1439,116 @@ def handicap_check(rom_path):
         else:
             print("  handicap 0: el campo empieza vacio")
 
+    failures += handicap_two_check(rom_path)
+
     for f in failures:
         print("FALLA:", f)
     if failures:
         return 1
     print("OK: el handicap entierra tres filas por paso y deja paso en todas.")
     return 0
+
+
+def handicap_two_check(rom_path):
+    """EN UNA CARRERA HAY DOS HANDICAPS, Y SE ELIGEN CON SELECT.
+
+    Antes se ponian con los gatillos, uno por lado del mando, y una Nintendo
+    Entertainment System no tenia gatillos. Arriba y abajo ya mueven el cursor
+    e izquierda y derecha ya cambian el valor, asi que queda SELECT, que en
+    esta pagina ya significa "el otro"; sobre la linea de HANDICAP salta entre
+    los dos numeros en vez de abandonarla, y el que esta elegido se escribe en
+    el blanco del cursor para que se vea cual de los dos mueve el mando.
+
+    Se comprueba lo que se ve y lo que hace: que los gatillos ya no tocan nada
+    aqui, que SELECT cambia de numero sin cambiar de linea, que el blanco se
+    muda con el, y que DERECHA sube el numero blanco y no el otro.
+    """
+    failures = []
+    core, screen = load(rom_path)    # `screen` must stay alive; see load()
+    _ = screen
+
+    def tap(*names, hold=4, settle=10):
+        core.set_keys(*[KEYS[n] for n in names]); run(core, hold)
+        core.set_keys(); run(core, settle)
+
+    def banks():
+        """Los bancos de paleta de la fila del handicap, columna a columna."""
+        return [(core.memory.u16[SCREENBLOCK_ADDR + (HANDICAP_ROW * 32 + c) * 2]
+                 >> 12) & 0xF for c in range(30)]
+
+    def white_digits():
+        """Que numeros de la fila estan escritos en el blanco del cursor."""
+        text = tilemap_text(core, HANDICAP_ROW)
+        b = banks()
+        return "".join(ch for ch, bank in zip(text, b)
+                       if ch.isdigit() and bank == MENU_ARROW_BANK)
+
+    run(core, 20)
+    press_start(core); run(core, 10)      # title -> GAME SELECT
+    # VERSUS COMPUTER: dos tableros, dos handicaps, y sin segunda consola.
+    for _ in range(3):
+        tap("DOWN")
+    press_start(core); run(core, 12)       # -> LEVEL SETTINGS
+    tap("DOWN")                            # el cursor sobre HANDICAP
+    row = tilemap_text(core, HANDICAP_ROW)
+    if "HANDICAP 0 0" not in row:
+        failures.append(f"en VERSUS la fila no trae dos numeros: {row!r}")
+        return failures
+
+    if white_digits() != "0":
+        failures.append(f"al abrir, el blanco no marca un solo numero: "
+                         f"{white_digits()!r} en {tilemap_text(core, HANDICAP_ROW)!r}")
+    else:
+        print("  en VERSUS el primer numero abre en blanco: es el que mueve el mando")
+
+    # LOS GATILLOS YA NO PONEN NADA. Uno solo, que es como se hacia antes.
+    before = tilemap_text(core, HANDICAP_ROW)
+    tap("L"); tap("R")
+    if tilemap_text(core, HANDICAP_ROW) != before:
+        failures.append(f"un gatillo sigue moviendo el handicap: {before!r} -> "
+                         f"{tilemap_text(core, HANDICAP_ROW)!r}")
+    else:
+        print("  ni L ni R mueven ya el handicap")
+
+    # DERECHA SUBE EL NUMERO BLANCO, que es el primero.
+    tap("RIGHT")
+    if "HANDICAP 3 0" not in tilemap_text(core, HANDICAP_ROW):
+        failures.append(f"DERECHA no sube el primer handicap: "
+                         f"{tilemap_text(core, HANDICAP_ROW)!r}")
+    else:
+        print("  DERECHA sube el del jugador: 3 filas")
+
+    # SELECT CAMBIA DE NUMERO SIN CAMBIAR DE LINEA.
+    tap("SELECT")
+    if ">" not in tilemap_text(core, HANDICAP_ROW):
+        failures.append("SELECT sobre HANDICAP se llevo el cursor de la linea")
+    elif white_digits() != "0":
+        failures.append(f"SELECT no pasa el blanco al segundo numero: "
+                         f"{white_digits()!r} en "
+                         f"{tilemap_text(core, HANDICAP_ROW)!r}")
+    else:
+        print("  SELECT pasa el blanco al handicap de la maquina, "
+               "sin salir de la linea")
+
+    tap("RIGHT"); tap("RIGHT")
+    if "HANDICAP 3 6" not in tilemap_text(core, HANDICAP_ROW):
+        failures.append(f"con el blanco en el segundo, DERECHA no lo sube a el: "
+                         f"{tilemap_text(core, HANDICAP_ROW)!r}")
+    else:
+        print("  ...y DERECHA sube el suyo: 3 para el jugador, 6 para la maquina")
+
+    # Y SELECT OTRA VEZ VUELVE, que si no la linea seria una trampa.
+    tap("SELECT")
+    if white_digits() != "3":
+        failures.append(f"SELECT no devuelve el blanco al primero: "
+                         f"{white_digits()!r}")
+    # ...y ABAJO sigue siendo la salida de la linea.
+    tap("DOWN")
+    if ">" in tilemap_text(core, HANDICAP_ROW):
+        failures.append("ABAJO ya no saca el cursor de la linea del handicap")
+    else:
+        print("  ABAJO sigue sacando el cursor de la linea")
+    return failures
 
 
 def panel_check(rom_path):
@@ -2406,12 +2538,106 @@ def pausemenu_check(rom_path):
         else:
             print("  y el HUD que elegiste sigue siendo el tuyo")
 
+    failures += pause_resume_music(rom_path)
+
     for f in failures:
         print("FALLA:", f)
     if failures:
         return 1
     print("OK: el menu de pausa cambia la musica, sale preguntando, y se queda.")
     return 0
+
+
+def pause_resume_music(rom_path):
+    """UNA PAUSA SUSPENDE LA CANCION; NO LA REBOBINA.
+
+    Las canciones del cartucho ya lo hacian solas: pausar manda MUSIC_SUSPEND
+    y reanudar MUSIC_RESUME, y el motor vuelve donde estaba. Las dos entradas a
+    mano tienen su propio secuenciador, y la salida de la pausa llamaba a
+    handtune_start, que devuelve las dos voces al primer compas: Korobeiniki y
+    Katiuska empezaban de nuevo tras cada pausa y tras cada visita a la linea
+    MUSIC del menu, que es justo lo que se reporto.
+
+    No se compara frame contra frame -- el retardo al reanudar es variable y
+    eso derrota cualquier comparacion sin alinear. Se graba la melodia UNA vez
+    desde una partida limpia como lista de notas, y se le pregunta al caso con
+    pausa por que entrada de esa lista sigue: continuar es la nota siguiente a
+    la ultima oida, reiniciar es la entrada cero.
+    """
+    failures = []
+    for want in ("KOROBEINIKI", "KATIUSKA"):
+        got = tune_notes(rom_path, want, pause_at=None, frames=1400)
+        if got is None:
+            failures.append(f"no se puede elegir {want} en LEVEL SETTINGS")
+            continue
+        melody = got
+        heard, after = tune_notes(rom_path, want, pause_at=600, frames=400)
+        n = len(heard)
+        if heard != melody[:n]:
+            failures.append(f"{want}: lo oido antes de pausar no sigue a la "
+                             f"melodia de referencia")
+            continue
+        # La nota que sonaba al caer la pausa se sostiene a traves de ella, asi
+        # que una continuacion puede retomar una entrada a un lado u otro de
+        # donde se quedo la cuenta.
+        at = [i for i in range(len(melody) - 5) if melody[i:i + 6] == after[:6]]
+        if not at:
+            failures.append(f"{want}: al reanudar suena algo que no esta en la "
+                             f"melodia: {after[:6]}")
+        elif at == [0]:
+            failures.append(f"{want}: al reanudar la cancion EMPIEZA DE NUEVO")
+        elif not any(abs(i - n) <= 2 for i in at):
+            failures.append(f"{want}: al reanudar salta a la nota {at}, y se "
+                             f"habia quedado en la {n}")
+        else:
+            print(f"  {want} se reanuda en la nota {min(at, key=lambda i: abs(i - n))} "
+                   f"de {len(melody)}, donde la dejo la pausa")
+    return failures
+
+
+def tune_notes(rom_path, want, pause_at, frames):
+    """Las notas que suenan, una entrada por nota y no por frame.
+
+    Con pause_at a None devuelve la lista entera de una partida sin tocar.
+    Con un numero de frames devuelve (lo oido antes de pausar, lo oido tras
+    reanudar), con la pausa echada en ese frame.
+    """
+    core, screen = load(rom_path)    # `screen` must stay alive; see load()
+    _ = screen
+
+    def tap(*names, hold=4, settle=12):
+        core.set_keys(*[KEYS[n] for n in names]); run(core, hold)
+        core.set_keys(); run(core, settle)
+
+    def notes(n):
+        out, last = [], None
+        for _ in range(n):
+            core.run_frame()
+            p = core.memory.u16[REG_SOUND1CNT_X] & 0x7FF
+            if p and p != last:
+                out.append(p)
+            last = p
+        return out
+
+    run(core, 40)
+    tap("START"); run(core, 20)
+    tap("L", "R"); run(core, 20)         # destapa las canciones extra
+    tap("START"); run(core, 20)
+    tap("SELECT"); tap("SELECT")          # el cursor sobre MUSIC
+    for _ in range(MUSIC_COUNT_MAX):
+        if want in tilemap_text(core, MUSIC_ROW):
+            break
+        tap("RIGHT")
+    if want not in tilemap_text(core, MUSIC_ROW):
+        return None
+    tap("START"); run(core, 30)
+    if pause_at is None:
+        return notes(frames)
+    heard = notes(pause_at)
+    tap("START", settle=30)               # pausa
+    run(core, 120)                        # un rato sobre el cartel
+    tap("START", settle=30)               # reanuda
+    return heard, notes(frames)
 
 
 def quit_audio_check(rom_path):

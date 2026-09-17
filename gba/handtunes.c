@@ -314,6 +314,16 @@ static int voice_step(Voice *v, const Section *score, bool bass) {
     return e->note;
 }
 
+/* Silences all three channels, and leaves the registers where the cartridge's
+ * engine expects to find them: it writes a channel whenever its own APU state
+ * changes, so the next note or effect reclaims these anyway. */
+static void release_channels(void) {
+    REG_SOUND1CNT_H = 0;     /* channel 1's envelope... */
+    REG_SOUND2CNT_L = 0;     /* ...and channel 2's, which is its _L */
+    REG_SOUND3CNT_L = 0;     /* ...and the wave channel, which mutes by _L */
+    REG_SOUND3CNT_H = 0;
+}
+
 void handtune_start(uint8_t tune) {
     if (tune >= HANDTUNE_COUNT) return;
     g_tune = &kTunes[tune];
@@ -323,15 +333,27 @@ void handtune_start(uint8_t tune) {
 }
 
 void handtune_stop(void) {
+    g_tune = 0;
     if (!g_playing) return;
     g_playing = false;
-    /* Silence all three, and leave the registers where the cartridge's engine
-     * expects to find them: it writes a channel whenever its own APU state
-     * changes, so the next note or effect reclaims these anyway. */
-    REG_SOUND1CNT_H = 0;     /* channel 1's envelope... */
-    REG_SOUND2CNT_L = 0;     /* ...and channel 2's, which is its _L */
-    REG_SOUND3CNT_L = 0;     /* ...and the wave channel, which mutes by _L */
-    REG_SOUND3CNT_H = 0;
+    release_channels();
+}
+
+void handtune_suspend(void) {
+    if (!g_playing) return;
+    g_playing = false;
+    release_channels();
+    /* g_tune, g_lead and g_bass are deliberately untouched. The next note
+     * this tune plays is the one it was about to play. */
+}
+
+void handtune_resume(void) {
+    if (g_tune) g_playing = true;
+}
+
+uint8_t handtune_current(void) {
+    if (!g_tune) return HANDTUNE_COUNT;
+    return (uint8_t)(g_tune - kTunes);
 }
 
 bool handtune_playing(void) { return g_playing; }

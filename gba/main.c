@@ -836,6 +836,13 @@ static void upload_skin_frame_palette(int skin) {
  * which is the whole of "the skin does not stop at the title". */
 static uint8_t g_title_skin;
 
+/* ...and whether the chord has been rung on the title yet. A shoulder on its
+ * own does NOTHING until it has: the skin is a thing to find, and a player
+ * who has not found it should not be able to change the title by resting a
+ * finger on L. Once found, L and R alone step the list backwards and forwards
+ * — with four skins, going back one used to mean going round three. */
+static bool g_title_skin_found;
+
 /* Puts the board into (or back out of) a prototype's clothes. Cheap enough to
  * call on every repaint — it compares first and does nothing when the slots
  * already hold what is wanted. `skin` is -1 for the release.
@@ -3853,9 +3860,17 @@ static unsigned append_number(char *row, unsigned n, unsigned value) {
 /* One field: the cursor if it is the chosen one, then the label and the value
  * in their columns, and whatever the value trails after it — which is only
  * ever what the handicap costs, and is a note about the value rather than
- * part of it, so it is drawn in the note's colour. */
+ * part of it, so it is drawn in the note's colour.
+ *
+ * ONE STRETCH OF THE VALUE MAY BE LIT, characters [hl, hl+hl_len), and it is
+ * drawn in the CURSOR'S white. That is the handicap row in a race, where the
+ * value is two numbers and only one of them is the one the pad is moving: the
+ * arrow says which LINE you are on and the white says which NUMBER, in the one
+ * colour this page already uses to mean exactly that. hl_len of 0 lights
+ * nothing, which is every other row. */
 static void draw_field_row(int field, int chosen, const char *label,
-                            const char *value, const char *tail) {
+                            const char *value, const char *tail,
+                            int hl, int hl_len) {
     int ty = MENU_FIELD_TY(field);
     clear_both(MENU_IN_TX, ty, MENU_IN_W, 1);
     if (field == chosen)
@@ -3865,8 +3880,11 @@ static void draw_field_row(int field, int chosen, const char *label,
         set_map_tile(MENU_LABEL_TX + i, ty,
                       WITH_BANK(ascii_tile(label[i]), BANK_MENU));
     int tx = MENU_VALUE_TX;
-    for (int i = 0; value[i]; i++, tx++)
-        set_map_tile(tx, ty, WITH_BANK(ascii_tile(value[i]), BANK_MENU));
+    for (int i = 0; value[i]; i++, tx++) {
+        bool lit = hl_len > 0 && i >= hl && i < hl + hl_len;
+        set_map_tile(tx, ty, WITH_BANK(ascii_tile(value[i]),
+                                        lit ? BANK_ARROW : BANK_MENU));
+    }
     if (tail) {
         tx += MENU_TAIL_GAP;
         for (int i = 0; tail[i]; i++, tx++)
@@ -3875,7 +3893,8 @@ static void draw_field_row(int field, int chosen, const char *label,
 }
 
 static void draw_level_settings(int chosen, uint8_t start_level, uint8_t music,
-                                 const uint8_t handicap[2], bool two_player) {
+                                 const uint8_t handicap[2], bool two_player,
+                                 int handicap_who) {
     draw_menu_frame();
     /* draw_menu_frame only repaints BG0; the offset layer keeps whatever the
      * screen before this one left on it. */
@@ -3886,7 +3905,7 @@ static void draw_level_settings(int chosen, uint8_t start_level, uint8_t music,
 
     n = append_number(value, 0, start_level);
     value[n] = '\0';
-    draw_field_row(MENU_FIELD_LEVEL, chosen, "LEVEL", value, NULL);
+    draw_field_row(MENU_FIELD_LEVEL, chosen, "LEVEL", value, NULL, 0, 0);
 
     /* THE STARTING HANDICAP, the cartridge's own menuPlayer1Handicap /
      * menuPlayer2Handicap (main.asm.txt:3536-3546): how many three-row bands
@@ -3909,19 +3928,29 @@ static void draw_level_settings(int chosen, uint8_t start_level, uint8_t music,
      * does; only the display changed. */
     n = append_number(value, 0,
                        (unsigned)handicap[0] * TENGEN_HANDICAP_ROWS_PER_STEP);
+    /* WHICH OF THE TWO NUMBERS THE PAD IS ON, in characters of the value, so
+     * the white lands on the one being moved however many digits the other
+     * takes. In one player there is only the one and nothing is lit. */
+    int hl = 0, hl_len = 0;
     if (two_player) {
+        unsigned first = n;
         value[n++] = ' ';
+        unsigned second = n;
         n = append_number(value, n,
                            (unsigned)handicap[1] * TENGEN_HANDICAP_ROWS_PER_STEP);
+        hl = handicap_who ? (int)second : 0;
+        hl_len = handicap_who ? (int)(n - second) : (int)first;
     }
     value[n] = '\0';
     /* The unit, and only while the cursor is on the field: it is there to
      * answer the question you are asking, and the rest of the time it is one
      * more thing on the page. */
     const char *unit = chosen == MENU_FIELD_HANDICAP ? "ROWS" : NULL;
-    draw_field_row(MENU_FIELD_HANDICAP, chosen, "HANDICAP", value, unit);
+    draw_field_row(MENU_FIELD_HANDICAP, chosen, "HANDICAP", value, unit,
+                    hl, hl_len);
 
-    draw_field_row(MENU_FIELD_MUSIC, chosen, "MUSIC", kMusicNames[music], NULL);
+    draw_field_row(MENU_FIELD_MUSIC, chosen, "MUSIC", kMusicNames[music],
+                    NULL, 0, 0);
 
     /* THE LINE UNDER IT IS GONE WITH THE STEPS. It used to spell out "BURIES
      * 3 AND 6 ROWS", because "1 2" said nothing; now the row itself reads
@@ -4758,6 +4787,17 @@ static bool solo_play_frame(uint8_t buttons, uint8_t pressed, bool *quit) {
              * MIX is on its turn — and the mix OPENS on Korobeiniki, so it was
              * every first level of every mixed game: pause, and the tune
              * played on alone over the plaque. */
+            /* A PAUSE SUSPENDS A TUNE; IT DOES NOT REWIND IT. This used to
+             * call handtune_start on the way out, which resets both voices to
+             * the first bar — so Korobeiniki and Katiuska began again from the
+             * top after every pause, and after every visit to the pause menu's
+             * MUSIC line, while the cartridge's own tracks came back exactly
+             * where MUSIC_SUSPEND had left them. Suspend and resume are that
+             * pair for the hand-entered ones.
+             *
+             * START is still start, mind: if the tune that should be playing
+             * is not the one loaded — the menu chose another, or the mix has
+             * turned over — it begins properly, from its first bar. */
             uint8_t tune = current_tune();
             if (MUSIC_IS_HANDTUNE(tune)) {
                 /* ...and they follow the engine, including into a prototype's
@@ -4765,9 +4805,13 @@ static bool solo_play_frame(uint8_t buttons, uint8_t pressed, bool *quit) {
                  * over a plaque the cartridge's own tune plays through would
                  * be the two halves of the machine disagreeing. */
                 if (g_session.game.paused && !g_session.game.proto_rules)
-                    handtune_stop();
-                else if (!g_session.game.paused)
-                    handtune_start(MUSIC_HANDTUNE_OF(tune));
+                    handtune_suspend();
+                else if (!g_session.game.paused) {
+                    if (handtune_current() == MUSIC_HANDTUNE_OF(tune))
+                        handtune_resume();
+                    else
+                        handtune_start(MUSIC_HANDTUNE_OF(tune));
+                }
             }
             /* The plaque has to be painted over on the way out, but this runs
              * mid-frame; six hundred tiles written into VRAM while the screen
@@ -4894,6 +4938,9 @@ int main(void) {
     uint8_t start_level = 0;
     /* menuPlayer1Handicap / menuPlayer2Handicap ($04F3-$04F4). */
     uint8_t handicap[2] = { 0, 0 };
+    /* ...and which of the two the pad is setting, in a race. SELECT swaps it
+     * and the value's white says which. See the note by the cursor keys. */
+    int handicap_who = 0;
     uint8_t game_mode = GAME_1P;
     /* Which of the three settings the cursor is on. */
     int menu_field = MENU_FIELD_LEVEL;
@@ -4920,13 +4967,33 @@ int main(void) {
             /* initializeTitleScreen ends with this (main.asm.txt:4489). */
             front_music(FRONT_TITLE_THEME);
             set_offset_layer(TITLE_LOGO_SHIFT_PX);
-            /* L+R, NOT EITHER SHOULDER, and it is the only cheat on this
-             * screen: the skin is a thing you look at rather than a thing you
-             * play with, so it answers to the same chord as everything else
-             * and unlocks NOTHING — a player who finds the prototype title has
-             * not thereby found the hidden tunes. See unlock_cheats. */
-            if (TITLE_SKIN_COUNT > 1 && shoulder_chord()) {
-                g_title_skin = (uint8_t)((g_title_skin + 1) % TITLE_SKIN_COUNT);
+            /* L+R FINDS IT; L AND R ALONE DRIVE IT AFTERWARDS.
+             *
+             * The chord is the discovery, and it is the only cheat on this
+             * screen: it unlocks NOTHING else — a player who finds the
+             * prototype title has not thereby found the hidden tunes (see
+             * unlock_cheats). Until it is rung, a lone shoulder does nothing
+             * at all, so the title cannot be changed by accident.
+             *
+             * After it, though, the chord is a poor control. There are four
+             * skins and it only ever went forwards, so going back to the one
+             * you just passed meant going round the other three — which is
+             * exactly what was reported. So once found, R steps forward and L
+             * steps back, and the chord itself stands down. */
+            int skin_step = 0;
+            if (TITLE_SKIN_COUNT > 1) {
+                bool chord = shoulder_chord();
+                bool tap_l = pressed_shoulder(SHOULDER_L);
+                bool tap_r = pressed_shoulder(SHOULDER_R);
+                if (!g_title_skin_found) {
+                    if (chord) { g_title_skin_found = true; skin_step = 1; }
+                } else if (!chord && (tap_l || tap_r)) {
+                    skin_step = tap_r ? 1 : TITLE_SKIN_COUNT - 1;
+                }
+            }
+            if (skin_step) {
+                g_title_skin = (uint8_t)((g_title_skin + skin_step) %
+                                          TITLE_SKIN_COUNT);
                 nes_audio_play(NES_SOUND_CHIRP);
                 vsync();
                 install_title_palette();
@@ -5081,17 +5148,32 @@ int main(void) {
              * "yes" and then "no" — which is how the handicap's first version
              * quietly ate the hidden tunes' chord. */
             bool chord = shoulder_chord();
-            bool tap_l = pressed_shoulder(SHOULDER_L);
-            bool tap_r = pressed_shoulder(SHOULDER_R);
 
             /* UP/DOWN/SELECT MOVE THE CURSOR, LEFT/RIGHT CHANGE THE FIELD.
              * SELECT moving it the way DOWN does is the cartridge's
              * (LA048's carry-set add, $9FBC/$A063); the split between moving
              * and setting is the port's, and it is what lets three settings
-             * share one page. */
+             * share one page.
+             *
+             * EXCEPT ON THE HANDICAP LINE OF A RACE, where SELECT switches
+             * between the two numbers instead of leaving the line.
+             *
+             * This used to be L and R — a shoulder on each player's side of
+             * the pad — and a Game Boy Advance has those where a Nintendo
+             * Entertainment System controller does not. The cartridge's own
+             * handicap screen is driven by the four it had, so the port should
+             * be too: Up and Down are the cursor's and Left and Right are the
+             * value's, which leaves exactly SELECT, and SELECT already means
+             * "the other one" everywhere else on this page. Down still leaves
+             * the line, so nothing is trapped there. */
+            bool two_handicaps = (game_mode == GAME_2P || game_mode == GAME_VS);
+            bool pick_side = (pressed & TENGEN_BTN_SELECT) && two_handicaps &&
+                              menu_field == MENU_FIELD_HANDICAP;
+            if (pick_side) handicap_who ^= 1;
             if (pressed & TENGEN_BTN_UP)
                 menu_field = (menu_field + MENU_FIELD_COUNT - 1) % MENU_FIELD_COUNT;
-            if (pressed & (TENGEN_BTN_DOWN | TENGEN_BTN_SELECT))
+            if ((pressed & TENGEN_BTN_DOWN) ||
+                ((pressed & TENGEN_BTN_SELECT) && !pick_side))
                 menu_field = (menu_field + 1) % MENU_FIELD_COUNT;
 
             bool back = (pressed & TENGEN_BTN_LEFT) != 0;
@@ -5103,30 +5185,22 @@ int main(void) {
                     start_level = (uint8_t)((start_level +
                                               (back ? levels - 1 : 1)) % levels);
                 } else if (menu_field == MENU_FIELD_HANDICAP) {
-                    /* In two players the pad reaches player 1's; the shoulders
-                     * below are how player 2's is set, which is what the
-                     * label says. */
-                    handicap[0] = (uint8_t)((handicap[0] +
-                                              (back ? TENGEN_HANDICAP_MAX : 1)) %
-                                             (TENGEN_HANDICAP_MAX + 1));
+                    /* Whichever of the two the white is on — the pad sets one
+                     * number at a time and SELECT says which. */
+                    int who = two_handicaps ? handicap_who : 0;
+                    handicap[who] = (uint8_t)((handicap[who] +
+                                               (back ? TENGEN_HANDICAP_MAX : 1)) %
+                                              (TENGEN_HANDICAP_MAX + 1));
                 } else {
                     g_music = (uint8_t)((g_music + (back ? music_choices() - 1 : 1))
                                          % music_choices());
                 }
             }
 
-            /* One shoulder each, and only when they are NOT both down: the
-             * chord is the hidden tunes', and a player reaching for them should
-             * not be burying anybody on the way. They work wherever the cursor
-             * is — that is the point of naming them in the label. */
-            if (!chord && (tap_l || tap_r)) {
-                int who = (tap_r && !tap_l &&
-                            (game_mode == GAME_2P || game_mode == GAME_VS)) ? 1 : 0;
-                handicap[who] = (uint8_t)((handicap[who] + 1) %
-                                           (TENGEN_HANDICAP_MAX + 1));
-                menu_field = MENU_FIELD_HANDICAP;   /* show what moved */
-                moved = true;
-            }
+            /* The shoulders set no handicap here any more — see SELECT above.
+             * The chord is all they are for on this page, and it is checked
+             * below. */
+            if (pick_side) moved = true;   /* repaint: the white has moved */
 
             if (chord && unlock_cheats()) {
                 /* This page can SHOW what was uncovered, so it does: the
@@ -5250,7 +5324,8 @@ int main(void) {
             /* Only a RACE has two handicaps — two boards to bury. A shared
              * board, coop's or WITH COMPUTER's, takes one. */
             draw_level_settings(menu_field, start_level, g_music, handicap,
-                                 game_mode == GAME_2P || game_mode == GAME_VS);
+                                 game_mode == GAME_2P || game_mode == GAME_VS,
+                                 handicap_who);
             audio_frame();
             continue;
         }
