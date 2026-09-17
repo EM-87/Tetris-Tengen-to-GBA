@@ -37,6 +37,9 @@
 #define REG_SOUND1CNT_X (*(vu16 *)0x04000064)
 #define REG_SOUND2CNT_L (*(vu16 *)0x04000068)
 #define REG_SOUND2CNT_H (*(vu16 *)0x0400006C)
+#define REG_SOUND3CNT_L (*(vu16 *)0x04000070)  /* wave bank / channel on */
+#define REG_SOUND3CNT_H (*(vu16 *)0x04000072)  /* length / volume code */
+#define REG_SOUND3CNT_X (*(vu16 *)0x04000074)  /* frequency / control */
 
 /* ----------------------------------------------------------------------- *
  * Notes
@@ -185,13 +188,22 @@ static const Event kKatiuskaBassB[] = {
  * played at 150 (the 7 it had was audibly a drag) and Katyusha, which is a
  * march and not a dance, at 128.6.
  *
- * ARTICULATION. Every note is cut one frame before its length runs out
- * instead of being left to a decaying envelope. At 150bpm an eighth note is
- * twelve frames and any envelope slow enough to sustain a quarter ran straight
- * through the eighths, smearing them together; a hard note-off is both
- * cleaner and independent of the tempo.
- * ----------------------------------------------------------------------- */
-#define NOTE_OFF_FRAMES 1
+ * ARTICULATION. Every note is cut before its length runs out instead of being
+ * left to a decaying envelope. At 150bpm an eighth note is twelve frames and
+ * any envelope slow enough to sustain a quarter ran straight through the
+ * eighths, smearing them together; a hard note-off is both cleaner and
+ * independent of the tempo.
+ *
+ * HOW MUCH is not the same for the two voices, and that is the cartridge's
+ * shape rather than a preference. Measured across its four tunes, pulse 1
+ * sounds 83-88% of the frames and pulse 2 only 37-46%: the lead is legato and
+ * the second voice is a stab, a short note under it and then nothing. The
+ * lead keeps its one frame; the bass gives back half of every note, which
+ * lands it at about half and stops it droning flat out under the melody. */
+#define LEAD_OFF_FRAMES 1
+/* ...as a fraction of the note: half of it, numerator over denominator. */
+#define BASS_OFF_NUM 1
+#define BASS_OFF_DEN 2
 
 typedef struct {
     const Event *events;
@@ -237,22 +249,47 @@ typedef struct {
     uint8_t section;    /* which section of the tune */
     uint16_t index;     /* which event within it */
     uint16_t ticks;     /* frames left of the current note */
+    uint16_t off_at;    /* ...and how many of those are its silence */
 } Voice;
 
 static Voice g_lead, g_bass;
 static const Tune *g_tune;
 static bool g_playing;
 
-/* Duty 2 (a square wave) for the lead, duty 1 for the bass so the two are
- * told apart. Envelope step 0 means the volume does not change, which is what
- * is wanted now that the note-off does the articulation. */
-#define LEAD_ENVELOPE  ((11 << 12) | (0 << 11) | (0 << 8) | (2 << 6))
-#define BASS_ENVELOPE  ((8 << 12) | (0 << 11) | (0 << 8) | (1 << 6))
+/* HOW LOUD, AND IT IS THE CARTRIDGE'S ANSWER RATHER THAN A GUESS.
+ *
+ * These two tunes were audibly louder and harsher than the four the ROM's own
+ * engine plays, so the four were MEASURED — the GBA's sound registers read
+ * back frame by frame while each one played, which is possible because the
+ * engine's output arrives at exactly these registers:
+ *
+ *     tune        pulse 1              pulse 2              triangle
+ *     LOGINSKA    83% of frames, 5     46%, 3               72% of frames
+ *     BRADINSKY   50%, 7               41%, 3               75%
+ *     KARINKA     88%, 5               37%, 3               51%
+ *     TROIKA      87%, 5               40%, 5               83%
+ *     ---------------------------------------------------------------
+ *     before      89%, 11              97%, 8                0%
+ *
+ * Three things at once, and the loudness is only the first. The lead was
+ * ELEVEN against the cartridge's five — more than twice the amplitude. The
+ * second voice was EIGHT against three, and it was sounding 97% of the time
+ * against their forty: a second square wave droning flat out under the
+ * melody, which is precisely what "saturated" sounds like. And the cartridge
+ * puts its low voice on the TRIANGLE, under all four tunes, where these had
+ * nothing at all — so what body they had was coming from sheer level.
+ *
+ * So: five and three, the cartridge's own pair for three of its four; the
+ * bass articulated instead of held (see BASS_HOLD); and the triangle put
+ * under it, which is where this game's bass lives. */
+#define LEAD_ENVELOPE  ((5 << 12) | (0 << 11) | (0 << 8) | (2 << 6))
+#define BASS_ENVELOPE  ((3 << 12) | (0 << 11) | (0 << 8) | (1 << 6))
 
 static void voice_reset(Voice *v) {
     v->section = 0;
     v->index = 0;
     v->ticks = 0;
+    v->off_at = 0;
 }
 
 /* Advances one voice. Returns the note to start now, NOTE_HOLD to leave the
@@ -260,10 +297,10 @@ static void voice_reset(Voice *v) {
 #define NOTE_HOLD    (-1)
 #define NOTE_RELEASE (-2)
 
-static int voice_step(Voice *v, const Section *score) {
+static int voice_step(Voice *v, const Section *score, bool bass) {
     if (v->ticks > 0) {
         v->ticks--;
-        return v->ticks < NOTE_OFF_FRAMES ? NOTE_RELEASE : NOTE_HOLD;
+        return v->ticks < v->off_at ? NOTE_RELEASE : NOTE_HOLD;
     }
     if (v->index >= score[v->section].count) {
         v->index = 0;
@@ -271,6 +308,9 @@ static int voice_step(Voice *v, const Section *score) {
     }
     const Event *e = &score[v->section].events[v->index++];
     v->ticks = (uint16_t)(e->len * g_tune->frames_per_sixteenth - 1);
+    v->off_at = bass ? (uint16_t)(v->ticks * BASS_OFF_NUM / BASS_OFF_DEN)
+                     : LEAD_OFF_FRAMES;
+    if (v->off_at < 1) v->off_at = 1;
     return e->note;
 }
 
@@ -285,11 +325,13 @@ void handtune_start(uint8_t tune) {
 void handtune_stop(void) {
     if (!g_playing) return;
     g_playing = false;
-    /* Silence both, and leave the registers where the cartridge's engine
+    /* Silence all three, and leave the registers where the cartridge's engine
      * expects to find them: it writes a channel whenever its own APU state
      * changes, so the next note or effect reclaims these anyway. */
     REG_SOUND1CNT_H = 0;     /* channel 1's envelope... */
     REG_SOUND2CNT_L = 0;     /* ...and channel 2's, which is its _L */
+    REG_SOUND3CNT_L = 0;     /* ...and the wave channel, which mutes by _L */
+    REG_SOUND3CNT_H = 0;
 }
 
 bool handtune_playing(void) { return g_playing; }
@@ -297,7 +339,7 @@ bool handtune_playing(void) { return g_playing; }
 void handtune_frame(void) {
     if (!g_playing) return;
 
-    int lead = voice_step(&g_lead, g_tune->melody);
+    int lead = voice_step(&g_lead, g_tune->melody, false);
     if (lead == NOTE_RELEASE || lead == REST) {
         REG_SOUND1CNT_H = 0;
     } else if (lead != NOTE_HOLD) {
@@ -306,11 +348,33 @@ void handtune_frame(void) {
         REG_SOUND1CNT_X = (uint16_t)(kNoteReg[lead] | 0x8000);
     }
 
-    int bass = voice_step(&g_bass, g_tune->bass);
+    /* THE BASS IS TWO VOICES NOW, and the second is the cartridge's own
+     * instrument. Every one of the ROM's four tunes has the wave channel
+     * going under it for half the frames or more — it IS this game's bass —
+     * and these two had nothing there, so what weight they had came from
+     * turning the squares up.
+     *
+     * The wave channel divides its rate by 32 where a pulse divides by 16, so
+     * THE SAME REGISTER VALUE SOUNDS AN OCTAVE LOWER. That is exactly where a
+     * bass wants to be, so the bass note's own number is written to both: the
+     * pulse plays it as written, quietly, and the wave doubles it an octave
+     * down. Wave RAM already holds the NES triangle's own 32-step ramp —
+     * nes_audio.c's load_triangle_wave puts it in both banks at startup and
+     * nothing ever overwrites it — so the timbre is the cartridge's too.
+     *
+     * It shares the channel with the engine the same way the pulses do: an
+     * effect that wants the triangle takes it, and the next bass note takes
+     * it back. */
+    int bass = voice_step(&g_bass, g_tune->bass, true);
     if (bass == NOTE_RELEASE || bass == REST) {
         REG_SOUND2CNT_L = 0;
+        REG_SOUND3CNT_L = 0;
+        REG_SOUND3CNT_H = 0;
     } else if (bass != NOTE_HOLD) {
         REG_SOUND2CNT_L = BASS_ENVELOPE;
         REG_SOUND2CNT_H = (uint16_t)(kNoteReg[bass] | 0x8000);
+        REG_SOUND3CNT_L = 0x0080;                /* one bank of 32, channel on */
+        REG_SOUND3CNT_H = (uint16_t)(1 << 13);   /* volume code 1 = 100% */
+        REG_SOUND3CNT_X = (uint16_t)(kNoteReg[bass] | 0x8000);
     }
 }

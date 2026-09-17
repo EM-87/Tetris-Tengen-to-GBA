@@ -680,6 +680,7 @@ AUDIO_RATE = 32768
 REG_SOUND1CNT_H = 0x04000062     # channels 1, 2 and 4 keep their volume in
 REG_SOUND2CNT_L = 0x04000068     # bits 12-15 of these
 REG_SOUND3CNT_L = 0x04000070     # bit 7 is the wave channel's own on/off
+REG_SOUND3CNT_H = 0x04000072     # ...and bits 13-14 its volume code
 REG_SOUND4CNT_L = 0x04000078
 REG_SOUNDCNT_X  = 0x04000084     # bits 0-3: which channels are sounding
 REG_SOUND1CNT_X = 0x04000064     # ...and channel 1's pitch, in bits 0-10
@@ -3316,16 +3317,49 @@ def handtunes_check(rom_path):
         return io[(addr - 0x04000000) >> 1]
 
     pitches, volumes = set(), set()
+    bass_vol, bass_on, tri_on = set(), 0, 0
     for _ in range(400):
         core.run_frame()
         pitches.add(reg(REG_SOUND1CNT_X) & 0x7FF)
         volumes.add((reg(REG_SOUND1CNT_H) >> 12) & 0xF)
+        v2 = (reg(REG_SOUND2CNT_L) >> 12) & 0xF
+        if v2:
+            bass_vol.add(v2)
+            bass_on += 1
+        if reg(REG_SOUND3CNT_H) & 0xE000:
+            tri_on += 1
     if max(volumes) == 0:
         failures.append("KOROBEINIKI no suena: el pulso 1 queda a volumen cero")
     elif len(pitches) < 6:
         failures.append(f"KOROBEINIKI no cambia de nota: {len(pitches)} tono(s)")
     else:
         print(f"  suena y se mueve: {len(pitches)} tonos distintos en 400 frames")
+
+    # AND NO LOUDER THAN THE FOUR THE CARTRIDGE PLAYS. Measured off these same
+    # registers while the ROM's engine played its own: pulse 1 sits at 5 (7 for
+    # BRADINSKY), pulse 2 at 3 (5 for TROIKA), and the triangle is going under
+    # all four of them for half the frames or more. The hand-entered pair used
+    # to run at 11 and 8 with the second sounding 97% of the time and nothing
+    # on the triangle at all — twice the amplitude on the lead, nearly three
+    # times on a second square that never stopped, which is what "saturated"
+    # was.
+    loud = max(volumes)
+    if loud > 7:
+        failures.append(f"KOROBEINIKI lleva el pulso 1 a {loud}; el cartucho "
+                         "no pasa de 7")
+    elif bass_vol and max(bass_vol) > 5:
+        failures.append(f"...y el pulso 2 a {max(bass_vol)}; el cartucho no "
+                         "pasa de 5")
+    elif bass_on > 400 * 7 // 10:
+        failures.append(f"el pulso 2 suena en el {100 * bass_on // 400}% de los "
+                         "frames; en el cartucho no llega al 50")
+    elif tri_on < 400 // 4:
+        failures.append(f"el triangulo solo suena el {100 * tri_on // 400}%: el "
+                         "cartucho lleva ahi el bajo de sus cuatro canciones")
+    else:
+        print(f"  y se mantiene en el nivel del cartucho: pulso 1 a {loud}, "
+              f"pulso 2 a {max(bass_vol)} el {100 * bass_on // 400}% del "
+              f"tiempo, triangulo el {100 * tri_on // 400}%")
 
     # PAUSE has to reach it too.
     tap(KEYS["START"], settle=10)
