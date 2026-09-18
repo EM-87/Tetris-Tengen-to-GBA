@@ -442,7 +442,17 @@ running ROM; only the side panels need reflowing).
      completed rows raises these builds' SCORE and leaves their LINES counter
      at zero, so whatever that counter is fed by, it is not a row that
      appeared in RAM without a piece putting it there. Measuring this one
-     properly wants a bot that stacks, not a memory poke.
+     properly wants a bot that stacks, not a memory poke — and a first bot
+     was tried: a one-column well at the right wall with the rest planted,
+     the I pieces turned and sent down it, everything else parked left. It
+     did not get a single real clear out of any of the three before topping
+     out, because these builds do not answer a two-frame tap the way the
+     release does and the console has no lock-detection of its own, so
+     several pieces fell under one held DOWN and piled up in the middle. The
+     rule stays unverified; the bot wants per-frame lock detection (the
+     falling piece IS written into $0600 in these builds, so a lock is the
+     frame a second set of unsettled cells appears at the top) and longer
+     presses before it can say anything.
    What is deliberately NOT taken is the SHAPE of their front end: only
    1 PLAYER and 2 PLAYER, four difficulty steps instead of ten levels, no
    handicap and no music menu. Taking those away on a chord rung at the title
