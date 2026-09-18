@@ -477,9 +477,27 @@ def coop_check(rom):
             failures.append(f"la columna {col} del campo no se dibuja en la "
                              f"columna {tx} de la pantalla: coop no esta "
                              "usando sus doce columnas")
+    # AND THE GUEST SEES IT TOO. The guest views slot 1, and drawing the
+    # field by view showed it field[1] — the one coop never writes — so the
+    # partner's console had an empty board with two pieces falling through
+    # it. Every cell settled in the shared field has to be ink on the
+    # guest's screen as well. (`final` was read before the two cells above
+    # were planted on the master alone.)
+    gpx = run_rom.pixels(screens[1])
+    missing = 0
+    for r in range(20):
+        for c in range(TENGEN_PF_WIDTH):
+            if not final[r * TENGEN_PF_WIDTH + c]:
+                continue
+            if gpx[r * 8 + 4][(COOP_FIELD_TX + c) * 8 + 4] == (0, 0, 0):
+                missing += 1
+    if missing:
+        failures.append(f"el invitado no ve {missing} de las {shared} celdas "
+                         "asentadas: dibuja el campo equivocado")
     if not failures:
         print(f"  campo compartido: {shared} celdas, doce columnas desde la "
-               f"columna {COOP_FIELD_TX}, y el segundo campo vacio")
+               f"columna {COOP_FIELD_TX}, el segundo campo vacio, y el "
+               "invitado ve las mismas celdas")
 
     # AND IT HAS TO END. Topping out a coop game used to leave the partner's
     # `game_active` standing, so neither console ever agreed the match was

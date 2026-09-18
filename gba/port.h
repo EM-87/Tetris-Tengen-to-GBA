@@ -1634,6 +1634,7 @@ extern uint8_t g_idle_palette;
 extern int g_dance_frames;
 void idle_cossack_celebrate(int lines);
 void draw_line_clear_sweep(void);
+int hud_clearing_slot(void);     /* whose rows are coming down; see hud.c */
 void points_clear(void);
 void note_award(int slot, TengenStepResult step);
 void draw_points(void);

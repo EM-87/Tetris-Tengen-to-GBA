@@ -153,9 +153,25 @@ static void draw_idle_cossack(int elapsed, bool running,
 /* The puff of smoke crossing each completed row: five sprites in a row, the
  * head at the column the sweep has reached and the rest trailing one column
  * apart behind it, each retiring as it leaves the field. */
+/* WHOSE ROWS ARE COMING DOWN. On a race board only the viewed player's can
+ * be; on the coop board either player's can, and the core holds both still
+ * while they do (tengen_step's coop hold), so the sweep, the word and the
+ * frozen field all have to follow whichever timer is running — which used
+ * to be the viewed player's only, so the partner's clears simply happened
+ * with no sweep and no word, and on the guest's console the rows vanished
+ * under a piece that had never seemed to stop. */
+int hud_clearing_slot(void) {
+    if (g_session.game.coop &&
+        g_session.game.player[g_view].line_clear_timer == 0 &&
+        g_session.game.player[g_view ^ 1].line_clear_timer > 0)
+        return g_view ^ 1;
+    return g_view;
+}
+
 void draw_line_clear_sweep(void) {
-    const TengenPlayerState *p = &g_session.game.player[g_view];
-    uint8_t step = tengen_line_clear_step(&g_session.game, (TengenPlayerSlot)g_view);
+    int slot = hud_clearing_slot();
+    const TengenPlayerState *p = &g_session.game.player[slot];
+    uint8_t step = tengen_line_clear_step(&g_session.game, (TengenPlayerSlot)slot);
     int used = 0;
 
     for (int row = 0; row < TENGEN_PF_HEIGHT; row++) {
@@ -1409,14 +1425,21 @@ void draw_panel(void) {
 }
 
 void draw_field(void) {
-    const TengenPlayfield *field = &g_session.game.field[g_view];
-    const TengenPlayerState *p = &g_session.game.player[g_view];
+    /* THE COOP BOARD IS field[0] FOR BOTH PLAYERS — the core shares it the
+     * way the cartridge does (tengen_core.c, `game->coop ? 0 : slot`) — and
+     * the guest views slot 1, so indexing by view showed the guest the
+     * second field, which coop never writes: an empty board with two pieces
+     * falling through it. */
+    const TengenPlayfield *field =
+        &g_session.game.field[g_session.game.coop ? 0 : g_view];
+    int clearing_slot = hud_clearing_slot();
+    const TengenPlayerState *p = &g_session.game.player[clearing_slot];
 
     /* How far the line-clear sweep has crossed the completed rows, and what
      * it is writing into them as it goes. `written` is the last column the
      * trailing sprite has passed over; everything to its right still shows
      * the blocks that are about to come down. */
-    uint8_t step = tengen_line_clear_step(&g_session.game, (TengenPlayerSlot)g_view);
+    uint8_t step = tengen_line_clear_step(&g_session.game, (TengenPlayerSlot)clearing_slot);
     int written = (int)step - TENGEN_CLEAR_TRAIL - 1;
     int rows_going = 0;
     for (int row = 0; row < TENGEN_PF_HEIGHT; row++)

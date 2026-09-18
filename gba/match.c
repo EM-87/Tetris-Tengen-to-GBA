@@ -744,7 +744,7 @@ void draw_match(bool *sweeping) {
     if (g_link_lost) draw_text(BOX_R_IN + 1, BOX_TOP_IN + 2, "LINK", BANK_LABEL);
 
     /* The sweep's sprites, and the one tidy-up when it finishes. */
-    if (g_session.game.player[g_view].line_clear_timer > 0) {
+    if (g_session.game.player[hud_clearing_slot()].line_clear_timer > 0) {
         draw_line_clear_sweep();
         *sweeping = true;
     } else if (*sweeping) {
