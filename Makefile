@@ -195,6 +195,7 @@ gba-check: $(GBA_ROM)
 	python3 tools/run_rom.py $(GBA_ROM) --stats
 	python3 tools/run_rom.py $(GBA_ROM) --effects
 	python3 tools/run_rom.py $(GBA_ROM) --loans
+	python3 tools/run_rom.py $(GBA_ROM) --onscreen
 	python3 tools/run_rom.py $(GBA_ROM) --gameover
 	python3 tools/run_rom.py $(GBA_ROM) --link
 	python3 tools/run_link.py $(GBA_ROM)

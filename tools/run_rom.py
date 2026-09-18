@@ -1360,6 +1360,10 @@ STATS_ICON_ROWS = 2
 STATS_RUN_STEPS = 8
 # Cuanto se escucha tras pulsar: el mas largo de los efectos dura 15 frames.
 EFFECT_WATCH_FRAMES = 30
+# Cuanta tinta tiene que prometer una CELDA para que su vacio sea sospechoso.
+# Media celda: menos que eso puede quedar tapado por otra capa sin que pase
+# nada, media letra no.
+ONSCREEN_MIN_INK = 32
 
 
 def to_music_page(core, settle=10):
@@ -2914,6 +2918,110 @@ def loans_check(rom_path):
     return 0
 
 
+def onscreen_check(rom_path):
+    """LO QUE ESTA ESCRITO TIENE QUE LLEGAR A LA PANTALLA.
+
+    Todas las comprobaciones de este fichero leen el MAPA DE TILES, y el mapa
+    puede decir la verdad mientras la pantalla miente. Paso: al partir
+    gba/main.c en cinco ficheros el compilador perdio el inline entre ellos,
+    el dibujado de un frame crecio un cinco por ciento y empezo a pasarse del
+    blanco vertical -- y pasarse no se ve como lentitud, se ve como que falta
+    la PARTE DE ARRIBA de lo ultimo que se dibuja, porque el haz ya ha pasado
+    por esas lineas cuando se escriben. Faltaban el titulo del menu de pausa y
+    el borde de arriba de su caja, con el mapa entero y correcto.
+
+    Asi que esto cruza las dos cosas en las pantallas que importan: para cada
+    fila de tiles suma la TINTA que el mapa promete -- mirando el arte de cada
+    tile en las cuatro capas -- y la compara con los pixeles encendidos de esa
+    fila. Una fila que promete tinta y no enciende nada es una fila que no
+    llego a tiempo.
+    """
+    failures = []
+    core, screen = load(rom_path)   # `screen` must stay alive; see load()
+
+    def tap(*names, hold=4, settle=16):
+        core.set_keys(*[KEYS[n] for n in names]); run(core, hold)
+        core.set_keys(); run(core, settle)
+
+    # El arte de cada tile, una vez: cuantos pixeles suyos no son el color 0.
+    def tile_ink(cache, tile):
+        if tile in cache:
+            return cache[tile]
+        n = 0
+        for i in range(16):
+            v = core.memory.u16[0x06000000 + tile * 32 + i * 2]
+            for s in range(0, 16, 4):
+                if (v >> s) & 0xF:
+                    n += 1
+        cache[tile] = n
+        return n
+
+    def audit(name):
+        cache = {}
+        rows = pixels(screen)
+        # CELDA A CELDA, no fila a fila: una fila con las paredes de una caja
+        # a los lados enciende pixeles aunque su contenido no llegue, y eso es
+        # justo lo que hay que cazar.
+        bad = []
+        for ty in range(SCREEN_H // TILE):
+            for tx in range(SCREEN_TW_TILES):
+                promised = 0
+                for sb in (28, 29, 30, 31):
+                    base = 0x06000000 + sb * 0x800
+                    t = core.memory.u16[base + ((ty * 32 + tx) * 2)] & 0x3FF
+                    if t:
+                        promised = max(promised, tile_ink(cache, t))
+                if promised < ONSCREEN_MIN_INK:
+                    continue
+                # Las capas van tres pixeles a un lado y dos al otro, asi que
+                # se mira la celda y su vecindad inmediata.
+                lit = sum(1 for y in range(ty * TILE, (ty + 1) * TILE + 2)
+                          for x in range(tx * TILE - 3, (tx + 1) * TILE + 3)
+                          if 0 <= y < SCREEN_H and 0 <= x < SCREEN_W
+                          and rows[y][x] != (0, 0, 0))
+                if lit == 0:
+                    bad.append((ty, tx))
+        if bad:
+            failures.append(f"{name}: {len(bad)} celdas con tiles escritos no "
+                             f"encienden un solo pixel, la primera en "
+                             f"{bad[0]}")
+        else:
+            print(f"  {name}: todo lo escrito esta en pantalla")
+
+    run(core, 40)
+    audit("el titulo")
+    press_start(core); run(core, 30)
+    tap("L", "R"); run(core, 20)
+    audit("GAME SELECT")
+    press_start(core); run(core, 30)
+    audit("LEVEL SETTINGS")
+    press_start(core); run(core, 90)
+    core.set_keys(KEYS["DOWN"]); run(core, 200); core.set_keys(); run(core, 30)
+    audit("una partida")
+    tap("START"); run(core, 40)
+    audit("el menu de pausa")
+    tap("START"); run(core, 20)
+    # ...y el game over, que dibuja su propia placa encima de todo.
+    off = game_offsets(rom_path)
+    base, why = game_state_address(rom_path)
+    if base is not None:
+        addr = base + off["field"]
+        for row in range(TENGEN_PF_HEIGHT):
+            for col in range(1, TENGEN_PF_WIDTH - 1):
+                core.memory.u8[addr + row * TENGEN_PF_WIDTH + col] = (
+                    0 if col == 5 else CELL_BLOCK)
+        run(core, 240)
+        audit("el game over")
+    del core, screen
+
+    for f in failures:
+        print("FALLA:", f)
+    if failures:
+        return 1
+    print("OK: lo que el mapa promete, la pantalla lo dibuja.")
+    return 0
+
+
 def effects_check(rom_path):
     """LOS DOS RUIDOS DE UN MENU, QUE NO SON LOS MISMOS EN LAS CUATRO ROMS.
 
@@ -4386,6 +4494,8 @@ def main():
                      help="check the title starts playing by itself")
     ap.add_argument("--loans", action="store_true",
                     help="check the palette banks a skin borrows come back")
+    ap.add_argument("--onscreen", action="store_true",
+                    help="check what the tile map promises reaches the screen")
     ap.add_argument("--effects", action="store_true",
                     help="check each build's menu noises are its own")
     ap.add_argument("--stats", action="store_true",
@@ -4457,6 +4567,8 @@ def main():
         sys.exit(quit_audio_check(args.rom))
     if args.loans:
         sys.exit(loans_check(args.rom))
+    if args.onscreen:
+        sys.exit(onscreen_check(args.rom))
     if args.effects:
         sys.exit(effects_check(args.rom))
     if args.stats:
