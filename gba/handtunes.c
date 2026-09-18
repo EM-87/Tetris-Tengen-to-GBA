@@ -328,9 +328,26 @@ static int voice_step(Voice *v, const Section *score, bool bass) {
 /* Silences all three channels, and leaves the registers where the cartridge's
  * engine expects to find them: it writes a channel whenever its own APU state
  * changes, so the next note or effect reclaims these anyway. */
+/* A PULSE CHANNEL ONLY TAKES A NEW VOLUME ON A RESTART — nes_audio.c says so
+ * over its own writes, and it is as true here: on the hardware, writing zero
+ * into the envelope register of a channel that is sounding does not stop it,
+ * the volume it is playing at is the one it loaded when it was started. The
+ * emulator applies the write at once, which is how a release that did
+ * nothing on a real console passed every check. So a release writes the
+ * zero and then restarts the channel, which loads it. The wave channel is
+ * different: bit 7 of its _L is an on/off switch, and that one works. */
+static void silence_pulse1(void) {
+    REG_SOUND1CNT_H = 0;
+    REG_SOUND1CNT_X = 0x8000;
+}
+static void silence_pulse2(void) {
+    REG_SOUND2CNT_L = 0;
+    REG_SOUND2CNT_H = 0x8000;
+}
+
 static void release_channels(void) {
-    REG_SOUND1CNT_H = 0;     /* channel 1's envelope... */
-    REG_SOUND2CNT_L = 0;     /* ...and channel 2's, which is its _L */
+    silence_pulse1();        /* channel 1's envelope... */
+    silence_pulse2();        /* ...and channel 2's, which is its _L */
     REG_SOUND3CNT_L = 0;     /* ...and the wave channel, which mutes by _L */
     REG_SOUND3CNT_H = 0;
 }
@@ -377,7 +394,7 @@ void handtune_frame(void) {
 
     int lead = voice_step(&g_lead, g_tune->melody, false);
     if (lead == NOTE_RELEASE || lead == REST) {
-        REG_SOUND1CNT_H = 0;
+        silence_pulse1();
     } else if (lead != NOTE_HOLD) {
         REG_SOUND1CNT_L = 0;                     /* no sweep */
         REG_SOUND1CNT_H = LEAD_ENVELOPE;
@@ -403,7 +420,7 @@ void handtune_frame(void) {
      * it back. */
     int bass = voice_step(&g_bass, g_tune->bass, true);
     if (bass == NOTE_RELEASE || bass == REST) {
-        REG_SOUND2CNT_L = 0;
+        silence_pulse2();
         REG_SOUND3CNT_L = 0;
         REG_SOUND3CNT_H = 0;
     } else if (bass != NOTE_HOLD) {

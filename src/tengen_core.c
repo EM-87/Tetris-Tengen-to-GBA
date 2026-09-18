@@ -1203,6 +1203,14 @@ TengenStepResult tengen_step(TengenGame *game, TengenPlayerSlot slot, uint8_t he
                 /* main.asm.txt:3189-3190: reaching a level by PLAY hands back
                  * the long bar. The cheat level-up does not. */
                 p->long_bar_code_used = 0;
+                /* ...AND IN COOP THE PARTNER GETS THE LEVEL TOO: the same
+                 * routine, having stored it, tests playMode and stores it a
+                 * second time two entries along (`bit playMode / bpl / tya /
+                 * eor #$02 / tay`, main.asm.txt:3191-3199). One board, one
+                 * gravity. cheat_level_up already did this; the play path
+                 * had the comment and the test and not the line, and the
+                 * test never cleared enough lines to notice. */
+                if (game->coop) game->player[slot ^ 1].level = new_level;
             }
 
             /* NO SPAWN HERE. The piece was zeroed when it locked and the

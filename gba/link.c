@@ -210,9 +210,19 @@ void link_lobby_step(TengenLobby *lobby) {
     if (lobby->ready || lobby->failed) return;
 
     bool master = link_is_master();
-    link_pump();
     link_tick();
 
+    /* TAKE, ANSWER, AND ONLY THEN START THE NEXT TRANSFER. This used to pump
+     * first, and on the emulated cable that was fine, because the transfer
+     * there completes inside the register write and SIO_START is clear
+     * again by the time lobby_send looks at it. On the hardware a transfer
+     * at 115200 baud is in flight for tens of microseconds, so the master's
+     * lobby_send, a few instructions after its own pump, found SIO_START set
+     * every single frame and put nothing on the wire: the register kept the
+     * last word and the handshake could only ever repeat its first stage.
+     * Reading what arrived and loading the reply before the pump means the
+     * transfer carries the reply, and the guard in lobby_send is left for
+     * the case it was written for. */
     LinkFrame f;
     if (link_pop(&f)) {
         tengen_lobby_apply(lobby, master, true, f.master, f.slave);
@@ -220,6 +230,9 @@ void link_lobby_step(TengenLobby *lobby) {
     } else {
         tengen_lobby_apply(lobby, master, false, 0, 0);
     }
+    /* ...unless that word was the last: a transfer started after the
+     * handshake is done would land its GO in the match's queue. */
+    if (!lobby->ready && !lobby->failed) link_pump();
 }
 
 /* ----------------------------------------------------------------------- *
