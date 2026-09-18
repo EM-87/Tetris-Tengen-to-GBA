@@ -237,45 +237,21 @@ IWRAM_CODE bool nes6502_call(Nes6502 *cpu, uint16_t addr, uint8_t a,
             break;
 
         /* -- arithmetic -------------------------------------------------
-         * Decimal mode is implemented rather than ignored. The game's own
-         * score arithmetic works in ASCII digits and never sets D, but a
-         * silently wrong ADC would be a horrible thing to debug later. */
+         * NO DECIMAL MODE, because the NES has none: the 2A03 is a 6502 with
+         * the BCD circuitry disabled in silicon, so SED sets the D flag and
+         * ADC/SBC carry on in binary regardless. This used to implement it,
+         * on the reasoning that a silently wrong ADC would be hard to debug;
+         * but a BCD ADC on a machine that never does one is the wrong answer
+         * in the one case it ever fires. The game keeps its scores in ASCII
+         * digits and never sets D anyway. */
 #define ADC(value_) do { \
         uint8_t m_ = (uint8_t)(value_); \
-        if (P & F_D) { \
-            unsigned lo_ = (unsigned)(A & 0x0F) + (m_ & 0x0F) + ((P & F_C) ? 1u : 0u); \
-            unsigned hi_ = (unsigned)(A >> 4) + (m_ >> 4); \
-            unsigned bin_ = (unsigned)A + m_ + ((P & F_C) ? 1u : 0u); \
-            if (lo_ > 9) { lo_ += 6; hi_++; } \
-            SETF(F_Z, (bin_ & 0xFF) == 0); \
-            SETF(F_N, (hi_ << 4) & 0x80); \
-            SETF(F_V, 0); \
-            if (hi_ > 9) hi_ += 6; \
-            SETF(F_C, hi_ > 15); \
-            A = (uint8_t)((hi_ << 4) | (lo_ & 0x0F)); \
-        } else { \
-            unsigned t_ = (unsigned)A + m_ + ((P & F_C) ? 1u : 0u); \
-            SETF(F_C, t_ > 0xFF); \
-            SETF(F_V, (~(A ^ m_) & (A ^ (uint8_t)t_) & 0x80) != 0); \
-            A = (uint8_t)t_; ZN(A); \
-        } } while (0)
+        unsigned t_ = (unsigned)A + m_ + ((P & F_C) ? 1u : 0u); \
+        SETF(F_C, t_ > 0xFF); \
+        SETF(F_V, (~(A ^ m_) & (A ^ (uint8_t)t_) & 0x80) != 0); \
+        A = (uint8_t)t_; ZN(A); } while (0)
 
-#define SBC(value_) do { \
-        uint8_t sm_ = (uint8_t)(value_); \
-        if (P & F_D) { \
-            unsigned borrow_ = (P & F_C) ? 0u : 1u; \
-            int lo_ = (int)(A & 0x0F) - (sm_ & 0x0F) - (int)borrow_; \
-            int hi_ = (int)(A >> 4) - (sm_ >> 4); \
-            int bin_ = (int)A - sm_ - (int)borrow_; \
-            if (lo_ & 0x10) { lo_ -= 6; hi_--; } \
-            if (hi_ & 0x10) hi_ -= 6; \
-            SETF(F_C, bin_ >= 0); \
-            SETF(F_V, ((A ^ sm_) & (A ^ (uint8_t)bin_) & 0x80) != 0); \
-            ZN((uint8_t)bin_); \
-            A = (uint8_t)(((unsigned)hi_ << 4) | ((unsigned)lo_ & 0x0F)); \
-        } else { \
-            ADC((uint8_t)(sm_ ^ 0xFF)); \
-        } } while (0)
+#define SBC(value_) ADC((uint8_t)((uint8_t)(value_) ^ 0xFF))
 
         case 0x69: ADC(FETCH()); break;
         case 0x65: ADC(RD(A_ZP())); break;
