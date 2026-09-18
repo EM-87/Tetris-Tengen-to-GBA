@@ -289,12 +289,12 @@ void nes_audio_frame(void) {
  * competing for the same three channels.
  * ----------------------------------------------------------------------- */
 static const uint8_t *g_fx_regs;    /* four bytes a frame, or NULL */
-static uint16_t g_fx_write;         /* one bit a frame: does it write? */
+static uint32_t g_fx_write;         /* one bit a frame: does it write? */
 static uint8_t g_fx_frames;         /* how many frames long */
 static uint8_t g_fx_at;             /* which frame it is on */
 static uint8_t g_fx_channel;
 
-void nes_audio_effect(const uint8_t *regs, uint16_t write, uint8_t frames,
+void nes_audio_effect(const uint8_t *regs, uint32_t write, uint8_t frames,
                        uint8_t channel) {
     if (channel > 1 || frames == 0) { g_fx_regs = 0; return; }
     g_fx_regs = regs;

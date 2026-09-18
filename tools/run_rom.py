@@ -1359,7 +1359,7 @@ HUD_LABEL_TILE_END = 790
 STATS_ICON_ROWS = 2
 STATS_RUN_STEPS = 8
 # Cuanto se escucha tras pulsar: el mas largo de los efectos dura 15 frames.
-EFFECT_WATCH_FRAMES = 24
+EFFECT_WATCH_FRAMES = 30
 
 
 def to_music_page(core, settle=10):
@@ -2960,9 +2960,17 @@ def effects_check(rom_path):
     else:
         print(f"  ...y proto_b con un trino de {min(b_f1)} a {max(b_f1)}, "
                f"{len(b_f1)} pasos barridos a mano")
-    if b_v1 and b_v1[-1]:
-        failures.append(f"el trino de proto_b se queda sonando (volumen "
-                         f"{b_v1[-1]:X})")
+    # ...Y NINGUNO SE QUEDA SONANDO. El de proto_c gastaba justo el ultimo
+    # frame de la ventana de captura, asi que su apagado se quedaba fuera y el
+    # trino sonaba para siempre; la ventana es mas ancha y el extractor se
+    # niega ahora a capturar un efecto que no ha terminado dentro de ella.
+    c_f1, _f2, c_v1, _v2 = listen(3, "START")
+    for name, vols in (("proto_b", b_v1), ("proto_c", c_v1)):
+        if vols and vols[-1]:
+            failures.append(f"el trino de {name} se queda sonando (volumen "
+                             f"{vols[-1]:X} tras {EFFECT_WATCH_FRAMES} frames)")
+        else:
+            print(f"  ...y el trino de {name} se apaga solo")
 
     for f in failures:
         print("FALLA:", f)

@@ -108,7 +108,7 @@ uint8_t *nes_rom_ram(void);
  * Call the frame function once a frame, after nes_audio_frame: an effect
  * holds its channel until the engine's own next note takes it back, which is
  * what happens on the cartridge too. */
-void nes_audio_effect(const uint8_t *regs, uint16_t write, uint8_t frames,
+void nes_audio_effect(const uint8_t *regs, uint32_t write, uint8_t frames,
                        uint8_t channel);
 void nes_audio_effect_frame(void);
 

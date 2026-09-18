@@ -1882,7 +1882,7 @@ SKIN_PLAQUE_BANK = 3
 # replays them through the same NES-to-GBA conversion its sound engine uses
 # (see nes_audio_effect). So a dump this file has never seen brings its own
 # noises along with its own paint.
-SKIN_FX_FRAMES = 16          # long enough for the longest of them, which is 13
+SKIN_FX_FRAMES = 24          # el mas largo medido gasta 16; ver la guarda al final
 SKIN_FX_PRESS = 4            # how long the button is held
 SKIN_FX_BUTTONS = ("DOWN", "START")    # the cursor, and the screen
 SKIN_FX_COUNT = len(SKIN_FX_BUTTONS)
@@ -2130,6 +2130,14 @@ def read_skin_effects(path):
             if f[2] or (f[3] & 7):
                 break
             frames[i] = None
+        # AND IT HAS TO HAVE FINISHED. proto_c's chirp writes its last frame
+        # in the fifteenth of sixteen slots, which is close enough that a
+        # build with a longer one would be cut off mid-sweep and nothing would
+        # say so.
+        if frames[-1] is not None:
+            return None, (f"{path}: su efecto de {button} sigue escribiendo en "
+                          f"el frame {SKIN_FX_FRAMES - 1}, que es el ultimo que "
+                          f"cabe: sube SKIN_FX_FRAMES")
         effects.append((channel, frames))
     return effects, None
 
@@ -2670,7 +2678,7 @@ def emit_skin_effects(plays):
         "/* One bit a frame: whether the effect writes its channel that frame.",
         " * A frame it does not write is a frame the note simply holds, and",
         " * writing it again would restart the note on this hardware. */",
-        "static const uint16_t kSkinFxWrite[SCREEN_PROTO_COUNT][SKIN_FX_COUNT] = {",
+        "static const uint32_t kSkinFxWrite[SCREEN_PROTO_COUNT][SKIN_FX_COUNT] = {",
     ]
     for p in plays:
         row = []
@@ -2679,7 +2687,7 @@ def emit_skin_effects(plays):
             for i, f in enumerate(frames):
                 if f:
                     bits |= 1 << i
-            row.append(f"0x{bits:04X}")
+            row.append(f"0x{bits:08X}")
         lines.append("    { " + ", ".join(row) + " },")
     lines.append("};")
     _table(lines,
