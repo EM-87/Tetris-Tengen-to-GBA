@@ -438,7 +438,7 @@ this channel changed". Measured against the running ROM, not assumed.
 Two routines draw everything that moves on the title screen, and neither is
 reimplemented in the port — both are executed, on the same 6502 interpreter
 that already runs the sound engine (`gba/nes6502.c`, `gba/audio_prg.h`), and
-`gba/main.c` copies the sprites they leave in `oamStaging` ($0500) into GBA
+`gba/frontend.c` copies the sprites they leave in `oamStaging` ($0500) into GBA
 OAM. `make gba-check --title` asserts all of it against a running ROM.
 
 ### drawCathedralSprites (`$B369`, main.asm.txt:6850)
@@ -1702,13 +1702,13 @@ for leaving a screen as well as for pausing:
   not "the music is off", it is **the machine is mute**: no piece landing, no
   game-over jingle, no menu blip, no title theme, until the console is
   switched off. Anything that tears a PAUSED game down has to send the RESUME
-  itself, because nothing else will — see `pause_menu_input` in `gba/main.c`,
+  itself, because nothing else will — see `pause_menu_input` in `gba/match.c`,
   where EXIT does, and `make gba-check --quit-audio`, which walks that road
   and counts frames with a channel sounding at every screen it leads to.
 * **RESUME is not free when nothing is suspended.** On a cold engine an extra
   RESUME costs the first frame of the tune and the recordings drift from
   there, so the port tracks whether it suspended rather than firing one
-  hopefully. `stop_music` / `resume_music` in `gba/main.c` are that pair, and
+  hopefully. `stop_music` / `resume_music` in `gba/frontend.c` are that pair, and
   pause, the front end and the way back to the title all go through them.
 * **AND RESUME GOES LAST.** `updateAudio` takes exactly ONE request off the
   ring per frame (`$CFCC-$CFDB`), so the order they are queued in is the order
@@ -1835,7 +1835,7 @@ select".
 The cartridge has **no back button** on its menus: they are a one-way chain
 with an idle timer (`dec player1FallTimer` at `$9FB1`) that drops back to the
 title. So B here, and A as a second confirm, are the PORT'S — the only two
-buttons in `gba/main.c` that are not the ROM's, and marked as such.
+buttons in `gba/main.c` and `gba/match.c` that are not the ROM's, and marked as such.
 
 ## The front end's music belongs to the screen
 
@@ -2061,7 +2061,7 @@ Where each piece lives, and why:
 | --- | --- | --- |
 | The lockstep itself and the handshake that sets up a match | `src/tengen_link.c` | Platform-independent, so `make test` can run two of them against each other and compare byte for byte. Lockstep and stop-and-wait handshakes are exactly the kind of thing that looks right and silently diverges. |
 | The cable | `gba/link.c` | GBA serial multiplayer mode, driven by the serial interrupt: the handler queues each transfer and immediately loads the next word, so the send register is never stale and no transfer is ever missed. Nothing in it blocks. |
-| The screens | `gba/main.c` | GAME SELECT, the link screen, and a match loop that differs from a solo game in three places only. |
+| The screens | `gba/main.c` and `gba/frontend.c` | GAME SELECT, the link screen, and a match loop that differs from a solo game in three places only. |
 
 Two things worth knowing before touching any of it:
 

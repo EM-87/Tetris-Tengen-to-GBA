@@ -115,7 +115,7 @@ running ROM; only the side panels need reflowing).
    game's signatures rather than a pause: a black puff of smoke crosses each
    completed row and leaves SINGLE / DOUBLE / TRIPLE / TETRIS written where
    the blocks were. Timing (one column every other frame) lives in the core
-   with a test; the drawing is in `gba/main.c`.
+   with a test; the drawing is in `gba/hud.c`.
 11. ~~Where the port's own cheats live~~ — ONE CHORD, ON THE MENUS. L+R on
    GAME SELECT or on LEVEL SETTINGS uncovers the hidden tunes and the pause
    menu together, and it is a one-way door until the console is switched off.
@@ -125,7 +125,7 @@ running ROM; only the side panels need reflowing).
    which put the one cheat that lets you LEAVE a game behind having already
    started one. The title's prototype skin is its own chord on its own screen
    (L+R there too, since the release) and opens nothing else. `unlock_cheats`
-   in gba/main.c is the whole door; `--pausemenu` and `--skin` check both
+   in gba/frontend.c is the whole door; `--pausemenu` and `--skin` check both
    halves, including that the game screen does NOT open it.
 12. ~~Pause and the long-bar/undo/level-up cheat codes~~ — done, traced in
    full. The three codes share one table and one cursor in the ROM, which is
@@ -375,7 +375,7 @@ running ROM; only the side panels need reflowing).
    Proto_b was left playing itself and its playfield watched — every piece
    that settled wrote four cells of ONE value, never four of four. So
    `piece_id_cells` on TengenGame makes `lock_piece` store the piece's id, and
-   `piece_cell_tile` in gba/main.c does the same for the falling piece and the
+   `piece_cell_tile` in gba/video.c does the same for the falling piece and the
    preview. Occupancy is `cell != 0` everywhere and TT_WALL is 15 either way,
    so nothing downstream notices. **NOT OVER THE CABLE**: a linked match is
    two consoles comparing state byte for byte, and one of them in a
@@ -484,6 +484,35 @@ does not is a bug.
   frame decrements both fall timers and the port's does not — measured, and
   written up with the PC that does it in reference/NOTES.md. One frame, once,
   in one mode; every frame after it matches.
+
+## Where the GBA layer lives
+
+`gba/main.c` was one file of six thousand lines and had stopped being
+readable. It is five now, sharing `gba/port.h`:
+
+- **`gba/port.h`** — the seam. Every constant that says WHERE something is on
+  the screen, which palette bank it is drawn in and which of the four
+  backgrounds it rides, plus the declarations of the symbols that really do
+  cross between the five. Anything used in only one file stays `static` where
+  it is defined, which is most of them (84 of 220 at the split).
+- **`gba/video.c`** — the hardware: backgrounds and their scrolls, palettes
+  and their banks, tile and sprite uploads, the keypad, and the SKINS. The
+  rest of the port draws through its primitives and never touches a register.
+- **`gba/hud.c`** — what a match looks like: the two panels of rope, the
+  board, the line-clear sweep, the cossacks, the piece histogram, the
+  high-score table, the plaques.
+- **`gba/frontend.c`** — the screens either side of one: the title and its
+  fireworks, GAME SELECT, LEVEL SETTINGS, the credits, the link lobby, and
+  the music the front end plays.
+- **`gba/match.c`** — one frame of play: the pause menu, the computer's
+  input, what a step has to announce, and the order the drawing happens in.
+- **`gba/main.c`** — the state machine: which screen is up, what a button
+  does on it, where it goes next.
+
+The split was mechanical and is meant to stay honest: a symbol gets external
+linkage because another file names it IN CODE, not in a comment. (Checking
+that against comment-stripped text is not a detail — `main` itself came out
+"shared" at first, because `main.asm.txt` is cited in half a dozen of them.)
 
 ## Build
 

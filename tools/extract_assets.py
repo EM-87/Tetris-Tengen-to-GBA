@@ -712,7 +712,7 @@ def emit_audio_header(base, data, span, source):
         " *     steal are the cartridge's own.",
         " *",
         " *   the TITLE SCREEN'S SPRITES — drawCathedralSprites and the",
-        " *     fireworks fill oamStaging ($0500), which gba/main.c reads back",
+        " *     fireworks fill oamStaging ($0500), which gba/frontend.c reads back",
         " *     and blits to GBA OAM. The fireworks call the sound engine for",
         " *     their bursts, which is why they must be the same machine.",
         " *",
@@ -1724,7 +1724,7 @@ def compose_proto_title(screen: bytes, rows, cols):
 #
 # Which is what this does. The prototype is walked into a game, its play screen
 # is read back, and a handful of its tiles are lifted out BY POSITION and
-# handed to the release's own tile numbers. Nothing in gba/main.c changes: the
+# handed to the release's own tile numbers. Nothing in the port's drawing changes: the
 # same set_map_tile calls draw the same tile ids, and a skin swap is a re-upload
 # of twenty-odd slots.
 #
@@ -2474,7 +2474,7 @@ def emit_skin_play(skins):
     lines += [
         "",
         "/* THE BOARD'S OWN SKIN: the tiles a prototype puts in the RELEASE's",
-        " * slots, so nothing in gba/main.c has to know a skin is on. A cell's",
+        " * slots, so nothing that draws has to know a skin is on. A cell's",
         " * nibble is its tile index in these builds exactly as it is in the",
         " * release (measured; see tools/extract_assets.py), and the frame is",
         " * lifted off their play screens by POSITION rather than by number,",
@@ -2852,7 +2852,7 @@ def emit_title_header(tiles, banks, source):
         " * the braid and the ingots. The title's border is four tiles thick on",
         " * every side (source columns 0-3 and 28-31, rows 0-3 and 26-29), so",
         " * this is wherever source 4-27 ended up. The fireworks are held",
-        " * inside it — see the note in gba/main.c. */",
+        " * inside it — see the note in gba/hud.c. */",
         f"#define SCREEN_TITLE_IN_TX0 {title_interior(TITLE_COL_BLOCKS, 4, 27)[0]}",
         f"#define SCREEN_TITLE_IN_TX1 {title_interior(TITLE_COL_BLOCKS, 4, 27)[1]}",
         f"#define SCREEN_TITLE_IN_TY0 {title_interior(TITLE_ROW_BLOCKS, 4, 25)[0]}",

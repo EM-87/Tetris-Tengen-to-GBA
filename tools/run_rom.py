@@ -48,7 +48,7 @@ SCREEN_W, SCREEN_H = 240, 160
 TILE = 8
 SCREEN_TW_TILES = SCREEN_W // TILE
 
-# The screen layout, in tile columns. These mirror gba/main.c and the reflow
+# The screen layout, in tile columns. These mirror gba/port.h and the reflow
 # done by tools/extract_assets.py; if they drift apart, the checks below stop
 # meaning anything, so they are asserted against the running ROM rather than
 # assumed.
@@ -66,7 +66,7 @@ COL_FRAME_R = (20, 22)    # the board's right frame — the other box's
 COL_BOX_R = (20, 30)      # the piece statistics, in two ranks
 
 # The walls are the cartridge's own frame art, drawn once with the screen, not
-# blocks painted from the playfield buffer — see the note in gba/main.c.
+# blocks painted from the playfield buffer — see the note in gba/hud.c.
 FIELD_TILES_W = COL_FIELD[1] - COL_FIELD[0]
 FIELD_X0 = COL_FIELD[0] * TILE
 FIELD_X1 = COL_FIELD[1] * TILE
@@ -290,7 +290,7 @@ CELL_WALL, CELL_BLOCK = 15, 1
 SCREENBLOCK_ADDR = 0x0600E000  # screenblock 28, as gba/main.c sets BG0CNT
 OAM_ADDR = 0x07000000
 SWEEP_TILES = (0x5B, 0x5C, 0x5D, 0x5E, 0x5F)  # main.asm.txt:1274-1338
-SWEEP_PAL_BANK = 4   # gba/main.c PAL_OBJ_CLEAR; banks 0-3 are the dancers
+SWEEP_PAL_BANK = 4   # gba/port.h PAL_OBJ_CLEAR; banks 0-3 are the dancers
 CLEAR_WORDS = {1: "SINGLE", 2: "DOUBLE", 3: "TRIPLE", 4: "TETRIS"}
 
 KEY_DOWN = 7
@@ -440,7 +440,7 @@ def lineclear_check(rom_path, row_count):
 # ---------------------------------------------------------------------------
 # The plaque is CENTRED, both ways — on the cartridge its eight columns are
 # 12..19 of 32, which is the middle of the screen, and that relationship is
-# what the port keeps rather than the column number. gba/main.c derives these
+# what the port keeps rather than the column number. gba/port.h derives these
 # the same way.
 # The braid's own mid blue, which the shelves are drawn in. Sampled rather
 # than named: it is palette bank 2 colour 2 of the cartridge's game set.
@@ -469,7 +469,7 @@ CODE_UNDO = "LEFT DOWN RIGHT UP LEFT DOWN RIGHT B A".split()
 # the checks below would catch.
 # THE ELF KNOWS THE OFFSETS, not this file. They used to be constants here and
 # a single new field in TengenGame moved all of them, which showed up as three
-# unrelated cheat-code checks failing. gba/main.c exports kGameProbe; this
+# unrelated cheat-code checks failing. gba/match.c exports kGameProbe; this
 # reads it, the way the audio checks read kNes6502Probe.
 _GAME_PROBE_CACHE = {}
 
@@ -884,11 +884,11 @@ LINK_TIMEOUT_FRAMES = 600   # TENGEN_LOBBY_TIMEOUT in src/tengen_link.h
 
 # The second map, four pixels along, which the menus use to centre their
 # odd-length lines and the play screen uses for the statistics. See
-# SCREENBLOCK_STATS in gba/main.c.
+# SCREENBLOCK_STATS in gba/port.h.
 SCREENBLOCK_OFFSET_ADDR = SCREENBLOCK_ADDR + 0x800
 # ...and screenblock 31, the histogram's, which outside a match carries the
 # one line the port wants two pixels higher than the grid (see
-# set_credit_layer in gba/main.c).
+# set_credit_layer in gba/video.c).
 SCREENBLOCK_LIFTED_ADDR = SCREENBLOCK_ADDR + 0x1800
 # ...and screenblock 30, the counters', which is where SCORE, LINES, LEVEL
 # and HIGH are actually written.
@@ -899,7 +899,7 @@ def tilemap_text(core, row, first=0, last=30):
     """The row of the tilemap as text, ACROSS EVERY TEXT LAYER.
 
     The tileset's letters sit at their ASCII codes (see ascii_tile in
-    gba/main.c), so a tile id IS a character. A menu line of odd length is
+    gba/video.c), so a tile id IS a character. A menu line of odd length is
     drawn on the offset layer instead of the main one, and the GAME SELECT
     credit on the lifted one — reading only the main map would report an empty
     row and every menu check would quietly stop checking anything.
@@ -923,7 +923,7 @@ def tilemap_text(core, row, first=0, last=30):
 #
 # Neither is drawn by the port. Both are subroutines of the cartridge run on
 # the same 6502 interpreter as the sound engine, filling oamStaging, which
-# gba/main.c copies into OAM (see draw_title_sprites). What can be checked
+# gba/frontend.c copies into OAM (see draw_title_sprites). What can be checked
 # from outside is exactly what matters: that the eighteen cathedral sprites
 # land on the picture, that bursts actually happen and animate, that the show
 # ends where the ROM ends it (frameCounterHigh = 4, about 1024 frames), that
@@ -1306,15 +1306,15 @@ GAME_SELECT_TY = 10             # ...and they start here, one row apart
 # had the port writing the list in white and marking the choice in the ORANGE
 # that bank 1 holds for the credit line alone.
 MENU_TEXT_BANK = 8              # PAL_MENU_BASE + 0, the cartridge's menu blue
-# ...and the one white on these screens, the cursor's: gba/main.c's BANK_ARROW.
+# ...and the one white on these screens, the cursor's: gba/port.h's BANK_ARROW.
 # The handicap's chosen number borrows it, which is what says which of the two
 # the pad is moving.
 MENU_ARROW_BANK = 11            # PAL_MENU_BASE + 3
-# ...and the cursor's column, gba/main.c's GAME_SELECT_ARROW_TX.
+# ...and the cursor's column, gba/frontend.c's GAME_SELECT_ARROW_TX.
 MENU_ARROW_TX = 5
 # The shared coop board starts one column further left than the ten-wide
 # one, because it is twelve wide (SCREEN_COOP_FIELD_TX in the generated
-# header, and COOP_FIELD_TX in gba/main.c).
+# header, and COOP_FIELD_TX in gba/port.h).
 COOP_FIELD_TX = 9
 # The HIGH SCORES page: the heading's row and the first entry's, as
 # gba/screen_leaderboard.h generates them.
@@ -1328,7 +1328,7 @@ TENGEN_ROM_ROW_ORIGIN = 6   # the ROM row the visible field starts at
 DEMO_START_FRAME = 5 * 256 + 0x20
 DEMO_WATCH_FRAMES = 2000
 
-# LEVEL SETTINGS, two rows apart and hung off HANDICAP -- gba/main.c's
+# LEVEL SETTINGS, two rows apart and hung off HANDICAP -- gba/port.h's
 # MENU_FIELD_TY(f) = 9 + 2f. Three rows apart read as three announcements
 # rather than as one block to choose from.
 LEVEL_ROW = 9
@@ -1337,17 +1337,17 @@ MUSIC_ROW = 13
 # Vueltas de sobra para dar la lista de canciones entera, destapada o no.
 MUSIC_COUNT_MAX = 14
 
-# El histograma tiene mapa para el solo (SCREENBLOCK_HISTOGRAM en gba/main.c),
+# El histograma tiene mapa para el solo (SCREENBLOCK_HISTOGRAM en gba/port.h),
 # asi que lo que este escrito ahi ES el histograma y no hay que saber donde
 # cae la caja. Siete columnas, una por tetromino.
 STATS_SCREENBLOCK = 31
 STATS_COLUMNS = 7
 # Las cuatro esquinas de la caja del cartel de GAME OVER (T_BOX_TL/TR/BL/BR en
-# gba/main.c). Son los mismos numeros con skin y sin ella: una skin cambia el
+# gba/port.h). Son los mismos numeros con skin y sin ella: una skin cambia el
 # DIBUJO que hay en esas ranuras y el banco de paleta, nunca el numero.
 PLAQUE_CORNERS = (0x29, 0x2B, 0x3A, 0x3C)
 # Las etiquetas del HUD (NEXT, SCORE, LINES, LEVEL, HIGH) no son ASCII sino
-# arte propio: HUD_LABEL_TILE_BASE en gba/main.c y las veintidos que siguen.
+# arte propio: HUD_LABEL_TILE_BASE en gba/port.h y las veintidos que siguen.
 HUD_LABEL_TILE_BASE = 768
 HUD_LABEL_TILE_END = 790
 # Y las dos filas que el release gasta en la tira de iconos del histograma,
@@ -2286,7 +2286,7 @@ def counters_check(rom_path):
     return 0
 
 
-# Where the pause menu's lines land, derived the way gba/main.c derives them:
+# Where the pause menu's lines land, derived the way gba/port.h derives them:
 # a box PMENU_H tall centred on a 20-row screen, with the column inside it.
 # The lines do NOT all live on the same background — the heading and the
 # question's second line ride the counters' layer two pixels down, the
@@ -2304,7 +2304,7 @@ PM_ANSWER = PMENU_TY + 6     # YES, with NO under it
 # The box's own columns, which is all a check about the box should read: the
 # rest of the row is the HUD, and the braid decodes as stray letters.
 # FOURTEEN, not thirteen: an odd width cannot be centred on the board, and the
-# box lands on the board. See PMENU_W in gba/main.c.
+# box lands on the board. See PMENU_W in gba/port.h.
 PMENU_W_T = 14
 PMENU_TX = (SCREEN_TW_TILES - PMENU_W_T) // 2
 PM_L = PMENU_TX + 1
@@ -2902,7 +2902,7 @@ def stats_check(rom_path):
     """
     failures = []
     # La capa del histograma es la suya propia (SCREENBLOCK_HISTOGRAM en
-    # gba/main.c), asi que no hace falta saber donde cae la caja: se barre
+    # gba/port.h), asi que no hace falta saber donde cae la caja: se barre
     # entera y lo que haya escrito ES el histograma.
     hist = 0x06000000 + STATS_SCREENBLOCK * 0x800
     # Cuentas bien distintas, ninguna nula, una por pieza.

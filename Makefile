@@ -82,7 +82,10 @@ ARMLDFLAGS := -T gba/gba.ld -nostartfiles -Wl,--gc-sections
 GBA_ASSETS := gba/tiles_game.h gba/screen_1p.h gba/screen_coop.h \
               gba/screen_leaderboard.h gba/palettes_rom.h gba/audio_prg.h
 
-GBA_SRC  := gba/main.c gba/nes_audio.c gba/nes6502.c gba/handtunes.c gba/link.c $(CORE_SRC)
+# The front end is five files sharing gba/port.h; see the note at the top of
+# that header for what is in which.
+GBA_SRC  := gba/main.c gba/video.c gba/hud.c gba/frontend.c gba/match.c \
+            gba/nes_audio.c gba/nes6502.c gba/handtunes.c gba/link.c $(CORE_SRC)
 GBA_ELF  := $(BUILD)/tengen.elf
 GBA_ROM  := $(BUILD)/tengen.gba
 
