@@ -322,6 +322,20 @@ AUDIO_SLICE_ALIGN = 0x100
 AUDIO_GOLDEN_TRACK = 0x09
 AUDIO_GOLDEN_FRAMES = 400
 AUDIO_SILENCE_TRACK = 0x08      # MUSIC_SILENCE, constants.asm.txt:44
+# ...AND THE ENGINE IS RESET FIRST, as the cartridge does on its first frame
+# (id $00, LD2C9 at main.asm.txt:8829): it lays out the free list of voice
+# slots the tunes draw on. An engine on zeroed RAM has no free list, and a
+# tune that wants a voice off it plays without that voice — LOGINSKA without
+# the repeat of its first strain, measured against the cartridge. So the
+# probe and the golden both start the way the port now does: reset, one
+# update to consume it (the reset wipes the queue as it runs, so it gets a
+# frame of its own), then the track. See NES_AUDIO_RESET in gba/nes_audio.h.
+AUDIO_RESET_TRACK = 0x00
+
+
+def reset_engine(cpu):
+    cpu.call(AUDIO_SET_TRACK_ADDR, a=AUDIO_RESET_TRACK)
+    cpu.call(AUDIO_UPDATE_ADDR)
 
 # THE TITLE SCREEN'S SPRITES ARE RUN, NOT REIMPLEMENTED — for the same reason
 # the music is.
@@ -641,6 +655,7 @@ def extract_audio_prg(rom: "Rom"):
     for track in AUDIO_TRACK_IDS:
         bus = Watching(prg)
         cpu = CPU(bus)
+        reset_engine(cpu)     # the paths a tune takes depend on it; see there
         cpu.call(AUDIO_SET_TRACK_ADDR, a=track)
         for _ in range(AUDIO_PROBE_FRAMES):
             cpu.call(AUDIO_UPDATE_ADDR)
@@ -698,6 +713,7 @@ def record_audio_golden(rom: "Rom", track, frames):
 
     bus = Bus(prg)
     cpu = CPU(bus)
+    reset_engine(cpu)
     # LA035's order, which is the port's: MUSIC_SILENCE and then the track
     # (main.asm.txt:4730-4735). Recording the golden without the silence made
     # it a recording of something the ROM never does, and the two drifted

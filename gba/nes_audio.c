@@ -115,11 +115,13 @@ const uint16_t kNes6502Probe[3] = {
 };
 
 static uint8_t g_prev[0x18];
-/* The engine's program bytes, copied out of cartridge ROM into external WRAM
- * at startup. Every 6502 instruction fetch reads from here, so it is worth
- * the copy: external WRAM answers in fewer cycles than the cartridge bus, and
- * unlike internal WRAM there is room for all 12KB of it. */
-__attribute__((section(".ewram"))) static uint8_t g_prg[AUDIO_PRG_SIZE];
+/* The 6502's whole address space as the engine's code sees it, laid out in
+ * external WRAM at startup: the program bytes at their own address, zero
+ * everywhere else. Every instruction fetch is one load from here (see
+ * Nes6502Bus.code), so it is worth both the copy and the 64KB: external
+ * WRAM answers in fewer cycles than the cartridge bus, and unlike internal
+ * WRAM it has the room. */
+__attribute__((section(".ewram"), aligned(4))) static uint8_t g_code[0x10000];
 
 /* The NES triangle's own waveform, written into GBA wave RAM: its 32-step
  * 4-bit ramp, 15 down to 0 and back up, which is exactly the shape wave RAM
@@ -223,8 +225,16 @@ void nes_audio_init(void) {
     REG_SOUNDCNT_H = 0x0002;                 /* PSG at full volume, no DirectSound */
     load_triangle_wave();
 
-    for (unsigned i = 0; i < AUDIO_PRG_SIZE; i++) g_prg[i] = kAudioPrg[i];
-    nes6502_init(&g_cpu, g_nes_ram, g_prg, AUDIO_PRG_BASE, AUDIO_PRG_SIZE);
+    nes6502_init(&g_cpu, g_nes_ram, g_code, kAudioPrg, AUDIO_PRG_BASE, AUDIO_PRG_SIZE);
+    /* THE CARTRIDGE'S FIRST FRAME, done here: queue the engine's reset and
+     * let one update consume it, before any track is asked for. The reset
+     * wipes the queue as it runs, so anything queued alongside it would be
+     * lost — hence a frame of its own, as on the cartridge. Without this the
+     * engine ran on a zeroed RAM that no reset had ever laid out, and every
+     * tune that wanted a voice off the free list played short. See
+     * NES_AUDIO_RESET. */
+    nes6502_call(&g_cpu, AUDIO_SET_TRACK_ADDR, NES_AUDIO_RESET, 20000);
+    nes6502_call(&g_cpu, AUDIO_UPDATE_ADDR, 0, 60000);
     for (int i = 0; i < 0x18; i++) g_prev[i] = 0;
     g_ready = true;
 }

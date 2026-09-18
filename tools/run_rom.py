@@ -182,9 +182,16 @@ def selftest(rom_path):
     core, screen = load(rom_path)
     failures = []
 
-    # The title screen must come up first and must not be blank.
+    # The title screen must come up first and must not be blank. Boot takes
+    # a few frames (the sound engine's 64KB code view is laid out before
+    # anything is drawn) and the title's own tile swap hides behind one black
+    # frame, so the check waits for it rather than looking at frame 8 exactly.
     run(core, 8)
-    title = pixels(screen)
+    for _ in range(30):
+        title = pixels(screen)
+        if any(p != (0, 0, 0) for row in title for p in row):
+            break
+        core.run_frame()
     if all(p == (0, 0, 0) for row in title for p in row):
         failures.append("la pantalla de titulo quedo en negro")
 

@@ -145,6 +145,18 @@ assets:
 # interpreter: about fifteen seconds per thousand frames), so it is not in
 # gba-check; reach for it after touching tengen_step.
 #   make trace ROM=/path/to/tetris.nes [FRAMES=3000]
+# ...AND THE TUNES AGAINST THE CARTRIDGE'S, the same way: an original dump
+# played into a 1 PLAYER game with each tune chosen, its APU register file
+# read every frame, and the port's lined up against it note by note. The
+# golden in gba-check hears only the title theme on a fresh engine; this is
+# what caught the engine reset the port never sent (NES_AUDIO_RESET). About
+# two minutes; not in gba-check for that reason.
+#   make tune-check ROM=/path/to/tetris.nes
+.PHONY: tune-check
+tune-check: $(GBA_ROM)
+	@test -n "$(ROM)" || { echo "usage: make tune-check ROM=/path/to/tetris.nes"; exit 1; }
+	python3 tools/probes/tune_vs_cartridge.py "$(ROM)" $(GBA_ROM)
+
 TRACE_CORE := $(BUILD)/trace_core
 
 $(TRACE_CORE): tools/trace_core.c $(CORE_SRC) $(CORE_HDR) | $(BUILD)

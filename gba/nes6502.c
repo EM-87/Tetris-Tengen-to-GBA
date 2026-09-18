@@ -28,13 +28,10 @@
 IWRAM_CODE static uint8_t bus_read(Nes6502 *cpu, uint16_t addr) {
     if (addr < 0x2000) return cpu->bus.ram[addr & 0x7FF];
     if (addr >= 0x4000 && addr <= 0x4017) return cpu->bus.apu[addr - 0x4000];
-    if (addr >= cpu->bus.prg_base) {
-        uint32_t off = (uint32_t)(addr - cpu->bus.prg_base);
-        if (off < cpu->bus.prg_size) return cpu->bus.prg[off];
-    }
-    /* Outside what the sound engine was measured to touch. Returning 0 keeps
-     * the interpreter deterministic rather than reading past an array. */
-    return 0;
+    /* The program's own bytes, or zero for anything outside what the sound
+     * engine was measured to touch: the view is built that way, so reading
+     * it is deterministic rather than a read past an array. */
+    return cpu->bus.code[addr];
 }
 
 IWRAM_CODE static void bus_write(Nes6502 *cpu, uint16_t addr, uint8_t value) {
@@ -45,13 +42,29 @@ IWRAM_CODE static void bus_write(Nes6502 *cpu, uint16_t addr, uint8_t value) {
     if (addr >= 0x4000 && addr <= 0x4017) cpu->bus.apu[addr - 0x4000] = value;
 }
 
-void nes6502_init(Nes6502 *cpu, uint8_t *ram, const uint8_t *prg,
-                   uint16_t prg_base, uint32_t prg_size) {
+void nes6502_init(Nes6502 *cpu, uint8_t *ram, uint8_t *code_view,
+                   const uint8_t *prg, uint16_t prg_base, uint32_t prg_size) {
     for (int i = 0; i < 0x800; i++) ram[i] = 0;
+    /* A word at a time: 64KB of byte stores into external WRAM is most of a
+     * frame, and this runs before the title is drawn. The view is
+     * word-aligned by its caller. */
+    {
+        uint32_t *words = (uint32_t *)code_view;
+        for (uint32_t i = 0; i < 0x10000 / 4; i++) words[i] = 0;
+    }
+    if (((uintptr_t)prg & 3) == 0 && (prg_base & 3) == 0 &&
+        (uint32_t)prg_base + prg_size <= 0x10000) {
+        const uint32_t *src = (const uint32_t *)prg;
+        uint32_t *dst = (uint32_t *)(code_view + prg_base);
+        uint32_t n = prg_size / 4;
+        for (uint32_t i = 0; i < n; i++) dst[i] = src[i];
+        for (uint32_t i = n * 4; i < prg_size; i++) code_view[prg_base + i] = prg[i];
+    } else {
+        for (uint32_t i = 0; i < prg_size && prg_base + i < 0x10000; i++)
+            code_view[prg_base + i] = prg[i];
+    }
     cpu->bus.ram = ram;
-    cpu->bus.prg = prg;
-    cpu->bus.prg_base = prg_base;
-    cpu->bus.prg_size = prg_size;
+    cpu->bus.code = code_view;
     for (int i = 0; i < 0x18; i++) cpu->bus.apu[i] = 0;
     cpu->a = cpu->x = cpu->y = 0;
     cpu->sp = 0xFD;
@@ -76,15 +89,26 @@ IWRAM_CODE bool nes6502_call(Nes6502 *cpu, uint16_t addr, uint8_t a,
 
     uint8_t A = cpu->a, X = cpu->x, Y = cpu->y, S = cpu->sp, P = cpu->p;
     uint16_t PC = cpu->pc;
+    /* THE FETCH IS ONE LOAD. Every instruction fetches one to three bytes,
+     * and going through bus_read's chain of range checks for each of them
+     * was the biggest single cost of a frame. The title screen, which runs
+     * the fireworks and the sound engine on top of its own drawing, had none
+     * of that to give: it missed a vblank in a hundred and fifty once the
+     * engine had a free list to walk (see NES_AUDIO_RESET). The 64KB view
+     * makes the check unnecessary — see Nes6502Bus.code — and one load per
+     * byte is also the SMALLEST way to write it, which matters: this switch
+     * is ~200 fetch sites in internal WRAM, and a fast path inlined at each
+     * of them once grew it past the stacks. */
+    const uint8_t *const code = cpu->bus.code;
 
 /* Locals kept in registers; these macros are what makes that readable. */
 #define RD(addr_) bus_read(cpu, (uint16_t)(addr_))
 #define WR(addr_, v_) bus_write(cpu, (uint16_t)(addr_), (uint8_t)(v_))
-#define FETCH() RD(PC++)
-#define FETCH16() (PC += 2, (uint16_t)(RD(PC - 2) | (RD(PC - 1) << 8)))
+#define FETCH() code[PC++]
+#define FETCH16() (PC += 2, (uint16_t)(code[(uint16_t)(PC - 2)] | (code[(uint16_t)(PC - 1)] << 8)))
 #define SETF(mask_, on_) (P = (on_) ? (uint8_t)(P | (mask_)) : (uint8_t)(P & ~(mask_)))
 #define ZN(v_) do { uint8_t t_ = (uint8_t)(v_); \
-                     SETF(F_Z, t_ == 0); SETF(F_N, t_ & 0x80); } while (0)
+                     P = (uint8_t)((P & (uint8_t)~(F_Z | F_N)) | (t_ == 0 ? F_Z : 0) | (t_ & F_N)); } while (0)
 #define PUSH(v_) do { cpu->bus.ram[0x100 + S] = (uint8_t)(v_); S--; } while (0)
 #define POP() (cpu->bus.ram[0x100 + (uint8_t)(++S)])
 

@@ -20,9 +20,15 @@
  * free of any decision about where things live. */
 typedef struct {
     uint8_t *ram;          /* 2KB, mirrored across $0000-$1FFF */
-    const uint8_t *prg;    /* program bytes */
-    uint16_t prg_base;     /* the 6502 address prg[0] sits at */
-    uint32_t prg_size;
+    /* THE WHOLE 64KB ADDRESS SPACE, AS THE CODE SEES IT: the program bytes
+     * at their own address and zero everywhere else. An instruction fetch is
+     * then one load, `code[pc]`, with no range check in front of it — and a
+     * fetch is the one thing the interpreter does more of than anything
+     * else. Reads of anything that is not RAM or the APU come from here too,
+     * which is the same answer the range checks used to give: the bytes
+     * inside the slice, and zero outside it. Supplied by the caller, 64KB,
+     * filled by nes6502_init. */
+    const uint8_t *code;
     uint8_t apu[0x18];     /* $4000-$4017, last value written (also read back) */
 } Nes6502Bus;
 
@@ -33,8 +39,10 @@ typedef struct {
     bool faulted;          /* hit an undocumented opcode, a BRK, or ran away */
 } Nes6502;
 
-void nes6502_init(Nes6502 *cpu, uint8_t *ram, const uint8_t *prg,
-                   uint16_t prg_base, uint32_t prg_size);
+/* `code_view` is the caller's 64KB; `prg` is copied into it at `prg_base`
+ * and the rest is zeroed. */
+void nes6502_init(Nes6502 *cpu, uint8_t *ram, uint8_t *code_view,
+                   const uint8_t *prg, uint16_t prg_base, uint32_t prg_size);
 
 /* Runs a subroutine to its RTS, the way a JSR from nowhere would, with A/X/Y
  * preloaded. Returns false if it faulted or ran past `max_steps` — a hang

@@ -147,7 +147,20 @@ running ROM; only the side panels need reflowing).
    documented. `make gba-check` compares the emulated APU against a golden
    recording made by the reference interpreter in `tools/nes_cpu.py`, frame
    by frame and byte for byte, and checks the whole thing still fits in a
-   GBA frame.
+   GBA frame. **THE ENGINE HAS TO BE RESET FIRST**, with track id `$00`,
+   which the cartridge queues on its first frame after power-on and which
+   builds the engine's free list of voice slots (`NES_AUDIO_RESET`): the
+   golden could not see that it was missing, because the title theme sounds
+   the same either way, but LOGINSKA in play lost the repeat of its first
+   strain and ran ahead of the cartridge — heard side by side, then measured
+   by `make tune-check`, which plays the cartridge itself into a game with
+   each tune and lines the port up against it note by note. The interpreter
+   fetches its code from a 64KB view of the address space in external WRAM
+   (`Nes6502Bus.code`, one load per byte, no range check), which is what
+   keeps the title screen inside its vblank with the engine doing the extra
+   work the reset gives it; a fast path inlined at every fetch site instead
+   grew the internal-WRAM code past the stacks, so mind `.iwram` in
+   `arm-none-eabi-objdump -h` when touching `gba/nes6502.c`.
 14. ~~2P~~ — done, over a LINK CABLE, and the CHOOSING COMES AFTER THE
    CONNECTING: 2 PLAYER goes straight to the lobby, the master reaches the
    level screen from there and the guest waits with a dancing cossack. The
@@ -561,6 +574,14 @@ that against comment-stripped text is not a detail — `main` itself came out
   `make gba` on a fresh clone. `PROTO` is optional and adds the title-skin
   easter egg; without it the port builds and runs the same, minus that.
 - `make assets-check` — verifies the asset conversion without needing a ROM.
+- `make tune-check ROM=/path/to/tetris.nes` — the four cartridge tunes AGAINST
+  THE CARTRIDGE, in play: `tools/probes/tune_vs_cartridge.py` boots the dump
+  into a 1 PLAYER game with each tune, reads its APU register file every
+  frame, does the same to the port, and compares the two as runs of held
+  notes on pulse 2 and the triangle (pulse 1 carries the effects, whose
+  timing the two games do not share). About two minutes. The golden check in
+  `gba-check` hears only the title theme on a fresh engine; this is what
+  found the engine reset the port never sent.
 - `make trace ROM=/path/to/tetris.nes [FRAMES=3000]` — **THE PORT AGAINST THE
   CARTRIDGE, NOT AGAINST THE DISASSEMBLY.** Boots an original dump in
   `tools/nes_console.py`, walks its menus into a 1 PLAYER game, reads its

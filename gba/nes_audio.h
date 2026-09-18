@@ -36,6 +36,16 @@
 
 /* Track ids, from reference/disasm/constants.asm.txt:37-61. Passed straight
  * to the cartridge's own setMusicOrSoundEffect. */
+/* ID ZERO IS THE ENGINE'S OWN RESET, and the cartridge queues it once, on
+ * its first frame after power-on (LD2C9, main.asm.txt:8829). It builds the
+ * engine's free list of voice slots — $FB and the chains at $03B0 and
+ * $03E0 — and nothing else ever does. An engine that never had it starts
+ * with an EMPTY free list, and a tune that asks for one more voice than it
+ * has gets the tune minus that voice: LOGINSKA lost the repeat of its first
+ * strain and went straight on to the second, which side by side with the
+ * cartridge is "ours runs ahead and skips bars". Not in constants.asm.txt,
+ * which starts its list at SUSPEND. */
+#define NES_AUDIO_RESET        0x00
 #define NES_MUSIC_SUSPEND      0x01
 #define NES_MUSIC_RESUME       0x02
 #define NES_MUSIC_LOGINSKA     0x04
