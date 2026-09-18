@@ -390,7 +390,12 @@ bool g_title_skin_found;
  * a skin belongs; see the callers. */
 void apply_skin(int skin) {
 #if SCREEN_PROTO_AVAILABLE && SCREEN_SKIN_PLAY
-    static int loaded = -1;
+    /* -2, never a skin number: the first call must upload even the
+     * release (-1), because upload_skin_play is the only writer of the
+     * panel's braid run at SKIN_PANEL_RUN_BASE. Starting at -1 left the
+     * release's top braid blank on a fresh boot until a prototype had
+     * been entered and left. */
+    static int loaded = -2;
     if (skin != loaded) {
         loaded = skin;
         upload_skin_play(skin);

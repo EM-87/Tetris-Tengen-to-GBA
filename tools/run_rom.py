@@ -204,6 +204,18 @@ def selftest(rom_path):
     if rows == title:
         failures.append("START no arranco la partida (la pantalla no cambio)")
 
+    # The panels' top run lives in slots the boot upload never touches, so
+    # the tilemap can be right while the art is all zeros: the rope along the
+    # top of both panels simply missing on a fresh boot, and back the moment
+    # a prototype skin has been put on and taken off. Read the ART, not the
+    # map — the map was correct all along.
+    for slot in PANEL_RUN_SLOTS:
+        art = [core.memory.u16[CHARBLOCK_ADDR + slot * 32 + i]
+               for i in range(0, 32, 2)]
+        if not any(art):
+            failures.append(f"la greca superior de los paneles (tile {slot:#x}) "
+                            "esta en blanco en el primer arranque")
+
     def region(bounds):
         return sum(cols[x] for x in range(bounds[0] * TILE, bounds[1] * TILE))
 
@@ -288,6 +300,10 @@ PF_W, PF_H = 12, 20            # must match TENGEN_PF_WIDTH / _HEIGHT
 PF_PLAYABLE = PF_W - 2         # what is actually drawn; the walls are frame art
 CELL_WALL, CELL_BLOCK = 15, 1
 SCREENBLOCK_ADDR = 0x0600E000  # screenblock 28, as gba/main.c sets BG0CNT
+CHARBLOCK_ADDR = 0x06000000    # charblock 0, the game's tiles
+# The panel's own top run: two slots above the cartridge's 256 that nothing
+# but apply_skin writes. See SKIN_PANEL_RUN_BASE in gba/screen_proto.h.
+PANEL_RUN_SLOTS = (0x320, 0x321)
 OAM_ADDR = 0x07000000
 SWEEP_TILES = (0x5B, 0x5C, 0x5D, 0x5E, 0x5F)  # main.asm.txt:1274-1338
 SWEEP_PAL_BANK = 4   # gba/port.h PAL_OBJ_CLEAR; banks 0-3 are the dancers
