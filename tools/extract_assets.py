@@ -1816,6 +1816,47 @@ SKIN_GARBAGE_SOURCE = 0x01
 SKIN_LEDGE_SLOT = 0x9D
 SKIN_LEDGE_ROW = 3
 
+# THE GAME OVER PLAQUE, which is a box of eight frame tiles round two words
+# spelt in plain ASCII. The letters need nothing: G, A, M and E are $47, $41,
+# $4D and $45 in every one of the four builds. The BOX does — the release
+# draws a thick band and the prototypes a thin rule inside a black outline,
+# and its eight tiles sit at different numbers in the two.
+#
+# READ OFF THE SCREEN, not guessed. Each dump was played to a game over with
+# DOWN held (tools/../scratchpad's overplaque probe) and the plaque's rows
+# dumped: the release writes $29 $2A $2B / $2C .. $2F / $3A $3B $3C and all
+# three prototypes write $25 $26 $27 / $28 .. $29 / $2A $2B $2C. The numbers
+# are therefore a constant here rather than a search, but they are CHECKED
+# below — a box whose top run has ink along the bottom is not a top run.
+SKIN_PLAQUE_RELEASE = (0x29, 0x2A, 0x2B, 0x2C, 0x2F, 0x3A, 0x3B, 0x3C)
+SKIN_PLAQUE_PROTO = (0x25, 0x26, 0x27, 0x28, 0x29, 0x2A, 0x2B, 0x2C)
+SKIN_PLAQUE_NAMES = ("TL", "T", "TR", "L", "R", "BL", "B", "BR")
+# ...and the attribute bank it is drawn in, which is the same 3 in all four.
+# Measured in play AND at the game over: bank 3 does not move between them, so
+# the play capture is enough to colour it.
+SKIN_PLAQUE_BANK = 3
+
+# THE PIECE HISTOGRAM, which is where the two designs differ most.
+#
+# The release counts pieces into ONE eight-step bar graphic shared by all
+# seven columns, and tells the columns apart by a strip of seven little
+# tetromino ICONS under them. A prototype has no icon strip at all: it gives
+# each piece its own eight-step run, drawn in that piece's own block pattern,
+# so a column is identified by what its bar is made of.
+#
+# Seven runs of eight, at $5B, $63, $6B, $73, $7B, $83 and $8B in CHR bank 0.
+# Found by watching the bottom row of the box while a game was played (the
+# histwatch probe): its tiles walk up from those bases one per piece. WHICH
+# RUN IS WHICH PIECE is not assumed either — run i's full tile is built out of
+# exactly the colours of block tile $0(i+1), checked below for every dump, so
+# the runs are in the pieces' own order and TT_I..TT_Z map straight onto them.
+SKIN_STATS_BASES = (0x5B, 0x63, 0x6B, 0x73, 0x7B, 0x83, 0x8B)
+SKIN_STATS_STEPS = 8
+# The bars' attribute bank on the prototype's play screen: 0, the same bank
+# its blocks are drawn in, which is what lets three colours tell seven
+# patterns apart.
+SKIN_STATS_BANK = 0
+
 # THE TETRIS BANNER, WHICH CANNOT BE DONE BY OVERWRITING SLOTS.
 #
 # The release's vertical banner and its horizontal menu logo are the SAME 39
@@ -1976,6 +2017,28 @@ def read_skin_play(path, chr_rom):
     slots.append(SKIN_LEDGE_SLOT)
     tiles.append(art(max(counts, key=counts.get)))
 
+    # THE GAME OVER PLAQUE'S BOX, straight into the release's own eight slots.
+    # Checked before it is taken: a frame tile has its border on the side it
+    # frames, so the top run's border pixels must all be in its top half, the
+    # bottom run's in its bottom half, and the two walls' on their own sides.
+    # A wrong tile number fails this immediately instead of quietly putting
+    # something else on the plaque.
+    why = check_plaque(chr_bank)
+    if why:
+        return None, f"{path}: {why}"
+    for slot, tile in zip(SKIN_PLAQUE_RELEASE, SKIN_PLAQUE_PROTO):
+        slots.append(slot)
+        tiles.append(art(tile))
+
+    # THE HISTOGRAM'S SEVEN RUNS. No release slot to overwrite — the release
+    # has one run where this has seven — so they travel as art of their own
+    # into a window the port keeps for them.
+    why = check_stats_runs(chr_bank)
+    if why:
+        return None, f"{path}: {why}"
+    stats = [art(base + step)
+             for base in SKIN_STATS_BASES for step in range(SKIN_STATS_STEPS)]
+
     # THE FRAME'S OWN COLOURS. Every one of its tiles has to be in one
     # attribute bank or the port cannot hand it one; the release's border is
     # the same way and read_braid_frame says so too.
@@ -2045,7 +2108,82 @@ def read_skin_play(path, chr_rom):
         "banner_art": [art(t) for t in order],
         "logo": logo,
         "logo_palette": logo_palette or [0x0F] * 4,
+        "stats": stats,
+        "stats_palette": [palette[SKIN_STATS_BANK * 4 + i] for i in range(4)],
+        "plaque_palette": [palette[SKIN_PLAQUE_BANK * 4 + i] for i in range(4)],
     }, None
+
+
+def _tile_pixels(chr_bank, tile):
+    """One tile's 64 pixel values, flat and row-major: index y * 8 + x."""
+    return tile_2bpp_to_pixels(
+        chr_bank[tile * NES_TILE_BYTES:(tile + 1) * NES_TILE_BYTES])
+
+
+def check_plaque(chr_bank):
+    """Are SKIN_PLAQUE_PROTO's eight tiles really a box? None when they are.
+
+    The border is whatever colour index is NOT the interior, and where it sits
+    is the whole of the test: the top run carries it along its top edge and
+    nowhere else, the bottom run along its bottom, and the two walls down
+    their own side. Corners are left alone — they carry two edges, so there is
+    nothing clean to assert about them.
+    """
+    px = {name: _tile_pixels(chr_bank, t)
+          for name, t in zip(SKIN_PLAQUE_NAMES, SKIN_PLAQUE_PROTO)}
+    if len(set(SKIN_PLAQUE_PROTO)) != len(SKIN_PLAQUE_PROTO):
+        return "los tiles del cartel de GAME OVER se repiten"
+
+    def edge(name, keep):
+        """The pixel values on the tile's `keep` half, and on the other."""
+        flat = px[name]
+        inside = {flat[i] for i in keep}
+        outside = {flat[i] for i in range(64) if i not in keep}
+        return inside, outside
+
+    halves = {
+        "T":  {y * 8 + x for y in range(0, 4) for x in range(8)},
+        "B":  {y * 8 + x for y in range(4, 8) for x in range(8)},
+        "L":  {y * 8 + x for y in range(8) for x in range(0, 4)},
+        "R":  {y * 8 + x for y in range(8) for x in range(4, 8)},
+    }
+    for name, keep in halves.items():
+        inside, outside = edge(name, keep)
+        if not inside - outside:
+            return (f"el tile {name} del cartel de GAME OVER (${dict(zip(SKIN_PLAQUE_NAMES, SKIN_PLAQUE_PROTO))[name]:02X}) "
+                    f"no tiene borde en su lado: dentro {sorted(inside)}, "
+                    f"fuera {sorted(outside)}")
+    return None
+
+
+def check_stats_runs(chr_bank):
+    """Are the seven bar runs the seven pieces', in order? None when they are.
+
+    Two things have to hold and neither is taken on trust. Each run must GROW
+    — its eight tiles are eight different amounts of ink, so no two of them
+    are the same picture. And run i must be piece i+1's: its full tile is
+    drawn in exactly the colours block tile $0(i+1) is drawn in, which is what
+    makes the port's TT_I..TT_Z fall straight onto the runs in order.
+    """
+    for i, base in enumerate(SKIN_STATS_BASES):
+        run = [chr_bank[(base + s) * NES_TILE_BYTES:(base + s + 1) * NES_TILE_BYTES]
+               for s in range(SKIN_STATS_STEPS)]
+        if len(set(run)) != SKIN_STATS_STEPS:
+            return (f"la tirada {i} del histograma (${base:02X}) repite alguno "
+                    f"de sus {SKIN_STATS_STEPS} pasos: no es una barra que crece")
+        ink = sum(1 for v in _tile_pixels(chr_bank, base) if v)
+        full = sum(1 for v in _tile_pixels(chr_bank, base + SKIN_STATS_STEPS - 1)
+                   if v)
+        if ink >= full:
+            return (f"la tirada {i} del histograma (${base:02X}) no crece: su "
+                    f"primer paso tiene {ink} pixeles y el ultimo {full}")
+        bar = {v for v in _tile_pixels(chr_bank, base + SKIN_STATS_STEPS - 1) if v}
+        block = {v for v in _tile_pixels(chr_bank, i + 1) if v}
+        if bar != block:
+            return (f"la tirada {i} del histograma esta pintada con los colores "
+                    f"{sorted(bar)} y la pieza $0{i + 1} con los {sorted(block)}: "
+                    f"las tiradas no van en el orden de las piezas")
+    return None
 
 
 def read_prototype(path):
@@ -2279,6 +2417,43 @@ def emit_skin_play(skins):
     _table(lines,
            "static const uint8_t kSkinLogoPalette[SCREEN_PROTO_COUNT][4] = {",
            [p["logo_palette"] for p in plays], lambda b: f"0x{b:02X}", 4)
+
+    lines += [
+        "",
+        "/* THE GAME OVER PLAQUE'S COLOURS. Its eight box tiles travel in",
+        " * kSkinTiles above, straight into the release's own slots -- the",
+        " * words GAME OVER are plain ASCII and need nothing -- but the box is",
+        " * red in the release and blue in all three prototypes, and that is a",
+        " * palette bank rather than a tile. Bank 3 of the play screen, which",
+        " * is the bank the plaque is drawn in and does not move between",
+        " * playing and topping out. */",
+    ]
+    _table(lines,
+           "static const uint8_t kSkinPlaquePalette[SCREEN_PROTO_COUNT][4] = {",
+           [p["plaque_palette"] for p in plays], lambda b: f"0x{b:02X}", 4)
+
+    lines += [
+        "",
+        "/* THE PIECE HISTOGRAM, which the two designs draw quite differently.",
+        " * The release shares ONE eight-step bar between the seven columns and",
+        " * names them with a strip of little tetromino icons underneath; a",
+        " * prototype has no icon strip and gives each piece its own eight-step",
+        " * run in that piece's own block pattern. So there is no release slot",
+        " * to overwrite: the seven runs come as art of their own, in the",
+        " * pieces' order (checked -- run i is drawn in the colours of block",
+        " * $0(i+1)), with their own palette bank, which is the one the blocks",
+        " * use and the only thing telling seven patterns apart. */",
+        f"#define SKIN_STATS_RUNS {len(SKIN_STATS_BASES)}",
+        f"#define SKIN_STATS_STEPS {SKIN_STATS_STEPS}",
+    ]
+    _table(lines,
+           "static const uint8_t kSkinStatsBars[SCREEN_PROTO_COUNT]"
+           "[SKIN_STATS_RUNS * SKIN_STATS_STEPS * 32] = {",
+           [[b for tile in p["stats"] for b in tile] for p in plays],
+           lambda b: f"0x{b:02X}", 16)
+    _table(lines,
+           "static const uint8_t kSkinStatsPalette[SCREEN_PROTO_COUNT][4] = {",
+           [p["stats_palette"] for p in plays], lambda b: f"0x{b:02X}", 4)
     return lines
 
 

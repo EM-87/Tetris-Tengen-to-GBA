@@ -179,6 +179,7 @@ gba-check: $(GBA_ROM)
 	python3 tools/run_rom.py $(GBA_ROM) --leaderboard
 	python3 tools/run_rom.py $(GBA_ROM) --pausemenu
 	python3 tools/run_rom.py $(GBA_ROM) --quit-audio
+	python3 tools/run_rom.py $(GBA_ROM) --stats
 	python3 tools/run_rom.py $(GBA_ROM) --gameover
 	python3 tools/run_rom.py $(GBA_ROM) --link
 	python3 tools/run_link.py $(GBA_ROM)

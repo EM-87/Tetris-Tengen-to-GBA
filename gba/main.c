@@ -789,6 +789,57 @@ static void upload_skin_banner(int skin) {
         dst[i / 2] = (uint16_t)(src[i] | (src[i + 1] << 8));
 }
 
+/* THE HISTOGRAM'S SEVEN RUNS, into a window of their own above the banner's.
+ *
+ * The release has ONE eight-step bar tile shared by all seven columns, with a
+ * strip of tetromino icons underneath to say which column is which piece. A
+ * prototype has no icon strip: each piece gets its own eight-step run drawn in
+ * that piece's own block pattern, and the pattern IS the label. So there is no
+ * release slot to overwrite here the way the blocks and the frame are — seven
+ * runs of eight is fifty-six tiles the release simply does not have — and they
+ * go above the banner's window instead. 1792 bytes, well inside a vblank. */
+#define SKIN_STATS_BASE 896
+static void upload_skin_stats(int skin) {
+    if (skin < 0) return;          /* the release draws its own one run */
+    vu16 *dst = MEM_CHARBLOCK(CHARBLOCK) + SKIN_STATS_BASE * 16;
+    const uint8_t *src = kSkinStatsBars[skin];
+    for (unsigned i = 0; i < SKIN_STATS_RUNS * SKIN_STATS_STEPS * 32; i += 2)
+        dst[i / 2] = (uint16_t)(src[i] | (src[i + 1] << 8));
+}
+
+/* ...and the one bank they are all drawn in, which is the prototype's own
+ * block palette: three colours is what tells seven patterns apart, and the
+ * release's per-piece icon banks would have two of them come out the same.
+ *
+ * BORROWED FROM THE TITLE'S FOUR, like the menu logo's — no board and no
+ * title are ever up at once, and install_title_palette fills all four again on
+ * every visit, so the loan always comes back. */
+#define SKIN_STATS_BANK (PAL_TITLE_BASE + 2)
+static void upload_skin_stats_palette(int skin) {
+    if (skin < 0) return;
+    vu16 *dst = MEM_PALETTE + SKIN_STATS_BANK * 16;
+    for (int i = 0; i < 4; i++)
+        dst[i] = nes_colour_to_gba(kSkinStatsPalette[skin][i]);
+}
+
+/* THE GAME OVER PLAQUE. Its eight box tiles ride in kSkinTiles, straight into
+ * the release's own slots — the words are plain ASCII and identical in all
+ * four builds — so only its COLOURS are left, and they are a whole bank: the
+ * release frames the plaque in red and every prototype in blue.
+ *
+ * NOT game bank 3, though, which is where the release draws it: that bank is
+ * also the HUD's — NEXT, SCORE, LINES, LEVEL and their rules — and every
+ * prototype's NEXT is as red as the release's, so their plaque's blue is NOT
+ * in the bank their header is in. Taking bank 3 wholesale turned NEXT grey.
+ * The plaque borrows a title bank instead. */
+#define SKIN_PLAQUE_BANK (PAL_TITLE_BASE + 1)
+static void upload_skin_plaque_palette(int skin) {
+    if (skin < 0) return;          /* no skin, no loan: BANK_PAUSE is bank 3 */
+    vu16 *dst = MEM_PALETTE + SKIN_PLAQUE_BANK * 16;
+    for (int i = 0; i < 4; i++)
+        dst[i] = nes_colour_to_gba(kSkinPlaquePalette[skin][i]);
+}
+
 /* The menus' logo gets a bank of its own, borrowed from the TITLE's four:
  * no two screens are ever up at once, and install_title_palette fills all
  * four again on every visit to the title, so the loan always comes back. It
@@ -858,7 +909,10 @@ static void apply_skin(int skin) {
     loaded = skin;
     upload_skin_play(skin);
     upload_skin_banner(skin);
+    upload_skin_stats(skin);
     upload_skin_logo_palette(skin);
+    upload_skin_stats_palette(skin);
+    upload_skin_plaque_palette(skin);
     upload_skin_frame_palette(skin);
 #else
     (void)skin;
@@ -912,6 +966,26 @@ static int play_skin(void) {
 #else
     return -1;
 #endif
+}
+
+/* WHICH PALETTE THE GAME OVER PLAQUE AND THE PAUSE BOX ARE DRAWN IN.
+ *
+ * The release frames both in red out of game bank 3 — which is also where the
+ * HUD's labels and counters live, NEXT and SCORE and the rest. Every
+ * prototype frames them in BLUE, and taking their bank 3 wholesale is not the
+ * way to get that: their own NEXT is as red as the release's, so the bank
+ * they draw the plaque in is not the bank they draw the header in.
+ *
+ * So the plaque gets a bank to itself, borrowed from the TITLE's four exactly
+ * as the menu logo and the histogram's runs are: no board and no title are
+ * ever up at once, and install_title_palette fills all four again on every
+ * visit. Without a skin nothing is borrowed and BANK_PAUSE is bank 3, which
+ * is what the cartridge uses. */
+static int plaque_bank(void) {
+#if SCREEN_PROTO_AVAILABLE && SCREEN_SKIN_PLAY
+    if (play_skin() >= 0) return SKIN_PLAQUE_BANK;
+#endif
+    return BANK_PAUSE;
 }
 
 /* WHICH TILE ONE CELL OF A PIECE IS DRAWN WITH, and it is not the same
@@ -1674,7 +1748,7 @@ static void draw_game_over(void) {
     for (int y = 0; y < SCREEN_1P_GAMEOVER_H; y++)
         for (int x = 0; x < SCREEN_1P_GAMEOVER_W; x++)
             set_map_tile(GAMEOVER_TX + x, GAMEOVER_TY + y,
-                          WITH_BANK(kGameOverTiles[y][x], BANK_PAUSE));
+                          WITH_BANK(kGameOverTiles[y][x], plaque_bank()));
 }
 
 /* The cartridge draws its whole header strip — SCORE, LINES, LEVEL, NEXT,
@@ -2432,26 +2506,67 @@ static void clear_stats_layer(void) {
         }
 }
 
+/* A PROTOTYPE COUNTS ITS PIECES DIFFERENTLY, and it is worth saying how,
+ * because it is one of the clearer differences between the builds.
+ *
+ * The release draws one bar graphic for all seven columns and puts a strip of
+ * little tetromino ICONS under them to say which column is whose. A prototype
+ * draws each piece's bar in that PIECE'S OWN BLOCK PATTERN — solid, striped,
+ * hatched — and has no icon strip at all: what the bar is made of is what
+ * names it. Seven runs of eight steps, in the pieces' own order, uploaded to
+ * SKIN_STATS_BASE and drawn in the blocks' bank.
+ *
+ * The ARITHMETIC does not change. Which step of the run a bar is on, and when
+ * it climbs a row, is the cartridge's own rule in both cases; only the
+ * pictures the rule picks are different. */
 static void draw_stats(const TengenPlayerState *p) {
+#if SCREEN_PROTO_AVAILABLE && SCREEN_SKIN_PLAY
+    int skin = play_skin();
+#else
+    int skin = -1;
+#endif
+    /* THE ICON STRIP'S TWO ROWS GO TO THE BARS under a skin, which is the
+     * only sensible thing to do with them: a prototype's bars stand on the
+     * floor of the box, and leaving the strip's rows blank would have them
+     * hanging two rows above it with nothing underneath. So the bars start
+     * one row lower and get two rows taller. */
+    int floor_ty = skin < 0 ? STATS_ICON_TY - 1 : STATS_ICON_TY + 1;
+    int bar_rows = floor_ty - STATS_TOP_TY + 1;
+
     for (int i = 0; i < SCREEN_1P_STATS_PIECES; i++) {
         int tx = STATS_TX + i;
-        /* Each icon in the palette the ROM's attribute table gives it: the
-         * I has its own, T/O/J/L share one, S and Z share another. */
-        int icon_bank = kStatsIconBanks[i];
-        set_histogram_tile(tx, STATS_ICON_TY, WITH_BANK(kStatsIcons[0][i], icon_bank));
-        set_histogram_tile(tx, STATS_ICON_TY + 1, WITH_BANK(kStatsIcons[1][i], icon_bank));
+        if (skin < 0) {
+            /* Each icon in the palette the ROM's attribute table gives it: the
+             * I has its own, T/O/J/L share one, S and Z share another. */
+            int icon_bank = kStatsIconBanks[i];
+            set_histogram_tile(tx, STATS_ICON_TY,
+                                WITH_BANK(kStatsIcons[0][i], icon_bank));
+            set_histogram_tile(tx, STATS_ICON_TY + 1,
+                                WITH_BANK(kStatsIcons[1][i], icon_bank));
+        }
 
         uint16_t n = p->piece_stats[TT_I + i];
         int full = n / 8;
         int part = n % 8;
-        if (full > STATS_BAR_ROWS) { full = STATS_BAR_ROWS; part = 0; }
+        if (full > bar_rows) { full = bar_rows; part = 0; }
 
-        for (int r = 0; r < STATS_BAR_ROWS; r++) {
-            int ty = STATS_ICON_TY - 1 - r;
+        for (int r = 0; r < bar_rows; r++) {
+            int ty = floor_ty - r;
             uint16_t tile = T_BLANK;
+            int bank = BANK_STATS;
+#if SCREEN_PROTO_AVAILABLE && SCREEN_SKIN_PLAY
+            if (skin >= 0) {
+                unsigned run = SKIN_STATS_BASE + (unsigned)i * SKIN_STATS_STEPS;
+                bank = SKIN_STATS_BANK;
+                if (r < full) tile = (uint16_t)(run + SKIN_STATS_STEPS - 1);
+                else if (r == full && part) tile = (uint16_t)(run + part - 1);
+                set_histogram_tile(tx, ty, WITH_BANK(tile, bank));
+                continue;
+            }
+#endif
             if (r < full) tile = STATS_BAR_FULL;
             else if (r == full && part) tile = SCREEN_1P_STATS_BAR_TILE + part - 1;
-            set_histogram_tile(tx, ty, WITH_BANK(tile, BANK_STATS));
+            set_histogram_tile(tx, ty, WITH_BANK(tile, bank));
         }
     }
 }
@@ -2871,7 +2986,7 @@ static void draw_pause_box(void) {
     for (int y = 0; y < PAUSE_H; y++)
         for (int x = 0; x < PAUSE_W; x++)
             set_map_tile(PAUSE_TX + x, PAUSE_TY + y,
-                          WITH_BANK(kPauseTiles[y][x], BANK_PAUSE));
+                          WITH_BANK(kPauseTiles[y][x], plaque_bank()));
 }
 
 
@@ -4359,16 +4474,16 @@ static void draw_box_frame(int tx, int ty, int w, int h) {
     for (int x = 0; x < w; x++) {
         set_map_tile(tx + x, ty,
                       WITH_BANK(x == 0 ? T_BOX_TL : x == w - 1 ? T_BOX_TR : T_BOX_T,
-                                 BANK_PAUSE));
+                                 plaque_bank()));
         set_map_tile(tx + x, ty + h - 1,
                       WITH_BANK(x == 0 ? T_BOX_BL : x == w - 1 ? T_BOX_BR : T_BOX_B,
-                                 BANK_PAUSE));
+                                 plaque_bank()));
     }
     for (int y = 1; y < h - 1; y++) {
-        set_map_tile(tx, ty + y, WITH_BANK(T_BOX_L, BANK_PAUSE));
-        set_map_tile(tx + w - 1, ty + y, WITH_BANK(T_BOX_R, BANK_PAUSE));
+        set_map_tile(tx, ty + y, WITH_BANK(T_BOX_L, plaque_bank()));
+        set_map_tile(tx + w - 1, ty + y, WITH_BANK(T_BOX_R, plaque_bank()));
         for (int x = 1; x < w - 1; x++)
-            set_map_tile(tx + x, ty + y, WITH_BANK(T_BLANK, BANK_PAUSE));
+            set_map_tile(tx + x, ty + y, WITH_BANK(T_BLANK, plaque_bank()));
     }
 }
 

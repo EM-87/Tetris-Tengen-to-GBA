@@ -414,8 +414,26 @@ running ROM; only the side panels need reflowing).
    1 PLAYER and 2 PLAYER, four difficulty steps instead of ten levels, no
    handicap and no music menu. Taking those away on a chord rung at the title
    would remove things this port has and a player chose, so they wait for a
-   decision. Likewise their GAME OVER plaque's blue border, which is a palette
-   this port has not captured.
+   decision.
+   **THE GAME OVER PLAQUE AND THE PIECE HISTOGRAM COME TOO**, and both had to
+   be played for rather than read: each dump was taken to a real game over
+   with DOWN held, and the plaque's rows and the histogram's floor read off
+   the screen there. The plaque is eight box tiles ($25-$2C against the
+   release's $29-$3C; the words are plain ASCII and identical in all four) and
+   a palette — red in the release, BLUE in all three — and the palette needs a
+   BANK OF ITS OWN rather than the release's bank 3, because that bank is also
+   the HUD's and every prototype's NEXT is as red as the release's. Taking
+   bank 3 wholesale turned NEXT grey; `plaque_bank()` borrows a title bank
+   instead, as the menu logo and the histogram's runs do.
+   The histogram is the bigger difference. The release shares ONE eight-step
+   bar between its seven columns and names them with a strip of tetromino
+   icons underneath; a prototype has no icon strip at all and gives each piece
+   its own eight-step run drawn in THAT PIECE'S OWN BLOCK PATTERN, so what a
+   bar is made of is what names it. Seven runs of eight at $5B, $63, $6B, $73,
+   $7B, $83 and $8B — and which run is which piece is checked rather than
+   assumed: run i's full tile is drawn in exactly the colours of block tile
+   $0(i+1) in all three dumps, so TT_I..TT_Z fall straight onto them. The two
+   rows the icon strip used to take become two more rows of bar.
 30. ~~Tetris Tengen XE~~ — done, behind the same L+R chord: levels 0-19 on the
    settings screen, the mod's longer fall-timer and mask tables, and the cap
    at 19 instead of 17. **AND THAT IS ALL THE MOD IS.** Its ten IPS records

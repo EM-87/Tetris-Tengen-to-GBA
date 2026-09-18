@@ -1337,6 +1337,24 @@ MUSIC_ROW = 13
 # Vueltas de sobra para dar la lista de canciones entera, destapada o no.
 MUSIC_COUNT_MAX = 14
 
+# El histograma tiene mapa para el solo (SCREENBLOCK_HISTOGRAM en gba/main.c),
+# asi que lo que este escrito ahi ES el histograma y no hay que saber donde
+# cae la caja. Siete columnas, una por tetromino.
+STATS_SCREENBLOCK = 31
+STATS_COLUMNS = 7
+# Las cuatro esquinas de la caja del cartel de GAME OVER (T_BOX_TL/TR/BL/BR en
+# gba/main.c). Son los mismos numeros con skin y sin ella: una skin cambia el
+# DIBUJO que hay en esas ranuras y el banco de paleta, nunca el numero.
+PLAQUE_CORNERS = (0x29, 0x2B, 0x3A, 0x3C)
+# Las etiquetas del HUD (NEXT, SCORE, LINES, LEVEL, HIGH) no son ASCII sino
+# arte propio: HUD_LABEL_TILE_BASE en gba/main.c y las veintidos que siguen.
+HUD_LABEL_TILE_BASE = 768
+HUD_LABEL_TILE_END = 790
+# Y las dos filas que el release gasta en la tira de iconos del histograma,
+# con los ocho pasos que tiene una tirada de barra en las dos construcciones.
+STATS_ICON_ROWS = 2
+STATS_RUN_STEPS = 8
+
 
 def to_music_page(core, settle=10):
     """Title -> GAME SELECT -> LEVEL SETTINGS, cursor on MUSIC.
@@ -2724,6 +2742,177 @@ def quit_audio_check(rom_path):
     return 0
 
 
+def stats_check(rom_path):
+    """EL HISTOGRAMA Y EL CARTEL, QUE CADA CONSTRUCCION DIBUJA A SU MANERA.
+
+    El release comparte UNA barra de ocho pasos entre las siete columnas y
+    pone debajo una tira de iconos para decir cual es cual. Un prototipo no
+    tiene tira: le da a cada pieza su propia tirada de ocho, pintada con el
+    patron de bloque de esa pieza, y el patron es la etiqueta. Asi que bajo
+    skin las dos filas de la tira son dos filas mas de barra, las siete
+    columnas tienen que dibujarse con tiles DISTINTOS entre si, y ninguna
+    puede quedar vacia teniendo cuenta.
+
+    Y el cartel de GAME OVER: rojo en el release, azul en los tres
+    prototipos. El marco viaja como arte en las ranuras del release, asi que
+    lo que se comprueba aqui es que cambia -- y que NEXT no cambia con el,
+    que es lo que paso al tomar prestado el banco 3 entero: los prototipos
+    tienen su NEXT tan rojo como el release.
+    """
+    failures = []
+    # La capa del histograma es la suya propia (SCREENBLOCK_HISTOGRAM en
+    # gba/main.c), asi que no hace falta saber donde cae la caja: se barre
+    # entera y lo que haya escrito ES el histograma.
+    hist = 0x06000000 + STATS_SCREENBLOCK * 0x800
+    # Cuentas bien distintas, ninguna nula, una por pieza.
+    counts = (37, 5, 61, 12, 84, 29, 50)
+    seen = {}
+    for skin in (0, 1):
+        core, screen = load(rom_path)   # `screen` must stay alive; see load()
+        _ = screen
+
+        def tap(*names, hold=4, settle=12):
+            core.set_keys(*[KEYS[n] for n in names]); run(core, hold)
+            core.set_keys(); run(core, settle)
+
+        run(core, 40)
+        if skin:
+            tap("L", "R"); run(core, 20)
+        press_start(core); run(core, 24)
+        press_start(core); run(core, 24)
+        press_start(core); run(core, 60)
+        tap("L", "R"); run(core, 30)          # al HUD de estadisticas
+        off = game_offsets(rom_path)
+        base, why = game_state_address(rom_path)
+        if base is None:
+            print(f"SALTADO: {why}")
+            return 0
+        # piece_stats es uint8_t[8] y la entrada 0 es TT_NONE.
+        for i, n in enumerate(counts):
+            core.memory.u8[base + off["stats"] + 1 + i] = n
+        run(core, 30)
+
+        used = {}
+        for ty in range(32):
+            for tx in range(32):
+                e = core.memory.u16[hist + ((ty * 32 + tx) * 2)]
+                if e & 0x3FF:
+                    used.setdefault(tx, []).append((ty, e))
+        cols = [sorted(v) for _k, v in sorted(used.items())]
+        if len(cols) != STATS_COLUMNS:
+            failures.append(f"{'release' if not skin else 'prototipo'}: el "
+                             f"histograma ocupa {len(cols)} columnas, no "
+                             f"{STATS_COLUMNS}")
+            del core, screen
+            continue
+        name = "release" if not skin else "prototipo"
+        # Las alturas siguen a las cuentas: mas piezas, barra mas alta.
+        order = sorted(range(len(counts)), key=lambda i: counts[i])
+        heights = [len(c) - (STATS_ICON_ROWS if not skin else 0) for c in cols]
+        if any(heights[a] > heights[b] for a, b in zip(order, order[1:])):
+            failures.append(f"{name}: las alturas {heights} no siguen al orden "
+                             f"de las cuentas {counts}")
+        else:
+            print(f"  {name}: siete barras, alturas {heights} para {counts}")
+        seen[skin] = cols
+        # El cartel: se entierra el tablero y se mira de que color sale.
+        addr = base + off["field"]
+        for row in range(TENGEN_PF_HEIGHT):
+            for col in range(1, TENGEN_PF_WIDTH - 1):
+                core.memory.u8[addr + row * TENGEN_PF_WIDTH + col] = (
+                    0 if col == 5 else CELL_BLOCK)
+        run(core, 240)
+        # El cartel se busca por sus propios tiles: las cuatro esquinas de la
+        # caja son $29 $2B $3A $3C en las dos construcciones -- lo que cambia
+        # es el dibujo y el banco, no el numero.
+        plaque = [core.memory.u16[SCREENBLOCK_ADDR + (i * 2)]
+                  for i in range(32 * 20)
+                  if (core.memory.u16[SCREENBLOCK_ADDR + (i * 2)] & 0x3FF)
+                  in PLAQUE_CORNERS]
+        if len(plaque) < len(PLAQUE_CORNERS):
+            failures.append(f"{name}: no sale el cartel de GAME OVER")
+        else:
+            seen[("plaque", skin)] = plaque
+            print(f"  {name}: el cartel de GAME OVER esta puesto")
+        # ...y la CABECERA sigue en su banco. NEXT, SCORE, LINES, LEVEL y HIGH
+        # no son ASCII sino arte propio, a partir de HUD_LABEL_TILE_BASE, asi
+        # que se buscan por numero de tile y se anotan sus bancos.
+        banks = {core.memory.u16[SCREENBLOCK_ADDR + (i * 2)] >> 12
+                 for i in range(32 * 20)
+                 if HUD_LABEL_TILE_BASE <= (core.memory.u16[SCREENBLOCK_ADDR +
+                                                            (i * 2)] & 0x3FF)
+                 < HUD_LABEL_TILE_END}
+        if not banks:
+            failures.append(f"{name}: no se encuentran las etiquetas del HUD")
+        seen[("labels", skin)] = banks
+        del core, screen
+
+    if 0 in seen and 1 in seen and not failures:
+        # LAS DOS FILAS DE LA TIRA DE ICONOS SON BARRA BAJO SKIN. En el
+        # release las dos de abajo de cada columna son el icono, asi que la
+        # barra es lo que queda; en un prototipo no hay icono y todo es barra.
+        # Las dos llegan igual de abajo -- al suelo de la caja -- y es la barra
+        # la que crece.
+        rel_floor = max(ty for c in seen[0] for ty, _e in c)
+        pro_floor = max(ty for c in seen[1] for ty, _e in c)
+        if rel_floor != pro_floor:
+            failures.append(f"el histograma no llega igual de abajo con skin "
+                             f"({pro_floor}) que sin ella ({rel_floor})")
+        rel = max(len(c) for c in seen[0]) - STATS_ICON_ROWS
+        pro = max(len(c) for c in seen[1])
+        if pro <= rel:
+            failures.append(f"bajo skin la barra mas alta mide {pro} filas y sin "
+                             f"skin {rel}: la tira de iconos no ha dejado su sitio")
+        else:
+            print(f"  la barra mas alta pasa de {rel} filas a {pro}: las dos de "
+                   "la tira de iconos son barra en el prototipo")
+        # ...Y CADA COLUMNA CON SU PROPIA TIRADA bajo skin, que es la
+        # diferencia entera: los tiles de una columna no aparecen en ninguna
+        # otra. Sin skin es justo al reves -- las siete comparten una sola
+        # tirada de ocho pasos, asi que todos sus tiles caben en una ventana
+        # de ocho.
+        pro_sets = [{e & 0x3FF for _ty, e in c} for c in seen[1]]
+        shared = [(i, j) for i in range(len(pro_sets))
+                  for j in range(i + 1, len(pro_sets))
+                  if pro_sets[i] & pro_sets[j]]
+        if shared:
+            failures.append(f"bajo skin las columnas {shared} comparten tiles de "
+                             f"barra: no llevan el patron de su pieza")
+        else:
+            print(f"  ...y cada columna con el patron de su pieza: "
+                   f"{len(pro_sets)} tiradas sin un tile en comun")
+        rel_bars = {e & 0x3FF for c in seen[0] for _ty, e in c[:-STATS_ICON_ROWS]}
+        if max(rel_bars) - min(rel_bars) >= STATS_RUN_STEPS:
+            failures.append(f"sin skin las columnas deberian compartir una sola "
+                             f"tirada y usan {sorted(hex(t) for t in rel_bars)}")
+
+    if ("plaque", 0) in seen and ("plaque", 1) in seen:
+        rel = {e >> 12 for e in seen[("plaque", 0)] if e & 0x3FF}
+        pro = {e >> 12 for e in seen[("plaque", 1)] if e & 0x3FF}
+        if rel == pro:
+            failures.append(f"el cartel de GAME OVER usa el mismo banco con y "
+                             f"sin skin ({sorted(rel)}): no cambia de color")
+        else:
+            print(f"  el cartel cambia de paleta con la skin: banco "
+                   f"{sorted(rel)} -> {sorted(pro)}")
+    if ("labels", 0) in seen and ("labels", 1) in seen:
+        if seen[("labels", 0)] != seen[("labels", 1)]:
+            failures.append(f"la cabecera cambia de banco con la skin "
+                             f"({sorted(seen[('labels', 0)])} -> "
+                             f"{sorted(seen[('labels', 1)])}): el cartel se ha "
+                             f"llevado NEXT y los contadores con el")
+        else:
+            print(f"  ...y la cabecera se queda en el banco "
+                   f"{sorted(seen[('labels', 0)])}: el cartel no la arrastra")
+
+    for f in failures:
+        print("FALLA:", f)
+    if failures:
+        return 1
+    print("OK: el histograma y el cartel son los de cada construccion.")
+    return 0
+
+
 def gameover_check(rom_path):
     """THE WAY OUT. Every mode has to end, and end where the player left.
 
@@ -3899,6 +4088,9 @@ def main():
                      help="check the COMPUTER player plays VERSUS and WITH")
     ap.add_argument("--demo", action="store_true",
                      help="check the title starts playing by itself")
+    ap.add_argument("--stats", action="store_true",
+                    help="check the histogram and the GAME OVER plaque follow "
+                         "the skin")
     ap.add_argument("--gameover", action="store_true",
                      help="check every mode ends and lets go of the player")
     ap.add_argument("--counters", action="store_true",
@@ -3963,6 +4155,8 @@ def main():
         sys.exit(leaderboard_check(args.rom))
     if args.quit_audio:
         sys.exit(quit_audio_check(args.rom))
+    if args.stats:
+        sys.exit(stats_check(args.rom))
     if args.pausemenu:
         sys.exit(pausemenu_check(args.rom))
     if args.counters:
