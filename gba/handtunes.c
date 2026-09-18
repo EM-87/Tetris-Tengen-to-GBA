@@ -250,6 +250,8 @@ typedef struct {
     uint16_t index;     /* which event within it */
     uint16_t ticks;     /* frames left of the current note */
     uint16_t off_at;    /* ...and how many of those are its silence */
+    uint8_t note;       /* the note sounding, for a restart after a pause */
+    bool restart;       /* the pause let the envelope go: write it again */
 } Voice;
 
 static Voice g_lead, g_bass;
@@ -290,6 +292,8 @@ static void voice_reset(Voice *v) {
     v->index = 0;
     v->ticks = 0;
     v->off_at = 0;
+    v->note = REST;
+    v->restart = false;
 }
 
 /* Advances one voice. Returns the note to start now, NOTE_HOLD to leave the
@@ -300,7 +304,12 @@ static void voice_reset(Voice *v) {
 static int voice_step(Voice *v, const Section *score, bool bass) {
     if (v->ticks > 0) {
         v->ticks--;
-        return v->ticks < v->off_at ? NOTE_RELEASE : NOTE_HOLD;
+        if (v->ticks < v->off_at) return NOTE_RELEASE;
+        /* A NOTE THE PAUSE INTERRUPTED. Suspending zeroes the envelopes, and
+         * a held note writes nothing, so without this the tune came back
+         * silent until its next note started — the rest of a long one gone. */
+        if (v->restart) { v->restart = false; return v->note; }
+        return NOTE_HOLD;
     }
     if (v->index >= score[v->section].count) {
         v->index = 0;
@@ -311,6 +320,8 @@ static int voice_step(Voice *v, const Section *score, bool bass) {
     v->off_at = bass ? (uint16_t)(v->ticks * BASS_OFF_NUM / BASS_OFF_DEN)
                      : LEAD_OFF_FRAMES;
     if (v->off_at < 1) v->off_at = 1;
+    v->note = e->note;
+    v->restart = false;
     return e->note;
 }
 
@@ -348,7 +359,10 @@ void handtune_suspend(void) {
 }
 
 void handtune_resume(void) {
-    if (g_tune) g_playing = true;
+    if (!g_tune) return;
+    g_playing = true;
+    g_lead.restart = true;      /* see voice_step */
+    g_bass.restart = true;
 }
 
 uint8_t handtune_current(void) {
