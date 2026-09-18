@@ -2585,6 +2585,7 @@ def pausemenu_check(rom_path):
         else:
             print("  y el HUD que elegiste sigue siendo el tuyo")
 
+    failures += pause_menu_visible(rom_path)
     failures += pause_resume_music(rom_path)
 
     for f in failures:
@@ -2593,6 +2594,63 @@ def pausemenu_check(rom_path):
         return 1
     print("OK: el menu de pausa cambia la musica, sale preguntando, y se queda.")
     return 0
+
+
+def pause_menu_visible(rom_path):
+    """EL MAPA DE TILES NO ES LO QUE SE VE, Y AQUI ESO IMPORTA.
+
+    Todo lo que este fichero comprueba del menu de pausa lo lee del mapa de
+    tiles, y el mapa mintio: durante un rato el menu estaba escrito entero y
+    en pantalla le faltaban el titulo PAUSE, la linea MUSIC y el borde de
+    arriba de la caja. La causa no era el dibujo sino el RELOJ -- partir
+    gba/main.c en cinco ficheros le quito al compilador el inline entre ellos,
+    el frame crecio un 5% y el dibujado empezo a pasarse del blanco vertical.
+    Pasarse no se ve como lentitud: se ve como que falta la PARTE DE ARRIBA de
+    lo ultimo que se dibuja, porque el haz ya ha pasado por esas lineas cuando
+    se escriben.
+
+    Asi que esto mira PIXELES. La caja se dibuja la ultima de todo el frame,
+    de modo que es el canario: si su fila de arriba y su titulo llegan a la
+    pantalla, el dibujado cabe en el blanco.
+    """
+    failures = []
+    core, screen = load(rom_path)   # `screen` must stay alive; see load()
+
+    def tap(*names, hold=4, settle=16):
+        core.set_keys(*[KEYS[n] for n in names]); run(core, hold)
+        core.set_keys(); run(core, settle)
+
+    run(core, 40)
+    press_start(core); run(core, 30)
+    tap("L", "R"); run(core, 20)            # el acorde, en el menu
+    press_start(core); run(core, 24)
+    press_start(core); run(core, 90)
+    tap("START"); run(core, 60)
+    rows = pixels(core if False else screen)
+
+    def lit(ty, tx0, tx1):
+        return sum(1 for y in range(ty * TILE, (ty + 1) * TILE)
+                   for x in range(tx0 * TILE, tx1 * TILE)
+                   if rows[y][x] != (0, 0, 0))
+
+    # Las filas de la caja, de arriba abajo: el borde, PAUSE, MUSIC, el nombre
+    # de la cancion, EXIT y el borde de abajo. Ninguna puede salir vacia.
+    want = ((PMENU_TY, "el borde de arriba de la caja"),
+            (PMENU_TY + 2, "el titulo PAUSE"),
+            (PMENU_TY + 4, "la linea MUSIC"),
+            (PMENU_TY + 5, "el nombre de la cancion"),
+            (PMENU_TY + 7, "la linea EXIT"),
+            (PMENU_TY + PMENU_H - 1, "el borde de abajo de la caja"))
+    for ty, what in want:
+        n = lit(ty, PMENU_TX + 2, PMENU_TX + PMENU_W_T - 2)
+        if n < 20:
+            failures.append(f"{what} no llega a la pantalla ({n} pixeles "
+                             f"encendidos en la fila {ty}): el dibujado se "
+                             f"esta pasando del blanco vertical")
+        else:
+            print(f"  {what}: {n} pixeles en pantalla")
+    del core, screen
+    return failures
 
 
 def pause_resume_music(rom_path):

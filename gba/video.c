@@ -68,6 +68,11 @@ uint16_t ascii_tile(char c) {
  * moves every one of these, and a Python constant that did not move would
  * quietly start reading a neighbour. Adding `garbage_rng` did exactly that
  * and the cheat-code check began failing three tests away from the change. */
+/* `used` AND `retain`, or link-time optimisation throws it away: nothing in
+ * the program reads it -- the whole point is that something OUTSIDE the
+ * program does -- and LTO can see that across the whole image where a single
+ * translation unit could not. */
+__attribute__((used, retain))
 const uint16_t kGameProbe[16] = {
     (uint16_t)offsetof(TengenGame, field),
     (uint16_t)offsetof(TengenGame, player),

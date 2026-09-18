@@ -67,8 +67,18 @@ ARMOBJCOPY := $(ARMPREFIX)objcopy
 
 # ARM7TDMI. -mthumb keeps the code small, which matters because it runs from
 # the 16-bit-wide cartridge bus.
+#
+# -flto IS NOT A NICETY HERE, it is what keeps the drawing inside the vertical
+# blank. The front end was one file for a long time and the compiler could
+# inline freely across all of it; splitting it into five took that away, the
+# frame's drawing grew by about 5%, and it started overrunning the blank --
+# which does not look like "slow", it looks like the TOP of whatever was drawn
+# last going missing, because the beam has already passed those scanlines by
+# the time they are written. The pause menu's heading vanished exactly that
+# way. Link-time optimisation gives the inlining back across the five files,
+# and the image comes out smaller than the single file's was.
 ARMFLAGS := -mcpu=arm7tdmi -mtune=arm7tdmi -mthumb -mthumb-interwork \
-            -std=c99 -Wall -Wextra -O2 -ffreestanding -fno-builtin \
+            -std=c99 -Wall -Wextra -O2 -flto -ffreestanding -fno-builtin \
             -fomit-frame-pointer
 # -nostartfiles (not -nostdlib): crt0.s replaces the toolchain's startup, but
 # libc and libgcc are still wanted — the core calls memcpy/memset, and the

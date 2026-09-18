@@ -669,7 +669,7 @@ static int g_leader_undo_n;
  * game has save memory by finding one of a handful of exact strings in the
  * ROM image. Without it every read comes back open bus and the table quietly
  * never persists. It is `used` so the linker cannot drop it. */
-__attribute__((used, section(".rodata")))
+__attribute__((used, retain, section(".rodata")))
 static const char kSaveSignature[] = "SRAM_V113";
 static const char kSaveMagic[SAVE_MAGIC_LEN] = { 'L', 'O', 'G', 'G' };
 
