@@ -782,7 +782,7 @@ back. Measured on the built ROM the computer lasts about 35,000
 frames — ten minutes — before burying itself, which is the same chooser at the
 same gravity the cartridge has.
 
-## The starting handicap## The attract demo
+## The attract demo
 
 `demoStart` (`main.asm.txt:3216-3230`) is four lines and then the ordinary
 game init: gameState becomes `GAMESTATE_DEMO` (`$FB`), **playMode 0** — one

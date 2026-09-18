@@ -218,9 +218,10 @@ void draw_title(void) {
         return;
     }
 #endif
-    /* Centred: the composition is 28 columns wide (see TITLE_KEEP_COLS —
-     * the brick border's jewels are a two-column motif and half of one is
-     * worse than none), so it sits one column in from each edge. */
+    /* Centred: the composition is 28 columns wide (SCREEN_TITLE_W, which
+     * tools/extract_assets.py cuts from the cartridge's 32 — the brick
+     * border's jewels are a two-column motif and half of one is worse than
+     * none), so it sits one column in from each edge. */
     const int pad = (SCREEN_TW - SCREEN_TITLE_W) / 2;
     for (int ty = 0; ty < SCREEN_TITLE_H_TILES; ty++) {
         for (int tx = 0; tx < SCREEN_TITLE_W; tx++) {

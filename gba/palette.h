@@ -50,24 +50,13 @@ static const uint8_t kNesPaletteRGB[64][3] = {
     {160,214,228},{160,162,160},{0,0,0},      {0,0,0},
 };
 
-/* piecePaletteIndex0..B, verbatim (main.asm.txt:5364-5399). Indexed by piece
- * id for pieces and by the level's ones digit for the field; entry 10 is what
- * the game flashes during a line clear, entry 11 is the bonus animation. */
+/* piecePaletteIndex0..B (main.asm.txt:5364-5399) — the piece and level
+ * palettes — are no longer copied here: the port takes every palette set
+ * straight off the cartridge's own tables, in gba/palettes_rom.h, which
+ * tools/extract_assets.py generates. Twelve entries, indexed by piece id for
+ * pieces and by the level's ones digit for the field; entry 10 is what the
+ * game flashes during a line clear, entry 11 is the bonus animation. */
 #define TENGEN_PALETTE_ENTRIES 12
-static const uint8_t kTengenPaletteIndices[TENGEN_PALETTE_ENTRIES][3] = {
-    {0x20, 0x10, 0x00}, /*  0  level 0            */
-    {0x26, 0x16, 0x06}, /*  1  level 1 & I        */
-    {0x27, 0x18, 0x08}, /*  2  level 2 & T        */
-    {0x21, 0x12, 0x01}, /*  3  level 3 & O        */
-    {0x37, 0x27, 0x17}, /*  4  level 4 & J        */
-    {0x34, 0x24, 0x14}, /*  5  level 5 & L        */
-    {0x2A, 0x1A, 0x0A}, /*  6  level 6 & S        */
-    {0x2C, 0x1C, 0x0C}, /*  7  level 7 & Z        */
-    {0x23, 0x13, 0x03}, /*  8  level 8            */
-    {0x2B, 0x1B, 0x0B}, /*  9  level 9            */
-    {0x0F, 0x0F, 0x0F}, /* 10  line clear (black) */
-    {0x30, 0x16, 0x0F}, /* 11  bonus animation    */
-};
 
 /* The NES backdrop these palettes share ($0F is black). */
 #define TENGEN_BACKDROP_INDEX 0x0F
