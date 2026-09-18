@@ -135,7 +135,7 @@ def main():
 
     rom_path = os.path.join(args.outdir, "trace_cartridge.txt")
     print(f"corriendo el cartucho {args.frames} frames "
-          f"(un interprete; tarda ~1 min por cada mil)...")
+          f"(un interprete; tarda ~15s por cada mil)...")
     seed = cartridge_trace(args.rom, args.frames, rom_path, args.coop)
     print(f"  savedRNGSeed = ${seed:04X}, escrito {rom_path}")
 

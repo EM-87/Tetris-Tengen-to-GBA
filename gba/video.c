@@ -386,15 +386,25 @@ bool g_title_skin_found;
 void apply_skin(int skin) {
 #if SCREEN_PROTO_AVAILABLE && SCREEN_SKIN_PLAY
     static int loaded = -1;
-    if (skin == loaded) return;
-    loaded = skin;
-    upload_skin_play(skin);
-    upload_skin_banner(skin);
-    upload_skin_stats(skin);
+    if (skin != loaded) {
+        loaded = skin;
+        upload_skin_play(skin);
+        upload_skin_banner(skin);
+        upload_skin_stats(skin);
+        upload_skin_frame_palette(skin);
+    }
+    /* THE BORROWED BANKS ARE NOT MEMOISED, and that is the whole of a bug
+     * worth setting down. Three of a skin's palettes are LOANS from the
+     * title's four — the menu logo's, the histogram's runs and the game over
+     * plaque's — and the title takes them back the moment it is drawn. So
+     * "this skin is already loaded" says nothing about whether those three
+     * banks still hold what the skin put there: go to the menus, back to the
+     * title, and to the menus again, and the early return above left the logo
+     * in the title's colours. Reloading them is twelve palette entries; the
+     * tiles above are the expensive part and they really are unchanged. */
     upload_skin_logo_palette(skin);
     upload_skin_stats_palette(skin);
     upload_skin_plaque_palette(skin);
-    upload_skin_frame_palette(skin);
 #else
     (void)skin;
 #endif

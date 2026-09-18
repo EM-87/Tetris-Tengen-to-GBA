@@ -118,7 +118,6 @@ int main(void) {
                                           TITLE_SKIN_COUNT);
                 nes_audio_play(NES_SOUND_CHIRP);
                 vsync();
-                install_title_palette();
                 /* CLEAR FIRST, then the tiles: a skin swap rewrites the whole
                  * 256-tile prototype bank, which is far more than a vblank
                  * holds, and with the map already blank none of it is on

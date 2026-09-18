@@ -532,7 +532,8 @@ that against comment-stripped text is not a detail — `main` itself came out
   port's last three timing bugs, none of which a reading of the disassembly
   had caught. `--coop` does the same for COOPERATIVE, both pads and the
   twelve-wide shared board. Both run to the end of a match and match it frame
-  for frame. Slow (an interpreter: about a minute a thousand frames), so it is
+  for frame. Slow (an interpreter: about fifteen seconds a thousand
+  frames, and it was four times that before nes_cpu.py was profiled), so it is
   NOT in `gba-check`; run it after touching `tengen_step`.
 - `make gba-check` — boots the ROM headlessly in mGBA and asserts it draws
   the field where the resolution mapping says it should, that a piece

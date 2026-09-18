@@ -1310,6 +1310,10 @@ MENU_TEXT_BANK = 8              # PAL_MENU_BASE + 0, the cartridge's menu blue
 # The handicap's chosen number borrows it, which is what says which of the two
 # the pad is moving.
 MENU_ARROW_BANK = 11            # PAL_MENU_BASE + 3
+# La memoria de paletas de fondo, y el primero de los cuatro bancos del titulo
+# (PAL_TITLE_BASE en gba/port.h). Una skin toma prestados tres de esos cuatro.
+PALETTE_ADDR = 0x05000000
+TITLE_PAL_BASE = 4
 # ...and the cursor's column, gba/frontend.c's GAME_SELECT_ARROW_TX.
 MENU_ARROW_TX = 5
 # The shared coop board starts one column further left than the ten-wide
@@ -2764,6 +2768,91 @@ def quit_audio_check(rom_path):
     if failures:
         return 1
     print("OK: salir por el menu de pausa deja el motor de sonido como estaba.")
+    return 0
+
+
+def loans_check(rom_path):
+    """LOS BANCOS QUE UNA SKIN TIENE PRESTADOS TIENEN QUE DEVOLVERSE.
+
+    Tres paletas de una skin son PRESTAMOS de las cuatro del titulo -- la del
+    logo de los menus, la de las tiradas del histograma y la del cartel de
+    GAME OVER -- porque nunca hay un titulo y un tablero en pantalla a la vez.
+    Eso solo funciona si cada lado las recupera al entrar, y durante un tiempo
+    ninguno de los dos lo hacia:
+
+      * el titulo instalaba sus cuatro bancos solo al CAMBIAR de skin, asi que
+        volver de los menus lo dibujaba con lo que los menus habian dejado --
+        el marco gris de la pantalla con licencia de Nintendo volvia con el
+        borde de arriba y el de la derecha azules;
+      * y apply_skin se saltaba el trabajo entero cuando la skin ya estaba
+        cargada, asi que una vez arreglado lo anterior, la segunda visita a
+        los menus dibujaba el logo con los colores del titulo.
+
+    Asi que esto no mira una pantalla: da la vuelta entera -- titulo, menus,
+    titulo, menus, partida, titulo -- y compara los dieciseis colores de los
+    cuatro bancos del titulo con los que tenia la primera vez.
+    """
+    failures = []
+    core, screen = load(rom_path)   # `screen` must stay alive; see load()
+    _ = screen
+
+    def tap(*names, hold=4, settle=16):
+        core.set_keys(*[KEYS[n] for n in names]); run(core, hold)
+        core.set_keys(); run(core, settle)
+
+    def title_banks():
+        return [core.memory.u16[PALETTE_ADDR + ((TITLE_PAL_BASE + b) * 16 + i) * 2]
+                for b in range(4) for i in range(4)]
+
+    run(core, 40)
+    tap("L", "R"); run(core, 24)          # una skin puesta
+    first = title_banks()
+    if not any(first):
+        print("SALTADO: esta ROM no trae skins")
+        return 0
+
+    tap("START"); run(core, 30)            # -> GAME SELECT
+    menu_first = title_banks()
+    tap("B"); run(core, 60)                # -> titulo
+    if title_banks() != first:
+        failures.append("el titulo no recupera sus bancos al volver de los menus")
+    else:
+        print("  el titulo recupera sus cuatro bancos al volver de los menus")
+
+    tap("START"); run(core, 30)            # -> GAME SELECT otra vez
+    if title_banks() != menu_first:
+        failures.append("la segunda visita a los menus no repone los prestamos: "
+                         "apply_skin se los salta por tener la skin ya cargada")
+    else:
+        print("  ...y los menus reponen los suyos en cada visita")
+
+    # ...y lo mismo pasando por una partida, que pide prestados otros dos.
+    # EL ACORDE, AQUI: el del titulo cambia la skin y no destapa nada mas, asi
+    # que sin este el cartel de pausa es un cartel y no hay por donde salir.
+    tap("L", "R"); run(core, 20)
+    press_start(core); run(core, 24)
+    press_start(core); run(core, 60)       # -> jugando
+    run(core, 60)
+    tap("START"); run(core, 20)            # pausa, que dibuja el cartel
+    tap("L", "R"); run(core, 20)           # ...y el acorde lo vuelve menu
+    # EXIT, y SI. START aqui seria reanudar, no salir.
+    for _ in range(3):
+        if ">" in tilemap_text(core, PM_EXIT, PM_L, PM_R):
+            break
+        tap("DOWN")
+    tap("A")                                # abre la pregunta
+    tap("LEFT")                             # SI
+    tap("A"); run(core, 120)
+    if title_banks() != first:
+        failures.append("el titulo no recupera sus bancos al volver de una partida")
+    else:
+        print("  ...y tambien al volver de una partida")
+
+    for f in failures:
+        print("FALLA:", f)
+    if failures:
+        return 1
+    print("OK: los bancos prestados vuelven a su sitio en los dos sentidos.")
     return 0
 
 
@@ -4229,6 +4318,8 @@ def main():
                      help="check the COMPUTER player plays VERSUS and WITH")
     ap.add_argument("--demo", action="store_true",
                      help="check the title starts playing by itself")
+    ap.add_argument("--loans", action="store_true",
+                    help="check the palette banks a skin borrows come back")
     ap.add_argument("--effects", action="store_true",
                     help="check each build's menu noises are its own")
     ap.add_argument("--stats", action="store_true",
@@ -4298,6 +4389,8 @@ def main():
         sys.exit(leaderboard_check(args.rom))
     if args.quit_audio:
         sys.exit(quit_audio_check(args.rom))
+    if args.loans:
+        sys.exit(loans_check(args.rom))
     if args.effects:
         sys.exit(effects_check(args.rom))
     if args.stats:

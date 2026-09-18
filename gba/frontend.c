@@ -190,6 +190,15 @@ void install_title_palette(void) {
 void draw_title(void) {
     if (!g_title_dirty) return;
     g_title_dirty = false;
+    /* THE TITLE TAKES ITS FOUR BANKS BACK, every visit. Three of them are on
+     * loan to a skin while the front end is up — the menu logo's, the
+     * histogram's and the plaque's, all borrowed from here because no title
+     * and no board are ever on screen at once — and this used to run only
+     * when the skin was SWAPPED. So coming back from the menus with a skin on
+     * drew the title in the colours the menus had left: the grey frame of the
+     * Nintendo-licensed screen came back with a blue top and a blue right
+     * side. See apply_skin, which reloads the loans for the same reason. */
+    install_title_palette();
 #if SCREEN_PROTO_AVAILABLE
     if (g_title_skin) {
         /* Thirty columns, no padding: the bordered prototypes' frames are two

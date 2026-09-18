@@ -43,9 +43,25 @@ class Bus:
     stored beside the nametable the way one would assume.
     """
 
+    # A SUBCLASS THAT WATCHES READS HAS TO SAY SO. CPU.fetch reads the
+    # cartridge straight out of the byte string when it can, which is worth
+    # twice the speed on a long run -- and is invisible to anything that
+    # overrides read() to observe. Exactly one thing here does: the audio
+    # extractor, which measures WHICH PRG the sound engine touches so it can
+    # cut the slice the port ships. With the fast path on, it stopped seeing
+    # the instruction fetches and cut four and a half kilobytes of engine CODE
+    # out of the slice. So: override read to watch, set this, and the fast
+    # path stands down.
+    watches_fetch = False
+
     def __init__(self, prg: bytes, strict=True, ppu=False):
         assert len(prg) in (16384, 32768), f"unexpected PRG size {len(prg)}"
         self.prg = prg
+        # PRG is 16 or 32KB, so both sizes mask instead of dividing. The
+        # instruction fetch is the single hottest thing this file does -- more
+        # than two of every three reads -- and a modulo plus a len() call on
+        # every one of them was costing real minutes on a trace run.
+        self.prg_mask = len(prg) - 1
         self.ram = bytearray(0x800)
         self.apu = bytearray(0x18)      # $4000-$4017, last value written
         self.writes = []                # (addr, value) since the last drain
@@ -67,10 +83,16 @@ class Bus:
         self.ctrl_at_nametable = None
 
     def read(self, addr):
+        # ORDERED BY HOW OFTEN EACH ARM IS TAKEN, not by address. Every
+        # instruction byte comes from PRG and most data from the zero page, so
+        # those two go first; the register addresses are rare and can afford to
+        # be last.
         addr &= 0xFFFF
+        if addr >= 0x8000:
+            return self.prg[(addr - 0x8000) & self.prg_mask]
         if addr < 0x2000:
             return self.ram[addr & 0x7FF]
-        if self.has_ppu and 0x2000 <= addr <= 0x3FFF:
+        if self.has_ppu and addr <= 0x3FFF:
             reg = 0x2000 + ((addr - 0x2000) & 7)
             if reg == 0x2002:
                 self._latch = 0     # reading PPUSTATUS resets the address latch
@@ -78,8 +100,6 @@ class Bus:
             return 0
         if 0x4000 <= addr <= 0x4017:
             return self.apu[addr - 0x4000]
-        if addr >= 0x8000:
-            return self.prg[(addr - 0x8000) % len(self.prg)]
         if self.strict:
             self.stray.append(("read", addr))
         return 0
@@ -126,6 +146,10 @@ class Bus:
 class CPU:
     def __init__(self, bus: Bus):
         self.bus = bus
+        # The cartridge, held directly: see fetch and Bus.watches_fetch.
+        self.prg = bus.prg
+        self.prg_mask = bus.prg_mask
+        self.fast_fetch = not bus.watches_fetch
         self.a = self.x = self.y = 0
         self.sp = 0xFD
         self.pc = 0
@@ -137,9 +161,15 @@ class CPU:
         self.p = (self.p | mask) if on else (self.p & ~mask & 0xFF)
 
     def _zn(self, value):
+        # _set twice would be two more calls on top of this one, and three
+        # quarters of the opcodes in the set end in it. Written out.
         value &= 0xFF
-        self._set(Z, value == 0)
-        self._set(N, value & 0x80)
+        p = self.p & ~(Z | N) & 0xFF
+        if value == 0:
+            p |= Z
+        if value & 0x80:
+            p |= N
+        self.p = p
         return value
 
     # -- stack ------------------------------------------------------------
@@ -153,9 +183,14 @@ class CPU:
 
     # -- fetch ------------------------------------------------------------
     def fetch(self):
-        value = self.bus.read(self.pc)
-        self.pc = (self.pc + 1) & 0xFFFF
-        return value
+        # Straight out of PRG when it can be: this is called twice per
+        # instruction on average and the bus's own dispatch is pure overhead
+        # for the one address range that is always the same one.
+        pc = self.pc
+        self.pc = (pc + 1) & 0xFFFF
+        if self.fast_fetch and pc >= 0x8000:
+            return self.prg[(pc - 0x8000) & self.prg_mask]
+        return self.bus.read(pc)
 
     def fetch16(self):
         low = self.fetch()
@@ -268,15 +303,57 @@ class CPU:
         b, r, w = self.bus.read, None, self.bus.write
 
         # Loads / stores
-        if   op == 0xA9: self.a = self._zn(self.fetch())
+
+        # THE EIGHTEEN THIS CARTRIDGE ACTUALLY RUNS, FIRST.
+        #
+        # ONE chain, not two: what follows the eighteen is the rest of
+        # the same if/elif, and the `else` at the foot of it is what
+        # catches an opcode this interpreter does not know. Splitting it
+        # in two put every hoisted opcode through that else instead.
+        #
+        # The chain below is grouped by what an instruction DOES, which
+        # reads well and costs dearly: counted over a real game the
+        # average instruction walked EIGHTY-ONE comparisons before it
+        # matched, because the two branches, JSR, RTS and the shift and
+        # rotate the randomiser leans on all sit near the bottom of it.
+        # These eighteen are 95% of everything this ROM executes, in
+        # frequency order, MOVED out of the groups below rather than
+        # copied -- there is still exactly one arm per opcode. Pointed at
+        # a different ROM the order would want measuring again.
+
+        if op == 0xB5: self.a = self._zn(b(self.a_zpx()))
+        elif op == 0x0A: self.a = self._asl(self.a)
+        elif op == 0x36: a = self.a_zpx(); w(a, self._rol(b(a)))
+        elif op == 0xD0: self._branch(not (self.p & Z))
+        elif op == 0xF0: self._branch(bool(self.p & Z))
+
+        # Flags and nop
         elif op == 0xA5: self.a = self._zn(b(self.a_zp()))
-        elif op == 0xB5: self.a = self._zn(b(self.a_zpx()))
+        elif op == 0x60:
+            low = self.pop()
+            self.pc = ((low | (self.pop() << 8)) + 1) & 0xFFFF
+        elif op == 0x20:
+            target = self.fetch16()
+            ret = (self.pc - 1) & 0xFFFF
+            self.push(ret >> 8)
+            self.push(ret & 0xFF)
+            self.pc = target
+        elif op == 0xA2: self.x = self._zn(self.fetch())
+        elif op == 0xC5: self._cmp(self.a, b(self.a_zp()))
+        elif op == 0x55: self.a = self._zn(self.a ^ b(self.a_zpx()))
         elif op == 0xAD: self.a = self._zn(b(self.a_abs()))
         elif op == 0xBD: self.a = self._zn(b(self.a_abx()))
+        elif op == 0x85: w(self.a_zp(), self.a)
+        elif op == 0x8D: w(self.a_abs(), self.a)
+        elif op == 0x9D: w(self.a_abx(), self.a)
+        elif op == 0x10: self._branch(not (self.p & N))
+        elif op == 0x4A: self.a = self._lsr(self.a)
+
+        # ...and the rest, grouped by what they do.
+        elif op == 0xA9: self.a = self._zn(self.fetch())
         elif op == 0xB9: self.a = self._zn(b(self.a_aby()))
         elif op == 0xA1: self.a = self._zn(b(self.a_indx()))
         elif op == 0xB1: self.a = self._zn(b(self.a_indy()))
-        elif op == 0xA2: self.x = self._zn(self.fetch())
         elif op == 0xA6: self.x = self._zn(b(self.a_zp()))
         elif op == 0xB6: self.x = self._zn(b(self.a_zpy()))
         elif op == 0xAE: self.x = self._zn(b(self.a_abs()))
@@ -286,10 +363,7 @@ class CPU:
         elif op == 0xB4: self.y = self._zn(b(self.a_zpx()))
         elif op == 0xAC: self.y = self._zn(b(self.a_abs()))
         elif op == 0xBC: self.y = self._zn(b(self.a_abx()))
-        elif op == 0x85: w(self.a_zp(), self.a)
         elif op == 0x95: w(self.a_zpx(), self.a)
-        elif op == 0x8D: w(self.a_abs(), self.a)
-        elif op == 0x9D: w(self.a_abx(), self.a)
         elif op == 0x99: w(self.a_aby(), self.a)
         elif op == 0x81: w(self.a_indx(), self.a)
         elif op == 0x91: w(self.a_indy(), self.a)
@@ -333,7 +407,6 @@ class CPU:
         elif op == 0x11: self.a = self._zn(self.a | b(self.a_indy()))
         elif op == 0x49: self.a = self._zn(self.a ^ self.fetch())
         elif op == 0x45: self.a = self._zn(self.a ^ b(self.a_zp()))
-        elif op == 0x55: self.a = self._zn(self.a ^ b(self.a_zpx()))
         elif op == 0x4D: self.a = self._zn(self.a ^ b(self.a_abs()))
         elif op == 0x5D: self.a = self._zn(self.a ^ b(self.a_abx()))
         elif op == 0x59: self.a = self._zn(self.a ^ b(self.a_aby()))
@@ -360,7 +433,6 @@ class CPU:
         elif op == 0xE1: self._sbc(b(self.a_indx()))
         elif op == 0xF1: self._sbc(b(self.a_indy()))
         elif op == 0xC9: self._cmp(self.a, self.fetch())
-        elif op == 0xC5: self._cmp(self.a, b(self.a_zp()))
         elif op == 0xD5: self._cmp(self.a, b(self.a_zpx()))
         elif op == 0xCD: self._cmp(self.a, b(self.a_abs()))
         elif op == 0xDD: self._cmp(self.a, b(self.a_abx()))
@@ -389,19 +461,16 @@ class CPU:
         elif op == 0x88: self.y = self._zn(self.y - 1)
 
         # Shifts
-        elif op == 0x0A: self.a = self._asl(self.a)
         elif op == 0x06: a = self.a_zp();  w(a, self._asl(b(a)))
         elif op == 0x16: a = self.a_zpx(); w(a, self._asl(b(a)))
         elif op == 0x0E: a = self.a_abs(); w(a, self._asl(b(a)))
         elif op == 0x1E: a = self.a_abx(); w(a, self._asl(b(a)))
-        elif op == 0x4A: self.a = self._lsr(self.a)
         elif op == 0x46: a = self.a_zp();  w(a, self._lsr(b(a)))
         elif op == 0x56: a = self.a_zpx(); w(a, self._lsr(b(a)))
         elif op == 0x4E: a = self.a_abs(); w(a, self._lsr(b(a)))
         elif op == 0x5E: a = self.a_abx(); w(a, self._lsr(b(a)))
         elif op == 0x2A: self.a = self._rol(self.a)
         elif op == 0x26: a = self.a_zp();  w(a, self._rol(b(a)))
-        elif op == 0x36: a = self.a_zpx(); w(a, self._rol(b(a)))
         elif op == 0x2E: a = self.a_abs(); w(a, self._rol(b(a)))
         elif op == 0x3E: a = self.a_abx(); w(a, self._rol(b(a)))
         elif op == 0x6A: self.a = self._ror(self.a)
@@ -413,31 +482,17 @@ class CPU:
         # Jumps and calls
         elif op == 0x4C: self.pc = self.a_abs()
         elif op == 0x6C: self.pc = self.a_ind()
-        elif op == 0x20:
-            target = self.fetch16()
-            ret = (self.pc - 1) & 0xFFFF
-            self.push(ret >> 8)
-            self.push(ret & 0xFF)
-            self.pc = target
-        elif op == 0x60:
-            low = self.pop()
-            self.pc = ((low | (self.pop() << 8)) + 1) & 0xFFFF
         elif op == 0x40:
             self.p = (self.pop() | U) & ~B & 0xFF
             low = self.pop()
             self.pc = low | (self.pop() << 8)
 
         # Branches
-        elif op == 0x10: self._branch(not (self.p & N))
         elif op == 0x30: self._branch(bool(self.p & N))
         elif op == 0x50: self._branch(not (self.p & V))
         elif op == 0x70: self._branch(bool(self.p & V))
         elif op == 0x90: self._branch(not (self.p & C))
         elif op == 0xB0: self._branch(bool(self.p & C))
-        elif op == 0xD0: self._branch(not (self.p & Z))
-        elif op == 0xF0: self._branch(bool(self.p & Z))
-
-        # Flags and nop
         elif op == 0x18: self._set(C, False)
         elif op == 0x38: self._set(C, True)
         elif op == 0x58: self._set(I, False)

@@ -625,6 +625,11 @@ def extract_audio_prg(rom: "Rom"):
     low, high = 0xFFFF, 0x0000
 
     class Watching(Bus):
+        # ...which means the instruction fetch must come through here too, or
+        # the span measured below is the engine's DATA and not its code. See
+        # Bus.watches_fetch.
+        watches_fetch = True
+
         def read(self, addr):
             nonlocal low, high
             a = addr & 0xFFFF
@@ -662,6 +667,20 @@ def extract_audio_prg(rom: "Rom"):
 
     if low > high:
         raise ValueError("the sound engine read no PRG at all; wrong addresses?")
+    # AND THE SPAN HAS TO COVER THE DOORS THE PORT KNOCKS ON. Every address
+    # the port calls into is one the engine plainly executes, so a span that
+    # does not reach one of them is a span that watched the wrong thing --
+    # which is exactly what happened the day the interpreter learned to read
+    # the cartridge without going through this bus.
+    doors = (AUDIO_SET_TRACK_ADDR, AUDIO_UPDATE_ADDR,
+             CATHEDRAL_ADDR, FIREWORKS_UPDATE_ADDR)
+    outside = [d for d in doors if not (low <= d <= high)]
+    if outside:
+        raise ValueError(
+            "the measured PRG span ${:04X}..${:04X} does not contain {} -- "
+            "the engine is called there, so the measurement missed its "
+            "instruction fetches".format(
+                low, high, ", ".join("$%04X" % d for d in outside)))
 
     base = max(0x8000, (low - AUDIO_SLICE_ALIGN) & ~(AUDIO_SLICE_ALIGN - 1))
     end = min(0x10000, (high + AUDIO_SLICE_ALIGN + 1) & ~(AUDIO_SLICE_ALIGN - 1))

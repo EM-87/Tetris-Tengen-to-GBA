@@ -132,7 +132,7 @@ assets:
 # disassembly, which is what everything else here measures. Boots an original
 # dump in tools/nes_console.py, plays a fixed script on both it and
 # src/tengen_core.c from the same seed, and diffs a line per frame. Slow (an
-# interpreter: about a minute per thousand frames), so it is not in
+# interpreter: about fifteen seconds per thousand frames), so it is not in
 # gba-check; reach for it after touching tengen_step.
 #   make trace ROM=/path/to/tetris.nes [FRAMES=3000]
 TRACE_CORE := $(BUILD)/trace_core
@@ -184,6 +184,7 @@ gba-check: $(GBA_ROM)
 	python3 tools/run_rom.py $(GBA_ROM) --quit-audio
 	python3 tools/run_rom.py $(GBA_ROM) --stats
 	python3 tools/run_rom.py $(GBA_ROM) --effects
+	python3 tools/run_rom.py $(GBA_ROM) --loans
 	python3 tools/run_rom.py $(GBA_ROM) --gameover
 	python3 tools/run_rom.py $(GBA_ROM) --link
 	python3 tools/run_link.py $(GBA_ROM)
