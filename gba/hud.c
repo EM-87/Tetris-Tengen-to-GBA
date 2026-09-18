@@ -645,6 +645,24 @@ void bonus_step(void) {
  * of a two-board screen, which this port does not have. */
 void bonus_end(void) {
     g_bonus_showing = false;
+    /* WHATEVER THE COUNT-UP HAD NOT REACHED IS PAID NOW. The show can be cut
+     * short (see the fast-forward in the level-up loop), and the bonus was
+     * only ever added a clear at a time as the digits ticked: leaving early
+     * left the rest of it unpaid, on the board being shown, in every mode. */
+    for (int i = 0; i < BONUS_CATEGORIES; i++) {
+        unsigned left = g_bonus_count[i] - g_bonus_shown[i];
+        g_bonus_shown[i] = g_bonus_count[i];
+        for (unsigned n = 0; n < left; n++) {
+            g_bonus_total += TENGEN_BONUS_PER_CLEAR[i];
+            for (int slot = 0; slot < 2; slot++) {
+                if (slot != g_view && !g_session.game.coop) continue;
+                if (!g_session.game.player[slot].game_active) continue;
+                g_session.game.player[slot].score =
+                    tengen_score_add(g_session.game.player[slot].score,
+                                      TENGEN_BONUS_PER_CLEAR[i]);
+            }
+        }
+    }
     if (g_session.game.two_player && !g_session.game.coop) {
         int other = g_view ^ 1;
         if (g_session.game.player[other].game_active) {
