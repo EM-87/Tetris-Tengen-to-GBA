@@ -410,6 +410,26 @@ running ROM; only the side panels need reflowing).
    it and no SINGLE / DOUBLE / TRIPLE / TETRIS written where it was. Two more
    live in the front end: no cossacks and no BONUS tally at a level-up — those
    builds carry straight on — and PAUSE does not silence the music.
+   **TWO OF THE THREE ARE NOW MEASURED ON THE DUMPS THEMSELVES**, which is
+   what ground rule 1 asks for, since the list they came from is somebody
+   else's writing. The playfield of these builds is where the release's is
+   ($0600, eight bytes a row), so a row can be planted in RAM and the console
+   watched:
+   * **the instant clear is real.** Counting from the frame a piece touches
+     the stack to the frame a completed row stops being full: the release
+     takes 29 frames, and proto_a, proto_b and proto_c take 2. That 29 is its
+     sweep; there is nothing of the sort in the three.
+   * **the missing wall kick is real.** Pieces pinned against the right wall —
+     the side the release's one-column-LEFT kick would rescue — rotate nine
+     times in ten, exactly as they do a column further in, and in not ONE of
+     those rotations does the piece change column. A kick is a rotation that
+     displaces; these never displace. The tenth is the rotation that would
+     have needed one, and it is refused.
+   * **the ten-line level is still on the list's word alone.** Planting
+     completed rows raises these builds' SCORE and leaves their LINES counter
+     at zero, so whatever that counter is fed by, it is not a row that
+     appeared in RAM without a piece putting it there. Measuring this one
+     properly wants a bot that stacks, not a memory poke.
    What is deliberately NOT taken is the SHAPE of their front end: only
    1 PLAYER and 2 PLAYER, four difficulty steps instead of ten levels, no
    handicap and no music menu. Taking those away on a chord rung at the title
@@ -462,6 +482,24 @@ six credit lines that had gone missing without anyone noticing. Everything
 here is a decision; anything not on it that the cartridge shows and the port
 does not is a bug.
 
+- **proto_c's title ANIMATION**, which is a real one and was looked for after
+  it was half-remembered: from about frame 68 its screen types a TETRIS
+  banner onto rows 7-9, four tiles at a time, one group every 64 frames, and
+  finishes around frame 1156 — nineteen seconds of it — before dropping into
+  its own attract demo at frame 1315. (proto_b has no animation and goes to
+  its demo at frame 450; proto_a has neither in eighteen hundred frames.)
+  The port does not show it because those three rows are three of the ten
+  that screen gives up to fit thirty by twenty, and what they would be taken
+  from is the cathedral — which is the one thing that screen cannot afford to
+  lose, and the reason its composition looks the way it does. The animation
+  is a real difference and this is a real cost; it is a decision, not an
+  oversight. See PROTO_RECIPES.
+- **A SCREEN-CHANGE NOISE under proto_a's skin.** Its dump answers a change
+  of screen with silence — measured, and reproduced — so the port does too,
+  which means the invented screens it never had (the high-score table's
+  typing, the pause menu's choices) are silent under that skin as well. The
+  cursor's tick still sounds on every one of them, so nothing is ever without
+  feedback. See screen_blip and read_skin_effects.
 - **"STATS", the heading over the 1P histogram** (row 6 of
   `gameModeNametable1P`). The port relocated the cartridge's header strip into
   the two boxes, and the right box's interior is eight columns by ten rows —
