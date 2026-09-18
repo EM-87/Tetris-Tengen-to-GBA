@@ -270,3 +270,57 @@ void nes_audio_frame(void) {
 
     for (int i = 0; i < 0x18; i++) g_prev[i] = apu[i];
 }
+
+/* ----------------------------------------------------------------------- *
+ * A CAPTURED EFFECT, replayed
+ *
+ * The four builds do not agree on the noise a menu makes, and only one of
+ * their sound engines is in this ROM. So a prototype's tick and chirp travel
+ * as what they are on the cartridge — the four registers of one pulse
+ * channel, frame by frame, captured off the dump — and are replayed here,
+ * through the SAME conversion the engine's own notes go through. That is the
+ * point of putting this in this file rather than beside the hand-entered
+ * tunes: nothing about the NES pulse channel is described twice.
+ *
+ * IT SHARES THE CHANNEL the way everything else here does. nes_audio_frame
+ * only touches a channel whose registers CHANGED, so an effect holds the
+ * channel until the engine's own next note takes it back — which is exactly
+ * what happens on the cartridge, where an effect and a tune are voices
+ * competing for the same three channels.
+ * ----------------------------------------------------------------------- */
+static const uint8_t *g_fx_regs;    /* four bytes a frame, or NULL */
+static uint16_t g_fx_write;         /* one bit a frame: does it write? */
+static uint8_t g_fx_frames;         /* how many frames long */
+static uint8_t g_fx_at;             /* which frame it is on */
+static uint8_t g_fx_channel;
+
+void nes_audio_effect(const uint8_t *regs, uint16_t write, uint8_t frames,
+                       uint8_t channel) {
+    if (channel > 1 || frames == 0) { g_fx_regs = 0; return; }
+    g_fx_regs = regs;
+    g_fx_write = write;
+    g_fx_frames = frames;
+    g_fx_channel = channel;
+    g_fx_at = 0;
+}
+
+void nes_audio_effect_frame(void) {
+    if (!g_fx_regs) return;
+    if (g_fx_at >= g_fx_frames) { g_fx_regs = 0; return; }
+    uint8_t at = g_fx_at++;
+    if (!(g_fx_write & (1u << at))) return;
+    const uint8_t *r = g_fx_regs + at * 4;
+    /* $4000/$4004 is DDLC VVVV and $4002/$4003 the eleven-bit period, exactly
+     * as apply_pulse reads them off the emulated APU. */
+    uint16_t period = (uint16_t)(r[2] | ((r[3] & 0x07) << 8));
+    uint16_t cnt_h = (uint16_t)((((r[0] >> 6) & 3) << 6) | envelope_bits(r[0]));
+    uint16_t cnt_x = (uint16_t)(0x8000 | (gba_rate(period) & 0x7FF));
+    if (g_fx_channel == 0) {
+        REG_SOUND1CNT_L = 0;         /* no sweep: these builds sweep by hand */
+        REG_SOUND1CNT_H = cnt_h;
+        REG_SOUND1CNT_X = cnt_x;
+    } else {
+        REG_SOUND2CNT_L = cnt_h;
+        REG_SOUND2CNT_H = cnt_x;
+    }
+}

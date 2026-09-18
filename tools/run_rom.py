@@ -1354,6 +1354,8 @@ HUD_LABEL_TILE_END = 790
 # con los ocho pasos que tiene una tirada de barra en las dos construcciones.
 STATS_ICON_ROWS = 2
 STATS_RUN_STEPS = 8
+# Cuanto se escucha tras pulsar: el mas largo de los efectos dura 15 frames.
+EFFECT_WATCH_FRAMES = 24
 
 
 def to_music_page(core, settle=10):
@@ -1845,6 +1847,29 @@ def demo_check(rom_path):
                          "no a GAME SELECT")
     else:
         print("  START sale de la demo a GAME SELECT, como en el cartucho")
+    del core, screen
+
+    # ...Y TAMBIEN DESDE UN TITULO CON SKIN, que es donde no llegaba. El reloj
+    # del titulo vivia dentro de la rutina de sprites, de la que una skin sale
+    # antes de tiempo, asi que sobre una pantalla de prototipo el contador no
+    # se movia y la demo no llegaba nunca: el titulo del release se ponia a
+    # jugar solo a los veintidos segundos y el del prototipo se quedaba ahi
+    # para siempre.
+    core, screen = load(rom_path)   # `screen` must stay alive; see load()
+    _ = screen
+    run(core, 40)
+    core.set_keys(KEYS["L"], KEYS["R"]); run(core, 4); core.set_keys(); run(core, 20)
+    started = None
+    for f in range(DEMO_WATCH_FRAMES):
+        core.run_frame()
+        if core.memory.u8[flag]:
+            started = f
+            break
+    if started is None:
+        failures.append(f"con skin la demo no arranca en {DEMO_WATCH_FRAMES} "
+                         f"frames: el reloj del titulo no corre bajo ella")
+    else:
+        print(f"  y con la skin puesta arranca igual, en el frame {started}")
 
     for f in failures:
         print("FALLA:", f)
@@ -2739,6 +2764,122 @@ def quit_audio_check(rom_path):
     if failures:
         return 1
     print("OK: salir por el menu de pausa deja el motor de sonido como estaba.")
+    return 0
+
+
+def effects_check(rom_path):
+    """LOS DOS RUIDOS DE UN MENU, QUE NO SON LOS MISMOS EN LAS CUATRO ROMS.
+
+    Medido en los volcados de verdad, apuntando cada escritura a $4000-$4015
+    mientras se movia el cursor y mientras cambiaba la pantalla:
+
+      cursor    release      pulso 2, periodo $4B7 (unos 93Hz) con el barrido
+                             del chip doblandolo hacia abajo once frames
+                A, B y C     pulso 2, periodo $021 (unos 3.3kHz), sin barrido,
+                             y se acaba en ocho
+      pantalla  release      pulso 1, una nota barrida
+                proto_a      nada en absoluto
+                B y C        pulso 1, un trino que sube y que barren a mano,
+                             reescribiendo el periodo cada frame
+
+    El del release lo toca el motor del cartucho, que va dentro de esta ROM.
+    Los de los prototipos no: se capturan de sus volcados como los registros
+    que escriben y se reproducen por la misma conversion (nes_audio_effect).
+
+    Lo que se comprueba aqui es lo que llega al chip: que el tic del cursor
+    con skin esta CINCO OCTAVAS por encima del que suena sin ella, que la
+    pantalla suena distinta, que un prototipo que contesta con silencio
+    contesta con silencio, y que ninguno de los dos se queda sonando.
+    """
+    failures = []
+    R1X, R1H = 0x04000064, 0x04000062
+    R2H, R2L = 0x0400006C, 0x04000068
+
+    def listen(skin, button):
+        """(frecuencias oidas, volumenes frame a frame) de los dos pulsos."""
+        core, screen = load(rom_path)   # `screen` must stay alive; see load()
+        _ = screen
+
+        def tap(*names, hold=4, settle=12):
+            core.set_keys(*[KEYS[n] for n in names]); run(core, hold)
+            core.set_keys(); run(core, settle)
+
+        run(core, 40)
+        if skin:
+            tap("L", "R"); run(core, 20)
+            for _ in range(skin - 1):
+                tap("R"); run(core, 20)
+        press_start(core); run(core, 30)      # -> GAME SELECT
+        core.set_keys(KEYS[button]); run(core, 4); core.set_keys()
+        f1, f2, v1, v2 = set(), set(), [], []
+        for _ in range(EFFECT_WATCH_FRAMES):
+            core.run_frame()
+            v1.append(core.memory.u16[R1H] >> 12)
+            v2.append(core.memory.u16[R2L] >> 12)
+            if v1[-1]:
+                f1.add(core.memory.u16[R1X] & 0x7FF)
+            if v2[-1]:
+                f2.add(core.memory.u16[R2H] & 0x7FF)
+        del core, screen
+        return f1, f2, v1, v2
+
+    # EL TIC DEL CURSOR. El del release es grave y el de los prototipos agudo,
+    # y en la GBA una frecuencia mas alta es un registro MAS GRANDE (R = 2048 -
+    # 131072/f), asi que el numero del prototipo tiene que ser mayor.
+    _f1, rel_f2, _v1, rel_v2 = listen(0, "DOWN")
+    if not rel_f2:
+        failures.append("sin skin el cursor no hace ruido")
+    _f1, pro_f2, _v1, pro_v2 = listen(1, "DOWN")
+    if not pro_f2:
+        failures.append("con skin el cursor no hace ruido")
+    if rel_f2 and pro_f2:
+        rel, pro = max(rel_f2), max(pro_f2)
+        if pro <= rel:
+            failures.append(f"el tic del cursor con skin ({pro}) no es mas agudo "
+                             f"que el del cartucho ({rel})")
+        else:
+            print(f"  el tic del cursor sube de {rel} a {pro}: el del prototipo "
+                   f"esta cinco octavas por encima")
+    # ...y NINGUNO se queda sonando: los dos acaban en silencio.
+    for name, vols in (("release", rel_v2), ("prototipo", pro_v2)):
+        if vols and vols[-1]:
+            failures.append(f"el tic del cursor del {name} se queda sonando "
+                             f"(volumen {vols[-1]:X} al final de "
+                             f"{EFFECT_WATCH_FRAMES} frames)")
+        else:
+            print(f"  ...y el del {name} se apaga solo")
+
+    # EL CAMBIO DE PANTALLA. proto_a contesta con silencio y los otros dos con
+    # un trino que sube; el release, con una nota barrida.
+    rel_f1, _f2, rel_v1, _v2 = listen(0, "START")
+    a_f1, _f2, a_v1, _v2 = listen(1, "START")
+    b_f1, _f2, b_v1, _v2 = listen(2, "START")
+    if not rel_f1:
+        failures.append("sin skin cambiar de pantalla no hace ruido")
+    else:
+        print(f"  el cambio de pantalla del cartucho suena en {sorted(rel_f1)}")
+    if any(a_v1):
+        failures.append(f"proto_a deberia cambiar de pantalla EN SILENCIO y "
+                         f"suena (volumenes {a_v1})")
+    else:
+        print("  proto_a cambia de pantalla sin decir nada, como su volcado")
+    if len(b_f1) < 3:
+        failures.append(f"el trino de proto_b no barre: solo {sorted(b_f1)}")
+    elif b_f1 == rel_f1:
+        failures.append("el cambio de pantalla de proto_b suena igual que el "
+                         "del cartucho")
+    else:
+        print(f"  ...y proto_b con un trino de {min(b_f1)} a {max(b_f1)}, "
+               f"{len(b_f1)} pasos barridos a mano")
+    if b_v1 and b_v1[-1]:
+        failures.append(f"el trino de proto_b se queda sonando (volumen "
+                         f"{b_v1[-1]:X})")
+
+    for f in failures:
+        print("FALLA:", f)
+    if failures:
+        return 1
+    print("OK: cada construccion hace en sus menus el ruido que hace la suya.")
     return 0
 
 
@@ -4088,6 +4229,8 @@ def main():
                      help="check the COMPUTER player plays VERSUS and WITH")
     ap.add_argument("--demo", action="store_true",
                      help="check the title starts playing by itself")
+    ap.add_argument("--effects", action="store_true",
+                    help="check each build's menu noises are its own")
     ap.add_argument("--stats", action="store_true",
                     help="check the histogram and the GAME OVER plaque follow "
                          "the skin")
@@ -4155,6 +4298,8 @@ def main():
         sys.exit(leaderboard_check(args.rom))
     if args.quit_audio:
         sys.exit(quit_audio_check(args.rom))
+    if args.effects:
+        sys.exit(effects_check(args.rom))
     if args.stats:
         sys.exit(stats_check(args.rom))
     if args.pausemenu:

@@ -1836,6 +1836,42 @@ SKIN_PLAQUE_NAMES = ("TL", "T", "TR", "L", "R", "BL", "B", "BR")
 # the play capture is enough to colour it.
 SKIN_PLAQUE_BANK = 3
 
+# THE TWO NOISES A MENU MAKES, which the four builds do not agree on.
+#
+# Logged off the real dumps, every write to $4000-$4013 while the cursor moved
+# and again while the screen changed, from the one menu all four leave silent:
+#
+#   moving the cursor
+#     release      $4004=BC $4005=DA $4006=B7 $4007=04, then BB BA B9 B7 B4 B2
+#     A, B and C   $4004=BE $4005=00 $4006=21 $4007=00, then BC BA B8 B6 B5 B4 B3
+#   changing screen
+#     release      $4000=B9 $4001=AD $4002=81 $4003=01, then a second period
+#                  and a fade
+#     proto_a      nothing at all
+#     B and C      $4000=BC with the period walked DOWN by hand, $08F $089
+#                  $081 $07A..., which is a rising chirp
+#
+# Read across: the release's cursor tick is a LOW note (period $4B7, about
+# 93Hz) with the sweep unit bending it further down over eleven frames; every
+# prototype's has no sweep, sits at period $021 — about 3.3kHz — and is gone in
+# eight. A thunk against a tick. And where the release answers a screen change
+# with a swept note, proto_a answers with silence and the other two with a
+# chirp they sweep by rewriting the period every frame.
+#
+# NOT TRANSCRIBED BY HAND. The four registers of whichever pulse channel the
+# effect uses are captured frame by frame, straight off the dump, and the port
+# replays them through the same NES-to-GBA conversion its sound engine uses
+# (see nes_audio_effect). So a dump this file has never seen brings its own
+# noises along with its own paint.
+SKIN_FX_FRAMES = 16          # long enough for the longest of them, which is 13
+SKIN_FX_PRESS = 4            # how long the button is held
+SKIN_FX_BUTTONS = ("DOWN", "START")    # the cursor, and the screen
+SKIN_FX_COUNT = len(SKIN_FX_BUTTONS)
+SKIN_FX_SILENT = 0xFF        # "this build answers with nothing"
+# The pulse channels' register blocks. The menu effects only ever use these
+# two; anything else is reported rather than silently dropped.
+SKIN_FX_CHANNELS = ((0x4000, 0x4003), (0x4004, 0x4007))
+
 # THE PIECE HISTOGRAM, which is where the two designs differ most.
 #
 # The release counts pieces into ONE eight-step bar graphic shared by all
@@ -1973,6 +2009,110 @@ def find_skin_menu_logo(path, letters):
                          for dr in range(rows)],
                         [pal[bank * 4 + i] for i in range(4)])
     return None
+
+
+def read_skin_effects(path):
+    """The two noises this dump's menus make: (effects, why).
+
+    Each effect is (channel, frames), where frames is one entry per frame --
+    None when nothing was written that frame, or the channel's four NES
+    registers as they stood THAT frame when something was. channel is
+    SKIN_FX_SILENT when the build answers with nothing, which is a real answer
+    for proto_a's screen change and not a failure.
+
+    Measured from the FIRST MENU, which all four dumps leave silent. On a
+    later one the tune playing underneath writes the same registers every
+    frame and there is no telling an effect from a bar of music, so a screen
+    that is already making a noise is refused rather than guessed at.
+    """
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from nes_console import NesConsole, BTN
+
+    nes = NesConsole(path)
+    log = []
+    real = nes.bus.write
+
+    def write(addr, value):
+        # $4015 IS THE NOTE-OFF in this family of engines: a voice is ended by
+        # clearing its bit there rather than by writing a volume of zero. It
+        # has to be captured with the four, or a tick replays as a tick that
+        # never stops -- which is exactly how it came out at first, holding at
+        # volume 3 for ever instead of going quiet.
+        if 0x4000 <= (addr & 0xFFFF) <= 0x4015:
+            log.append((addr & 0xFFFF, value))
+        return real(addr, value)
+
+    nes.bus.write = write
+    nes.run(150)
+    nes.run(6, BTN["START"])
+    nes.run(40)
+    if nes.ram(GAMESTATE_ADDR) == GAMESTATE_PLAYING:
+        return None, f"{path} pasa del titulo directo al juego: no hay menu que oir"
+    log.clear()
+    nes.run(20)
+    log[:] = [(a, v) for a, v in log if a <= 0x4013]
+    if log:
+        return None, (f"{path}: su primer menu ya suena solo ({len(log)} "
+                      f"escrituras en 20 frames), no se puede aislar un efecto")
+
+    effects = []
+    for button in SKIN_FX_BUTTONS:
+        # Every frame: which registers were written, and what the whole APU
+        # looked like afterwards. $4015 is rewritten with the same contents
+        # every frame by these engines, so only a CHANGE to it is a note
+        # starting or ending; the four pulse registers count whenever they are
+        # written at all.
+        state, seen = {}, []
+        for f in range(SKIN_FX_FRAMES):
+            log.clear()
+            nes.run(1, BTN[button] if f < SKIN_FX_PRESS else 0)
+            wrote, enable_moved = False, False
+            for addr, value in log:
+                if addr <= 0x4013:
+                    wrote = True
+                elif state.get(addr) != value:
+                    enable_moved = True
+                state[addr] = value
+            seen.append((wrote or enable_moved, dict(state)))
+
+        touched = {a for wrote, st in seen if wrote for a in st if a <= 0x4013}
+        if not touched:
+            effects.append((SKIN_FX_SILENT, [None] * SKIN_FX_FRAMES))
+            continue
+        hit = [i for i, (lo, hi) in enumerate(SKIN_FX_CHANNELS)
+               if any(lo <= a <= hi for a in touched)]
+        stray = [a for a in touched
+                 if not any(lo <= a <= hi for lo, hi in SKIN_FX_CHANNELS)]
+        if stray or len(hit) != 1:
+            return None, (f"{path}: su efecto de {button} toca "
+                          f"{sorted(hex(a) for a in touched)}, y este captador "
+                          f"solo sabe de un canal de pulso")
+        channel = hit[0]
+        lo, _hi = SKIN_FX_CHANNELS[channel]
+        bit = 1 << channel
+
+        frames = []
+        for wrote, st in seen:
+            if not wrote:
+                frames.append(None)
+                continue
+            regs = [st.get(lo + i, 0) for i in range(4)]
+            # A frame the channel is DISABLED on is a frame it is silent on,
+            # whatever its volume nibble still says: these engines end a voice
+            # by clearing its bit in $4015 rather than by writing a zero.
+            if not (st.get(0x4015, 0xFF) & bit):
+                regs[0] = (regs[0] & 0xF0) | 0x10   # constant volume, zero
+            frames.append(regs)
+        # A leading frame whose period is still zero is the $4015 rewrite that
+        # happened before the effect began, not part of it.
+        for i, f in enumerate(frames):
+            if f is None:
+                continue
+            if f[2] or (f[3] & 7):
+                break
+            frames[i] = None
+        effects.append((channel, frames))
+    return effects, None
 
 
 def read_skin_play(path, chr_rom):
@@ -2220,6 +2360,13 @@ def read_prototype(path):
     play, play_why = read_skin_play(path, chr_rom)
     if play is None:
         print(f"  {path}: sin pantalla de juego ({play_why})")
+    else:
+        effects, fx_why = read_skin_effects(path)
+        if effects is None:
+            # Not fatal: a skin with no captured noises simply keeps the
+            # release's, which is what it did before there were any.
+            print(f"  {path}: sin efectos de menu ({fx_why})")
+        play["effects"] = effects
     return {
         "label": label,
         "how": how,
@@ -2454,6 +2601,74 @@ def emit_skin_play(skins):
     _table(lines,
            "static const uint8_t kSkinStatsPalette[SCREEN_PROTO_COUNT][4] = {",
            [p["stats_palette"] for p in plays], lambda b: f"0x{b:02X}", 4)
+
+    lines += emit_skin_effects(plays)
+    return lines
+
+
+def emit_skin_effects(plays):
+    """The two noises each dump's menus make, as NES pulse registers a frame."""
+    if not all(p.get("effects") for p in plays):
+        return [
+            "",
+            "/* AT LEAST ONE DUMP WOULD NOT GIVE UP ITS MENU NOISES, so every",
+            " * skin keeps the release's. One build's tick under another's",
+            " * paint is worse than the cartridge's own everywhere. */",
+            "#define SCREEN_SKIN_FX 0",
+            "",
+        ]
+    lines = [
+        "",
+        "/* THE TWO NOISES A MENU MAKES, captured off each dump rather than",
+        " * transcribed: the four NES pulse registers, frame by frame, of",
+        " * whichever channel the effect uses. The port replays them through",
+        " * the same NES-to-GBA conversion its sound engine uses, so a dump",
+        " * this file has never seen brings its own noises with its own paint.",
+        " *",
+        " * Read them and the builds' tastes are plain. Moving the cursor: the",
+        " * release plays a LOW note, period $4B7 or about 93Hz, with the sweep",
+        " * unit bending it further down over eleven frames; every prototype",
+        " * plays period $021, about 3.3kHz, flat, and is done in eight. A thunk",
+        " * against a tick. Changing screen: the release answers with a swept",
+        " * note, proto_a with nothing at all, and the other two with a chirp",
+        " * they sweep by hand, rewriting the period every frame.",
+        " *",
+        " * A channel of 0xFF means SILENCE, which is proto_a's real answer to a",
+        " * screen change and not a capture that failed. */",
+        "#define SCREEN_SKIN_FX 1",
+        f"#define SKIN_FX_FRAMES {SKIN_FX_FRAMES}",
+        f"#define SKIN_FX_COUNT {SKIN_FX_COUNT}",
+        f"#define SKIN_FX_CURSOR 0",
+        f"#define SKIN_FX_SCREEN 1",
+        f"#define SKIN_FX_SILENT 0x{SKIN_FX_SILENT:02X}",
+        "static const uint8_t kSkinFxChannel[SCREEN_PROTO_COUNT][SKIN_FX_COUNT] = {",
+    ]
+    for p in plays:
+        lines.append("    { " + ", ".join(f"0x{ch:02X}" for ch, _f in p["effects"])
+                     + " },")
+    lines.append("};")
+    lines += [
+        "/* One bit a frame: whether the effect writes its channel that frame.",
+        " * A frame it does not write is a frame the note simply holds, and",
+        " * writing it again would restart the note on this hardware. */",
+        "static const uint16_t kSkinFxWrite[SCREEN_PROTO_COUNT][SKIN_FX_COUNT] = {",
+    ]
+    for p in plays:
+        row = []
+        for _ch, frames in p["effects"]:
+            bits = 0
+            for i, f in enumerate(frames):
+                if f:
+                    bits |= 1 << i
+            row.append(f"0x{bits:04X}")
+        lines.append("    { " + ", ".join(row) + " },")
+    lines.append("};")
+    _table(lines,
+           "static const uint8_t kSkinFxRegs[SCREEN_PROTO_COUNT]"
+           "[SKIN_FX_COUNT * SKIN_FX_FRAMES * 4] = {",
+           [[b for _ch, frames in p["effects"]
+             for f in frames for b in (f or [0, 0, 0, 0])] for p in plays],
+           lambda b: f"0x{b:02X}", 16)
     return lines
 
 

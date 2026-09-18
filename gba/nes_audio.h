@@ -88,4 +88,28 @@ void nes_audio_frame(void);
 bool nes_rom_call(uint16_t addr, uint8_t a, uint32_t max_steps);
 uint8_t *nes_rom_ram(void);
 
+/* ----------------------------------------------------------------------- *
+ * A CAPTURED EFFECT, replayed
+ *
+ * The four builds do not agree on the noise a menu makes, and only one of
+ * their sound engines is in this ROM. A prototype's tick and chirp travel as
+ * the four registers of one pulse channel, frame by frame, captured off the
+ * dump (see read_skin_effects), and are replayed through the same conversion
+ * the engine's own notes go through.
+ *
+ *   regs     four bytes a frame: $4000-$4003 or $4004-$4007 as they stood
+ *   write    one bit a frame, low bit first: does that frame write at all?
+ *            A frame that does not write is a note holding, and writing it
+ *            again would restart it on this hardware.
+ *   channel  0 for pulse 1, 1 for pulse 2; anything else stops the effect,
+ *            which is how a build that answers a screen change with silence
+ *            is expressed.
+ *
+ * Call the frame function once a frame, after nes_audio_frame: an effect
+ * holds its channel until the engine's own next note takes it back, which is
+ * what happens on the cartridge too. */
+void nes_audio_effect(const uint8_t *regs, uint16_t write, uint8_t frames,
+                       uint8_t channel);
+void nes_audio_effect_frame(void);
+
 #endif /* NES_AUDIO_H */

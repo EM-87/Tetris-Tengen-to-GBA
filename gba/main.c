@@ -988,6 +988,59 @@ static int plaque_bank(void) {
     return BANK_PAUSE;
 }
 
+/* THE NOISE A SCREEN MAKES WHEN IT CHANGES, and the four builds do not agree
+ * on it. Logged off the real dumps, every write to $4000-$4013 while the menu
+ * cursor moved:
+ *
+ *   release      $4004=BC $4005=DA $4006=B7 $4007=04, then BB BA B9 B7 B4 B2
+ *   proto A/B/C  $4004=BE $4005=00 $4006=21 $4007=00, then BC BA B8 B6 B5 B4 B3
+ *
+ * Both are pulse 2 with the volume stepped down by hand. The release's is a
+ * LOW note — period $4B7 is about 93Hz — with the sweep unit bending it
+ * further down over eleven frames; every prototype's has no sweep, sits at
+ * period $021, about 3.3kHz, and is gone in eight. A thunk against a tick,
+ * and one of the plainer differences between the builds once you hear them
+ * next to each other.
+ *
+ * The release's are the cartridge's own effects and the engine in this ROM
+ * knows them by number. The prototypes' engine is not in this ROM, so theirs
+ * are captured off the dumps as the registers they write and replayed through
+ * the same conversion — see nes_audio_effect and read_skin_effects. */
+#if SCREEN_PROTO_AVAILABLE && SCREEN_SKIN_PLAY && SCREEN_SKIN_FX
+static bool skin_effect(int which) {
+    int skin = front_skin();
+    if (skin < 0) return false;
+    uint8_t channel = kSkinFxChannel[skin][which];
+    if (channel == SKIN_FX_SILENT) {
+        /* A real answer, not a missing one: proto_a changes screen without a
+         * sound. Nothing is played AND the release's is not either. */
+        nes_audio_effect(0, 0, 0, SKIN_FX_SILENT);
+        return true;
+    }
+    nes_audio_effect(&kSkinFxRegs[skin][which * SKIN_FX_FRAMES * 4],
+                      kSkinFxWrite[skin][which], SKIN_FX_FRAMES, channel);
+    return true;
+}
+#else
+static bool skin_effect(int which) { (void)which; return false; }
+#endif
+
+/* The blip a screen change makes... */
+static void screen_blip(void) {
+#if SCREEN_PROTO_AVAILABLE && SCREEN_SKIN_PLAY && SCREEN_SKIN_FX
+    if (skin_effect(SKIN_FX_SCREEN)) return;
+#endif
+    nes_audio_play(NES_SOUND_SCREEN_SWITCH);
+}
+
+/* ...and the tick the cursor makes moving down a list. */
+static void cursor_blip(void) {
+#if SCREEN_PROTO_AVAILABLE && SCREEN_SKIN_PLAY && SCREEN_SKIN_FX
+    if (skin_effect(SKIN_FX_CURSOR)) return;
+#endif
+    nes_audio_play(NES_SOUND_MENU_SELECT);
+}
+
 /* WHICH TILE ONE CELL OF A PIECE IS DRAWN WITH, and it is not the same
  * question in the two builds.
  *
@@ -2311,12 +2364,12 @@ static bool leader_type(uint8_t held, uint8_t pressed) {
             int p = g_leader_undo[--g_leader_undo_n];
             g_leader[g_leader_row].initials[p] = 1;   /* 'A' */
             g_leader_cursor = p;
-            nes_audio_play(NES_SOUND_SCREEN_SWITCH);
+            screen_blip();
         }
     }
 
     if (pressed & (TENGEN_BTN_A | TENGEN_BTN_START)) {
-        nes_audio_play(NES_SOUND_SCREEN_SWITCH);
+        screen_blip();
         g_leader_cursor = 0;
         g_leader_undo_n = 0;
         /* Done with this one; the next person who made the table, if there is
@@ -3137,6 +3190,7 @@ static uint8_t music_choices(void) {
 static void audio_frame(void) {
     nes_audio_frame();
     handtune_frame();
+    nes_audio_effect_frame();
 }
 
 /* MUSIC_SILENCE IS A STOP FOR ONE PRIORITY CLASS, AND THE TITLE THEME IS NOT
@@ -3524,15 +3578,22 @@ static void draw_spire_rim(void) {
 }
 
 static void draw_title_sprites(void) {
+    /* THE TITLE'S CLOCK TICKS WHATEVER THE TITLE IS WEARING, and it used to
+     * live three lines below this — inside the part a skin returns early
+     * from. So on a prototype's screen g_title_frame never moved, and the
+     * attract demo, which is nothing but that counter reaching
+     * DEMO_START_FRAME, simply never came: the skinned title sat there for
+     * ever while the release's started playing by itself after twenty-two
+     * seconds. The counter is the screen's, not the fireworks'. */
+    uint16_t frame = g_title_frame++;
     if (g_title_skin) {          /* see the note above draw_title */
         oam_hide_all();
         return;
     }
     uint8_t *ram = nes_rom_ram();
     ram[NES_RAM_GAMESTATE] = NES_GAMESTATE_TITLE;
-    ram[NES_RAM_FRAME_LOW] = (uint8_t)g_title_frame;
-    ram[NES_RAM_FRAME_HIGH] = (uint8_t)(g_title_frame >> 8);
-    g_title_frame++;
+    ram[NES_RAM_FRAME_LOW] = (uint8_t)frame;
+    ram[NES_RAM_FRAME_HIGH] = (uint8_t)(frame >> 8);
 
     /* The step limit is a hang guard, not timing: the fireworks' worst frame
      * rewrites all 45 of their sprites twice over. */
@@ -4636,7 +4697,7 @@ static bool pause_menu_input(uint8_t pressed, bool *leaving) {
             g_pause_yes = !g_pause_yes;
         if (pressed & TENGEN_BTN_B) {
             g_pause_confirm = false;
-            nes_audio_play(NES_SOUND_SCREEN_SWITCH);
+            screen_blip();
         } else if (pressed & TENGEN_BTN_A) {
             if (g_pause_yes) {
                 /* QUITTING IS NOT AN UNPAUSE, AND THE ENGINE ONLY KNOWS ABOUT
@@ -4665,7 +4726,7 @@ static bool pause_menu_input(uint8_t pressed, bool *leaving) {
             } else {
                 g_pause_confirm = false;
             }
-            nes_audio_play(NES_SOUND_SCREEN_SWITCH);
+            screen_blip();
         }
         return true;
     }
@@ -4716,7 +4777,7 @@ static bool pause_menu_input(uint8_t pressed, bool *leaving) {
     if (g_pause_row == PMENU_EXIT && (pressed & TENGEN_BTN_A)) {
         g_pause_confirm = true;
         g_pause_yes = false;   /* NO first: a pause menu does not lose games */
-        nes_audio_play(NES_SOUND_SCREEN_SWITCH);
+        screen_blip();
     }
     return true;
 }
@@ -4936,7 +4997,7 @@ static bool solo_play_frame(uint8_t buttons, uint8_t pressed, bool *quit) {
         }
         /* Every applied code plays this (main.asm.txt:7089, 7127). */
         if (cheat[0] != TENGEN_CHEAT_NONE)
-            nes_audio_play(NES_SOUND_SCREEN_SWITCH);
+            screen_blip();
     }
 
     TengenStepResult local = tengen_step(&g_session.game, TENGEN_PLAYER_1, buttons);
@@ -5127,7 +5188,7 @@ int main(void) {
             }
             if (pressed & MENU_ADVANCE) {
                 screen = SCREEN_GAME_SELECT;
-                nes_audio_play(NES_SOUND_SCREEN_SWITCH);
+                screen_blip();
                 vsync();
                 audio_frame();
                 clear_screen();
@@ -5211,12 +5272,12 @@ int main(void) {
                     ? (uint8_t)((game_mode + GAME_COUNT - 1) % GAME_COUNT)
                     : (uint8_t)((game_mode + 1) % GAME_COUNT);
                 /* processMenuInput plays this on every move (:4655). */
-                nes_audio_play(NES_SOUND_MENU_SELECT);
+                cursor_blip();
             }
             if (pressed & TENGEN_BTN_B) {
                 screen = SCREEN_TITLE;
                 restart_title_sprites();
-                nes_audio_play(NES_SOUND_SCREEN_SWITCH);
+                screen_blip();
                 vsync();
                 audio_frame();
                 clear_screen();
@@ -5238,7 +5299,7 @@ int main(void) {
                     screen = SCREEN_LEVEL_SELECT;
                     menu_field = MENU_FIELD_LEVEL;
                 }
-                nes_audio_play(NES_SOUND_SCREEN_SWITCH);
+                screen_blip();
                 vsync();
                 audio_frame();
                 clear_screen();
@@ -5324,7 +5385,7 @@ int main(void) {
                 g_music = MUSIC_KOROBEINIKI;
                 menu_field = MENU_FIELD_MUSIC;
             } else if (moved || (pressed & MENU_STEP)) {
-                nes_audio_play(NES_SOUND_MENU_SELECT);
+                cursor_blip();
             }
 
             /* MOVING THE CURSOR PLAYS THE TUNE. The cartridge calls LA035 from
@@ -5340,7 +5401,7 @@ int main(void) {
                 /* The cartridge has no back button at all — its menus are a
                  * one-way chain with an idle timer — so B is the port's, for
                  * the same reason A confirms. */
-                nes_audio_play(NES_SOUND_SCREEN_SWITCH);
+                screen_blip();
                 screen = SCREEN_GAME_SELECT;
                 /* Backing out of a 2P choice drops the cable with it. */
                 if (GAME_IS_LINKED(game_mode)) link_shutdown();
@@ -5353,7 +5414,7 @@ int main(void) {
                 /* START, and only START, confirms on the cartridge ($A011);
                  * A is the port's second confirm, as everywhere else here. */
                 uint16_t seed = (uint16_t)(seed_source.lo | (seed_source.hi << 8));
-                nes_audio_play(NES_SOUND_SCREEN_SWITCH);
+                screen_blip();
 
                 if (GAME_IS_LINKED(game_mode)) {
                     /* The master has chosen. Letting the handshake go delivers
@@ -5464,7 +5525,7 @@ int main(void) {
             if (lobby.hold && lobby.linked && link_is_master()) {
                 screen = SCREEN_LEVEL_SELECT;
                 menu_field = MENU_FIELD_LEVEL;
-                nes_audio_play(NES_SOUND_SCREEN_SWITCH);
+                screen_blip();
                 vsync();
                 audio_frame();
                 clear_screen();
@@ -5476,7 +5537,7 @@ int main(void) {
                 screen = SCREEN_GAME_SELECT;
                 link_shutdown();
                 oam_hide_all();
-                nes_audio_play(NES_SOUND_SCREEN_SWITCH);
+                screen_blip();
                 vsync();
                 audio_frame();
                 clear_screen();
@@ -5701,7 +5762,7 @@ int main(void) {
              * redraw one. Without this the box's border kept whatever the
              * banner had left in it. */
             g_repaint = true;
-            nes_audio_play(NES_SOUND_SCREEN_SWITCH);
+            screen_blip();
         }
 
         /* IN THE DEMO THE PAD IS NOT A CONTROLLER, it is the way out. The
@@ -5715,7 +5776,7 @@ int main(void) {
                 g_ai_active = false;
                 match_running = false;
                 screen = SCREEN_GAME_SELECT;
-                nes_audio_play(NES_SOUND_SCREEN_SWITCH);
+                screen_blip();
                 vsync();
                 audio_frame();
                 clear_screen();
