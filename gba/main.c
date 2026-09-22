@@ -628,6 +628,8 @@ int main(void) {
                 nes_audio_play(NES_MUSIC_LEVELUP);
             }
             g_dancer_elapsed++;
+            /* One frame of the choreography: see the driver in gba/hud.c. */
+            dancers_step(g_dancer_elapsed);
             bonus_step();
 
             vsync();

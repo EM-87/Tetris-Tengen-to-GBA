@@ -1696,6 +1696,8 @@ void oam_hide_all(void);
 /* hud.c */
 void draw_coop_dancers(int elapsed, int count);
 void draw_dancers(int elapsed, int count);
+void dancers_begin(uint16_t seed, int cast);  /* the interlude's choreography; see hud.c */
+void dancers_step(int frame);
 extern uint8_t g_idle_palette;
 extern int g_dance_frames;
 void idle_cossack_celebrate(int lines);

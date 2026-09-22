@@ -371,6 +371,28 @@ RAM_RNG_SEED_VALUE = 0x5A
 RAM_OAM_STAGING = 0x0500
 TITLE_PROBE_FRAMES = 2000       # past frameCounterHigh = 4, where the show ends
 
+# THE COSSACKS' CHOREOGRAPHY IS RUN, NOT REIMPLEMENTED, for the same reason
+# the title's sprites are: each dancer follows a little program of its own
+# and the port reads those programs, their branch tables and the poses they
+# name straight out of the slice below. So the driver is probed here too, or
+# the slice comes out measured on the sound engine alone and stops well above
+# the table the programs START at. See the choreography note in gba/hud.c.
+DANCER_SETUP_ADDR = 0x8D8B      # L8D8B: the cast, the stage and the programs
+DANCER_DRIVER_ADDR = 0xB015     # LB015: one frame of it
+DANCER_PROBE_FRAMES = 1200      # twenty seconds, well past the show's own 32
+RAM_PLAY_MODE = 0x002F          # playMode; $FF is coop, which has the most
+RAM_P1_ACTIVE = 0x004A          # player1GameActive
+RAM_P2_ACTIVE = 0x004B
+RAM_CLEAR_COUNTS = 0x006C       # $6C-$73, the two players' tallies interleaved
+# ...AND THE SHOW'S OWN COUNTER, which is player1FallTimer wearing a second
+# hat: LB043 refuses the random branch while it is below $70 and walks the
+# programs off their ends instead. The interlude runs it from $7C to $F4, so
+# on that screen the branch always fires; a probe that leaves it at zero
+# crashes into the branch tables after a few hundred frames, which is how
+# this line came to be here.
+RAM_SHOW_TIMER = 0x006A         # player1FallTimer (tetris-ram.asm.txt:86)
+RAM_SHOW_TIMER_VALUE = 0x7C     # DANCER_TIMER_START
+
 # Screen regions, in NES nametable columns. See BOARD LAYOUT above.
 COL_FRAME_L = (0, 2)            # braid; the playfield's left wall
 COL_PLAYFIELD_PLAY = (2, 12)    # the ten playable columns
@@ -680,6 +702,26 @@ def extract_audio_prg(rom: "Rom"):
             "the title screen's sprites touched something outside RAM and the "
             f"APU: {bus.stray[:5]}")
 
+    # ...and the dancers' driver, seeded for the biggest cast there is: coop
+    # with both boards alive and a tally full of tetrises, so every one of the
+    # eight programs in the start table is walked rather than only the first.
+    bus = Watching(prg)
+    cpu = CPU(bus)
+    bus.write(RAM_PLAY_MODE, 0xFF)
+    bus.write(RAM_P1_ACTIVE, 1)
+    bus.write(RAM_P2_ACTIVE, 1)
+    for i in range(8):
+        bus.write(RAM_CLEAR_COUNTS + i, 9)
+    cpu.call(DANCER_SETUP_ADDR)
+    bus.write(RAM_SHOW_TIMER, RAM_SHOW_TIMER_VALUE)
+    for frame in range(DANCER_PROBE_FRAMES):
+        bus.write(RAM_FRAME_LOW, frame & 0xFF)
+        cpu.call(DANCER_DRIVER_ADDR)
+    if bus.stray:
+        raise ValueError(
+            f"the dancers touched something outside RAM and the APU: "
+            f"{bus.stray[:5]}")
+
     if low > high:
         raise ValueError("the sound engine read no PRG at all; wrong addresses?")
     # AND THE SPAN HAS TO COVER THE DOORS THE PORT KNOCKS ON. Every address
@@ -688,7 +730,8 @@ def extract_audio_prg(rom: "Rom"):
     # which is exactly what happened the day the interpreter learned to read
     # the cartridge without going through this bus.
     doors = (AUDIO_SET_TRACK_ADDR, AUDIO_UPDATE_ADDR,
-             CATHEDRAL_ADDR, FIREWORKS_UPDATE_ADDR)
+             CATHEDRAL_ADDR, FIREWORKS_UPDATE_ADDR,
+             DANCER_SETUP_ADDR, DANCER_DRIVER_ADDR)
     outside = [d for d in doors if not (low <= d <= high)]
     if outside:
         raise ValueError(

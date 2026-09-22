@@ -107,6 +107,8 @@ void nes_audio_frame(void);
  * ----------------------------------------------------------------------- */
 bool nes_rom_call(uint16_t addr, uint8_t a, uint32_t max_steps);
 uint8_t *nes_rom_ram(void);
+uint8_t nes_rom_peek(uint16_t addr);
+uint8_t nes_rom_acc(void);
 
 /* ----------------------------------------------------------------------- *
  * A CAPTURED EFFECT, replayed

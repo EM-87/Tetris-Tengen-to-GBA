@@ -97,8 +97,19 @@ running ROM; only the side panels need reflowing).
    per-tetris since the last level-up, capped at six. The show is a fixed 32
    seconds and a button does not skip it, it fast-forwards to a wind-down of
    one to three seconds — both the cartridge's, including the eight-bit
-   underflow that makes an early press end it sooner than a late one. Their
-   individual choreography scripts are still untraced (noted in NOTES.md).
+   underflow that makes an early press end it sooner than a late one. And
+   each one's OWN CHOREOGRAPHY, which is the last thing here that used to be
+   an approximation: the driver `LB015` is transcribed into `gba/hud.c` and
+   reads the cartridge's own programs, branch tables and poses out of the PRG
+   slice the sound engine already carries, rolling the cartridge's own
+   `shuffleRngSeed5x` for the branches. Nothing is extracted for it.
+   **THE DICE ARE SHARED, so a dancer who never comes on still costs.**
+   `L8E46` zeroes the program pointer of every slot the cast does not fill
+   and `LB019` skips a slot whose pointer is zero — a troupe of six rolls six
+   times a frame, not eight. Giving the two spare slots a programme anyway
+   drew nothing extra on screen and put every other dancer on a different
+   branch; `make dance-check` is what found it, and it runs the 6502 driver
+   beside the port's on one seed for both casts, six and coop's eight.
 9. ~~Title and menu screens~~ — done, from the cartridge's own title art and
    menu frame. The title's frame is TWO frames and the screen's shape decides
    which: the port keeps the blue BRAID whole on all four sides and fills the
@@ -531,9 +542,6 @@ does not is a bug.
 - **"HIGH SCORE" reads "HIGH"** in the 1P panel, for the same reason: the cell
   is eight tiles wide and the phrase is ten. The number under it is the number
   the cartridge puts there.
-- **Each dancer's choreography script.** Traced as far as the driver (`LB015`)
-  and no further; the port's dancers walk the pose table from staggered starts
-  instead of following their own programs. See reference/NOTES.md.
 - **A skinned board over the LINK CABLE.** A skin changes what a settled cell
   holds (roadmap 31), and a linked match is two consoles comparing state byte
   for byte, so one of them wearing a prototype's clothes would be a real
@@ -605,21 +613,18 @@ fixed.
    is the lobby: exchange the skin so both boards wear the master's, with
    the release's RULES. Both consoles then agree on the cell format and the
    paint is real. See `piece_id_cells` and `skin_begin_match`.
-4. **The cossacks' choreography.** The one approximation left: their little
-   programs at `$019A`/`$01A2` are traced (see The dancers) and not run, so
-   the port walks the pose table from staggered starts instead.
-5. **The computer in coop.** It cannot slide a piece UNDER one already
+4. **The computer in coop.** It cannot slide a piece UNDER one already
    placed, does not read where the partner is about to put theirs, and
    ignores their shadow. None of that is in the cartridge, which has no
    computer at all, so it belongs under the cheat if it is built.
-6. **`VBlankIntrWait` instead of the spin.** `vsync()` busy-waits at full
+5. **`VBlankIntrWait` instead of the spin.** `vsync()` busy-waits at full
    clock for the whole visible frame, which on a real console is battery
    and heat for nothing. The BIOS call halts instead. It wants the vblank
    interrupt in the vector the cable owns today.
-7. **The fireworks' distance and the dithered sky.** The bursts were moved
+6. **The fireworks' distance and the dithered sky.** The bursts were moved
    away from the frame to stop them colliding with it, and the cartridge's
    title has a dithered sunset behind them that the port does not draw.
-8. **The ten-line rule on the prototypes.** Still on the word of the list
+7. **The ten-line rule on the prototypes.** Still on the word of the list
    it came from; what the stacking bot needs is written up above.
 
 *(The coop HUD was on this list and is built: a panel per player, the
@@ -672,6 +677,18 @@ that against comment-stripped text is not a detail — `main` itself came out
   timing the two games do not share). About two minutes. The golden check in
   `gba-check` hears only the title theme on a fresh engine; this is what
   found the engine reset the port never sent.
+- `make clear-check ROM=/path/to/tetris.nes` — the joins a cleared row breaks,
+  which `make trace` cannot reach because its button script never completes a
+  row: plants one in both machines and compares the cells the clear rewrote.
+- `make dance-check ROM=/path/to/tetris.nes` — the cossacks' choreography,
+  both casts. `tools/probes/dance_vs_cartridge.py` runs the cartridge's own
+  `LB015` on `tools/nes_cpu.py` beside the port's C driver on the SAME seed —
+  the port writes it into the sound engine's RAM at `$34` when the show
+  starts and the probe reads it back — and compares the four tiles of every
+  dancer, frame by frame, off OAM rather than off an internal. Six for a solo
+  screen and eight for coop, which is the only check that the start table is
+  indexed by POSITION. It is what caught the two dancers who were never drawn
+  and rolled the dice anyway.
 - `make trace ROM=/path/to/tetris.nes [FRAMES=3000]` — **THE PORT AGAINST THE
   CARTRIDGE, NOT AGAINST THE DISASSEMBLY.** Boots an original dump in
   `tools/nes_console.py`, walks its menus into a 1 PLAYER game, reads its

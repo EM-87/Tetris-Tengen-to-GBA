@@ -90,7 +90,12 @@ static const uint8_t kNoiseShift[16] = {0, 1, 2, 0, 1, 1, 2, 3, 2, 3, 3, 4, 4, 5
  * which does not break the ROM, it silently SKIPS the check that reads it.
  * External linkage is the only thing that guarantees the name survives. */
 Nes6502 g_cpu;
-static uint8_t g_nes_ram[0x800];
+/* NOT static, for the same reason g_cpu is not: the checks in
+ * tools/run_rom.py read this out of the ELF by name, and link-time
+ * optimisation is free to rename or fold a file-local array — it did, the
+ * day the dancers started reading this file's ROM view, and the audio check
+ * quietly went from passing to SALTADO. */
+uint8_t g_nes_ram[0x800];
 static bool g_ready;
 
 /* The APU as it was after the previous frame. Channels are only touched when
@@ -252,6 +257,18 @@ bool nes_rom_call(uint16_t addr, uint8_t a, uint32_t max_steps) {
 }
 
 uint8_t *nes_rom_ram(void) { return g_nes_ram; }
+
+/* ONE BYTE OF THE CARTRIDGE, by its own address. The 64KB view the
+ * interpreter fetches from holds the whole slice at the addresses the 6502
+ * knows it by, so a caller that wants the cartridge's DATA rather than its
+ * code — a table of pointers, a list of tile ids — can read it here instead
+ * of having it extracted into a header of its own. The dancers' choreography
+ * is read this way; see the driver in gba/hud.c. */
+uint8_t nes_rom_peek(uint16_t addr) { return g_code[addr]; }
+
+/* ...and what the last nes_rom_call left in A, for the routines whose answer
+ * is a return value rather than a write to RAM. */
+uint8_t nes_rom_acc(void) { return g_cpu.a; }
 
 /* True if any of a channel's registers hold a different value than they did
  * last frame. */

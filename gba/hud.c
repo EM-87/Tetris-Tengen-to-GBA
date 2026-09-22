@@ -22,14 +22,125 @@
  * way it is going. Where they stop is the port's choice for the same reason
  * it is in a solo game — the choreography scripts are not traced — and it is
  * the middle of the panel they are walking onto. */
-void draw_coop_dancers(int elapsed, int count) {
-    int pose_step = elapsed / DANCER_POSE_FRAMES;
-    int walk = elapsed / DANCER_WALK_FRAMES;
+/* ----------------------------------------------------------------------- *
+ * THE CHOREOGRAPHY (VERIFIED, LB015 at main.asm.txt:6392-6525)
+ *
+ * The cossacks were the one thing in this port still doing an impression.
+ * Their POSES are the cartridge's, their positions are, their cadence is,
+ * their number is — but which pose each of them strikes was the port walking
+ * the pose table from a staggered start, because the cartridge does not keep
+ * a sequence of poses anywhere. It keeps a little PROGRAM per dancer, and
+ * this is its interpreter.
+ *
+ * Each dancer holds a pointer ($019A low / $01A2 high on the cartridge, and
+ * g_dance_pc here) into a list of 2-byte entries, advanced by one entry
+ * every eighth frame. WHAT AN ENTRY MEANS is decided by comparing it against
+ * two addresses, which is as close to a type tag as 1989 gets:
+ *
+ *   >= $C8BC   a POSE: four tile ids, one per sprite of the 2x2.
+ *   >= $B14D   a JUMP: carry on reading at that address instead.
+ *   otherwise  a BRANCH: the entry names a table of sixteen pointers and
+ *              shuffleRngSeed5x picks one of them. This is what keeps six
+ *              dancers on one stage from falling into step.
+ *
+ * A dancer WALKS — one pixel every fourth frame — only while its program
+ * lies below $B181. That is what stops them where they stop: the port used
+ * to walk them to a mark it had to choose for itself, and getting that
+ * choice wrong left every one of them half off its own ledge.
+ *
+ * NOTHING IS EXTRACTED FOR THIS. The programs, the branch tables and the
+ * poses are all inside the PRG slice the port already carries for the sound
+ * engine, at the addresses the 6502 knows them by, so the driver reads them
+ * straight out of it with nes_rom_peek and the dice are the cartridge's own
+ * routine. The one path not modelled is LB043's wait, which tests the show's
+ * counter against $70: the interlude runs that counter from $7C to $F4, so
+ * on this screen it is always above it and the branch always fires.
+ * ----------------------------------------------------------------------- */
+#define DANCE_START_TABLE 0x8E86   /* L8E86: where each dancer's program begins */
+#define DANCE_BRANCH_TOP  0xB14D   /* LB14D */
+#define DANCE_POSE_BASE   0xC8BC   /* possibleUnusedData2 — the poses start here */
+#define DANCE_WALK_TOP    0xB181   /* LB181: a program below this one walks */
+#define NES_SHUFFLE_RNG   0x9A0D   /* shuffleRngSeed5x (main.asm.txt:3835) */
+#define NES_RAM_RNG_SEED  0x0034   /* rngSeed (tetris-ram.asm.txt:37) */
+#define DANCE_COOP_POSITION 6      /* coop's first position; see dancers_begin */
+#define DANCE_FOLLOW_MAX  8        /* a hang guard, not a rule */
 
+static uint16_t g_dance_pc[DANCER_COOP_COUNT];
+static uint8_t g_dance_pose[DANCER_COOP_COUNT][DANCER_SPRITES];
+static uint16_t g_dance_walk[DANCER_COOP_COUNT];
+
+static uint16_t rom_peek16(uint16_t at) {
+    return (uint16_t)(nes_rom_peek(at) | (nes_rom_peek((uint16_t)(at + 1)) << 8));
+}
+
+/* Follow jumps and branches until the entry under the pointer is a pose, and
+ * take its four tiles. Idempotent once it lands on one, which is why the
+ * cartridge can afford to do it every frame: a branch is spent the moment it
+ * is taken, because what it stores is the pointer it landed on. */
+static void dance_settle(int d) {
+    uint16_t entry = DANCE_POSE_BASE;
+    for (int hop = 0; hop < DANCE_FOLLOW_MAX; hop++) {
+        entry = rom_peek16(g_dance_pc[d]);
+        if (entry >= DANCE_POSE_BASE) break;
+        if (entry >= DANCE_BRANCH_TOP) { g_dance_pc[d] = entry; continue; }
+        nes_rom_call(NES_SHUFFLE_RNG, 0, 2000);
+        g_dance_pc[d] = rom_peek16((uint16_t)(entry + (nes_rom_acc() & 0x1E)));
+    }
+    for (int s = 0; s < DANCER_SPRITES; s++)
+        g_dance_pose[d][s] = nes_rom_peek((uint16_t)(entry + s));
+}
+
+/* The show is starting: every dancer back to the head of its own program.
+ *
+ * ONLY THE ONES WHO COME ON, and that is not a tidiness: L8E46 zeroes the
+ * program pointer of every slot the cast does not fill and LB019 skips a
+ * slot whose pointer's high byte is zero, so a troupe of six rolls the dice
+ * six times a frame and not eight. Giving the two empty slots a programme
+ * anyway left them rolling too, and the dice are SHARED — two extra rolls
+ * moved every other dancer onto a different branch. It cost nothing on
+ * screen (they were never drawn) and the whole choreography downstream. */
+void dancers_begin(uint16_t seed, int cast) {
+    uint8_t *ram = nes_rom_ram();
+    /* The dice want a seed and the cartridge's own is not in this RAM — the
+     * port runs the sound engine here, not the game. The match's is as good
+     * as any and makes a replay of the same game dance the same way. */
+    ram[NES_RAM_RNG_SEED] = (uint8_t)seed;
+    ram[NES_RAM_RNG_SEED + 1] = (uint8_t)(seed >> 8);
+    /* FOURTEEN ENTRIES, NOT EIGHT, and which six or eight of them a cast
+     * gets is the POSITION each dancer stands in: L8DE4 indexes this table
+     * by that, and the positions are 0-5 down the one column a solo screen
+     * has and 6-13 in the pairs coop runs down both of its panels. There
+     * are only two distinct programmes in the table — $B14D and $B167 —
+     * but which dancer gets which is what keeps them out of step. */
+    int base = g_session.game.coop ? DANCE_COOP_POSITION : 0;
+    if (cast > DANCER_COOP_COUNT) cast = DANCER_COOP_COUNT;
+    for (int d = 0; d < DANCER_COOP_COUNT; d++) {
+        g_dance_walk[d] = 0;
+        for (int s = 0; s < DANCER_SPRITES; s++) g_dance_pose[d][s] = 0;
+        if (d >= cast) { g_dance_pc[d] = 0; continue; }   /* L8E46's zeroes */
+        g_dance_pc[d] = rom_peek16((uint16_t)(DANCE_START_TABLE + (base + d) * 2));
+        dance_settle(d);
+    }
+}
+
+/* ...and one frame of it. `frame` is the show's own counter, which is what
+ * the cartridge tests frameCounterLow for. */
+void dancers_step(int frame) {
+    for (int d = 0; d < DANCER_COOP_COUNT; d++) {
+        if ((g_dance_pc[d] >> 8) == 0) continue;   /* LB019: an empty slot */
+        if ((frame % DANCER_POSE_FRAMES) == 0) g_dance_pc[d] += 2;
+        dance_settle(d);
+        if (g_dance_pc[d] < DANCE_WALK_TOP && (frame % DANCER_WALK_FRAMES) == 0)
+            g_dance_walk[d]++;
+    }
+}
+
+void draw_coop_dancers(int elapsed, int count) {
+    (void)elapsed;                      /* the driver keeps the clock now */
     if (count > DANCER_COOP_COUNT) count = DANCER_COOP_COUNT;
     for (int d = 0; d < count; d++) {
-        int pose = (pose_step + d * 5) % DANCER_POSE_COUNT;
-        const uint8_t *tiles = kDancerPoses[pose];
+        const uint8_t *tiles = g_dance_pose[d];
+        int walk = (int)g_dance_walk[d];
         uint8_t attr = kDancerCoopAttr[d];
         bool leftward = (attr & 0x40) != 0;   /* mirrored: walks to the left */
 
@@ -38,11 +149,9 @@ void draw_coop_dancers(int elapsed, int count) {
         int x = (int)kDancerCoopX[d] - 8;
         int y = (int)kDancerCoopY[d] - SCREEN_COOP_FIELD_TY * 8;
 
-        int limit = leftward
-            ? (COOP_PANEL_W * 8 - 16) / 2
-            : COOP_R_TX * 8 + (COOP_PANEL_W * 8 - 16) / 2;
+        /* No mark to stop them at any more: their own programs stop them,
+         * by leaving the range that walks. See the driver above. */
         x += leftward ? -walk : walk;
-        if (leftward ? (x < limit) : (x > limit)) x = limit;
 
         for (int s = 0; s < DANCER_SPRITES; s++) {
             /* A mirrored pair swaps its own left and right halves. */
@@ -60,27 +169,19 @@ void draw_coop_dancers(int elapsed, int count) {
  * positions: one column of six, 24 pixels apart, walking right off their
  * starting mark onto the ledges. */
 void draw_dancers(int elapsed, int count) {
-    int pose_step = elapsed / DANCER_POSE_FRAMES;
-    int walk = elapsed / DANCER_WALK_FRAMES;
-
+    (void)elapsed;                      /* the driver keeps the clock now */
     if (count > DANCER_COUNT) count = DANCER_COUNT;
     for (int d = 0; d < count; d++) {
-        /* Staggered starting poses so the six are not in lockstep. This is
-         * the stand-in for the per-dancer script; see the note above. */
-        int pose = (pose_step + d * 7) % DANCER_POSE_COUNT;
-        const uint8_t *tiles = kDancerPoses[pose];
+        /* Their own programs, out of the cartridge: see the driver above. */
+        const uint8_t *tiles = g_dance_pose[d];
 
-        int x = DANCER_STAGE_TX * 8 - DANCER_START_OFFSET + walk;
+        int x = DANCER_STAGE_TX * 8 - DANCER_START_OFFSET + (int)g_dance_walk[d];
         int y = (int)kDancerStartY[d] - DANCER_Y_ORIGIN;
-        /* They walk on from the left and STOP IN THE MIDDLE OF THE LEDGE.
-         * Where the cartridge stops them is in the choreography scripts,
-         * which are not traced, so the port has to choose — and the far edge
-         * it used to choose left every one of them half hanging off its own
-         * ledge, and off the column the banner's letters occupy, which is the
-         * same four columns (DANCER_STAGE_TX == BANNER_TX, both four wide,
-         * exactly as the cartridge has them at nametable column 14). */
-        int limit = DANCER_STAGE_TX * 8 + (DANCER_STAGE_TW * 8 - 16) / 2;
-        if (x > limit) x = limit;
+        /* They walk on from the left and stop where their programs stop
+         * walking them, which is what the port used to have to guess at.
+         * The stage is the banner's four columns (DANCER_STAGE_TX ==
+         * BANNER_TX, exactly as the cartridge has them at nametable column
+         * 14), so a walk that ran on would take them off it. */
 
         for (int s = 0; s < DANCER_SPRITES; s++) {
             int sx = x + ((s & 1) ? 8 : 0);

@@ -134,6 +134,12 @@ static void announce_step(TengenStepResult step) {
              * at the top of showLevelBonus, and how well the level went is
              * what decides how many cossacks come on. */
             g_dancer_cast = tengen_dancer_count(&g_session.game);
+            /* ...and every one of them back to the head of its own
+             * programme, with the match's own number for the dice. See the
+             * driver in gba/hud.c. */
+            dancers_begin((uint16_t)(g_session.game.player[g_view].rng.lo |
+                                      (g_session.game.player[g_view].rng.hi << 8)),
+                           g_dancer_cast);
         }
     }
     if (step.topped_out) {

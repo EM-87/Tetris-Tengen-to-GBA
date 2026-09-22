@@ -166,6 +166,15 @@ clear-check: $(GBA_ROM)
 	@test -n "$(ROM)" || { echo "usage: make clear-check ROM=/path/to/tetris.nes"; exit 1; }
 	python3 tools/probes/clear_joins.py "$(ROM)" $(GBA_ROM)
 
+# ...AND THE COSSACKS' CHOREOGRAPHY, both casts: the port runs the cartridge's
+# own driver in C over the cartridge's own programmes, so this runs the 6502
+# one beside it on the same seed and compares the tiles frame by frame.
+#   make dance-check ROM=/path/to/tetris.nes
+.PHONY: dance-check
+dance-check: $(GBA_ROM)
+	@test -n "$(ROM)" || { echo "usage: make dance-check ROM=/path/to/tetris.nes"; exit 1; }
+	python3 tools/probes/dance_vs_cartridge.py "$(ROM)" $(GBA_ROM)
+
 TRACE_CORE := $(BUILD)/trace_core
 
 $(TRACE_CORE): tools/trace_core.c $(CORE_SRC) $(CORE_HDR) | $(BUILD)
