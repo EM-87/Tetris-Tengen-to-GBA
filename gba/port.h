@@ -846,6 +846,27 @@ typedef struct {
  * the checksum were fine, so the table simply never loaded. */
 #define SAVE_ENTRY_BYTES 9
 
+/* ONE TABLE PER BUILD. A prototype is a different game — its level climbs
+ * every ten lines and its rows go the frame they complete, so a score made
+ * on one is not a score made on the release, and putting them in one table
+ * made the easiest build own the page. So there is a table for the release
+ * and one for each prototype, chosen by the skin the match was played in.
+ *
+ * TABLE 0 STAYS WHERE IT WAS, bytes and offsets unchanged, so a console that
+ * already has a release table keeps it; the others are written after it and
+ * carry a checksum byte each, past them all. A table whose bytes do not add
+ * up is not refused, it is simply the cartridge's own fifteen — which is
+ * what a build nobody has played yet should look like. */
+#if SCREEN_PROTO_AVAILABLE && SCREEN_SKIN_PLAY
+#define LEADER_TABLES (1 + SCREEN_PROTO_COUNT)
+#else
+#define LEADER_TABLES 1
+#endif
+#define SAVE_TABLE_BYTES ((unsigned)LEADER_ENTRIES * SAVE_ENTRY_BYTES)
+#define SAVE_TABLE_OFF(t) (SAVE_DATA_OFF + (unsigned)(t) * SAVE_TABLE_BYTES)
+/* ...and the extra tables' checksums, one byte each, after all the data. */
+#define SAVE_SUMS_OFF SAVE_TABLE_OFF(LEADER_TABLES)
+
 /* HOW LONG EACH OF THE TWO PAGES STANDS THERE, and both are the cartridge's
  * own, counted on its own clock — which nobody would guess at, because both
  * come out of the SAME byte being used for two things.
@@ -1680,6 +1701,8 @@ void bonus_end(void);
 extern int g_leader_row;
 bool leader_load(void);
 void leader_reset(void);
+void leader_reset_table(int table);
+void leader_use_table(int skin);   /* -1 release, 0.. the prototypes */
 void draw_leader_row(int row);
 void draw_leaderboard(void);
 void leader_submit(void);

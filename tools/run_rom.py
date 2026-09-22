@@ -2239,6 +2239,50 @@ def leaderboard_check(rom_path):
         print("  arriba/abajo la letra, izquierda/derecha el hueco, B deshace, "
                "A acepta")
 
+    # ...AND A ONLY ACEPTA ON THE LAST LETTER. Everywhere else it walks to the
+    # next one, which is what A means in every other entry field there is; it
+    # used to take the whole name from wherever the cursor stood, so the
+    # obvious "press A to keep this letter" threw the other two away. The tell
+    # is that UP still bites after the press: if A had finished the name,
+    # nothing would answer the pad. START finishes from anywhere, which is
+    # what it already meant here.
+    # A low score, so this entry lands at the bottom and leaves BCD in the
+    # first row for the two checks below.
+    press_start(core); run(core, 40)
+    press_start(core); run(core, 10)
+    press_start(core); run(core, 12)
+    press_start(core); run(core, 30)
+    to_gameover(core, 4000)
+
+    def table_over(frames=40):
+        """The whole table, over a blink: the cursor blanks the letter it is
+        on for half of every 32 frames, so one reading can miss a letter
+        that is there."""
+        seen = set()
+        for _ in range(frames):
+            core.run_frame()
+            seen.update(rows(core))
+        return seen
+
+    tap("A")                       # first letter: this must NOT take the name
+    tap("UP", 1)                   # so this lands on the SECOND letter
+    if not any(" AB" in t for t in table_over()):
+        failures.append("A en la primera letra no paso a la segunda: "
+                         f"{sorted(t for t in table_over() if 'A' in t)!r}")
+    else:
+        tap("START")               # ...and START takes the name from here
+        run(core, 20)
+        taken = table_over()
+        if not any(" AB" in t for t in taken):
+            failures.append("START no cerro el nombre")
+        else:
+            tap("UP", 1)
+            if table_over() != taken:
+                failures.append("despues de START el pad sigue escribiendo")
+            else:
+                print("  A pasa de letra y solo cierra en la tercera; "
+                       "START cierra desde cualquiera")
+
     # AND IT SURVIVES THE POWER GOING OFF, which is the one thing the NES
     # cartridge wanted and could not have: its magic at $04F7 only carries the
     # table across a RESET. Here it is in the GBA's battery-backed SRAM, under
@@ -2277,6 +2321,114 @@ def leaderboard_check(rom_path):
     if failures:
         return 1
     print("OK: la tabla de records es la del cartucho, y se escribe en ella.")
+    return 0
+
+
+def proto_count():
+    """How many prototype skins this build carries, from the generated header."""
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "..", "gba", "screen_proto.h")) as fh:
+            for line in fh:
+                if line.startswith("#define SCREEN_PROTO_COUNT"):
+                    return int(line.split()[2])
+    except OSError:
+        pass
+    return 0
+
+
+def tables_check(rom_path):
+    """ONE HIGH SCORES TABLE PER BUILD, and they must not see each other.
+
+    A prototype is a different game — the level climbs every ten lines and a
+    row goes the frame it completes — so a score made on one does not belong
+    beside a score made on the release, and with one table between them the
+    easiest build simply owned the page. See LEADER_TABLES in gba/port.h.
+
+    What this does is put a score on the release's table, walk the title's
+    skin round to a prototype, and look: the prototype must open on the
+    cartridge's own fifteen. Then it puts a different score on the
+    prototype's and walks back, and the release's must be exactly as it was
+    left — neither overwritten nor joined.
+    """
+    failures = []
+    core, screen = load(rom_path)   # `screen` must stay alive; see load()
+    _ = screen
+    base, why = game_state_address(rom_path)
+    if base is None:
+        print(f"SALTADO: {why}")
+        return 0
+    off = game_offsets(rom_path)
+
+    def tap(*keys, hold=4, settle=12):
+        core.set_keys(*keys); run(core, hold)
+        core.set_keys(); run(core, settle)
+
+    def table():
+        return [tilemap_text(core, LEADER_FIRST_TY + i, 0, 30) for i in range(15)]
+
+    def play_and_lose(score):
+        """A game on whatever skin is up, ended with `score` on the board."""
+        start_game(core)
+        for i in range(4):
+            core.memory.u8[base + off["score"] + i] = (score >> (8 * i)) & 0xFF
+        for r in range(TENGEN_PF_HEIGHT):
+            for c in range(TENGEN_PF_WIDTH):
+                core.memory.u8[base + off["field"] + r * TENGEN_PF_WIDTH + c] = (
+                    CELL_WALL if c in (0, TENGEN_PF_WIDTH - 1)
+                    else (0 if c == 5 else CELL_BLOCK))
+        run(core, 240)
+        press_start(core); run(core, 30)     # the plaque -> HIGH SCORES
+        seen = table()
+        tap(KEYS["START"]); run(core, 20)    # ...take the name and leave
+        press_start(core); run(core, 40)
+        return seen
+
+    # The board is played for a few frames on the way to being buried, so the
+    # score that lands is the planted one plus whatever those frames paid.
+    run(core, 40)
+    release_first = play_and_lose(80000)
+    if "0800" not in release_first[0]:
+        failures.append(f"el 80000 no entro en la tabla del release: "
+                         f"{release_first[0]!r}")
+
+    # The chord uncovers the skins; L walks to the first prototype.
+    tap(KEYS["L"], KEYS["R"]); run(core, 30)
+    proto_first = play_and_lose(60000)
+    # The TOP ROW, not the whole table: 8000 is one of the cartridge's own
+    # fifteen and would match an 80000 anywhere looser than this. If the two
+    # builds shared a table the release's 80000 would be sitting above the
+    # prototype's 60000, which is exactly what this asks.
+    if "0800" in proto_first[0]:
+        failures.append(f"la tabla del prototipo abre con el record del "
+                         f"release: {proto_first[0]!r}")
+    elif "0600" not in proto_first[0]:
+        failures.append(f"el 60000 no entro en la tabla del prototipo: "
+                         f"{proto_first[0]!r}")
+    elif "017000" not in proto_first[1]:
+        failures.append("bajo el record del prototipo no estan las quince del "
+                         f"cartucho: {proto_first[1]!r}")
+    else:
+        print("  el prototipo abre con las quince del cartucho, no con las "
+               "del release")
+
+    # ...and back to the release, whose own table must be untouched. L walks
+    # the ring backwards, so one press from the first prototype is it.
+    tap(KEYS["L"]); run(core, 24)
+    back = play_and_lose(10)
+    if "0600" in back[0]:
+        failures.append(f"la tabla del release abre con el record del "
+                         f"prototipo: {back[0]!r}")
+    elif "0800" not in back[0]:
+        failures.append(f"el release perdio su propio record: {back[0]!r}")
+    else:
+        print("  y el release conserva el suyo, sin el del prototipo")
+
+    for f in failures:
+        print("FALLA:", f)
+    if failures:
+        return 1
+    print("OK: cada build lleva su propia tabla de records.")
     return 0
 
 
@@ -4536,6 +4688,8 @@ def main():
                      help="check quitting from the pause menu leaves the sound alive")
     ap.add_argument("--leaderboard", action="store_true",
                      help="check the HIGH SCORES table and its initials")
+    ap.add_argument("--tables", action="store_true",
+                     help="check each build keeps its own HIGH SCORES table")
     ap.add_argument("--points", action="store_true",
                      help="check the drop-point sprites beside the piece")
     ap.add_argument("--falling", action="store_true",
@@ -4588,6 +4742,8 @@ def main():
         sys.exit(points_check(args.rom))
     if args.leaderboard:
         sys.exit(leaderboard_check(args.rom))
+    if args.tables:
+        sys.exit(tables_check(args.rom))
     if args.quit_audio:
         sys.exit(quit_audio_check(args.rom))
     if args.loans:

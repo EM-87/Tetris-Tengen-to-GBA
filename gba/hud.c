@@ -695,7 +695,13 @@ static char leader_letter(uint8_t index) {
     return index == 0 ? ' ' : (char)('A' + index - 1);
 }
 
-static LeaderEntry g_leader[LEADER_ENTRIES];
+/* The tables, and which one is in play. Table 0 is the release's and the
+ * rest are the prototypes', in skin order; see LEADER_TABLES. Everything
+ * below still says `g_leader`, because everything below is about ONE table
+ * and which one it is is decided in exactly one place. */
+static LeaderEntry g_tables[LEADER_TABLES][LEADER_ENTRIES];
+static int g_table;
+#define g_leader (g_tables[g_table])
 
 /* Which entry is being typed into, and which of its three letters — the
  * cartridge's $74/$75 (one per player) and the $40/$80 flags it marks the
@@ -729,10 +735,10 @@ __attribute__((used, retain, section(".rodata"), aligned(4)))
 static const char kSaveSignature[16] = "SRAM_V113";
 static const char kSaveMagic[SAVE_MAGIC_LEN] = { 'L', 'O', 'G', 'G' };
 
-static uint8_t leader_checksum(void) {
+static uint8_t leader_checksum_of(int table) {
     uint8_t sum = 0xA5;
     for (int i = 0; i < LEADER_ENTRIES; i++) {
-        const LeaderEntry *e = &g_leader[i];
+        const LeaderEntry *e = &g_tables[table][i];
         for (int b = 0; b < 4; b++) sum = (uint8_t)(sum + (e->score >> (8 * b)));
         sum = (uint8_t)(sum + (e->lines & 0xFF) + (e->lines >> 8));
         for (int c = 0; c < LEADER_INITIALS; c++) sum = (uint8_t)(sum + e->initials[c]);
@@ -741,12 +747,16 @@ static uint8_t leader_checksum(void) {
     return sum;
 }
 
-static void leader_save(void) {
-    for (int i = 0; i < SAVE_MAGIC_LEN; i++)
-        sram_write((unsigned)i, (unsigned char)kSaveMagic[i]);
+/* Where a table's checksum byte lives: the release's is the one the save
+ * always had, and the rest are past all the data. See LEADER_TABLES. */
+static unsigned leader_sum_off(int table) {
+    return table == 0 ? SAVE_SUM_OFF : SAVE_SUMS_OFF + (unsigned)(table - 1);
+}
+
+static void leader_save_table(int table) {
     for (int i = 0; i < LEADER_ENTRIES; i++) {
-        const LeaderEntry *e = &g_leader[i];
-        unsigned at = SAVE_DATA_OFF + (unsigned)i * SAVE_ENTRY_BYTES;
+        const LeaderEntry *e = &g_tables[table][i];
+        unsigned at = SAVE_TABLE_OFF(table) + (unsigned)i * SAVE_ENTRY_BYTES;
         for (int b = 0; b < 4; b++)
             sram_write(at + (unsigned)b, (unsigned char)(e->score >> (8 * b)));
         sram_write(at + 4, (unsigned char)(e->lines & 0xFF));
@@ -754,20 +764,27 @@ static void leader_save(void) {
         for (int c = 0; c < LEADER_INITIALS; c++)
             sram_write(at + 6 + (unsigned)c, e->initials[c]);
     }
-    sram_write(SAVE_SUM_OFF, leader_checksum());
+    sram_write(leader_sum_off(table), leader_checksum_of(table));
+}
+
+static void leader_save(void) {
+    for (int i = 0; i < SAVE_MAGIC_LEN; i++)
+        sram_write((unsigned)i, (unsigned char)kSaveMagic[i]);
+    /* ALL OF THEM, not just the one in play. A table nobody touched costs
+     * fifteen entries of writes and keeps the save whole; writing one at a
+     * time meant a console that had never played a prototype carried a
+     * checksum for a table that was never written. */
+    for (int t = 0; t < LEADER_TABLES; t++) leader_save_table(t);
 }
 
 /* ...and reading it back, with the cartridge's own suspicion: the magic, the
  * checksum, and then every field checked for range before any of it is
  * believed. Returns false if what is there is not a table, which is what a
  * console that has never run this game looks like. */
-bool leader_load(void) {
-    for (int i = 0; i < SAVE_MAGIC_LEN; i++)
-        if (sram_read((unsigned)i) != (unsigned char)kSaveMagic[i]) return false;
-
+static bool leader_load_table(int table) {
     LeaderEntry got[LEADER_ENTRIES];
     for (int i = 0; i < LEADER_ENTRIES; i++) {
-        unsigned at = SAVE_DATA_OFF + (unsigned)i * SAVE_ENTRY_BYTES;
+        unsigned at = SAVE_TABLE_OFF(table) + (unsigned)i * SAVE_ENTRY_BYTES;
         uint32_t score = 0;
         for (int b = 0; b < 4; b++)
             score |= (uint32_t)sram_read(at + (unsigned)b) << (8 * b);
@@ -784,11 +801,29 @@ bool leader_load(void) {
     }
 
     LeaderEntry keep[LEADER_ENTRIES];
-    for (int i = 0; i < LEADER_ENTRIES; i++) { keep[i] = g_leader[i]; g_leader[i] = got[i]; }
-    if (leader_checksum() != sram_read(SAVE_SUM_OFF)) {
-        for (int i = 0; i < LEADER_ENTRIES; i++) g_leader[i] = keep[i];
+    for (int i = 0; i < LEADER_ENTRIES; i++) {
+        keep[i] = g_tables[table][i];
+        g_tables[table][i] = got[i];
+    }
+    if (leader_checksum_of(table) != sram_read(leader_sum_off(table))) {
+        for (int i = 0; i < LEADER_ENTRIES; i++) g_tables[table][i] = keep[i];
         return false;
     }
+    return true;
+}
+
+bool leader_load(void) {
+    for (int i = 0; i < SAVE_MAGIC_LEN; i++)
+        if (sram_read((unsigned)i) != (unsigned char)kSaveMagic[i]) return false;
+
+    /* THE RELEASE'S TABLE DECIDES WHETHER THERE IS A SAVE AT ALL — it is the
+     * one that has always been at these offsets. The prototypes' are read
+     * beside it and each simply keeps the cartridge's fifteen if its own
+     * bytes do not add up, which is what a build nobody has played looks
+     * like on a console that was saving before they existed. */
+    if (!leader_load_table(0)) return false;
+    for (int t = 1; t < LEADER_TABLES; t++)
+        if (!leader_load_table(t)) leader_reset_table(t);
     g_high_score = g_leader[0].score;
     return true;
 }
@@ -797,12 +832,28 @@ bool leader_load(void) {
  * 'A', and then the fifteen scores are built by counting DOWN from entry 0:
  * `tya; adc #$33`, which lands on 17000 for the first and 3000 for the last in
  * steps of a thousand. */
-void leader_reset(void) {
+void leader_reset_table(int table) {
     for (int i = 0; i < LEADER_ENTRIES; i++) {
-        g_leader[i].score = (uint32_t)(17000 - i * 1000);
-        g_leader[i].lines = 0;
-        for (int c = 0; c < LEADER_INITIALS; c++) g_leader[i].initials[c] = 1; /* 'A' */
+        g_tables[table][i].score = (uint32_t)(17000 - i * 1000);
+        g_tables[table][i].lines = 0;
+        for (int c = 0; c < LEADER_INITIALS; c++)
+            g_tables[table][i].initials[c] = 1; /* 'A' */
     }
+}
+
+void leader_reset(void) {
+    for (int t = 0; t < LEADER_TABLES; t++) leader_reset_table(t);
+    g_high_score = g_leader[0].score;
+}
+
+/* WHICH BUILD'S TABLE IS IN PLAY, by the skin: -1 is the release and 0 and up
+ * are the prototypes in their title order. Called where the skin is settled,
+ * not read every frame, because switching is also what refreshes the HIGH
+ * SCORE the HUD and the menus print. */
+void leader_use_table(int skin) {
+    int table = skin + 1;
+    if (table < 0 || table >= LEADER_TABLES) table = 0;
+    g_table = table;
     g_high_score = g_leader[0].score;
 }
 
@@ -994,7 +1045,19 @@ bool leader_type(uint8_t held, uint8_t pressed) {
         }
     }
 
-    if (pressed & (TENGEN_BTN_A | TENGEN_BTN_START)) {
+    /* A WALKS, START FINISHES. A used to mean "done" wherever the cursor
+     * was, which put the end of the name one button away from its first
+     * letter: press A to accept the letter you just chose, the way every
+     * other entry field in the world works, and the whole name was taken
+     * with two of its three letters still an A. So A moves to the next
+     * letter and only finishes on the last one, and START is the way out
+     * from anywhere — which is what it already meant here and everywhere
+     * else on this page. B still puts a letter back. */
+    if ((pressed & TENGEN_BTN_A) && !(pressed & TENGEN_BTN_START) &&
+        g_leader_cursor < LEADER_INITIALS - 1) {
+        g_leader_cursor++;
+        cursor_blip();
+    } else if (pressed & (TENGEN_BTN_A | TENGEN_BTN_START)) {
         screen_blip();
         g_leader_cursor = 0;
         g_leader_undo_n = 0;

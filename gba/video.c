@@ -443,6 +443,9 @@ void skin_begin_match(bool linked) {
     (void)linked;
     g_skin_on = false;
 #endif
+    /* ...and this match's scores go in this build's table. A prototype is a
+     * different game — see LEADER_TABLES. */
+    leader_use_table(play_skin());
     g_session.game.piece_id_cells = g_skin_on;
     /* ...and their RULES with their paint: the level every ten lines, no wall
      * kick, and rows that go the frame they complete. See proto_rules. */

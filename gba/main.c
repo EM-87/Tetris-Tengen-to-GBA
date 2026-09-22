@@ -116,6 +116,9 @@ int main(void) {
             if (skin_step) {
                 g_title_skin = (uint8_t)((g_title_skin + skin_step) %
                                           TITLE_SKIN_COUNT);
+                /* ...and the HIGH SCORE the menus print is this build's, from
+                 * this build's table. See LEADER_TABLES. */
+                leader_use_table(front_skin());
                 nes_audio_play(NES_SOUND_CHIRP);
                 vsync();
                 /* CLEAR FIRST, then the tiles: a skin swap rewrites the whole
