@@ -546,6 +546,90 @@ does not is a bug.
   written up with the PC that does it in reference/NOTES.md. One frame, once,
   in one mode; every frame after it matches.
 
+## Two things that look like bugs and are the cartridge's
+
+Both were reported from playing, both were measured, and both came back
+"this is what the original does". They are here so the next person to see
+them does not spend the afternoon again.
+
+- **The left panel's shelves do not touch the rope; the right panel's do.**
+  There is one black pixel column between them, measured on the screen at
+  the shelf rows: the shelf's last lit column is x=63 and the rope's first
+  lit column is x=65. It is the cartridge's. The wall tile `$6A` — the first
+  of the two the left wall is made of — has a blank leftmost pixel column,
+  and the coop screen this panel is taken from puts seven ledge tiles
+  straight against it: `9D 9D 9D 9D 9D 9D 9D 6A 6B ... 73 74 9D 9D ...`.
+  On the right the wall's LAST tile, `$74`, is lit to its edge, so that
+  junction closes. Same art, same layout, same seam. Closing it would mean
+  drawing a tile the cartridge does not have.
+- **Stacked pieces merge where a row was cleared.** The blocks' separator
+  lives on each tile's TOP row and LEFT column — `$01`-`$0E`, and which one
+  a cell gets is decided when the piece LOCKS, by where that cell sits
+  inside that piece (`tengen_tile_id_for_cell`). A cell whose piece-mate was
+  above it gets a tile with no top edge. Clear the row that mate was in and
+  the cell keeps its tile, so whatever lands on it next joins onto it. The
+  cartridge stores exactly the same ids and collapses rows exactly the same
+  way — `make trace` compares those very nibbles against it frame for frame
+  — so the port cannot differ here without leaving the cartridge. Fixing it
+  is a port-side DRAWING change, not a core one: derive each settled cell's
+  tile from its four neighbours at draw time instead of trusting the one it
+  locked with. That would keep the core byte-identical and the trace green,
+  and it is the only way to do it that does. See **Melons** below.
+
+## Melons — the things worth opening next
+
+Ordered by what they buy against what they cost. Everything here is a
+decision waiting to be made, not a defect; the defects are bugs and get
+fixed.
+
+1. **The rival's records over the cable.** Each console keeps its own
+   table and only ever writes its own player into it, so two consoles end a
+   2P match with different pages. Sending the loser's score and initials
+   across at the end, and offering them a row marked as theirs, is the
+   piece that is missing. The lobby already has a word to carry it and the
+   initials queue already takes two names at once (it does in coop).
+2. **The A+B restart of a dead board in 2P.** The cartridge lets a player
+   whose board is finished start again on the spot (`handleGameOver`,
+   main.asm.txt:82F3-830F) while the other plays on. The port ends the
+   match instead. With it, the question of what happens to a player's five
+   accumulated games at the leaderboard becomes real and `$74`/`$75` want
+   tracing to answer it.
+3. **The prototypes as a skin over the cable.** Asked for, and it is not a
+   flag flip: a skinned board stores the PIECE'S OWN ID in a settled cell
+   and the release stores a joined-block tile, so the two consoles' fields
+   would differ byte for byte and lockstep would call it a divergence. A
+   prototype has no art above `$07` to draw the release's ids with either —
+   `$08` and up is lettering in proto_b and the fret in proto_c. The way in
+   is the lobby: exchange the skin so both boards wear the master's, with
+   the release's RULES. Both consoles then agree on the cell format and the
+   paint is real. See `piece_id_cells` and `skin_begin_match`.
+4. **The coop HUD.** The right box should carry the partner's NEXT, score
+   and lines instead of the idle cossack; LEVEL is shared and HIGH belongs
+   to whichever table is in play. Under the cheat, two more fields —
+   T.LINES and T.SCORE, both players added — in the fourth cell of each
+   panel, which is why that cell should be left free. In WITH COMPUTER the
+   HUD should still swap to Stats, and there the left panel goes back to
+   its 1P shape with SCORE and LINES reading as totals; over the cable
+   against a person, coop only.
+5. **Separating stacked pieces after a clear.** The drawing change in the
+   section above.
+6. **The cossacks' choreography.** The one approximation left: their little
+   programs at `$019A`/`$01A2` are traced (see The dancers) and not run, so
+   the port walks the pose table from staggered starts instead.
+7. **The computer in coop.** It cannot slide a piece UNDER one already
+   placed, does not read where the partner is about to put theirs, and
+   ignores their shadow. None of that is in the cartridge, which has no
+   computer at all, so it belongs under the cheat if it is built.
+8. **`VBlankIntrWait` instead of the spin.** `vsync()` busy-waits at full
+   clock for the whole visible frame, which on a real console is battery
+   and heat for nothing. The BIOS call halts instead. It wants the vblank
+   interrupt in the vector the cable owns today.
+9. **The fireworks' distance and the dithered sky.** The bursts were moved
+   away from the frame to stop them colliding with it, and the cartridge's
+   title has a dithered sunset behind them that the port does not draw.
+10. **The ten-line rule on the prototypes.** Still on the word of the list
+    it came from; what the stacking bot needs is written up above.
+
 ## Where the GBA layer lives
 
 `gba/main.c` was one file of six thousand lines and had stopped being

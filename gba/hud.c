@@ -1438,7 +1438,15 @@ void draw_panel(void) {
          * be. The ROM keeps no piece histogram in 2P either, so nothing of
          * the cartridge's is being displaced. */
         const TengenPlayerState *o = &g_session.game.player[g_view ^ 1];
-        draw_text(BOX_L_IN, ROW_HIGH, "RIVAL", BANK_LABEL);
+        /* ...AND THE WORD OVER IT SAYS WHETHER THEY ARE STILL IN IT. The
+         * notice used to be at the bottom of the right box, which is the row
+         * the histogram's icon strip stands on — so the box could carry the
+         * notice or the statistics and not both, and a race got no
+         * statistics at all. Here it costs nothing: the number under it is
+         * their score either way, and frozen is what OUT means. */
+        clear_region(BOX_L_IN, ROW_HIGH, BOX_L_W, 1);
+        draw_text(BOX_L_IN, ROW_HIGH,
+                   o->game_active ? "RIVAL" : " OUT", BANK_LABEL);
         clear_region(BOX_L_IN, ROW_HIGH + 1, BOX_L_W, 1);
         draw_number_blank(BOX_L_IN, ROW_HIGH + 1, o->score, 6, BANK_VALUE);
     } else {
@@ -1510,18 +1518,14 @@ void draw_panel(void) {
         if (alive) g_idle_frame++;
 
         clear_both(BOX_R_IN, ROW_DANCER, BOX_IN, ROW_DANCER_H);
-        if (!g_session.game.two_player) {
-            draw_stats(p);
-        } else {
-            /* A race keeps no piece histogram — the cartridge keeps none in
-             * 2P either. The rival topping out is the only news this box has
-             * left to carry, and it goes at the bottom of it. */
-            clear_region(BOX_R_IN, SHELF_FIRST + 1, BOX_IN,
-                          BOX_BOT_IN - SHELF_FIRST);
-            clear_stats_layer();
-            if (!g_session.game.player[g_view ^ 1].game_active)
-                draw_text(BOX_R_IN + 2, BOX_BOT_IN - 1, "OUT", BANK_LABEL);
-        }
+        /* THE HISTOGRAM IN EVERY MODE, a race included. The cartridge keeps
+         * none in 2P, which is why this box used to be empty there — but the
+         * cartridge has no VERSUS COMPUTER either, and the counts it would
+         * be refusing to show are the ones the port already keeps per player.
+         * What it was really showing instead was the rival's OUT notice, and
+         * that has moved to the left panel, over their score, where it reads
+         * better and costs the box nothing. */
+        draw_stats(p);
     }
 
     g_panel_layer = false;
