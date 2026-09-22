@@ -559,6 +559,15 @@ void draw_bonus_static(void) {
     int tx = bonus_tx();
     clear_region(tx, 0, SCREEN_1P_BONUS_W, SCREEN_TH);
     clear_panel_region(tx, 0, SCREEN_1P_BONUS_W, SCREEN_TH);
+    /* THE COOP BOARD IS TWELVE WIDE AND THIS PANEL IS TEN, so a column of
+     * board stood either side of it for the whole show — settled blocks
+     * framing the tally. The panel is centred and cannot be widened (it is
+     * the cartridge's own blit), so the two columns it does not reach are
+     * wiped here. */
+    if (g_session.game.coop) {
+        clear_region(COOP_FIELD_TX, 0, 1, SCREEN_TH);
+        clear_region(COOP_FIELD_TX + TENGEN_PF_WIDTH - 1, 0, 1, SCREEN_TH);
+    }
     for (int y = 0; y < SCREEN_1P_BONUS_H; y++)
         for (int x = 0; x < SCREEN_1P_BONUS_W; x++)
             set_map_tile(tx + x, y, WITH_BANK(kBonusTiles[y][x], BANK_LABEL));
@@ -645,6 +654,15 @@ void bonus_step(void) {
  * of a two-board screen, which this port does not have. */
 void bonus_end(void) {
     g_bonus_showing = false;
+    /* AND THE TOTAL COMES OFF THE SCREEN WITH IT. The figure is the one row
+     * of this table that rides the COUNTERS' layer, two pixels above the
+     * grid, and nothing else ever writes that layer over the board: not
+     * draw_field, which is the main layer, and not draw_static_screen, which
+     * clears nothing. So the last total stayed printed across the bottom of
+     * the playfield for the rest of the game, and you only met it on your
+     * way out of the first level. draw_bonus_static clears this same
+     * footprint on the way in; this is the other half of it. */
+    clear_panel_region(bonus_tx(), 0, SCREEN_1P_BONUS_W, SCREEN_TH);
     /* WHATEVER THE COUNT-UP HAD NOT REACHED IS PAID NOW. The show can be cut
      * short (see the fast-forward in the level-up loop), and the bonus was
      * only ever added a clear at a time as the digits ticked: leaving early

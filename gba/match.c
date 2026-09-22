@@ -103,7 +103,13 @@ static void announce_step(TengenStepResult step) {
         /* The cartridge's level-up music takes over; a hand-entered tune stands
          * down and start_music() puts it back when the dancers finish. */
         handtune_stop();
-        nes_audio_play(NES_MUSIC_LEVELUP);
+        /* THE INTRO, which is what the cartridge plays at this moment; the
+         * looping tune comes in when the intro runs out. See
+         * NES_MUSIC_LEVELUP_INTRO. A linked match and a prototype's game have
+         * no show to hand it over to, and for them the jingle on its own is
+         * the right answer anyway: it ends by itself, where the loop had to
+         * be cut off by whatever came next. */
+        nes_audio_play(NES_MUSIC_LEVELUP_INTRO);
         /* MUSIC MIX turns over here, and here only. See MUSIC_MIX. */
         if (g_music == MUSIC_MIX) {
             g_mix_step = (uint8_t)((g_mix_step + 1) % MIX_COUNT);

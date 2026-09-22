@@ -398,6 +398,16 @@
  * as on the cartridge. */
 #define DANCER_TICK_FRAMES 16         /* frameCounterLow & $0F */
 #define DANCER_TIMER_START 0x7C       /* L8D6B */
+/* How long MUSIC_LEVELUP_INTRO runs before it lets every channel go, counted
+ * on the cartridge's own engine: frame 143 is the last one it holds a
+ * channel for. The cartridge spends those frames on the transition between
+ * the board and the show — its state counter walks $05 to $0D sixteen frames
+ * at a time, and L8D6B, which plays the looping tune, is waiting at $0D. The
+ * port has no transition screen: its show starts on the frame the rows
+ * collapse. So the intro plays over the show's opening instead of before it,
+ * and the loop takes over where the cartridge takes it over. See
+ * NES_MUSIC_LEVELUP_INTRO. */
+#define LEVELUP_INTRO_FRAMES 144
 #define DANCER_TIMER_WINDDOWN 0xF4    /* L9035 compares against this */
 #define DANCER_TIMER_TAIL 0xF5        /* ...and forces at least this */
 
@@ -1422,6 +1432,14 @@ typedef enum {
  * fireworks stop themselves at frameCounterHigh 4. The port already feeds
  * that counter to the cartridge's own firework code, so the demo can start
  * off the very same number. */
+/* ...AND IT PLAYS AT LEVEL NINE, not at the level the menus are showing.
+ * L955B (main.asm.txt:3156-3160) tests gameState before reading
+ * menuPlayer1StartLevel: in the states whose id is negative — the title's
+ * $FA and the demo's $FB — it substitutes a flat nine instead. So the
+ * attract mode has always been a fast game, which is the point of it; the
+ * port ran it at zero and it showed, because the pieces fell at a tenth of
+ * the speed the cartridge advertises. */
+#define DEMO_START_LEVEL 9
 #define DEMO_START_FRAME ((5 * 256) + 0x20)
 /* How long the demo lingers on its own GAME OVER before the title comes back.
  * The cartridge goes to its high-score table here and from there to the title

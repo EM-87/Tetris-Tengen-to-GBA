@@ -55,6 +55,16 @@
 #define NES_MUSIC_SILENCE      0x08
 #define NES_MUSIC_TITLESCREEN  0x09
 #define NES_MUSIC_GAMEOVER     0x0A
+/* THE LEVEL-UP IS TWO TUNES, NOT ONE, and the port only ever played the
+ * second. The clear that raises the level plays the INTRO — it takes
+ * SOUND_LINECLEAR's place at that moment (main.asm.txt:3207) — and the
+ * show's own routine plays the one below when the dancers come on
+ * (L8D6B, :2038). Measured on the engine: the intro is a finite jingle of
+ * sixteen notes that releases every channel at frame 143; MUSIC_LEVELUP
+ * loops and was still going at frame 400. Starting at the loop meant the
+ * level turned over on the middle of the piece, which is what "it is not
+ * the same tune, it is the composition" is. */
+#define NES_MUSIC_LEVELUP_INTRO 0x0B
 #define NES_MUSIC_LEVELUP      0x0D
 #define NES_SOUND_DROP         0x0E
 /* The cartridge's own sound engine can play these and the cartridge never

@@ -155,7 +155,8 @@ int main(void) {
                 g_view = 0;
                 g_ai_active = true;
                 g_ai_slot = TENGEN_PLAYER_1;   /* the demo's computer is P1 */
-                tengen_new_game(&g_session.game, seed, 0, false, false, false);
+                tengen_new_game(&g_session.game, seed, DEMO_START_LEVEL,
+                                 false, false, false);
                 tengen_ai_reset(&g_ai);
                 /* THE DEMO LOOKS AT A PIECE BEFORE IT MOVES IT. Nothing else
                  * separates the attract mode from a machine twitching the pad
@@ -614,6 +615,15 @@ int main(void) {
                     g_dancer_timer++;
                 }
             }
+            /* ...and where the intro runs out, the show's own tune takes
+             * over, which is L8D6B's half of the level-up music. Not if the
+             * player has already cut the show short: that path silences the
+             * music on purpose and starting a looping tune into the last few
+             * frames of a wind-down would be a stutter, not music. */
+            if (g_dancer_elapsed == LEVELUP_INTRO_FRAMES &&
+                g_dancer_timer < DANCER_TIMER_TAIL) {
+                nes_audio_play(NES_MUSIC_LEVELUP);
+            }
             g_dancer_elapsed++;
             bonus_step();
 
@@ -650,8 +660,16 @@ int main(void) {
                  * straight through where LINES is printed. */
                 clear_panel_region(COOP_L_TX, 0, COOP_PANEL_W, SCREEN_TH);
                 clear_panel_region(COOP_R_TX, 0, COOP_PANEL_W, SCREEN_TH);
-                clear_both(COOP_L_TX, COOP_NEXT_TY, COOP_PANEL_W, 3);
-                clear_both(COOP_R_TX, COOP_NEXT_TY, COOP_PANEL_W, 3);
+                /* THE WHOLE TOP COMPARTMENT, not the three rows NEXT's label
+                 * and piece were assumed to fit in. It is six rows deep — the
+                 * braid to the first ledge — and a piece that reached past the
+                 * third left its bottom row standing behind the dancers. This
+                 * is draw_coop_next's own clear, which is the guarantee that
+                 * it cannot reach the ledges they stand on. */
+                clear_both(COOP_L_TX, BRAID_T, COOP_PANEL_W,
+                            COOP_LEDGE_FIRST - BRAID_T);
+                clear_both(COOP_R_TX, BRAID_T, COOP_PANEL_W,
+                            COOP_LEDGE_FIRST - BRAID_T);
                 draw_coop_dancers(g_dancer_elapsed, g_dancer_cast);
             } else if (!g_show_banner) {
                 /* HUD STATS keeps its screen. Nothing is cleared and nothing
@@ -678,29 +696,24 @@ int main(void) {
             continue;
         }
 
-        /* SELECT changes which cossack is standing in HUD STATS. The game
-         * proper never reads SELECT (the cartridge's own pause and cheat
-         * codes are on Start and the face buttons), so it is free, and the
-         * four palettes are the only thing that separates the cartridge's six
-         * dancers from each other. */
-        if (screen == SCREEN_PLAYING && (pressed & TENGEN_BTN_SELECT)) {
-            g_idle_palette = (uint8_t)((g_idle_palette + 1) % IDLE_PALETTE_COUNT);
-        }
-
-        /* L+R swaps the right-hand box between the piece histogram and the
+        /* THE HUD IS THE FEATURE AND THE COSSACK IS THE EXTRA, so the plain
+         * button is the HUD's and the chord is the cossack's. It was the
+         * other way round: SELECT cycled the dancer's palette and L+R swapped
+         * the box, which put the thing you change once in a session on the
+         * easy button and the thing you actually use on a two-hand chord.
+         *
+         * SELECT swaps the right-hand box between the piece histogram and the
          * cartridge's vertical TETRIS banner — while there is a match to swap
          * it around. Once the board is dead the only thing left to press is
-         * the one that starts again. */
-        /* ...and there is nothing to swap on a coop screen: it has no boxes,
-         * and the banner's column is the middle of the board. */
-        /* IN PLAY THE CHORD ONLY SWAPS THE HUD, and uncovers nothing. It used
-         * to open the pause menu from the plaque, which put the one cheat
-         * that lets you LEAVE a game behind having already started one; both
-         * doors are on the menu screens now (see unlock_cheats), so in here
-         * the chord means one thing only. */
-        if (screen == SCREEN_PLAYING && match_running &&
-            !g_session.game.coop && !g_session.game.paused &&
-            g_session.game.player[g_view].game_active && shoulder_chord()) {
+         * the one that starts again, and there is nothing to swap on a coop
+         * screen: it has no boxes, and the banner's column is the middle of
+         * the board. The game proper never reads SELECT — the cartridge's own
+         * pause and cheat codes are on Start and the face buttons — so it is
+         * free. */
+        bool hud_swappable = screen == SCREEN_PLAYING && match_running &&
+                              !g_session.game.coop && !g_session.game.paused &&
+                              g_session.game.player[g_view].game_active;
+        if (hud_swappable && (pressed & TENGEN_BTN_SELECT)) {
             g_show_banner = !g_show_banner;
             /* Both directions need the static screen back: going TO the
              * banner erases the braid box, and coming back from it has to
@@ -708,6 +721,18 @@ int main(void) {
              * banner had left in it. */
             g_repaint = true;
             screen_blip();
+        }
+
+        /* ...and the chord changes which cossack is standing in HUD STATS,
+         * which is the only thing separating the cartridge's six dancers from
+         * each other. It answers on the SAME terms as the swap above — not
+         * over a dead board and not under a pause — because two doors into
+         * the same screen that disagree about when they are open is worse
+         * than either rule. The chirp is its own: the screen has not changed,
+         * so the screen's blip would be a lie. */
+        if (hud_swappable && shoulder_chord()) {
+            g_idle_palette = (uint8_t)((g_idle_palette + 1) % IDLE_PALETTE_COUNT);
+            nes_audio_play(NES_SOUND_CHIRP);
         }
 
         /* IN THE DEMO THE PAD IS NOT A CONTROLLER, it is the way out. The

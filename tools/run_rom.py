@@ -480,7 +480,8 @@ KEYS = {"A": 0, "B": 1, "SELECT": 2, "START": 3,
         "RIGHT": 4, "LEFT": 5, "UP": 6, "DOWN": 7,
         # The GBA's two extra buttons. The game proper never reads them —
         # they have no NES equivalent — so they are the port's own switches:
-        # L or R swaps the title skin, L+R together the right-hand HUD box.
+        # L or R swaps the title skin; in a match L+R changes the cossack
+        # and SELECT swaps the right-hand HUD box.
         "R": 8, "L": 9}
 CODE_LEVEL_UP = "UP DOWN UP DOWN LEFT RIGHT B B A".split()
 CODE_LONG_BAR = "DOWN DOWN LEFT RIGHT LEFT RIGHT B A".split()
@@ -1421,7 +1422,8 @@ def to_music_page(core, settle=10):
 # The rope is woven and the weave leans, so its runs and its corners only fit
 # each other one way round. This has now been got wrong in both directions:
 # once with the corners right and the runs mirrored against the cartridge's,
-# once the other way, and each time the tell was L+R — the banner redraws the
+# once the other way, and each time the tell was the HUD swap — the banner
+# redraws the
 # two columns beside the board as a plain strip, and if that strip is not the
 # same tile the panel puts there, the weave visibly flips as the box comes and
 # goes.
@@ -1698,7 +1700,7 @@ def panel_check(rom_path):
     # right one's rope has to run to the screen's last line exactly as the
     # left one's does, and the histogram standing in it has to reach the
     # bottom without anything closing it off.
-    core.set_keys(KEYS["L"], KEYS["R"])
+    core.set_keys(KEYS["SELECT"])
     run(core, 5)
     core.set_keys()
     run(core, 40)
@@ -2595,9 +2597,9 @@ def pausemenu_check(rom_path):
 
     if hud() != "BANNER":
         failures.append(f"la partida no abre en HUD Banner sino en {hud()}")
-    core.set_keys(KEYS["L"], KEYS["R"]); run(core, 4); core.set_keys(); run(core, 20)
+    core.set_keys(KEYS["SELECT"]); run(core, 4); core.set_keys(); run(core, 20)
     if hud() != "STATS":
-        failures.append("L+R en juego no cambia el HUD")
+        failures.append("SELECT en juego no cambia el HUD")
     else:
         # quit out and come back
         tap("START")
@@ -3208,7 +3210,7 @@ def stats_check(rom_path):
         press_start(core); run(core, 24)
         press_start(core); run(core, 24)
         press_start(core); run(core, 60)
-        tap("L", "R"); run(core, 30)          # al HUD de estadisticas
+        tap("SELECT"); run(core, 30)          # al HUD de estadisticas
         off = game_offsets(rom_path)
         base, why = game_state_address(rom_path)
         if base is None:
@@ -3351,7 +3353,7 @@ def gameover_check(rom_path):
         against the computer it means the computer too;
       * stay stopped — no piece of anybody's moves after the plaque is up;
       * let go — Start goes back to the title from the mode's own screen; and
-      * take the HUD swap with it: L+R is a thing you do to a game in play.
+      * take the HUD swap with it: SELECT is a thing you do to a game in play.
 
     It buries the board by hand rather than stacking pieces for ten minutes:
     every row solid but one column, so nothing can clear and the next piece
@@ -3432,13 +3434,13 @@ def gameover_check(rom_path):
                              f"({before} -> {after})")
             continue
 
-        # L+R is for a game in play. Read the far right column, which is the
-        # box the banner would take over.
+        # SELECT is for a game in play. Read the far right column, which is
+        # the box the banner would take over.
         hud = tuple(tilemap_text(core, r, 22, 30) for r in range(4, 12))
-        core.set_keys(KEYS["L"], KEYS["R"]); run(core, 6)
+        core.set_keys(KEYS["SELECT"]); run(core, 6)
         core.set_keys(); run(core, 12)
         if tuple(tilemap_text(core, r, 22, 30) for r in range(4, 12)) != hud:
-            failures.append(f"{name}: L+R todavia cambia el HUD despues del game over")
+            failures.append(f"{name}: SELECT todavia cambia el HUD despues del game over")
             continue
 
         # The cartridge's road out of a game runs through its HIGH SCORES
@@ -3859,7 +3861,7 @@ def braid_check(rom_path):
     box = frame_columns(*RIGHT_FRAME)
     box_left = frame_columns(*LEFT_FRAME)
 
-    core.set_keys(KEYS["L"], KEYS["R"]); run(core, 4); core.set_keys(); run(core, 12)
+    core.set_keys(KEYS["SELECT"]); run(core, 4); core.set_keys(); run(core, 12)
     banner = frame_columns(*RIGHT_FRAME)
 
     failures = []
@@ -3884,7 +3886,7 @@ def braid_check(rom_path):
     else:
         print("  las dos grecas son espejo la una de la otra, como en el cartucho")
 
-    core.set_keys(KEYS["L"], KEYS["R"]); run(core, 4); core.set_keys(); run(core, 12)
+    core.set_keys(KEYS["SELECT"]); run(core, 4); core.set_keys(); run(core, 12)
     back = frame_columns(*RIGHT_FRAME)
     if any(box[y] != back[y] for y in body):
         failures.append("al volver del banner la greca no queda como estaba")
