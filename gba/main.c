@@ -713,9 +713,14 @@ int main(void) {
          * the board. The game proper never reads SELECT — the cartridge's own
          * pause and cheat codes are on Start and the face buttons — so it is
          * free. */
+        /* ...AND COOP SWAPS TOO, BUT ONLY AGAINST THE MACHINE. Its other HUD
+         * hides the partner's board, which against the computer is a
+         * difficulty setting and against a person over the cable is just
+         * less game. See draw_coop_stats_panel. */
         bool hud_swappable = screen == SCREEN_PLAYING && match_running &&
-                              !g_session.game.coop && !g_session.game.paused &&
-                              g_session.game.player[g_view].game_active;
+                              !g_session.game.paused &&
+                              g_session.game.player[g_view].game_active &&
+                              (!g_session.game.coop || (g_ai_active && !g_linked));
         if (hud_swappable && (pressed & TENGEN_BTN_SELECT)) {
             g_show_banner = !g_show_banner;
             /* Both directions need the static screen back: going TO the

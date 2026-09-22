@@ -3010,6 +3010,98 @@ def quit_audio_check(rom_path):
     return 0
 
 
+def coop_hud_check(rom_path):
+    """THE COOP HUD: a panel each, and the board's totals under the chord.
+
+    A shared board has two of everything the core keeps — score, lines, the
+    NEXT piece — and the coop screen used to print one of each and give the
+    right-hand panel's tall compartment to the idle cossack. Now it is your
+    panel on the left and theirs on the right, four cells a side:
+
+        NEXT / SCORE / LINES / LEVEL  |  NEXT / SCORE / LINES / HIGH
+
+    with the last cell of each holding T.LINES and T.SCORE once the cheats
+    are uncovered, and standing empty until they are. Against the COMPUTER
+    SELECT swaps to a second HUD that hides the partner's panel and turns
+    your two counters into the board's totals; over a cable it must not (see
+    run_link.py, which checks that half).
+    """
+    failures = []
+    base, why = game_state_address(rom_path)
+    if base is None:
+        print(f"SALTADO: {why}")
+        return 0
+    off = game_offsets(rom_path)
+    LEFT, RIGHT = (0, 7), (30 - 7, 30)
+
+    def start(cheat):
+        core, screen = load(rom_path)
+        _ = screen
+        run(core, 8)
+        press_start(core); run(core, 20)          # title -> GAME SELECT
+        if cheat:
+            core.set_keys(KEYS["L"], KEYS["R"]); run(core, 4)
+            core.set_keys(); run(core, 24)
+        for _ in range(4):                        # ...down to WITH COMPUTER
+            core.set_keys(KEYS["DOWN"]); run(core, 4); core.set_keys(); run(core, 8)
+        press_start(core); run(core, 12)
+        press_start(core); run(core, 60)
+        for who, score, lines in ((0, 12345, 27), (1, 6789, 14)):
+            at = base + off["score"] + who * off["stride"]
+            for k in range(4): core.memory.u8[at + k] = (score >> (8 * k)) & 0xFF
+            at = base + off["lines"] + who * off["stride"]
+            for k in range(4): core.memory.u8[at + k] = (lines >> (8 * k)) & 0xFF
+        run(core, 60)
+        return core
+
+    def panel(core, cols, first=9, last=20):
+        return " ".join(t for t in
+                         (tilemap_text(core, ty, *cols) for ty in range(first, last))
+                         if t)
+
+    core = start(cheat=False)
+    left, right = panel(core, LEFT), panel(core, RIGHT)
+    if "12345" not in left or "27" not in left:
+        failures.append(f"el panel izquierdo no lleva lo del jugador: {left!r}")
+    if "6789" not in right or "14" not in right:
+        failures.append(f"el panel derecho no lleva lo del companero: {right!r}")
+    if "T." in left or "T." in right:
+        failures.append("los totales salen sin haber tocado el acorde")
+    if not failures:
+        print(f"  sin acorde: izquierda {left!r}")
+        print(f"              derecha   {right!r}")
+
+    core = start(cheat=True)
+    left, right = panel(core, LEFT), panel(core, RIGHT)
+    # 27 + 14 = 41 lines, and 12345 + 6789 = 19134 plus whatever the computer
+    # scored while the frames above ran.
+    if "41" not in left:
+        failures.append(f"T.LINES no suma las dos: {left!r}")
+    elif "1913" not in right and "1914" not in right:
+        failures.append(f"T.SCORE no suma las dos: {right!r}")
+    else:
+        print(f"  con acorde: T.LINES y T.SCORE en la ultima celda de cada uno")
+
+    # ...and SELECT swaps to the HUD that hides them, against the computer.
+    core.set_keys(KEYS["SELECT"]); run(core, 4); core.set_keys(); run(core, 60)
+    left, right = panel(core, LEFT), panel(core, RIGHT)
+    if "6789" in right:
+        failures.append("SELECT no escondio el panel del companero")
+    elif "41" not in left:
+        failures.append(f"el HUD de stats no trae los totales: {left!r}")
+    else:
+        print("  y contra la maquina SELECT esconde al companero y deja los "
+               "totales")
+
+    for f in failures:
+        print("FALLA:", f)
+    if failures:
+        return 1
+    print("OK: en cooperativo cada jugador tiene su panel, con los totales "
+           "bajo el acorde.")
+    return 0
+
+
 def loans_check(rom_path):
     """LOS BANCOS QUE UNA SKIN TIENE PRESTADOS TIENEN QUE DEVOLVERSE.
 
@@ -4690,6 +4782,8 @@ def main():
                      help="check the HIGH SCORES table and its initials")
     ap.add_argument("--tables", action="store_true",
                      help="check each build keeps its own HIGH SCORES table")
+    ap.add_argument("--coophud", action="store_true",
+                     help="check the coop HUD gives each player a panel")
     ap.add_argument("--points", action="store_true",
                      help="check the drop-point sprites beside the piece")
     ap.add_argument("--falling", action="store_true",
@@ -4744,6 +4838,8 @@ def main():
         sys.exit(leaderboard_check(args.rom))
     if args.tables:
         sys.exit(tables_check(args.rom))
+    if args.coophud:
+        sys.exit(coop_hud_check(args.rom))
     if args.quit_audio:
         sys.exit(quit_audio_check(args.rom))
     if args.loans:

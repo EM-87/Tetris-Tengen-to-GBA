@@ -603,32 +603,28 @@ fixed.
    is the lobby: exchange the skin so both boards wear the master's, with
    the release's RULES. Both consoles then agree on the cell format and the
    paint is real. See `piece_id_cells` and `skin_begin_match`.
-4. **The coop HUD.** The right box should carry the partner's NEXT, score
-   and lines instead of the idle cossack; LEVEL is shared and HIGH belongs
-   to whichever table is in play. Under the cheat, two more fields —
-   T.LINES and T.SCORE, both players added — in the fourth cell of each
-   panel, which is why that cell should be left free. In WITH COMPUTER the
-   HUD should still swap to Stats, and there the left panel goes back to
-   its 1P shape with SCORE and LINES reading as totals; over the cable
-   against a person, coop only.
-5. **Separating stacked pieces after a clear.** The drawing change in the
+4. **Separating stacked pieces after a clear.** The drawing change in the
    section above.
-6. **The cossacks' choreography.** The one approximation left: their little
+5. **The cossacks' choreography.** The one approximation left: their little
    programs at `$019A`/`$01A2` are traced (see The dancers) and not run, so
    the port walks the pose table from staggered starts instead.
-7. **The computer in coop.** It cannot slide a piece UNDER one already
+6. **The computer in coop.** It cannot slide a piece UNDER one already
    placed, does not read where the partner is about to put theirs, and
    ignores their shadow. None of that is in the cartridge, which has no
    computer at all, so it belongs under the cheat if it is built.
-8. **`VBlankIntrWait` instead of the spin.** `vsync()` busy-waits at full
+7. **`VBlankIntrWait` instead of the spin.** `vsync()` busy-waits at full
    clock for the whole visible frame, which on a real console is battery
    and heat for nothing. The BIOS call halts instead. It wants the vblank
    interrupt in the vector the cable owns today.
-9. **The fireworks' distance and the dithered sky.** The bursts were moved
+8. **The fireworks' distance and the dithered sky.** The bursts were moved
    away from the frame to stop them colliding with it, and the cartridge's
    title has a dithered sunset behind them that the port does not draw.
-10. **The ten-line rule on the prototypes.** Still on the word of the list
-    it came from; what the stacking bot needs is written up above.
+9. **The ten-line rule on the prototypes.** Still on the word of the list
+   it came from; what the stacking bot needs is written up above.
+
+*(The coop HUD was on this list and is built: a panel per player, the
+board's totals under the chord, and a second HUD against the computer that
+hides the partner's. See draw_coop_panel and `make gba-check --coophud`.)*
 
 ## Where the GBA layer lives
 

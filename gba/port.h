@@ -323,6 +323,16 @@
  * by staging the two players' pieces as sprites with a palette each. */
 #define PAL_PIECE2_BANK 14
 
+/* ...AND THE PARTNER'S PREVIEW, on a coop board, which needs a fourth set of
+ * piece colours: their NEXT is not their CURRENT and it is not ours either.
+ * It is borrowed from the TITLE'S OWN BANK the way the plaque, the histogram
+ * and the menu logo borrow the other three — no title is up while a board is,
+ * install_title_palette fills all four again on every visit, and the pages
+ * between a coop match and the title (the plaque, the HIGH SCORES page) draw
+ * out of the menu's banks and the game's, never this one. See
+ * SKIN_PLAQUE_BANK for the same argument made three times already. */
+#define PAL_NEXT2_BANK PAL_TITLE_BASE
+
 /* Anything a menu SAYS rather than offers: the handicap's unit, the line at
  * the foot. The same pale blue as a value, because on the cartridge's own
  * screens the ONLY white is the cursor and everything else is blue.
@@ -991,18 +1001,28 @@ typedef struct {
  * between the rest — and the port lays its HUD into exactly that, using the
  * cartridge's own ledges where the 1P panel would draw a rule.
  *
- * WHAT GOES IN THEM is the cartridge's choice too. Its coop screen carries
- * LEVEL on the left, HIGH and SCORE on the right, and no piece counts — a
- * shared board has one score, one level, and the histogram would be nobody's.
- * The port adds what that screen keeps in a band the GBA cannot show: the
- * NEXT piece.
+ * WHAT GOES IN THEM was the cartridge's choice and is not any more. Its coop
+ * screen carries LEVEL on the left, HIGH and SCORE on the right, and no piece
+ * counts, because its coop keeps one score between the two of you. This
+ * port's core keeps a score, a line count and a preview PER PLAYER on the
+ * shared board, so there is a panel each: yours on the left, theirs on the
+ * right, and the two figures neither panel can give you — the board's totals
+ * — in the last cell of each once the chord has been rung. See
+ * draw_coop_panel.
  *
- * ONE preview, not two, and that is a fact about the cartridge rather than a
- * saving of space: both players' lookahead randomisers are seeded from the
- * same number (main.asm.txt:3319-3326, and tengen_new_game says so), and each
- * steps its own once per spawn, so the two sequences are identical from the
- * first piece to the last however differently the two play. Drawing it twice
- * would be drawing the same piece twice.
+ * TWO PREVIEWS, AND THIS NOTE USED TO ARGUE FOR ONE. The argument was that
+ * both players' lookahead randomisers are seeded from the same number
+ * (main.asm.txt:3319-3326, and tengen_new_game says so) and each steps its
+ * own once per spawn, so the two SEQUENCES are identical from the first piece
+ * to the last however differently the two play — and that therefore drawing
+ * it twice would be drawing the same piece twice.
+ *
+ * The sequences are identical. The two players' POSITIONS in them are not,
+ * unless they have taken exactly as many pieces as each other, which over a
+ * game they never do. Measured on a WITH COMPUTER board: the two NEXT pieces
+ * differ on 1528 frames out of 1800. The partner's preview is their piece,
+ * not a copy of ours, and it is the one thing on a shared board you cannot
+ * work out by looking at the board.
  * ----------------------------------------------------------------------- */
 /* THE SAME SHAPE AS THE OTHER TWO HUDS, which is the least this panel could
  * be: it is the screen they were copied FROM. The cartridge's ledges fall on
@@ -1017,8 +1037,15 @@ typedef struct {
  * solapan" even before the two of them land on layers with different
  * scrolls. */
 #define COOP_NEXT_TY ROW_NEXT       /* the same row as the other two HUDs */
-#define COOP_COUNTER_TY 9           /* between the first two ledges */
-#define COOP_LOWER_TY 12            /* ...and the next two */
+/* FOUR CELLS A SIDE, not two. The ledges are three rows apart from row 8, so
+ * the pairs between them are 9, 12, 15 and 18 — the same four the 1P panel
+ * has, because the 1P panel was copied from this screen. Two of them stood
+ * empty while the cossack had the right-hand tall compartment to himself. */
+#define COOP_CELL_TY(i) (COOP_LEDGE_FIRST + 1 + (i) * 3)
+#define COOP_COUNTER_TY COOP_CELL_TY(0)   /*  9 */
+#define COOP_LOWER_TY   COOP_CELL_TY(1)   /* 12 */
+#define COOP_THIRD_TY   COOP_CELL_TY(2)   /* 15 */
+#define COOP_TOTAL_TY   COOP_CELL_TY(3)   /* 18 */
 
 
 /* ----------------------------------------------------------------------- *
@@ -1711,6 +1738,7 @@ extern int g_idle_frame;
 extern bool g_dancer_active;
 extern int g_dancer_elapsed;
 void clear_stats_layer(void);
+void clear_stats_layer_at(int tx);
 void draw_counter(int ty, int label_first, int label_count,
                           uint32_t value, int digits, int value_indent);
 void draw_panel(void);

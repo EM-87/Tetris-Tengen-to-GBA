@@ -499,6 +499,47 @@ def coop_check(rom):
                f"columna {COOP_FIELD_TX}, el segundo campo vacio, y el "
                "invitado ve las mismas celdas")
 
+    # ...AND EACH CONSOLE PUTS ITSELF ON THE LEFT. The coop HUD is one panel
+    # per player — yours with your NEXT, score and lines, theirs on the other
+    # side — so the two consoles must show the SAME two panels the other way
+    # round. Distinct scores are planted on both cores (identically, so the
+    # simulation does not diverge) and each screen is read back.
+    LEFT, RIGHT = (0, 7), (30 - 7, 30)   # the two coop panels, COOP_PANEL_W wide
+    # BELOW THE TABLE'S LAST ENTRY (3000) on purpose: a qualifying score
+    # would send the game-over check below into typing initials instead of
+    # back to the title.
+    for who, score in ((0, 2345), (1, 1678)):
+        for core in cores:
+            at = session_addr + off["score"] + who * off["stride"]
+            for k in range(4):
+                core.memory.u8[at + k] = (score >> (8 * k)) & 0xFF
+    both(40, [[], []])
+
+    def panel(core, cols):
+        rows = [run_rom.tilemap_text(core, ty, *cols) for ty in range(9, 14)]
+        return " ".join(r for r in rows if r)
+
+    mine = (panel(master, LEFT), panel(master, RIGHT))
+    theirs = (panel(slave, LEFT), panel(slave, RIGHT))
+    if "2345" not in mine[0] or "1678" not in mine[1]:
+        failures.append(f"el anfitrion no se ve a si mismo a la izquierda: {mine!r}")
+    elif "1678" not in theirs[0] or "2345" not in theirs[1]:
+        failures.append(f"el invitado no se ve a si mismo a la izquierda: {theirs!r}")
+    else:
+        print("  y cada consola lleva su propio panel a la izquierda y el del "
+               "companero a la derecha")
+
+    # THE OTHER COOP HUD IS NOT FOR THE CABLE. It hides the partner's board,
+    # which against the computer is a difficulty setting and against a person
+    # is just less game, so SELECT must do nothing here.
+    before = (panel(master, RIGHT), panel(slave, RIGHT))
+    both(4, [[KEYS["SELECT"]], [KEYS["SELECT"]]])
+    both(40, [[], []])
+    if (panel(master, RIGHT), panel(slave, RIGHT)) != before:
+        failures.append("SELECT cambia el HUD en un cooperativo por cable")
+    else:
+        print("  y SELECT no esconde el panel del companero por cable")
+
     # AND IT HAS TO END. Topping out a coop game used to leave the partner's
     # `game_active` standing, so neither console ever agreed the match was
     # over: the board sat there and Start did nothing. Buried by hand — solid

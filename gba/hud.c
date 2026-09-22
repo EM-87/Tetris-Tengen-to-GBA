@@ -485,6 +485,15 @@ void draw_static_screen(void) {
             set_map_tile(0, dy, run);
             set_map_tile(SCREEN_TW - 1, dy, run);
         }
+        /* ...AND BOTH PANELS' COUNTERS COME OFF WITH IT. The two coop HUDs
+         * fill different cells — the partner's panel has four and the stats
+         * one has the histogram — and a counter is only overwritten by
+         * another counter in the same cell, so a swap left the old HUD's
+         * words standing in the cells the new one does not use. This runs
+         * once per repaint, which is exactly when a swap happens. */
+        clear_panel_region(COOP_L_TX, BRAID_T, COOP_PANEL_W, SCREEN_TH - BRAID_T);
+        clear_panel_region(COOP_R_TX, BRAID_T, COOP_PANEL_W, SCREEN_TH - BRAID_T);
+        clear_stats_layer_at(COOP_R_TX);
         set_offset_layer(STATS_SHIFT_PX);
         return;
     }
@@ -1102,14 +1111,14 @@ bool leader_type(uint8_t held, uint8_t pressed) {
  * scrolled three pixels for its own reasons (see SCREENBLOCK_STATS) and puts
  * them half a pixel the other side of centre. No new layer, no new art, and
  * the even widths stay on the main one where they are already right. */
-static void draw_next_piece(int tx, int ty) {
+static void draw_next_piece(int tx, int ty, int slot, int bank) {
     clear_region(tx, ty, NEXT_CELL_W, 3);
     for (int y = 0; y < 3; y++)
         for (int x = 0; x < NEXT_CELL_W; x++) set_stats_tile(tx + x, ty + y, T_BLANK);
 
-    TengenTetromino next = g_session.game.player[g_view].piece.next;
+    TengenTetromino next = g_session.game.player[slot].piece.next;
     if (next <= TT_NONE || next >= TENGEN_TETROMINO_COUNT) return;
-    set_next_palette(next);
+    set_bank_from_piece(bank, next);
 
     int first = NEXT_CELL_W, last = -1;
     for (int c = 0; c < 4; c++)
@@ -1132,7 +1141,7 @@ static void draw_next_piece(int tx, int ty) {
             uint8_t tile = piece_cell_tile(next, 0, occupied);
             occupied++;
             if (r >= 3) continue;
-            uint16_t entry = WITH_BANK(tile, PAL_NEXT_BANK);
+            uint16_t entry = WITH_BANK(tile, bank);
             if (offset_layer) set_stats_tile(tx + c + shift, ty + r, entry);
             else              set_map_tile(tx + c + shift, ty + r, entry);
         }
@@ -1192,13 +1201,15 @@ static void draw_banner(void) {
  * the statistics. Anything that takes the panel over has to take both. */
 /* Both of the right box's borrowed layers: the histogram's, and the offset
  * one, which may still be holding an odd-width preview from a moment ago. */
-void clear_stats_layer(void) {
+void clear_stats_layer_at(int tx) {
     for (int y = BOX_TOP_IN; y <= BOX_BOT_IN; y++)
         for (int x = 0; x < BOX_IN; x++) {
-            set_stats_tile(STATS_TX + x, y, T_BLANK);
-            set_histogram_tile(STATS_TX + x, y, T_BLANK);
+            set_stats_tile(tx + x, y, T_BLANK);
+            set_histogram_tile(tx + x, y, T_BLANK);
         }
 }
+
+void clear_stats_layer(void) { clear_stats_layer_at(STATS_TX); }
 
 /* A PROTOTYPE COUNTS ITS PIECES DIFFERENTLY, and it is worth saying how,
  * because it is one of the clearer differences between the builds.
@@ -1213,7 +1224,7 @@ void clear_stats_layer(void) {
  * The ARITHMETIC does not change. Which step of the run a bar is on, and when
  * it climbs a row, is the cartridge's own rule in both cases; only the
  * pictures the rule picks are different. */
-static void draw_stats(const TengenPlayerState *p) {
+static void draw_stats(const TengenPlayerState *p, int base_tx) {
 #if SCREEN_PROTO_AVAILABLE && SCREEN_SKIN_PLAY
     int skin = play_skin();
 #else
@@ -1228,7 +1239,7 @@ static void draw_stats(const TengenPlayerState *p) {
     int bar_rows = floor_ty - STATS_TOP_TY + 1;
 
     for (int i = 0; i < SCREEN_1P_STATS_PIECES; i++) {
-        int tx = STATS_TX + i;
+        int tx = base_tx + i;
         if (skin < 0) {
             /* Each icon in the palette the ROM's attribute table gives it: the
              * I has its own, T/O/J/L share one, S and Z share another. */
@@ -1318,12 +1329,12 @@ void draw_counter(int ty, int label_first, int label_count,
  * the indented content column, which is what left them sitting left of
  * centre; `w` is that interior's width, because the coop panel's is seven
  * where the port's own boxes are eight. */
-static void draw_next_label_and_piece(int tx, int ty, int w) {
+static void draw_next_label_and_piece(int tx, int ty, int w, int slot, int bank) {
     int label_tx = tx + (w - HUD_LABEL_NEXT_W) / 2;
     for (int i = 0; i < HUD_LABEL_NEXT_W; i++)
         set_map_tile(label_tx + i, ty,
                       WITH_BANK(HUD_LABEL_TILE_BASE + 18 + i, BANK_LABEL));
-    draw_next_piece(tx + (w - NEXT_CELL_W) / 2, ty + 2);
+    draw_next_piece(tx + (w - NEXT_CELL_W) / 2, ty + 2, slot, bank);
 }
 
 /* One counter in a seven-column panel: label, value, and no rule — the ledge
@@ -1354,47 +1365,139 @@ static void draw_coop_text_counter(int tx, int ty, const char *label,
  * the piece landed two pixels off its own word — which with one pixel between
  * them is the word and the piece touching. Both on the grid, and there is no
  * second scroll to disagree with. */
-static void draw_coop_next(int tx) {
+static void draw_coop_next(int tx, int slot, int bank) {
     bool was = g_panel_layer;
     g_panel_layer = false;
     clear_both(tx, BRAID_T, COOP_PANEL_W, COOP_LEDGE_FIRST - BRAID_T);
     clear_panel_region(tx, BRAID_T, COOP_PANEL_W, COOP_LEDGE_FIRST - BRAID_T);
-    draw_next_label_and_piece(tx, COOP_NEXT_TY, COOP_PANEL_W);
+    draw_next_label_and_piece(tx, COOP_NEXT_TY, COOP_PANEL_W, slot, bank);
     g_panel_layer = was;
 }
 
-static void draw_coop_panel(void) {
-    const TengenPlayerState *p = &g_session.game.player[0];
-    if (p->score > g_high_score) g_high_score = p->score;
+/* Both boards' numbers added up, which is the only figure a shared board
+ * cannot read off either panel. Clamped where the counters are: six digits of
+ * score and four of lines is what every other counter on this screen shows,
+ * and a number wider than its cell is worse than a number that stops. */
+static uint32_t coop_total_score(void) {
+    uint32_t t = g_session.game.player[0].score + g_session.game.player[1].score;
+    return t > 999999 ? 999999 : t;
+}
+static uint32_t coop_total_lines(void) {
+    uint32_t t = g_session.game.player[0].lines + g_session.game.player[1].lines;
+    return t > 9999 ? 9999 : t;
+}
+
+/* THE COOP PANELS, ONE PLAYER EACH.
+ *
+ * The cartridge's coop screen prints LEVEL on the left and HIGH and SCORE on
+ * the right and nothing else, because its own coop has nothing else to say:
+ * one board, one score between the two of you. This port's does not work
+ * that way — the core keeps a score, a line count and a preview PER PLAYER
+ * on the shared board, and every one of those was being thrown away. The
+ * left panel is yours and the right one is theirs, laid into the four cells
+ * the cartridge's own ledges make on each side:
+ *
+ *      left                    right
+ *      NEXT   (yours)          NEXT   (theirs)
+ *      SCORE  (yours)          SCORE  (theirs)
+ *      LINES  (yours)          LINES  (theirs)
+ *      LEVEL  (shared)         HIGH   (this build's table)
+ *      -- free --              -- free --
+ *
+ * LEVEL IS ONE FIELD because there is one level: tengen_step hands the new
+ * one to the partner on a shared board, the way the cartridge's own level-up
+ * routine stores it twice. HIGH is the table the match is being played into,
+ * which on a cable is each console's own — see LEADER_TABLES.
+ *
+ * TWO PREVIEWS, NOT ONE, and that is worth setting down because this file
+ * used to say the opposite. The two lookahead randomisers are seeded from
+ * the same number and step once per spawn each, so the SEQUENCES are
+ * identical — but the two players are not at the same POINT in them unless
+ * they have taken exactly as many pieces as each other, which over a game
+ * they never do. Measured on a WITH COMPUTER board: the two NEXT pieces
+ * differ on 1528 frames out of 1800. It is their piece, not a copy of ours.
+ *
+ * AND THE LAST CELL EACH IS THE CHEAT'S. Coop plays more like a race than
+ * like a team, so the two figures nobody can work out from the panels — the
+ * board's total lines and total score — go there once the chord has been
+ * rung, and stand empty until it has. */
+/* THE OTHER COOP HUD, and it is a difficulty setting. Against the COMPUTER
+ * the partner's panel tells you what the machine is holding and how it is
+ * doing, which is information the cartridge would never have given you; this
+ * takes it away again. The left panel goes back to the shape the 1P one has
+ * — NEXT, two counters, LEVEL, HIGH — except that the two counters are the
+ * BOARD'S totals rather than yours, because on one field your own score
+ * without your partner's says less than the pair does. The right panel is
+ * the histogram and the cossack over it, exactly as in 1P; it is seven
+ * columns wide and so is the panel, which is the whole reason this fits.
+ *
+ * NOT OVER THE CABLE. There the partner is a person who chose to play with
+ * you, and hiding their board from you is not a difficulty setting, it is
+ * just less game. See the swap's own condition in main.c. */
+static void draw_coop_stats_panel(const TengenPlayerState *me) {
+    draw_coop_next(COOP_L_TX, g_view, PAL_NEXT_BANK);
 
     g_panel_layer = true;
-    draw_coop_next(COOP_L_TX);
-
-    /* One board, one score and one level — which is what the cartridge's own
-     * coop screen prints, and all a shared field has to say. */
-    draw_coop_counter(COOP_L_TX, COOP_COUNTER_TY, HUD_LABEL_LEVEL, p->level, 2);
-    draw_coop_counter(COOP_L_TX, COOP_LOWER_TY, HUD_LABEL_LINES, p->lines, 4);
-    draw_coop_counter(COOP_R_TX, COOP_COUNTER_TY, HUD_LABEL_SCORE, p->score, 6);
-    draw_coop_text_counter(COOP_R_TX, COOP_LOWER_TY, "HIGH", g_high_score, 6);
+    draw_coop_text_counter(COOP_L_TX, COOP_COUNTER_TY, "T.SCORE",
+                            coop_total_score(), 6);
+    draw_coop_text_counter(COOP_L_TX, COOP_LOWER_TY, "T.LINES",
+                            coop_total_lines(), 4);
+    draw_coop_counter(COOP_L_TX, COOP_THIRD_TY, HUD_LABEL_LEVEL, me->level, 2);
+    draw_coop_text_counter(COOP_L_TX, COOP_TOTAL_TY, "HIGH", g_high_score, 6);
     g_panel_layer = false;
 
-    /* AND A COSSACK IN THE RIGHT PANEL'S TALL COMPARTMENT, which is the one
-     * NEXT has on the left and which coop had standing empty. It is the same
-     * figure HUD Stats keeps over its histogram, on the same rules: he stops
-     * when the board dies and when the plaque goes up, because there is
-     * nothing to keep time to, and he dances the whole level-up show through
-     * — though in coop the show has the real eight of them out on the ledges,
-     * so he stands down for it rather than competing with them. */
+    /* The cossack gets the right panel's tall compartment back, on the same
+     * terms he has in HUD Stats: he stops when the board dies and when the
+     * plaque goes up, and he stands down for the level-up show because that
+     * show has the real eight of them out on these very ledges. */
     if (g_dancer_active) {
         hide_idle_cossack();
     } else {
-        bool alive = g_session.game.player[0].game_active &&
-                     !g_session.game.paused;
-        draw_idle_cossack(g_idle_frame, alive,
-                           COOP_R_TX, BRAID_T, COOP_PANEL_W,
-                           COOP_LEDGE_FIRST - BRAID_T);
+        bool alive = me->game_active && !g_session.game.paused;
+        draw_idle_cossack(g_idle_frame, alive, COOP_R_TX, BRAID_T,
+                           COOP_PANEL_W, COOP_LEDGE_FIRST - BRAID_T);
         if (alive) g_idle_frame++;
     }
+    draw_stats(me, COOP_R_TX);
+}
+
+static void draw_coop_panel(void) {
+    const TengenPlayerState *me = &g_session.game.player[g_view];
+    const TengenPlayerState *them = &g_session.game.player[g_view ^ 1];
+    /* EITHER OF THEM CAN BEAT THE TABLE, and both are offered it when the
+     * board dies — see leader_submit. */
+    if (me->score > g_high_score) g_high_score = me->score;
+    if (them->score > g_high_score) g_high_score = them->score;
+
+    if (!g_show_banner) { draw_coop_stats_panel(me); return; }
+
+    draw_coop_next(COOP_L_TX, g_view, PAL_NEXT_BANK);
+    draw_coop_next(COOP_R_TX, g_view ^ 1, PAL_NEXT2_BANK);
+
+    g_panel_layer = true;
+    draw_coop_counter(COOP_L_TX, COOP_COUNTER_TY, HUD_LABEL_SCORE, me->score, 6);
+    draw_coop_counter(COOP_L_TX, COOP_LOWER_TY, HUD_LABEL_LINES, me->lines, 4);
+    draw_coop_counter(COOP_L_TX, COOP_THIRD_TY, HUD_LABEL_LEVEL, me->level, 2);
+
+    draw_coop_counter(COOP_R_TX, COOP_COUNTER_TY, HUD_LABEL_SCORE, them->score, 6);
+    draw_coop_counter(COOP_R_TX, COOP_LOWER_TY, HUD_LABEL_LINES, them->lines, 4);
+    draw_coop_text_counter(COOP_R_TX, COOP_THIRD_TY, "HIGH", g_high_score, 6);
+
+    if (g_pause_unlocked) {
+        draw_coop_text_counter(COOP_L_TX, COOP_TOTAL_TY, "T.LINES",
+                                coop_total_lines(), 4);
+        draw_coop_text_counter(COOP_R_TX, COOP_TOTAL_TY, "T.SCORE",
+                                coop_total_score(), 6);
+    } else {
+        clear_region(COOP_L_TX, COOP_TOTAL_TY, COOP_PANEL_W, 2);
+        clear_region(COOP_R_TX, COOP_TOTAL_TY, COOP_PANEL_W, 2);
+    }
+    g_panel_layer = false;
+
+    /* NO COSSACK HERE ANY MORE. He had the right panel's tall compartment
+     * while it was empty; the partner's preview is what that compartment is
+     * for now, and he keeps the one HUD Stats gives him. */
+    hide_idle_cossack();
 }
 
 void draw_panel(void) {
@@ -1426,7 +1529,7 @@ void draw_panel(void) {
      * 40-pixel cell can be) and eleven against six. The preview's own layer
      * is held at the grid to match; see the note by REG_BG1VOFS below. */
     g_panel_layer = false;
-    draw_next_label_and_piece(BOX_L_TX, ROW_NEXT, BOX_IN);
+    draw_next_label_and_piece(BOX_L_TX, ROW_NEXT, BOX_IN, g_view, PAL_NEXT_BANK);
     g_panel_layer = true;
 
     draw_counter(ROW_SCORE, HUD_LABEL_SCORE, p->score, 6, 0);
@@ -1525,7 +1628,7 @@ void draw_panel(void) {
          * What it was really showing instead was the rival's OUT notice, and
          * that has moved to the left panel, over their score, where it reads
          * better and costs the box nothing. */
-        draw_stats(p);
+        draw_stats(p, STATS_TX);
     }
 
     g_panel_layer = false;
