@@ -1735,6 +1735,11 @@ void leader_use_table(int skin);   /* -1 release, 0.. the prototypes */
 void draw_leader_row(int row);
 void draw_leaderboard(void);
 void leader_submit(void);
+/* Over a cable both players go on the board and only one of them is typed
+ * here; these are the other one. See leader_submit and TengenNameSwap. */
+int  leader_rival_row(void);                        /* -1: nobody's */
+void leader_own_initials(uint8_t out[LEADER_INITIALS]);
+void leader_rival_initials(const uint8_t in[LEADER_INITIALS]);
 bool leader_type(uint8_t held, uint8_t pressed);
 extern int g_idle_frame;
 extern bool g_dancer_active;

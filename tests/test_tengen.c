@@ -1126,6 +1126,127 @@ static void test_no_lobby_word_can_look_like_an_absent_console(void) {
     }
 }
 
+/* ----------------------------------------------------------------------- *
+ * The records, after the match
+ * ----------------------------------------------------------------------- */
+
+/* One transfer of the records swap. Both ends have something to say here —
+ * there is no master and no slave — so both put a word up and both take the
+ * other's. */
+static void name_transfer(TengenNameSwap *a, TengenNameSwap *b, bool carries) {
+    uint16_t aw = tengen_name_word(a);
+    uint16_t bw = tengen_name_word(b);
+    tengen_name_apply(a, carries, bw);
+    tengen_name_apply(b, carries, aw);
+}
+
+static void test_the_rivals_name_crosses_the_cable(void) {
+    /* A linked match is lockstep, so each console has simulated the other's
+     * board and knows its score to the byte. The one thing it cannot know is
+     * what the person at the other end typed. Three letters each way. */
+    TengenNameSwap a, b;
+    const uint8_t left[TENGEN_NAME_LETTERS] = { 5, 13, 26 };
+    const uint8_t right[TENGEN_NAME_LETTERS] = { 1, 1, 9 };
+
+    tengen_name_start(&a);
+    tengen_name_start(&b);
+    CHECK(!tengen_name_have(&a) && !tengen_name_have(&b));
+    CHECK(!a.complete && !b.complete);
+
+    /* NOBODY TYPES AT THE SAME SPEED. This one finishes first and the other
+     * is still on its second letter; the exchange has to sit through that
+     * without either giving up or sending a name that is not final yet. */
+    tengen_name_send(&a, left);
+    for (int i = 0; i < 40; i++) name_transfer(&a, &b, true);
+    CHECK(tengen_name_have(&b));
+    for (int c = 0; c < TENGEN_NAME_LETTERS; c++) CHECK(b.theirs[c] == left[c]);
+    CHECK(!tengen_name_have(&a));       /* nothing has been typed over there */
+    CHECK(!a.complete && !b.complete);  /* ...so neither is finished */
+
+    tengen_name_send(&b, right);
+    for (int i = 0; i < 40; i++) name_transfer(&a, &b, true);
+    CHECK(tengen_name_have(&a));
+    for (int c = 0; c < TENGEN_NAME_LETTERS; c++) CHECK(a.theirs[c] == right[c]);
+
+    /* AND BOTH FINISH, which is the linger's whole job: the last thing each
+     * is waiting for is the other's receipt, so a console that went quiet the
+     * moment it had everything would leave the other with the letters and no
+     * way to learn that its own had arrived. */
+    CHECK(a.complete && b.complete);
+    CHECK(!a.failed && !b.failed);
+}
+
+static void test_the_records_swap_rides_out_lost_transfers(void) {
+    /* A dropped word costs one turn of the wheel, not a stall: each console
+     * sends its three letters round and round rather than waiting for an
+     * acknowledgement of each one. */
+    TengenNameSwap a, b;
+    const uint8_t left[TENGEN_NAME_LETTERS] = { 2, 4, 6 };
+    const uint8_t right[TENGEN_NAME_LETTERS] = { 3, 5, 7 };
+    tengen_name_start(&a);
+    tengen_name_start(&b);
+    tengen_name_send(&a, left);
+    tengen_name_send(&b, right);
+
+    /* Two in every three transfers never happen. */
+    for (int i = 0; i < 120; i++) name_transfer(&a, &b, (i % 3) == 0);
+    CHECK(tengen_name_have(&a) && tengen_name_have(&b));
+    for (int c = 0; c < TENGEN_NAME_LETTERS; c++) {
+        CHECK(a.theirs[c] == right[c]);
+        CHECK(b.theirs[c] == left[c]);
+    }
+    CHECK(a.complete && b.complete);
+    CHECK(!a.failed && !b.failed);
+}
+
+static void test_a_records_swap_with_nobody_there_gives_up(void) {
+    /* The other console can be unplugged, or its player can walk away from
+     * the table. Either way the page must not wait for ever. */
+    TengenNameSwap swap;
+    const uint8_t mine[TENGEN_NAME_LETTERS] = { 1, 2, 3 };
+    tengen_name_start(&swap);
+    tengen_name_send(&swap, mine);
+    for (int i = 0; i < TENGEN_NAME_TIMEOUT - 1; i++) {
+        tengen_name_apply(&swap, false, 0);
+        CHECK(!swap.failed);
+    }
+    tengen_name_apply(&swap, false, 0);
+    CHECK(swap.failed);
+    CHECK(!tengen_name_have(&swap));
+
+    /* ...AND SO DOES A CABLE THAT IS TALKING ABOUT SOMETHING ELSE. A word
+     * left over from the match is a frame of buttons, not an answer, and
+     * counting it as one would keep the page up for ever on a console whose
+     * partner never reached the table. */
+    TengenNameSwap stale;
+    tengen_name_start(&stale);
+    tengen_name_send(&stale, mine);
+    for (int i = 0; i < TENGEN_NAME_TIMEOUT; i++)
+        tengen_name_apply(&stale, true, tengen_link_pack(0x0F, 3));
+    CHECK(stale.failed);
+    CHECK(!tengen_name_have(&stale));
+}
+
+static void test_no_records_word_can_look_like_an_absent_console(void) {
+    /* The same rule the lobby's words live under: $FFFF is what a GBA reads
+     * from the slot of a console that is not there. */
+    TengenNameSwap swap;
+    uint8_t letters[TENGEN_NAME_LETTERS];
+    /* 27 letters: the alphabet plus the blank the table types with. */
+    for (int a = 0; a < 32; a++) {
+        for (int c = 0; c < TENGEN_NAME_LETTERS; c++) letters[c] = (uint8_t)a;
+        tengen_name_start(&swap);
+        CHECK(tengen_name_word(&swap) != 0xFFFF);
+        swap.got = (uint8_t)((1u << TENGEN_NAME_LETTERS) - 1u);
+        CHECK(tengen_name_word(&swap) != 0xFFFF);
+        tengen_name_send(&swap, letters);
+        for (int place = 0; place < TENGEN_NAME_LETTERS; place++) {
+            swap.cursor = (uint8_t)place;
+            CHECK(tengen_name_word(&swap) != 0xFFFF);
+        }
+    }
+}
+
 /* The handshake and the match are one continuous conversation over one cable,
  * so the seam between them is where a design that reads well can still fall
  * over. This plays both halves end to end. */
@@ -2827,6 +2948,10 @@ int main(void) {
     test_a_lobby_with_nothing_on_the_other_end_gives_up();
     test_no_lobby_word_can_look_like_an_absent_console();
     test_a_lobby_hands_straight_over_to_a_matching_pair_of_games();
+    test_the_rivals_name_crosses_the_cable();
+    test_the_records_swap_rides_out_lost_transfers();
+    test_a_records_swap_with_nobody_there_gives_up();
+    test_no_records_word_can_look_like_an_absent_console();
     test_the_wire_word_survives_a_round_trip();
     test_the_computers_piece_table_derives_from_the_bitmaps();
     test_the_computer_replans_when_its_column_is_taken();

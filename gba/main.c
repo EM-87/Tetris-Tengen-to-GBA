@@ -71,6 +71,16 @@ int main(void) {
     bool sweeping = false;   /* true while the line-clear sweep owns the OAM */
     bool match_running = false;
     TengenLobby lobby;
+    /* THE CABLE OUTLIVES THE MATCH BY A FEW SECONDS. Lockstep gives both
+     * consoles the rival's score and lines for nothing; the one thing it
+     * cannot give is the name the other player typed, so the wire stays up
+     * from the last piece to the bottom of the HIGH SCORES page while the
+     * two exchange three letters each. See TengenNameSwap. */
+    TengenNameSwap name_swap;
+    bool swapping = false;
+    bool swap_sent = false;
+    bool swap_landed = false;   /* the rival's letters are in the table */
+    bool swap_drawn = false;    /* ...and on the screen */
 
     /* The ROM steps its RNG once per frame from the main loop
      * (main.asm.txt:49-50), and whatever state it is in when Start is pressed
@@ -84,6 +94,56 @@ int main(void) {
         uint8_t pressed = (uint8_t)(buttons & ~held_last);
         held_last = buttons;
         tengen_rng_step(&seed_source);
+
+        /* THE SWAP RUNS UNDER WHATEVER IS ON THE SCREEN, which is why it is
+         * up here and not in one screen's arm of the loop: the plaque comes
+         * first, then the table, and each console reaches them in its own
+         * time because one player sits on the game over and the other does
+         * not. Starting it the moment the match ends, rather than when the
+         * page comes up, is what keeps either end from waiting on the
+         * other's button.
+         *
+         * This console's own three letters go on the wire as soon as there
+         * is nothing left to type — which for a player who did not make this
+         * table is at once, with the letters an untyped row carries. See
+         * TengenNameSwap for why that case exists at all. */
+        if (swapping) {
+            if (screen == SCREEN_TITLE) {
+                /* Every road out of the table ends here, and a cable left
+                 * live under the title is one the next lobby would find
+                 * halfway through somebody else's conversation. A rival still
+                 * waiting sees this as silence and gives up on its own clock,
+                 * keeping whatever letters did arrive. */
+                link_shutdown();
+                swapping = false;
+            } else {
+                /* NOT BEFORE THE TABLE IS UP. `g_leader_row` is -1 from
+                 * the moment the match ends until leader_submit runs, so a
+                 * send gated on that alone went out on the game-over plaque
+                 * with the letters of a row nobody had been offered yet —
+                 * and the rival's row came up AAA however carefully its
+                 * owner typed. The page is where there is a name to send. */
+                if (!swap_sent && screen == SCREEN_LEADERBOARD &&
+                     g_leader_row < 0) {
+                    uint8_t mine[LEADER_INITIALS];
+                    leader_own_initials(mine);
+                    tengen_name_send(&name_swap, mine);
+                    swap_sent = true;
+                }
+                link_name_step(&name_swap);
+                /* The row is filled in as soon as the three letters are here;
+                 * DRAWING it waits for the page's own vertical blank below,
+                 * which is the only place this file writes video memory. */
+                if (tengen_name_have(&name_swap) && !swap_landed) {
+                    leader_rival_initials(name_swap.theirs);
+                    swap_landed = true;
+                }
+                if (name_swap.complete || name_swap.failed) {
+                    link_shutdown();
+                    swapping = false;
+                }
+            }
+        }
 
         if (screen == SCREEN_TITLE) {
             /* initializeTitleScreen ends with this (main.asm.txt:4489). */
@@ -593,6 +653,11 @@ int main(void) {
              * six hundred tiles a frame for a blinking letter would be a
              * whole vertical blank spent on nothing. */
             if (g_leader_row >= 0) draw_leader_row(g_leader_row);
+            /* ...and the rival's row once, on the frame their name lands. */
+            if (swap_landed && !swap_drawn && leader_rival_row() >= 0) {
+                draw_leader_row(leader_rival_row());
+                swap_drawn = true;
+            }
             audio_frame();
             continue;
         }
@@ -794,8 +859,17 @@ int main(void) {
             if (!keep_going) {
                 match_running = false;
                 if (g_linked) {
-                    link_play_end();
-                    link_shutdown();
+                    /* THE HARDWARE DOES NOT GO AWAY HERE ANY MORE. It used
+                     * to, and that is why the rival's name could not cross:
+                     * by the time there was a name to send, the cable was
+                     * already put away. link_name_start takes the send
+                     * register back off the interrupt, which is what
+                     * link_play_end did on its own before. */
+                    link_name_start(&name_swap);
+                    swapping = true;
+                    swap_sent = false;
+                    swap_landed = false;
+                    swap_drawn = false;
                 }
             }
         }

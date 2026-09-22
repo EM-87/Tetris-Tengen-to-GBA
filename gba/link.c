@@ -256,3 +256,46 @@ void link_play_begin(void) {
 void link_play_end(void) {
     g_auto_tx = false;
 }
+
+/* ----------------------------------------------------------------------- *
+ * The records, after the match
+ *
+ * The same wire and the same once-a-frame shape as the lobby's; only the
+ * state machine differs, and that one is in ../src/tengen_link.c where it
+ * can be run against a second machine on the host. See TengenNameSwap.
+ * ----------------------------------------------------------------------- */
+
+static void name_send(const TengenNameSwap *swap) {
+    if (REG_SIOCNT & SIO_START) return;   /* never while one is in flight */
+    REG_SIOMLT_SEND = tengen_name_word(swap);
+}
+
+void link_name_start(TengenNameSwap *swap) {
+    tengen_name_start(swap);
+    /* The interrupt stops loading buttons of its own: from here the word on
+     * the wire is this exchange's. */
+    g_auto_tx = false;
+    /* WHAT THE MATCH LEFT BEHIND GOES FIRST. The queue can still hold a
+     * transfer or two of buttons, and tengen_name_apply would count each of
+     * them against the give-up counter rather than as an answer. */
+    LinkFrame f;
+    while (link_pop(&f)) { }
+    name_send(swap);
+}
+
+void link_name_step(TengenNameSwap *swap) {
+    if (swap->complete || swap->failed) return;
+
+    bool master = link_is_master();
+    link_tick();
+    /* Take, answer, and only then start the next transfer — see the note in
+     * link_lobby_step for why that order and not the other one. */
+    LinkFrame f;
+    if (link_pop(&f)) {
+        tengen_name_apply(swap, true, master ? f.slave : f.master);
+        name_send(swap);
+    } else {
+        tengen_name_apply(swap, false, 0);
+    }
+    if (!swap->complete && !swap->failed) link_pump();
+}

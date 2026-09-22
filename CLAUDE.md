@@ -345,6 +345,26 @@ running ROM; only the side panels need reflowing).
    battery-backed SRAM under the cartridge's own 'LOGG' magic — which on the
    NES only carried it across a RESET. A cold table is @resetHighScores', 17000
    down to 3000 in thousands, which is why HIGH SCORE opens at 017000.
+   **AND OVER A CABLE BOTH PLAYERS GO ON IT, WITH THEIR OWN NAMES.** A linked
+   match is lockstep — both consoles simulate both boards — so each one has
+   known the rival's score and lines all along and simply never wrote them
+   down: a race ended with two pages that disagreed about who had been there.
+   Both players are inserted on both tables now. The one thing lockstep
+   cannot hand over is the NAME the person at the other end typed, so that
+   crosses on the same cable the match ran on, in the few seconds between the
+   last piece and the bottom of the page: three letters each way, one per
+   transfer, round and round, with a receipt bit in every word (see
+   `TengenNameSwap`). It is NOT stop-and-wait like the lobby — this exchange
+   is symmetric, both ends have something to say and neither is asking — and
+   the LINGER at the end is not padding: the last thing each console waits
+   for is the other's receipt, so one that went quiet the moment it had
+   everything would leave the other with the letters and no way to learn that
+   its own arrived. What it does not solve, and it is an edge rather than an
+   oversight: the two tables are two consoles' own histories, so a score can
+   make one and miss the other, and a player who made only the rival's sends
+   the letters an untyped row carries. `tools/run_link.py` plays the whole
+   road on two cores — two scores, two names typed on two consoles — and
+   reads both pages back off the tilemap.
 26. ~~The level's BONUS tally~~ — done. displayStatsP1 paints the playfield
    over with it while the cossacks dance, and L8EA2 counts it up one clear at
    a time ADDING TO THE SCORE: singles x100, doubles x400, triples x900,
@@ -616,19 +636,13 @@ Ordered by what they buy against what they cost. Everything here is a
 decision waiting to be made, not a defect; the defects are bugs and get
 fixed.
 
-1. **The rival's records over the cable.** Each console keeps its own
-   table and only ever writes its own player into it, so two consoles end a
-   2P match with different pages. Sending the loser's score and initials
-   across at the end, and offering them a row marked as theirs, is the
-   piece that is missing. The lobby already has a word to carry it and the
-   initials queue already takes two names at once (it does in coop).
-2. **The A+B restart of a dead board in 2P.** The cartridge lets a player
+1. **The A+B restart of a dead board in 2P.** The cartridge lets a player
    whose board is finished start again on the spot (`handleGameOver`,
    main.asm.txt:82F3-830F) while the other plays on. The port ends the
    match instead. With it, the question of what happens to a player's five
    accumulated games at the leaderboard becomes real and `$74`/`$75` want
    tracing to answer it.
-3. **The prototypes as a skin over the cable.** Asked for, and it is not a
+2. **The prototypes as a skin over the cable.** Asked for, and it is not a
    flag flip: a skinned board stores the PIECE'S OWN ID in a settled cell
    and the release stores a joined-block tile, so the two consoles' fields
    would differ byte for byte and lockstep would call it a divergence. A
@@ -637,14 +651,14 @@ fixed.
    is the lobby: exchange the skin so both boards wear the master's, with
    the release's RULES. Both consoles then agree on the cell format and the
    paint is real. See `piece_id_cells` and `skin_begin_match`.
-4. **`VBlankIntrWait` instead of the spin.** `vsync()` busy-waits at full
+3. **`VBlankIntrWait` instead of the spin.** `vsync()` busy-waits at full
    clock for the whole visible frame, which on a real console is battery
    and heat for nothing. The BIOS call halts instead. It wants the vblank
    interrupt in the vector the cable owns today.
-5. **The fireworks' distance and the dithered sky.** The bursts were moved
+4. **The fireworks' distance and the dithered sky.** The bursts were moved
    away from the frame to stop them colliding with it, and the cartridge's
    title has a dithered sunset behind them that the port does not draw.
-6. **The ten-line rule on the prototypes.** Still on the word of the list
+5. **The ten-line rule on the prototypes.** Still on the word of the list
    it came from; what the stacking bot needs is written up above.
 
 *(The coop HUD was on this list and is built: a panel per player, the

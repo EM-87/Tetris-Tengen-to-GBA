@@ -2118,6 +2118,54 @@ Two things worth knowing before touching any of it:
 (`tools/run_link.py`) and asserts their whole game state stays identical byte
 for byte while the two players are fed opposite buttons.
 
+### ...and the cable outlives the match, by three letters
+
+Lockstep means each console has simulated the rival's board all along, so it
+knows their score and their lines to the byte — the check above is exactly
+that claim. It simply never wrote them down: only the local player went on
+the local HIGH SCORES page, so a race ended with two pages that disagreed
+about who had been there. **Both players are inserted on both tables now.**
+
+The one thing lockstep cannot hand over is the NAME the person at the other
+end typed, and that is the whole of what crosses: three letters each way,
+between the last piece and the bottom of the page. `TengenNameSwap`
+(`src/tengen_link.c`) is the exchange and `link_name_step` carries it.
+
+Three things about it, each of which was a decision:
+
+- **It is not stop-and-wait, and the lobby is.** The handshake has one side
+  asking and the other answering, so there is a tag to echo. This is
+  symmetric: both ends have something to say and neither is waiting on the
+  other's permission. So each console sends its three letters round and
+  round, one per transfer, and says in bit 8 of every word — the RECEIPT —
+  whether it has all three of the other's yet. A lost transfer costs one turn
+  of the wheel instead of a stall.
+- **The LINGER at the end is not padding.** The last thing each console is
+  waiting for is the other's receipt, so one that went quiet the moment it
+  had everything would leave the other holding the letters with no way to
+  learn that its own had arrived — and on the master, the only end that
+  starts transfers, that is a hang rather than a delay.
+- **It starts when the match ends, not when the page comes up.** One player
+  sits on the game-over plaque and the other does not, so the two reach the
+  table seconds apart; starting the exchange at the plaque is what keeps
+  either end from waiting on the other's button. What it sends, though, waits
+  for the page: `g_leader_row` reads -1 both before the typing is offered and
+  after it is done, and a send gated on that alone went out on the plaque
+  with the letters of a row nobody had been shown.
+
+What it does NOT solve, and this is an edge rather than an oversight: the two
+tables are two consoles' own histories, so a score can make one and miss the
+other. A player whose score reaches the rival's table but not their own is
+never offered the typing, and sends the letters an untyped row carries —
+which is what the cartridge prints for a row nobody typed.
+
+`tools/run_link.py` plays the whole road on two cores: a linked 2P game, two
+scores planted identically on both (the only way to touch memory without
+breaking the lockstep the checks above just proved), both boards buried, two
+different names typed on two different consoles, and then both pages read
+back off the tilemap — the scores, the names, and each name beside the score
+that earned it.
+
 ## A note on frame rate
 
 NES NTSC runs at ~60.0988 Hz; GBA runs at ~59.7275 Hz. `tengen_step` is

@@ -1045,16 +1045,48 @@ void draw_leaderboard(void) {
  * here, oldest first. */
 static int g_leader_queue[2];
 static int g_leader_queued;
+/* ...and over a cable, the two rows are not both this console's to type. See
+ * leader_rival_row. */
+static int g_leader_own_row = -1;
+static int g_leader_rival_row = -1;
+
+int leader_rival_row(void) { return g_leader_rival_row; }
+
+void leader_own_initials(uint8_t out[LEADER_INITIALS]) {
+    /* A player with no row here still has a name to send, because the row
+     * they have is on the OTHER console's table — the two are two consoles'
+     * own histories and a score can make one and miss the other. What goes
+     * across then is what an untyped row carries. See TengenNameSwap. */
+    for (int c = 0; c < LEADER_INITIALS; c++)
+        out[c] = g_leader_own_row >= 0 ? g_leader[g_leader_own_row].initials[c]
+                                        : 1 /* 'A' */;
+}
+
+void leader_rival_initials(const uint8_t in[LEADER_INITIALS]) {
+    if (g_leader_rival_row < 0) return;
+    for (int c = 0; c < LEADER_INITIALS; c++)
+        g_leader[g_leader_rival_row].initials[c] =
+            (uint8_t)(in[c] < LEADER_LETTERS ? in[c] : 1);
+    leader_save();
+}
 
 void leader_submit(void) {
     g_leader_row = -1;
     g_leader_queued = 0;
     g_leader_cursor = 0;
+    g_leader_own_row = -1;
+    g_leader_rival_row = -1;
 
     int slots[2];
     int n = 0;
     slots[n++] = g_view;
-    if (g_session.game.coop && !g_ai_active) slots[n++] = g_view ^ 1;
+    /* THE OTHER PLAYER GOES ON THE BOARD TOO, and over a cable that is new:
+     * a linked match is lockstep, so this console has simulated the rival's
+     * board and knows their score and lines to the byte. It never wrote them
+     * down, which is how two consoles ended a race with two pages that
+     * disagreed about who had been there. What it does NOT know is the name,
+     * and that comes over the wire afterwards — see TengenNameSwap. */
+    if ((g_session.game.coop && !g_ai_active) || g_linked) slots[n++] = g_view ^ 1;
 
     for (int i = 0; i < n; i++) {
         const TengenPlayerState *p = &g_session.game.player[slots[i]];
@@ -1064,6 +1096,15 @@ void leader_submit(void) {
          * exactly as it pushes every other entry down. */
         for (int q = 0; q < g_leader_queued; q++)
             if (g_leader_queue[q] >= row) g_leader_queue[q]++;
+        if (g_leader_own_row >= row) g_leader_own_row++;
+        if (g_leader_rival_row >= row) g_leader_rival_row++;
+        if (g_linked && slots[i] != g_view) {
+            /* Not this console's to type: the person who earned it is at the
+             * other end of the cable, typing it there. */
+            g_leader_rival_row = row;
+            continue;
+        }
+        if (slots[i] == g_view) g_leader_own_row = row;
         g_leader_queue[g_leader_queued++] = row;
     }
     if (g_leader_queued) {

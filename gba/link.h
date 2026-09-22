@@ -146,4 +146,19 @@ void link_play_begin(void);
  * put the hardware away entirely. */
 void link_play_end(void);
 
+/* ----------------------------------------------------------------------- *
+ * The records
+ *
+ * The cable outlives the match by a few seconds, because the one thing
+ * lockstep cannot give either console is the NAME the other player typed.
+ * See TengenNameSwap for the exchange; this is the wire under it.
+ * ----------------------------------------------------------------------- */
+
+/* Arms the swap, takes the send register back off the interrupt, drops
+ * whatever the match left in the queue, and loads the first word. */
+void link_name_start(TengenNameSwap *swap);
+
+/* One frame of it. Call once a frame until `complete` or `failed`. */
+void link_name_step(TengenNameSwap *swap);
+
 #endif /* LINK_H */

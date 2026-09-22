@@ -200,3 +200,74 @@ void tengen_lobby_apply(TengenLobby *lobby, bool master, bool got,
     }
     lobby->stage = (uint8_t)tag;
 }
+
+/* ----------------------------------------------------------------------- *
+ * The records, after the match
+ * ----------------------------------------------------------------------- */
+
+/* Bits 0-4 are the letter, 5-6 its place in the name, and bit 8 is the
+ * receipt: "I have all three of yours". Every word carries the receipt,
+ * TYPING included, so it can be given before this console has typed a thing. */
+#define NAME_LETTER_MASK 0x001F
+#define NAME_PLACE_SHIFT 5
+#define NAME_RECEIPT     0x0100
+
+void tengen_name_start(TengenNameSwap *swap) {
+    memset(swap, 0, sizeof(*swap));
+}
+
+void tengen_name_send(TengenNameSwap *swap,
+                       const uint8_t initials[TENGEN_NAME_LETTERS]) {
+    for (int i = 0; i < TENGEN_NAME_LETTERS; i++)
+        swap->mine[i] = (uint8_t)(initials[i] & NAME_LETTER_MASK);
+    swap->sending = true;
+}
+
+uint16_t tengen_name_word(const TengenNameSwap *swap) {
+    uint16_t receipt = tengen_name_have(swap) ? NAME_RECEIPT : 0u;
+    if (!swap->sending) return tagged(TENGEN_LOBBY_TYPING, receipt);
+    uint8_t place = (uint8_t)(swap->cursor % TENGEN_NAME_LETTERS);
+    return tagged(TENGEN_LOBBY_NAME,
+                   (uint16_t)((swap->mine[place] & NAME_LETTER_MASK) |
+                              ((uint16_t)place << NAME_PLACE_SHIFT) | receipt));
+}
+
+void tengen_name_apply(TengenNameSwap *swap, bool got, uint16_t word) {
+    if (swap->complete || swap->failed) return;
+
+    if (!got) {
+        if (++swap->idle >= TENGEN_NAME_TIMEOUT) swap->failed = true;
+        return;
+    }
+
+    TengenLobbyTag tag = tag_of(word);
+    /* A word that is neither of ours is the tail of something else — the
+     * lobby's last GO, a frame of buttons the match left in the queue — and
+     * it is not an answer. It does not reset the give-up counter either. */
+    if (tag != TENGEN_LOBBY_NAME && tag != TENGEN_LOBBY_TYPING) {
+        if (++swap->idle >= TENGEN_NAME_TIMEOUT) swap->failed = true;
+        return;
+    }
+    swap->idle = 0;
+
+    uint16_t payload = word & TENGEN_LOBBY_PAYLOAD_MASK;
+    if (tag == TENGEN_LOBBY_NAME) {
+        uint8_t place = (uint8_t)((payload >> NAME_PLACE_SHIFT) & 0x03);
+        if (place < TENGEN_NAME_LETTERS) {
+            swap->theirs[place] = (uint8_t)(payload & NAME_LETTER_MASK);
+            swap->got = (uint8_t)(swap->got | (1u << place));
+        }
+    }
+    if (payload & NAME_RECEIPT) swap->acked = true;
+
+    /* One letter a transfer, round and round: a lost word costs one turn of
+     * the wheel rather than a stall, which is what buys the lack of a
+     * handshake here. */
+    if (swap->sending)
+        swap->cursor = (uint8_t)((swap->cursor + 1) % TENGEN_NAME_LETTERS);
+
+    if (tengen_name_have(swap) && swap->acked) {
+        if (swap->linger >= TENGEN_NAME_LINGER) swap->complete = true;
+        else swap->linger++;
+    }
+}

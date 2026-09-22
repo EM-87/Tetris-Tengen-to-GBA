@@ -63,6 +63,8 @@ SCREEN_W, SCREEN_H = 240, 160
 TENGEN_PF_WIDTH = 12
 TENGEN_PF_HEIGHT = 20
 COOP_FIELD_TX = 9
+CELL_WALL = 15          # the sentinel the ROM keeps in the wall columns
+LEADER_INITIALS = 3     # three letters a name, as the cartridge's table has
 
 # I/O registers, as halfword indices into struct GBA's io[] array.
 IO_SIOMULTI0 = 0x120 >> 1
@@ -595,6 +597,175 @@ def coop_check(rom):
     if failures:
         return 1
     print("OK: en cooperativo los dos juegan en un solo campo de doce columnas.")
+    return records_check(rom)
+
+
+def records_check(rom):
+    """THE RIVAL'S RECORD, and the one thing lockstep cannot hand over.
+
+    A linked match simulates both boards on both consoles, so each one knows
+    the other player's score and lines to the byte — the check above proves
+    exactly that, byte for byte. What neither can know is the NAME the person
+    at the other end typed, and without it a race ended with two HIGH SCORES
+    pages that disagreed about who had been there: each console wrote down
+    its own player and nobody else.
+
+    So both consoles put BOTH players on their own table, each types only its
+    own three letters, and the letters cross afterwards on the same cable the
+    match ran on. What this drives is that whole road: a linked 2P game,
+    two different scores, two different names typed on two different
+    consoles, and then both pages read back off the tilemap.
+    """
+    import run_rom
+
+    sym, why = symbol(rom, "g_session")
+    if sym is None:
+        print(f"SALTADO: {why}")
+        return 0
+    session_addr, session_size = sym
+    game_size = session_size - 4
+    off = run_rom.game_offsets(rom)
+
+    mgba.log.silence()
+    cores, screens = [], []
+    for _ in range(2):
+        core = mgba.core.load_path(rom)
+        screen = mgba.image.Image(SCREEN_W, SCREEN_H)
+        core.set_video_buffer(screen)   # must stay alive; see run_rom.load()
+        core.reset()
+        cores.append(core)
+        screens.append(screen)
+    master, slave = cores
+    cable = Cable(master, slave)
+    ends = [CableEnd(cable, True), CableEnd(cable, False)]
+    for core, end in zip(cores, ends):
+        core.attach_sio(end, lib.SIO_MULTI)
+
+    def both(frames, keys=None):
+        for _ in range(frames):
+            for i, core in enumerate(cores):
+                core.set_keys(*(keys[i] if keys else []))
+                core.run_frame()
+
+    def tap(name, who=None):
+        both(4, [[KEYS[name]] if who in (None, i) else [] for i in range(2)])
+        both(10, [[], []])
+
+    failures = []
+    both(8)
+    tap("START")            # title -> game select
+    tap("DOWN")             # 1 PLAYER -> 2 PLAYER
+    tap("START")            # -> the cable
+    both(50)
+    tap("START", who=0)     # the master releases the lobby
+    both(60)
+    if read_bytes(master, session_addr, game_size) == bytes(game_size):
+        print("SALTADO: la partida por cable no arranco")
+        return 0
+
+    # TWO SCORES THAT BOTH BELONG ON THE TABLE, planted identically on both
+    # cores — the only way to touch memory here without breaking the lockstep
+    # the checks above just proved. The cold table runs 17000 down to 3000,
+    # so both of these go in near the top and neither falls off.
+    SCORES = (60000, 45000)
+    for who, score in enumerate(SCORES):
+        for core in cores:
+            at = session_addr + off["score"] + who * off["stride"]
+            for k in range(4):
+                core.memory.u8[at + k] = (score >> (8 * k)) & 0xFF
+
+    # ...and bury both boards, solid but for one column so no row completes.
+    field = session_addr + off["field"]
+    PF = TENGEN_PF_HEIGHT * TENGEN_PF_WIDTH
+    for core in cores:
+        for board in (0, 1):
+            for r in range(TENGEN_PF_HEIGHT):
+                for c in range(TENGEN_PF_WIDTH):
+                    core.memory.u8[field + board * PF + r * TENGEN_PF_WIDTH + c] = (
+                        CELL_WALL if c in (0, TENGEN_PF_WIDTH - 1)
+                        else (0 if c == 5 else 0x01))
+    both(300, [[], []])
+
+    # WHAT THEY ACTUALLY ENDED ON, not what was planted: the last piece of
+    # each board is still worth points as it lands, so the figure on the
+    # table is a little above the one written in.
+    final = []
+    for who in range(2):
+        at = session_addr + off["score"] + who * off["stride"]
+        final.append(sum(master.memory.u8[at + k] << (8 * k) for k in range(4)))
+
+    tap("START")            # off the plaque, onto the table
+    both(40, [[], []])
+    blind = [i for i, core in enumerate(cores)
+             if "HIGH SCORES" not in run_rom.tilemap_text(core, 2, 0, 30)]
+    if blind:
+        print(f"SALTADO: la(s) consola(s) {blind} no llegan a la tabla")
+        return 0
+
+    def rows(core):
+        return [run_rom.tilemap_text(core, run_rom.LEADER_FIRST_TY + i, 0, 30)
+                for i in range(15)]
+
+    # BOTH SCORES, ON BOTH PAGES. This is the half that needed no cable at
+    # all — each console had simulated the other's board all along — and the
+    # half that was simply never written down.
+    for name, core in (("maestro", master), ("esclavo", slave)):
+        page = "".join(rows(core))
+        for score in final:
+            if f"{score:06d}" not in page:
+                failures.append(f"el {name} no anoto {score}: la tabla solo "
+                                 "lleva a su propio jugador")
+    if not failures:
+        print(f"  las dos consolas anotan las dos puntuaciones, {final[0]} y "
+               f"{final[1]}")
+
+    # AND NOW THE NAMES. Each console types its own and only its own: the
+    # master walks the alphabet twice for a B and the slave four times for a
+    # D, so the two names cannot be confused for one another.
+    def letters(who, steps):
+        for _ in range(LEADER_INITIALS):
+            for _ in range(steps):
+                both(3, [[KEYS["UP"]] if who == i else [] for i in range(2)])
+                both(5, [[], []])
+            both(3, [[KEYS["A"]] if who == i else [] for i in range(2)])
+            both(6, [[], []])
+
+    letters(0, 1)     # the master types BBB
+    letters(1, 3)     # the slave types DDD
+    # ...and then the swap, which is a handful of transfers. Give it room.
+    both(180, [[], []])
+
+    for name, core, own, rival in (("maestro", master, "BBB", "DDD"),
+                                    ("esclavo", slave, "DDD", "BBB")):
+        page = rows(core)
+        if not any(own in row for row in page):
+            failures.append(f"el {name} no tiene su propio nombre {own} en la "
+                             f"tabla: {page[0]!r} / {page[1]!r}")
+        elif not any(rival in row for row in page):
+            failures.append(f"el {name} no recibio el nombre del rival "
+                             f"({rival}): {page[0]!r} / {page[1]!r}")
+    if not failures:
+        print("  y el nombre que tecleo cada jugador cruza el cable al otro")
+
+    # THE ROW IS THE RIVAL'S ROW, not just their letters somewhere: the name
+    # has to land beside the score that earned it.
+    for name, core, pairs in (
+            ("maestro", master, ((final[0], "BBB"), (final[1], "DDD"))),
+            ("esclavo", slave, ((final[0], "BBB"), (final[1], "DDD")))):
+        for score, who in pairs:
+            row = next((r for r in rows(core) if f"{score:06d}" in r), "")
+            if who not in row:
+                failures.append(f"en el {name} la fila de {score} no lleva "
+                                 f"{who}: {row!r}")
+    if not failures:
+        print("  y cada nombre va en la fila de la puntuacion que lo gano")
+
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: los dos acaban con la misma pagina de records, con el rival "
+           "dentro y con su nombre.")
     return 0
 
 

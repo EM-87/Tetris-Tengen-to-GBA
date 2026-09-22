@@ -110,7 +110,12 @@ typedef enum {
      * stop-and-wait turn costs two transfers, which is two sixtieths of a
      * second on a screen the player is already sitting on. */
     TENGEN_LOBBY_HANDICAP = 5,  /* player 1 in bits 0-3, player 2 in bits 4-7 */
-    TENGEN_LOBBY_GO      = 6
+    TENGEN_LOBBY_GO      = 6,
+    /* ...and two the match itself is over before either is used: the records
+     * swap, below. They share the tag space because they share the wire and
+     * the same rule about $FFFF. */
+    TENGEN_LOBBY_TYPING  = 7,   /* nothing to say yet; bit 8 is the receipt */
+    TENGEN_LOBBY_NAME    = 8    /* one letter of three; see TengenNameSwap */
 } TengenLobbyTag;
 
 #define TENGEN_LOBBY_TAG_SHIFT 12
@@ -167,5 +172,77 @@ uint16_t tengen_lobby_word(const TengenLobby *lobby, bool master);
  * the two words are ignored and only the give-up counter moves. */
 void tengen_lobby_apply(TengenLobby *lobby, bool master, bool got,
                          uint16_t master_word, uint16_t slave_word);
+
+/* ----------------------------------------------------------------------- *
+ * The records, after the match
+ *
+ * ONLY THE NAME CROSSES, and that is the whole size of this. A linked match
+ * is lockstep: both consoles simulate both boards, so each one already knows
+ * the other player's score and lines to the byte — `make gba-check` asserts
+ * exactly that. What no console can know is what the person at the other end
+ * typed into their own three letters, and without it a 2P match ends with
+ * two HIGH SCORES pages that disagree about who was there.
+ *
+ * So both consoles put BOTH players on their own table and each types only
+ * its own; the three letters go across afterwards and fill in the other row.
+ *
+ * NOT STOP-AND-WAIT, unlike the lobby, and for a reason: this is symmetric.
+ * Both ends have something to say and neither is asking the other for it, so
+ * there is no tag to echo. Each console sends its three letters round and
+ * round, one per transfer, takes whatever arrives, and says in bit 8 of every
+ * word whether it has all three of the other's yet. That is the receipt, and
+ * it makes a lost transfer cost one turn of the wheel rather than a stall.
+ *
+ * THE LINGER IS NOT PADDING. A console that has everything must keep
+ * answering for a few more transfers, because the last thing the other one
+ * is waiting for is its receipt — and on the master, which is the only end
+ * that starts transfers, going quiet would leave the slave with the letters
+ * and no way to learn that its own arrived.
+ *
+ * What it does NOT solve, and this is a real edge rather than an oversight:
+ * the two tables are two consoles' own histories, so a score can make one
+ * and miss the other. A player whose score reaches the rival's table but not
+ * their own is never asked to type, and sends the letters their row would
+ * have carried — which is what the cartridge prints for a row nobody typed.
+ * ----------------------------------------------------------------------- */
+#define TENGEN_NAME_LETTERS 3
+/* Ten seconds of silence, the same as the lobby's: long enough for the other
+ * player to sit on their game-over plaque, short enough not to hang a page. */
+#define TENGEN_NAME_TIMEOUT 600
+/* Transfers to keep answering after everything has arrived. See above. */
+#define TENGEN_NAME_LINGER 8
+
+typedef struct {
+    uint8_t mine[TENGEN_NAME_LETTERS];    /* what goes on the wire */
+    uint8_t theirs[TENGEN_NAME_LETTERS];  /* ...and what came off it */
+    uint8_t got;        /* bit per position of `theirs` that has arrived */
+    uint8_t cursor;     /* which of `mine` goes next */
+    uint8_t linger;
+    bool sending;       /* this console has finished typing */
+    bool acked;         /* the other console has all three of mine */
+    bool complete;      /* everything is across, both ways; the cable may go */
+    bool failed;        /* nothing answered for long enough to give up */
+    uint16_t idle;
+} TengenNameSwap;
+
+/* Arms one. Nothing is sent but TYPING until tengen_name_send. */
+void tengen_name_start(TengenNameSwap *swap);
+
+/* This console's three letters are final; put them on the wire. */
+void tengen_name_send(TengenNameSwap *swap,
+                       const uint8_t initials[TENGEN_NAME_LETTERS]);
+
+/* What this console should put on the wire next. */
+uint16_t tengen_name_word(const TengenNameSwap *swap);
+
+/* What one transfer carried. `got` is false when it failed, in which case
+ * `word` is ignored and only the give-up counter moves. */
+void tengen_name_apply(TengenNameSwap *swap, bool got, uint16_t word);
+
+/* True once all three of the other console's letters are in `theirs`. The
+ * row can be filled in from this point; `complete` is about the cable. */
+static inline bool tengen_name_have(const TengenNameSwap *swap) {
+    return swap->got == ((1u << TENGEN_NAME_LETTERS) - 1u);
+}
 
 #endif /* TENGEN_LINK_H */
