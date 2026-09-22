@@ -54,9 +54,30 @@ typedef struct {
      * has a board to itself; on the SHARED board of WITH COMPUTER the human
      * spends the whole game waiting on it. See tengen_ai_buttons for why it
      * starts at once and why it lets go. Off in the demo, so the attract mode
-     * keeps the cartridge's pace. */
+     * keeps the cartridge's pace.
+     *
+     * `coop_aware` is the third, and it is the one that makes the computer a
+     * PARTNER rather than a second player in the same room. The cartridge's
+     * computer reads the settled board and nothing else, which is fine on a
+     * board of its own and is the whole problem on the shared one: both
+     * players score the same twelve columns with the same routine, so both
+     * pick the same column, and the two pieces — which are solid to each
+     * other (checkCoopCollision) — spend the descent pressed together.
+     * MEASURED, on twenty-four playouts of WITH COMPUTER with the computer
+     * on both pads: nine of every ten refused shifts were the partner, not
+     * the wall and not the terrain, and 48% of every shift either of them
+     * asked for was refused. It does two things, and each is worth about
+     * half of the gain: the partner's piece is dropped onto the settled
+     * board and read as ground WHERE IT WILL LAND (tengen_ai_shadow), and
+     * the soft drop waits while the piece is still short of its column
+     * (tengen_ai_buttons). Together: 908 pieces and 34 lines become 1637 and
+     * 197, holes fall from 903 to 666, and refused shifts from 48% to 27%.
+     *
+     * It does nothing outside coop, and it is OFF unless a caller asks —
+     * WITH COMPUTER as the cartridge ships it is the cartridge's player. */
     uint8_t settle;
     bool soft_drop;
+    bool coop_aware;
 
     uint8_t since_spawn;         /* frames since tengen_ai_choose was called */
 } TengenAi;
@@ -96,6 +117,20 @@ uint8_t tengen_ai_buttons(TengenAi *ai, const TengenGame *game,
 #define TENGEN_AI_SCRATCH_A 19
 void tengen_ai_heights(const TengenGame *game, TengenPlayerSlot slot,
                         uint8_t out[TENGEN_AI_SCRATCH_A]);
+
+/* ...and the port's own second pass over them, which the cartridge has no
+ * equivalent of: the PARTNER'S SHADOW. On a shared board the other player's
+ * falling piece is solid to this one and invisible to the scan above, so
+ * this raises every column the partner's piece stands over — from the
+ * partner's own topmost cell all the way down, because that corridor is
+ * where the piece is going and nothing else may be put in it. A column the
+ * partner is already at the top of reads $30, the same as a wall, which is
+ * what it is for as long as the partner is in it.
+ *
+ * Does nothing unless the game is coop and the partner has a piece. Exposed
+ * for the tests; `tengen_ai_choose` calls it when `coop_aware` is set. */
+void tengen_ai_shadow(const TengenGame *game, TengenPlayerSlot slot,
+                       uint8_t out[TENGEN_AI_SCRATCH_A]);
 
 /* The piece table's bonus byte, `computerMoveSelectTableOffsetBy18`'s first
  * byte of each entry — signed, and where the thing's taste lives. Exposed so

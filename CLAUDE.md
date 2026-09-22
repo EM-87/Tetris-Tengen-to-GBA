@@ -308,6 +308,30 @@ running ROM; only the side panels need reflowing).
    checks that they do. `playModeTable` is what says which board each mode
    uses: VERSUS is a race like 2P, WITH COMPUTER is coop's shared twelve-wide
    board. Neither needs a cable. See reference/NOTES.md.
+   **AND ON THE SHARED BOARD IT NOW READS ITS PARTNER, BEHIND THE CHORD.**
+   `computerMove` looks at the settled field and nothing else, which is fine
+   with a board to itself and is the whole problem with one to share: both
+   players score the same twelve columns with the same routine, pick the same
+   one, and the two pieces — solid to each other, `checkCoopCollision` — spend
+   the descent shouldering. Measured over twenty-four playouts with the
+   computer on both pads: 48% of every shift either of them asked for was
+   REFUSED, and nine in ten of those by the partner rather than by the wall or
+   the terrain. `coop_aware` is two things and each is worth about half the
+   gain — the partner's piece is dropped onto the settled board and read as
+   ground WHERE IT WILL LAND (not where it is: a column it is merely passing
+   through is not full, and stacking against that phantom wall leaves a hole),
+   and the soft drop WAITS while the piece is still short of its column,
+   because a shift the partner refuses is retried eight frames later and by
+   then a piece that kept dropping is out of position. Together: 908 pieces
+   and 34 lines become 1637 and 197, holes fall from 903 to 666, refusals from
+   48% to 27%. It costs pace, about eighty frames a piece against sixty-six,
+   and it cannot hang because gravity runs whether Down is pressed or not.
+   **It is OFF unless the chord has been rung**, for the same reason the pause
+   menu is: WITH COMPUTER is a mode the cartridge ships and what it ships is
+   the player above. `make gba-check --coopai` checks both halves of that door
+   on a fixture that decides it outright — one well, three partner positions,
+   and the computer takes the well every time without the chord and never with
+   it — and the playouts are in `make test`.
 24. ~~The attract demo~~ — done, and it is the same computer playing the same
    game: `demoStart` is playMode 0 with the music suspended, reached off the
    title's own clock at frameCounterHigh 5 / low $20, with the computer on
@@ -613,23 +637,27 @@ fixed.
    is the lobby: exchange the skin so both boards wear the master's, with
    the release's RULES. Both consoles then agree on the cell format and the
    paint is real. See `piece_id_cells` and `skin_begin_match`.
-4. **The computer in coop.** It cannot slide a piece UNDER one already
-   placed, does not read where the partner is about to put theirs, and
-   ignores their shadow. None of that is in the cartridge, which has no
-   computer at all, so it belongs under the cheat if it is built.
-5. **`VBlankIntrWait` instead of the spin.** `vsync()` busy-waits at full
+4. **`VBlankIntrWait` instead of the spin.** `vsync()` busy-waits at full
    clock for the whole visible frame, which on a real console is battery
    and heat for nothing. The BIOS call halts instead. It wants the vblank
    interrupt in the vector the cable owns today.
-6. **The fireworks' distance and the dithered sky.** The bursts were moved
+5. **The fireworks' distance and the dithered sky.** The bursts were moved
    away from the frame to stop them colliding with it, and the cartridge's
    title has a dithered sunset behind them that the port does not draw.
-7. **The ten-line rule on the prototypes.** Still on the word of the list
+6. **The ten-line rule on the prototypes.** Still on the word of the list
    it came from; what the stacking bot needs is written up above.
 
 *(The coop HUD was on this list and is built: a panel per player, the
 board's totals under the chord, and a second HUD against the computer that
-hides the partner's. See draw_coop_panel and `make gba-check --coophud`.)*
+hides the partner's. See draw_coop_panel and `make gba-check --coophud`.
+So is the computer in coop, on the same chord: see roadmap 23. What it
+still cannot do is slide a piece UNDER one already placed — and that one is
+MEASURED, not pending. Teaching the height profile to report a cavity you
+could reach sideways was tried twice, with a one-cell probe and with a
+two-cell one, and both made it play WORSE: 1637 pieces and 197 lines became
+905 and 102, then 1177 and 152. The cartridge's scorer drops pieces onto a
+surface from above, and a hole it aims at but the driver cannot steer into
+is a piece hung on the overhang. It stays out.)*
 
 ## Where the GBA layer lives
 
@@ -711,7 +739,10 @@ that against comment-stripped text is not a detail — `main` itself came out
   interpreter frame for frame while still leaving the game running at full
   speed. The line-clear check plants completed rows straight into the game's
   playfield through the emulator, so it doesn't need a bot that can stack;
-  that's a fixture in the harness, never anything the ROM knows about.
+  that's a fixture in the harness, never anything the ROM knows about. The
+  same trick answers a question no playout could answer twice the same way:
+  `--coopai` plants one board with one well, hangs the partner's piece over
+  it in three positions, and reads back the column the computer picked.
 
 Run `make test` and `make gba-check` before considering a change done. The
 first catches rule regressions; the second catches the ones that only appear

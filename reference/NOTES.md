@@ -744,6 +744,49 @@ top of whatever the human had put there; `tengen_ai_rechoose` is that second
 look, identical to the first but for the port's own settle clock, which keeps
 running rather than restarting a piece halfway down.
 
+**AND THAT IS ALL THE MANNERS THE CARTRIDGE GIVES IT**, which is not enough,
+and the port's own answer is `coop_aware` — off unless the cheat chord has
+been rung, because WITH COMPUTER is a mode the cartridge ships. What the
+re-plan cannot fix is that `computerMove` reads the SETTLED board: the other
+player's falling piece is solid to this one (`checkCoopCollision`) and
+invisible to both scorers, so the two of them score the same twelve columns
+with the same routine and pick the same one. MEASURED over twenty-four
+playouts with the computer on both pads: **48% of every shift either of them
+asked for was refused, and nine in ten of those by the partner** rather than
+by the wall or by the terrain.
+
+Two things, each worth about half the gain:
+
+* **The shadow** (`tengen_ai_shadow`). The partner's piece is dropped
+  straight down onto the settled field and the columns it covers WHERE IT
+  COMES TO REST are raised. Where it comes to rest, not where it is: a
+  column the partner is merely passing through is not full, and a piece
+  stacked against that phantom wall leaves a hole the moment the partner
+  lands lower. As future terrain it is right, and the computer stacks flush
+  on what its partner is about to put down.
+* **Waiting its turn** (`tengen_ai_buttons`). The soft drop is dropped while
+  the piece is still short of the column it wants. A shift the partner
+  refuses is retried eight frames later, and a piece that kept dropping
+  meanwhile is a row lower and out of position.
+
+Together: 908 pieces and 34 lines become 1637 and 197, holes fall from 903
+to 666, refusals from 48% to 27%. It costs about eighty frames a piece
+instead of sixty-six and it cannot hang, since gravity runs whether Down is
+pressed or not. Capping the wait at 32, 48, 64 or 96 frames was tried and
+every cap was worse than none.
+
+**TWO THINGS THAT WERE TRIED AND ARE WORSE**, kept here so they are not
+tried again. RE-PLANNING WHEN THE PARTNER MOVES rather than only when it
+spawns: chasing a shadow that shifts every eight frames means never reaching
+any target, and it took 197 lines down to about 40. And TEACHING THE HEIGHT
+PROFILE TO REPORT A CAVITY — the "it cannot slide a piece under one already
+placed" complaint — by flood-filling the empty cells reachable from above
+and reporting the deepest one per column: 1637 pieces and 197 lines became
+905 and 102 with a one-cell probe and 1177 and 152 with a two-cell one. The
+cartridge's scorer drops a piece onto a surface from above and its driver
+steers by column alone; a cavity it aims at but cannot steer into is a piece
+hung on the overhang. That one stays unsolved rather than papered over.
+
 ## The attract demo
 
 `demoStart` (`main.asm.txt:3216-3230`) is four lines and then the ordinary

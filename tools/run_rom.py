@@ -2022,6 +2022,135 @@ def computer_check(rom_path):
     return 0
 
 
+# TengenAi, byte by byte — see src/tengen_ai.h, where the struct is six bytes
+# of the ROM's own scratch and then the port's. There is no probe for it, so
+# `soft_drop` is read as well and checked against the one value a running
+# WITH COMPUTER game can have: if the layout ever moves, that is what says so
+# rather than the flags quietly reading each other's bytes.
+AI_TARGET_X, AI_TARGET_O = 6, 7
+AI_SETTLE, AI_SOFT_DROP, AI_COOP_AWARE = 8, 9, 10
+
+
+def coop_ai_check(rom_path):
+    """THE COMPUTER AS A PARTNER, and the door it is behind.
+
+    `computerMove` reads the settled board and nothing else. On the shared
+    twelve-wide field of WITH COMPUTER that leaves out the one thing that
+    decides everything — the OTHER falling piece, which is solid to this one
+    — so both players score the same columns with the same routine, pick the
+    same one, and shoulder each other all the way down. Measured on the host:
+    48% of every shift either of them asked for was refused, and nine in ten
+    of those by the partner. See TengenAi's `coop_aware`.
+
+    That is what the cartridge does, though, so the fix is behind the same
+    chord as the pause menu and the hidden tunes, and this checks BOTH
+    halves of that door on a running ROM.
+
+    The fixture is one board and three partner positions: flat at row 10
+    everywhere, with a two-row well at columns 8 and 9. The well is the
+    deepest place on the board and the computer wants it — unless the
+    partner's piece is hanging over it, in which case what is about to be in
+    it is exactly what fills it. Without the chord the computer takes the
+    well whatever the partner does; with it, never.
+    """
+    off = game_offsets(rom_path)
+    base, why = game_state_address(rom_path)
+    if base is None:
+        print(f"SALTADO: {why}")
+        return 0
+    ai, why = game_state_address(rom_path, "g_ai")
+    if ai is None:
+        print(f"SALTADO: {why}")
+        return 0
+
+    failures = []
+    WELL = (8, 9)              # the two columns of the well, in storage terms
+    WELL_TARGET = 10           # ...as computerMove numbers them: +2 for the walls
+    TT_O = 3
+
+    def start(entry, chord):
+        core, screen = load(rom_path)   # `screen` must stay alive; see load()
+        run(core, 8)
+        press_start(core); run(core, 10)
+        if chord:
+            # The chord is rung on GAME SELECT, which is where unlock_cheats
+            # lives; at the title it only cycles the skin.
+            core.set_keys(KEYS["L"], KEYS["R"]); run(core, 4)
+            core.set_keys(); run(core, 24)
+        for _ in range(entry):
+            core.set_keys(KEYS["DOWN"]); run(core, 4)
+            core.set_keys(); run(core, 10)
+        press_start(core); run(core, 12)
+        press_start(core); run(core, 60)
+        return core, screen
+
+    def plant(core, partner_x):
+        addr = base + off["field"]
+        for y in range(TENGEN_PF_HEIGHT):
+            for x in range(TENGEN_PF_WIDTH):
+                floor = 12 if x in WELL else 10
+                core.memory.u8[addr + y * TENGEN_PF_WIDTH + x] = 15 if y >= floor else 0
+        # The partner, hanging over the well.
+        core.memory.u8[base + off["current"]] = TT_O
+        core.memory.u8[base + off["orientation"]] = 0
+        core.memory.u8[base + off["x"]] = partner_x
+        core.memory.u8[base + off["y"]] = 6
+        # ...and a fresh piece in the computer's hand, which is what makes
+        # ai_input call tengen_ai_choose on the very next frame.
+        st = off["stride"]
+        core.memory.u8[base + off["current"] + st] = TT_O
+        core.memory.u8[base + off["orientation"] + st] = 0
+        core.memory.u8[base + off["y"] + st] = 4
+        core.memory.u8[base + off["x"] + st] = 9
+        run(core, 2)
+
+    for chord in (False, True):
+        seen = []
+        for partner_x in (9, 10, 11):
+            core, screen = start(4, chord)
+            _ = screen
+            if core.memory.u8[ai + AI_SOFT_DROP] != 1:
+                failures.append("g_ai no esta donde se cree: soft_drop deberia "
+                                 "valer 1 en una partida de WITH COMPUTER")
+                break
+            plant(core, partner_x)
+            aware = core.memory.u8[ai + AI_COOP_AWARE]
+            if aware != int(chord):
+                failures.append(f"con acorde={int(chord)} la maquina lee "
+                                 f"coop_aware={aware}")
+            seen.append(core.memory.u8[ai + AI_TARGET_X])
+        if failures:
+            break
+        if not chord and any(t != WELL_TARGET for t in seen):
+            failures.append(f"sin el acorde la maquina deberia ir al pozo "
+                             f"siempre: eligio {seen}")
+        if chord and any(t == WELL_TARGET for t in seen):
+            failures.append(f"con el acorde la maquina se mete en el pozo que "
+                             f"el companero va a tapar: eligio {seen}")
+        if not failures:
+            print(f"  {'con' if chord else 'sin'} el acorde, con el companero "
+                   f"sobre el pozo: columnas {seen}")
+
+    # ...AND A RACE IS NOT A SHARED BOARD. VERSUS has two fields and what
+    # falls on the other one is none of this column's business, so the knob
+    # stays off there whatever the chord says.
+    if not failures:
+        core, screen = start(3, True)
+        _ = screen
+        if core.memory.u8[ai + AI_COOP_AWARE] != 0:
+            failures.append("en VERSUS la maquina lee el campo del rival")
+        else:
+            print("  ...y en VERSUS sigue apagado: son dos tableros")
+
+    for f in failures:
+        print("FALLA:", f)
+    if failures:
+        return 1
+    print("OK: bajo el acorde el ordenador lee a su companero, y solo en "
+           "el tablero compartido.")
+    return 0
+
+
 def points_check(rom_path):
     """THE POINTS THE PIECE WAS WORTH, beside the piece.
 
@@ -4759,6 +4888,8 @@ def main():
                      help="check LEVEL SETTINGS fits inside its frame")
     ap.add_argument("--computer", action="store_true",
                      help="check the COMPUTER player plays VERSUS and WITH")
+    ap.add_argument("--coopai", action="store_true",
+                     help="check the computer reads its partner under the chord")
     ap.add_argument("--demo", action="store_true",
                      help="check the title starts playing by itself")
     ap.add_argument("--loans", action="store_true",
@@ -4826,6 +4957,8 @@ def main():
         sys.exit(menu_check(args.rom))
     if args.computer:
         sys.exit(computer_check(args.rom))
+    if args.coopai:
+        sys.exit(coop_ai_check(args.rom))
     if args.demo:
         sys.exit(demo_check(args.rom))
     if args.gameover:

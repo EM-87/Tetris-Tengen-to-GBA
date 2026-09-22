@@ -1703,6 +1703,175 @@ static void test_the_computer_can_be_told_to_look_first_and_to_drop(void) {
     CHECK(tengen_ai_buttons(&rom, &game, TENGEN_PLAYER_2, 0) == 0);
 }
 
+static void test_the_computer_can_be_told_to_read_the_partner(void) {
+    /* THE THIRD KNOB, and the one that makes it a partner rather than a
+     * second player in the same room. `computerMove` reads the settled board
+     * and nothing else, so on the shared twelve-wide field both players score
+     * the same columns with the same routine, pick the same one, and shoulder
+     * each other all the way down — the two falling pieces are solid to one
+     * another. Off by default, so WITH COMPUTER as the cartridge ships it is
+     * still the cartridge's player. */
+    TengenGame game;
+    TengenAi ai;
+    uint8_t plain[TENGEN_AI_SCRATCH_A], shadowed[TENGEN_AI_SCRATCH_A];
+
+    tengen_new_game(&game, 0x5150, 0, true, true, false);
+    CHECK(game.coop);
+    tengen_ai_reset(&ai);
+    CHECK(!ai.coop_aware);
+
+    /* Player 1's piece hangs at the top of an empty board. The heights the
+     * cartridge builds cannot see it at all: every playable column reads the
+     * floor. */
+    game.player[TENGEN_PLAYER_1].piece.current = TT_O;
+    game.player[TENGEN_PLAYER_1].piece.orientation = 0;
+    game.player[TENGEN_PLAYER_1].piece.x = 4;
+    game.player[TENGEN_PLAYER_1].piece.y = TENGEN_ROM_ROW_ORIGIN;
+    tengen_ai_heights(&game, TENGEN_PLAYER_2, plain);
+
+    memcpy(shadowed, plain, sizeof(plain));
+    tengen_ai_shadow(&game, TENGEN_PLAYER_2, shadowed);
+
+    /* WHERE IT WILL LAND, not where it is: the O is at the top of an empty
+     * board, so its shadow is on the floor — the two rows above it — and the
+     * columns it covers come back exactly one piece tall. */
+    TengenCell cells[4];
+    int n = tengen_active_piece_cells(&game, TENGEN_PLAYER_1, cells);
+    CHECK(n == 4);
+    int covered = 0;
+    for (int nibble = 0; nibble < TENGEN_AI_COLUMNS; nibble++) {
+        bool mine = false;
+        for (int i = 0; i < n; i++)
+            if (cells[i].col + TENGEN_ROM_COL_ORIGIN == nibble) mine = true;
+        if (!mine) {
+            CHECK(shadowed[nibble] == plain[nibble]);
+            continue;
+        }
+        covered++;
+        CHECK(shadowed[nibble] < plain[nibble]);
+        /* Two rows of O standing on the floor of a twenty-row field. */
+        CHECK(shadowed[nibble] ==
+               (uint8_t)((TENGEN_PF_HEIGHT - 2 + TENGEN_ROM_ROW_ORIGIN) * 8));
+    }
+    CHECK(covered == 2);
+
+    /* And it is COOP'S ONLY: a race is two boards and what falls on the
+     * other one is nothing to do with this column. */
+    TengenGame race;
+    tengen_new_game(&race, 0x5150, 0, true, false, false);
+    race.player[TENGEN_PLAYER_1].piece.current = TT_O;
+    race.player[TENGEN_PLAYER_1].piece.x = 4;
+    race.player[TENGEN_PLAYER_1].piece.y = TENGEN_ROM_ROW_ORIGIN;
+    tengen_ai_heights(&race, TENGEN_PLAYER_2, plain);
+    memcpy(shadowed, plain, sizeof(plain));
+    tengen_ai_shadow(&race, TENGEN_PLAYER_2, shadowed);
+    CHECK(memcmp(plain, shadowed, sizeof(plain)) == 0);
+}
+
+static void test_the_computer_waits_its_turn_on_a_shared_board(void) {
+    /* The other half of `coop_aware`: it stops soft-dropping while its piece
+     * is still short of the column it wants. A shift the partner refuses is
+     * retried eight frames later, and a piece that kept dropping meanwhile is
+     * a row lower and out of position — which is how the computer used to
+     * bury a shared board. Gravity still runs, so this can slow it down and
+     * cannot hang it. */
+    TengenGame coop;
+    TengenAi ai;
+    tengen_new_game(&coop, 0x3210, 0, true, true, false);
+    tengen_ai_reset(&ai);
+    ai.soft_drop = true;
+    ai.coop_aware = true;
+    tengen_ai_choose(&ai, &coop, TENGEN_PLAYER_2);
+
+    /* Short of its column: no Down. */
+    coop.player[TENGEN_PLAYER_2].piece.x = (int8_t)(ai.target_x + 3);
+    coop.player[TENGEN_PLAYER_2].piece.orientation =
+        (uint8_t)(ai.target_orientation & 3);
+    for (uint8_t frame = 1; frame < 8; frame++)
+        CHECK(!(tengen_ai_buttons(&ai, &coop, TENGEN_PLAYER_2, frame)
+                 & TENGEN_BTN_DOWN));
+
+    /* Over it: Down, exactly as before. */
+    coop.player[TENGEN_PLAYER_2].piece.x = (int8_t)ai.target_x;
+    CHECK(tengen_ai_buttons(&ai, &coop, TENGEN_PLAYER_2, 1) == TENGEN_BTN_DOWN);
+
+    /* And on a board of its own the wait does not apply, knob or no knob:
+     * there is nobody to wait for. */
+    TengenGame race;
+    TengenAi solo;
+    tengen_new_game(&race, 0x3210, 0, true, false, false);
+    tengen_ai_reset(&solo);
+    solo.soft_drop = true;
+    solo.coop_aware = true;
+    tengen_ai_choose(&solo, &race, TENGEN_PLAYER_2);
+    race.player[TENGEN_PLAYER_2].piece.x = (int8_t)(solo.target_x + 3);
+    uint8_t seen = 0;
+    for (uint8_t frame = 1; frame < 8; frame++)
+        seen |= tengen_ai_buttons(&solo, &race, TENGEN_PLAYER_2, frame);
+    CHECK(seen & TENGEN_BTN_DOWN);
+}
+
+static void test_reading_the_partner_makes_the_shared_board_last(void) {
+    /* The point of the two above, measured the only way it can be: play the
+     * thing. Two computers on one board, the same seeds either way, and the
+     * knob is the only difference. It is not a close call — see the note on
+     * TengenAi for the full numbers. */
+    struct { long pieces, lines; } run[2] = { { 0, 0 }, { 0, 0 } };
+
+    for (int aware = 0; aware < 2; aware++) {
+        for (int g = 0; g < 8; g++) {
+            TengenGame game;
+            TengenAi ai[2];
+            TengenTetromino last[2] = { TT_NONE, TT_NONE };
+            TengenTetromino partner[2] = { TT_NONE, TT_NONE };
+            bool dead = false;
+
+            tengen_new_game(&game, (uint16_t)(0x1234 + g * 0x2F1B), 0,
+                             true, true, false);
+            for (int s = 0; s < 2; s++) {
+                tengen_ai_reset(&ai[s]);
+                ai[s].soft_drop = true;
+                ai[s].settle = 24;
+                ai[s].coop_aware = (aware != 0);
+            }
+            for (int f = 0; f < 20000 && !dead; f++) {
+                for (int s = 0; s < 2 && !dead; s++) {
+                    TengenPlayerSlot slot = (TengenPlayerSlot)s;
+                    TengenPlayerState *p = &game.player[s];
+                    TengenTetromino mine, theirs;
+                    TengenStepResult r;
+                    if (!p->game_active) { dead = true; break; }
+                    mine = p->piece.current;
+                    theirs = game.player[s ^ 1].piece.current;
+                    if (mine != last[s])
+                        tengen_ai_choose(&ai[s], &game, slot);
+                    else if (theirs != partner[s] && theirs != TT_NONE &&
+                              mine != TT_NONE)
+                        tengen_ai_rechoose(&ai[s], &game, slot);
+                    last[s] = mine;
+                    partner[s] = theirs;
+                    r = tengen_step(&game, slot,
+                                     tengen_ai_buttons(&ai[s], &game, slot,
+                                                        (uint8_t)f));
+                    if (r.piece_locked) run[aware].pieces++;
+                    if (r.lines_collapsed)
+                        for (int i = 0; i < TENGEN_PF_HEIGHT; i++)
+                            if (r.rows_cleared_mask & (1u << i))
+                                run[aware].lines++;
+                    if (r.topped_out) dead = true;
+                }
+            }
+        }
+    }
+
+    /* Half again as many pieces placed before the board is buried, and
+     * several times the lines. The margins here are wide on purpose: this
+     * pins the DIRECTION, not the exact playout, which any change to the
+     * scorer would move. */
+    CHECK(run[1].pieces > run[0].pieces * 5 / 4);
+    CHECK(run[1].lines > run[0].lines * 2);
+}
+
 static void test_coop_is_one_twelve_wide_board_over_the_cable(void) {
     /* COOPERATIVE is the third mode the cartridge offers and the only one
      * where the two players share a field: initPlayer1orCoopPlayfield leaves
@@ -2671,6 +2840,9 @@ int main(void) {
     test_the_computers_soft_drop_does_not_eat_its_own_shifts();
     test_a_coop_line_clear_holds_both_players();
     test_the_computer_can_be_told_to_look_first_and_to_drop();
+    test_the_computer_can_be_told_to_read_the_partner();
+    test_the_computer_waits_its_turn_on_a_shared_board();
+    test_reading_the_partner_makes_the_shared_board_last();
     test_either_player_can_pause_a_linked_game();
     test_level_starts_at_the_chosen_start_level();
     test_level_is_recomputed_from_the_line_total();
