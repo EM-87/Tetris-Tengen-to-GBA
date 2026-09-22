@@ -1033,24 +1033,33 @@ void draw_leaderboard(void) {
     for (int row = 0; row < LEADER_ENTRIES; row++) draw_leader_row(row);
 }
 
-/* WHOSE SCORES GO ON THE BOARD. L81DD (main.asm.txt:315-339) is called with
- * the player who just topped out, and on the negative playMode — coop — it
- * runs for the other one too, because one board is two players' game. What it
- * refuses is the COMPUTER: L81EC returns without doing anything for player 2
- * once menuGameMode has reached VERSUS. So a machine never takes a place on
- * the table, and in coop both people do.
+/* WHOSE SCORES GO ON THE BOARD, AND WHEN. L81DD (main.asm.txt:315-339) is
+ * called from the TOP-OUT itself (:600, the `jsr` right after the flag is
+ * cleared), not from the end of the match — which is the whole reason a
+ * player who starts again over A+B does not lose the game they just
+ * finished: each board that dies is written down as it dies, so five games
+ * are five rows. On the negative playMode — coop — it runs for the other
+ * player too, because one board is two players' game. What it refuses is the
+ * COMPUTER: L81EC returns without doing anything for player 2 once
+ * menuGameMode has reached VERSUS. So a machine never takes a place on the
+ * table, and in coop both people do.
  *
- * Up to two entries can therefore be waiting to be typed into, which is what
- * the cartridge's $74 and $75 are for. They are typed one after the other
- * here, oldest first. */
-static int g_leader_queue[2];
+ * The cartridge keeps one flag per PLAYER for the typing ($74/$75) and marks
+ * each row with its owner in the top two bits of its initials, so Left and
+ * Right walk a player between their own rows. The port types them one after
+ * the other instead, oldest first, which is the same set in a fixed order. */
+#define LEADER_QUEUE_MAX 8
+static int g_leader_queue[LEADER_QUEUE_MAX];   /* this console's, to type */
 static int g_leader_queued;
-/* ...and over a cable, the two rows are not both this console's to type. See
- * leader_rival_row. */
-static int g_leader_own_row = -1;
-static int g_leader_rival_row = -1;
+/* ...and over a cable the rival's rows are not this console's to type: their
+ * name arrives on the wire. See TengenNameSwap. */
+static int g_leader_rivals[LEADER_QUEUE_MAX];
+static int g_leader_rivals_n;
+static int g_leader_own_row = -1;              /* the newest of this console's */
 
-int leader_rival_row(void) { return g_leader_rival_row; }
+int leader_rival_row(void) {
+    return g_leader_rivals_n ? g_leader_rivals[g_leader_rivals_n - 1] : -1;
+}
 
 void leader_own_initials(uint8_t out[LEADER_INITIALS]) {
     /* A player with no row here still has a name to send, because the row
@@ -1063,57 +1072,76 @@ void leader_own_initials(uint8_t out[LEADER_INITIALS]) {
 }
 
 void leader_rival_initials(const uint8_t in[LEADER_INITIALS]) {
-    if (g_leader_rival_row < 0) return;
-    for (int c = 0; c < LEADER_INITIALS; c++)
-        g_leader[g_leader_rival_row].initials[c] =
-            (uint8_t)(in[c] < LEADER_LETTERS ? in[c] : 1);
-    leader_save();
+    /* EVERY row that is theirs, not just the last: a rival who started again
+     * over A+B has one row per game they finished, and one name for all of
+     * them. */
+    for (int i = 0; i < g_leader_rivals_n; i++)
+        for (int c = 0; c < LEADER_INITIALS; c++)
+            g_leader[g_leader_rivals[i]].initials[c] =
+                (uint8_t)(in[c] < LEADER_LETTERS ? in[c] : 1);
+    if (g_leader_rivals_n) leader_save();
 }
 
-void leader_submit(void) {
+/* A fresh match: nothing is owed and nothing is owned. */
+void leader_new_match(void) {
     g_leader_row = -1;
     g_leader_queued = 0;
+    g_leader_rivals_n = 0;
     g_leader_cursor = 0;
     g_leader_own_row = -1;
-    g_leader_rival_row = -1;
+}
 
-    int slots[2];
-    int n = 0;
-    slots[n++] = g_view;
-    /* THE OTHER PLAYER GOES ON THE BOARD TOO, and over a cable that is new:
-     * a linked match is lockstep, so this console has simulated the rival's
-     * board and knows their score and lines to the byte. It never wrote them
-     * down, which is how two consoles ended a race with two pages that
-     * disagreed about who had been there. What it does NOT know is the name,
-     * and that comes over the wire afterwards — see TengenNameSwap. */
-    if ((g_session.game.coop && !g_ai_active) || g_linked) slots[n++] = g_view ^ 1;
+/* One board has just died. Writes it down where it belongs and remembers
+ * whose row it is; nothing is typed until the page comes up. */
+static void leader_record_one(int slot) {
+    const TengenPlayerState *p = &g_session.game.player[slot];
+    /* L81EC's refusal: in VERSUS and WITH COMPUTER, player 2 is the machine
+     * and a machine takes no place on the table. */
+    if (g_ai_active && slot == TENGEN_PLAYER_2) return;
 
-    for (int i = 0; i < n; i++) {
-        const TengenPlayerState *p = &g_session.game.player[slots[i]];
-        int row = leader_insert(p->score, p->lines);
-        if (row < 0) continue;
-        /* An entry that lands above one already queued pushes it down a row,
-         * exactly as it pushes every other entry down. */
-        for (int q = 0; q < g_leader_queued; q++)
-            if (g_leader_queue[q] >= row) g_leader_queue[q]++;
-        if (g_leader_own_row >= row) g_leader_own_row++;
-        if (g_leader_rival_row >= row) g_leader_rival_row++;
-        if (g_linked && slots[i] != g_view) {
-            /* Not this console's to type: the person who earned it is at the
-             * other end of the cable, typing it there. */
-            g_leader_rival_row = row;
-            continue;
-        }
-        if (slots[i] == g_view) g_leader_own_row = row;
-        g_leader_queue[g_leader_queued++] = row;
+    int row = leader_insert(p->score, p->lines);
+    if (row < 0) return;
+    /* An entry that lands above one already remembered pushes it down a row,
+     * exactly as it pushes every other entry down. */
+    for (int q = 0; q < g_leader_queued; q++)
+        if (g_leader_queue[q] >= row) g_leader_queue[q]++;
+    for (int q = 0; q < g_leader_rivals_n; q++)
+        if (g_leader_rivals[q] >= row) g_leader_rivals[q]++;
+    if (g_leader_own_row >= row) g_leader_own_row++;
+
+    /* Over a cable only this console's own player types here; in a coop game
+     * on one console both pads do. */
+    if (g_linked && slot != g_view) {
+        if (g_leader_rivals_n < LEADER_QUEUE_MAX)
+            g_leader_rivals[g_leader_rivals_n++] = row;
+        return;
     }
+    g_leader_own_row = row;
+    if (g_leader_queued < LEADER_QUEUE_MAX)
+        g_leader_queue[g_leader_queued++] = row;
+}
+
+void leader_record(int slot) {
+    if (g_demo) return;                 /* nobody played that one */
+    leader_record_one(slot);
+    /* One board is two players' game: L81DD runs the other one as well. */
+    if (g_session.game.coop) leader_record_one(slot ^ 1);
+}
+
+/* The page is coming up: open the typing on whatever was written down while
+ * the match was running. */
+void leader_submit(void) {
+    g_leader_cursor = 0;
     if (g_leader_queued) {
         g_leader_row = g_leader_queue[0];
         g_leader_blink = 0;
         g_leader_undo_n = 0;
+    } else {
+        g_leader_row = -1;
     }
     leader_save();
 }
+
 
 /* One letter along the alphabet, wrapping both ways — L92BA
  * (main.asm.txt:2789-2799): $FF comes back as $1A and $1B comes back as 0, so

@@ -216,6 +216,7 @@ static void ai_play_frame(void) {
      * both of them, which is what announce_step already does. */
     TengenStepResult out = tengen_step(&g_session.game, TENGEN_PLAYER_2, buttons);
     note_award(TENGEN_PLAYER_2, out);
+    if (out.topped_out) leader_record(TENGEN_PLAYER_2);
     announce_step(out);
 }
 
@@ -569,6 +570,15 @@ bool link_play_frame(void) {
             break;
         note_award(0, out[0]);
         note_award(1, out[1]);
+        /* A GAME IS WRITTEN DOWN AS IT ENDS, not at the end of the match:
+         * L81DD is called from the top-out itself (main.asm.txt:600), which
+         * is what lets a player start again over A+B and keep the game they
+         * just finished. Both consoles see both results, so both write the
+         * same two rows on the same frame. */
+        for (int i = 0; i < 2; i++) if (out[i].topped_out) leader_record(i);
+        /* ...and a board put back on its feet is a new board: everything on
+         * it, and every counter beside it, has to be drawn again. */
+        if (out[0].restarted || out[1].restarted) g_repaint = true;
         announce_step(out[g_view]);
         stepped++;
     }
@@ -719,6 +729,7 @@ bool solo_play_frame(uint8_t buttons, uint8_t pressed, bool *quit) {
 
     TengenStepResult local = tengen_step(&g_session.game, TENGEN_PLAYER_1, buttons);
     note_award(TENGEN_PLAYER_1, local);
+    if (local.topped_out) leader_record(TENGEN_PLAYER_1);
     announce_step(local);
     ai_play_frame();
     return !match_over();

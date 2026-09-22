@@ -890,6 +890,16 @@ that is the cartridge's own choice rather than a shortcut: `$F` is a real
 block tile in its set — a lone shaded block — so garbage draws correctly with
 no renderer change at all.
 
+**EVERY CALL STARTS FROM `savedRNGSeed`**, and that was read wrong for a
+long time. `lda savedRNGSeed / sta rngSeed` is the fifth thing
+`initHandicapGarbage` does (`:3554-3557`) — INSIDE the routine, not before
+it — so the two players' piles are dealt from the same number and two equal
+handicaps bury two boards identically. The port ran one sequence through both
+calls, which gave player 2 a different pile from player 1's for the same
+setting. It is corrected, and the reseed is what A+B's restart needs in any
+case: without it the pile a restarted board gets would depend on how far the
+first one had wound the generator.
+
 In the port it is `tengen_apply_handicap`, drawing from a `garbage_rng` the
 game seeds alongside its piece RNG, so two consoles from one seed bury each
 other identically. The HANDICAP screen carries the two values; over the cable
@@ -2117,6 +2127,52 @@ Two things worth knowing before touching any of it:
 `make gba-check` runs two mGBA cores with a simulated cable between them
 (`tools/run_link.py`) and asserts their whole game state stays identical byte
 for byte while the two players are fed opposite buttons.
+
+### A+B PUTS A DEAD BOARD BACK ON ITS FEET
+
+`activeGamePlay` falls into `handleGameOver` (`main.asm.txt:472-490`) the
+moment `player1GameActive,x` reads zero — whether or not the other board is
+still going — and there A and B HELD together (not pressed; the test is on
+`player1ControllerHeld,x`) start that player again on the spot. In a race
+that is one board restarting while the other plays on, which is what a race
+between two people needs to be playable at all.
+
+`restartVsMode` (`:3402-3465`) is what it runs, and its order is worth
+keeping: the score's six digits and the line count's four go back to ASCII
+zeroes; the level goes back to **that player's own** `menuPlayer1StartLevel`,
+so the two can restart onto different levels; the RNG goes back to
+`savedRNGSeed`, so the new board is dealt exactly what the match opened with;
+`player1GameActive,x` is set from whatever is in A at that point, which is
+`$30`, because any non-zero is alive; the two cheat codes, the undo's memory
+and the level's clear tally are cleared; the playfield is laid out again; and
+`endPlayfieldInit` deals the handicap pile again. Nothing of the other
+player's is touched.
+
+**WHICH MODES.** `handleGameOver` branches on playMode before anything else:
+0 (1P) and `$FF` (COOPERATIVE, and WITH COMPUTER with it) jump to
+`initializeGameMode` instead, which is a WHOLE NEW GAME rather than one
+board. The port takes the race and not that one — see CLAUDE.md for why. The
+VERSUS guard that stops the computer restarting itself (`:830C-830E`) is
+unreachable in the port for a different reason: `tengen_ai_buttons` picks one
+rotation button or the other and never both, and a test says so.
+
+**AND THE GAME IT JUST FINISHED IS NOT LOST**, which is the other half and
+the reason the melon asked what happens to five accumulated games. `L81DD` —
+the leaderboard insert — is called from the TOP-OUT itself (`:600`, the `jsr`
+straight after the flag is cleared), not from the end of the match. So each
+board that dies is written down as it dies and five games are five rows. The
+cartridge keeps one typing flag per PLAYER (`$74`/`$75`) and marks each row
+with its owner in the top two bits of its initials, so Left and Right walk a
+player between their own rows on the page; the port types them one after the
+other, oldest first, which is the same set in a fixed order.
+
+Over a cable the restart is driven by BUTTONS, which cross the wire, so it
+has to happen inside the core on the frame both consoles agree on —
+`tengen_step` does it, off the held buttons it is already given. Done in the
+front end off the local keypad it would part the two simulations on that
+frame and they would never meet again. `tools/run_link.py` restarts one
+console's board mid-race and then compares the whole game state byte for
+byte, which is the only statement of that worth making.
 
 ### ...and the cable outlives the match, by three letters
 

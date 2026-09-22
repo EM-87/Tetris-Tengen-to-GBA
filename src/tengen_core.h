@@ -204,6 +204,11 @@ typedef struct {
      * them x1/x4/x9/x25 (L8E54, :2160) for its bonus figures, and decides how
      * many dancers walk on; see tengen_dancer_count. */
     uint8_t clear_counts[4];  /* [0] single, [1] double, [2] triple, [3] tetris */
+    /* menuPlayer1Handicap / menuPlayer2Handicap ($04F3-$04F4), remembered
+     * because restartVsMode deals the pile again for the board it restarts
+     * (endPlayfieldInit, main.asm.txt:3534-3542). Set by
+     * tengen_apply_handicap. */
+    uint8_t handicap;
 
     /* Cheat-code entry, mirroring $01B6-$01BB. See TENGEN_CHEAT_* below. */
     uint8_t code_input_y;       /* codeInputYPlayer1: offset into the code table */
@@ -266,6 +271,13 @@ typedef struct {
      * (main.asm.txt:3556-3562). Kept per game so the garbage a seed produces
      * is the same on both consoles of a linked match. */
     TengenRng garbage_rng;
+    /* savedRNGSeed ($5A-$5B). The number the whole game was dealt from, kept
+     * because two things go back to it: initHandicapGarbage, which reseeds
+     * rngSeed from it at the top of EVERY call (main.asm.txt:3554-3557), and
+     * restartVsMode, which hands it back to the player it is restarting
+     * (:3432-3435) — so a board started again over A+B gets the pieces the
+     * match opened with. */
+    uint16_t seed;
     TengenPlayerState player[2];
     bool coop;
     bool two_player;
@@ -360,6 +372,10 @@ typedef struct {
     bool lines_collapsed;       /* set on the frame the rows actually vanish */
     bool leveled_up;
     bool topped_out;
+    /* A+B on a dead board put it back on its feet. See tengen_restart_player:
+     * the board, the score, the lines and the level are all new, so a
+     * renderer has to repaint rather than update. */
+    bool restarted;
 
     /* WHAT THE PIECE WAS WORTH, and how high it came to rest — the two things
      * L8129 needs to put the little three-digit total up beside it
@@ -544,6 +560,38 @@ void tengen_new_game(TengenGame *game, uint16_t seed, uint8_t start_level,
  * from the game's own garbage RNG, so two consoles from one seed bury each
  * other identically. */
 void tengen_apply_handicap(TengenGame *game, TengenPlayerSlot slot, uint8_t handicap);
+
+/* ----------------------------------------------------------------------- *
+ * A+B PUTS A DEAD BOARD BACK ON ITS FEET (VERIFIED, handleGameOver
+ * main.asm.txt:472-490 and restartVsMode :3402-3465)
+ *
+ * The cartridge reads the DEAD player's own pad every frame its board is
+ * finished — `activeGamePlay` falls into `handleGameOver` the moment
+ * `player1GameActive,x` reads zero, whether or not the other board is still
+ * going — and A and B held together start that player again on the spot.
+ * In a race that is one board restarting while the other plays on.
+ *
+ * What restartVsMode does, in its own order: the score and the line count go
+ * back to ASCII zeroes, the level back to THAT PLAYER'S chosen start level,
+ * the RNG back to the game's `savedRNGSeed` — so the new board is dealt the
+ * same pieces the match opened with — the board itself is laid out again,
+ * the handicap pile is dealt again, and the two cheat codes, the undo's
+ * memory and the level's clear tally are all cleared. `player1GameActive,x`
+ * is set from whatever happens to be in A at that point, which is `$30`; any
+ * non-zero is alive.
+ *
+ * ONLY IN A RACE. `handleGameOver` branches on playMode: 0 (1P) and $FF
+ * (coop, and WITH COMPUTER with it) go to `initializeGameMode` instead,
+ * which is a whole new game rather than one board — see the note in
+ * CLAUDE.md for why the port does not take that road. The VERSUS guard that
+ * stops the computer restarting itself is unreachable here for a different
+ * reason: `tengen_ai_buttons` never holds A and B on the same frame, and a
+ * test says so.
+ *
+ * Returns false, and does nothing, for a board that is still alive or a mode
+ * that has no restart. tengen_step calls it; it is exposed so a test can.
+ * ----------------------------------------------------------------------- */
+bool tengen_restart_player(TengenGame *game, TengenPlayerSlot slot);
 
 /* ----------------------------------------------------------------------- *
  * The level-up show's cast (VERIFIED, main.asm.txt:2050-2082, L8D8B)

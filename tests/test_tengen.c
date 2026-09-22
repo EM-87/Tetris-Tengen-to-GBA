@@ -1732,6 +1732,214 @@ static void test_the_computers_soft_drop_does_not_eat_its_own_shifts(void) {
     CHECK(landed * 10 >= asked * 8);
 }
 
+static void bury_board(TengenGame *game, TengenPlayerSlot slot) {
+    /* Solid but for one column, so no row can ever complete and the next
+     * piece has nowhere to go. */
+    TengenPlayfield *field = &game->field[game->coop ? 0 : (int)slot];
+    for (int row = 0; row < TENGEN_PF_HEIGHT; row++)
+        for (int col = 0; col < TENGEN_PF_WIDTH; col++)
+            field->cell[row][col] = (col == 5) ? TT_NONE : TT_I;
+}
+
+static void test_a_plus_b_puts_a_dead_board_back_on_its_feet(void) {
+    /* handleGameOver (main.asm.txt:472-478) reads the DEAD player's own pad
+     * every frame its board is finished — activeGamePlay falls into it the
+     * moment player1GameActive,x reads zero, whether or not the other board
+     * is still going — and A and B held together run restartVsMode. In a
+     * race that is one board starting again while the other plays on. */
+    TengenGame game;
+    tengen_new_game(&game, 0x2468, 4, true, false, false);
+    CHECK(!game.coop && game.two_player);
+
+    /* Player 2 has been playing: a score, some lines, a level of its own. */
+    game.player[TENGEN_PLAYER_2].score = 12345;
+    game.player[TENGEN_PLAYER_2].lines = 41;
+    game.player[TENGEN_PLAYER_2].level = 7;
+    bury_board(&game, TENGEN_PLAYER_2);
+
+    bool topped = false;
+    for (int frame = 0; frame < 600 && !topped; frame++) {
+        tengen_step(&game, TENGEN_PLAYER_1, 0);
+        topped = tengen_step(&game, TENGEN_PLAYER_2, 0).topped_out;
+    }
+    CHECK(topped);
+    CHECK(!game.player[TENGEN_PLAYER_2].game_active);
+    /* ...and player 1's race carries on, which is the whole point. */
+    CHECK(game.player[TENGEN_PLAYER_1].game_active);
+
+    /* A alone is not it, and neither is B. */
+    TengenStepResult r = tengen_step(&game, TENGEN_PLAYER_2, TENGEN_BTN_A);
+    CHECK(!r.restarted && !game.player[TENGEN_PLAYER_2].game_active);
+    r = tengen_step(&game, TENGEN_PLAYER_2, TENGEN_BTN_B);
+    CHECK(!r.restarted && !game.player[TENGEN_PLAYER_2].game_active);
+
+    /* Both, held. */
+    uint32_t was_p1_score = game.player[TENGEN_PLAYER_1].score;
+    r = tengen_step(&game, TENGEN_PLAYER_2,
+                     (uint8_t)(TENGEN_BTN_A | TENGEN_BTN_B));
+    CHECK(r.restarted);
+    CHECK(game.player[TENGEN_PLAYER_2].game_active);
+    CHECK(game.player[TENGEN_PLAYER_2].score == 0);
+    CHECK(game.player[TENGEN_PLAYER_2].lines == 0);
+    /* The level goes back to the one THIS player chose, not to zero. */
+    CHECK(game.player[TENGEN_PLAYER_2].level == 4);
+    CHECK(game.player[TENGEN_PLAYER_2].piece.current != TT_NONE);
+    /* The board is laid out again, walls and all, and nothing is settled. */
+    for (int row = 0; row < TENGEN_PF_HEIGHT; row++) {
+        CHECK(game.field[1].cell[row][0] == TT_WALL);
+        CHECK(game.field[1].cell[row][TENGEN_PF_WIDTH - 1] == TT_WALL);
+        for (int col = 1; col < TENGEN_PF_WIDTH - 1; col++)
+            CHECK(game.field[1].cell[row][col] == TT_NONE);
+    }
+    /* And NOTHING of player 1's was touched: it is still their game. */
+    CHECK(game.player[TENGEN_PLAYER_1].game_active);
+    CHECK(game.player[TENGEN_PLAYER_1].score == was_p1_score);
+}
+
+static void test_a_restarted_board_is_dealt_the_match_s_own_pieces(void) {
+    /* restartVsMode hands the player savedRNGSeed back (main.asm.txt:3432-
+     * 3435), so the board it starts is dealt exactly what the match opened
+     * with — not a fresh sequence, and not where the dead game left off.
+     *
+     * Measured against a brand-new game on the same seed, which is the only
+     * statement of that worth making: same piece in hand, same piece waiting,
+     * same generator behind them. */
+    TengenGame fresh, again;
+    tengen_new_game(&fresh, 0x7BCD, 0, true, false, false);
+    tengen_new_game(&again, 0x7BCD, 0, true, false, false);
+
+    /* Play player 2's board out, so its lookahead is a long way from where it
+     * started before anything is restarted. */
+    again.player[TENGEN_PLAYER_2].score = 9000;
+    bool topped = false;
+    for (int frame = 0; frame < 900 && !topped; frame++)
+        topped = tengen_step(&again, TENGEN_PLAYER_2,
+                              TENGEN_BTN_DOWN).topped_out;
+    if (!topped) {
+        bury_board(&again, TENGEN_PLAYER_2);
+        for (int frame = 0; frame < 900 && !topped; frame++)
+            topped = tengen_step(&again, TENGEN_PLAYER_2, 0).topped_out;
+    }
+    CHECK(topped);
+    CHECK(again.player[TENGEN_PLAYER_2].rng.lo !=
+           fresh.player[TENGEN_PLAYER_2].rng.lo ||
+           again.player[TENGEN_PLAYER_2].rng.hi !=
+           fresh.player[TENGEN_PLAYER_2].rng.hi);
+
+    CHECK(tengen_restart_player(&again, TENGEN_PLAYER_2));
+    CHECK(again.player[TENGEN_PLAYER_2].piece.current ==
+           fresh.player[TENGEN_PLAYER_2].piece.current);
+    CHECK(again.player[TENGEN_PLAYER_2].piece.next ==
+           fresh.player[TENGEN_PLAYER_2].piece.next);
+    CHECK(again.player[TENGEN_PLAYER_2].rng.lo ==
+           fresh.player[TENGEN_PLAYER_2].rng.lo);
+    CHECK(again.player[TENGEN_PLAYER_2].rng.hi ==
+           fresh.player[TENGEN_PLAYER_2].rng.hi);
+    /* ...and the fall timer is where a fresh game leaves it, so the first
+     * piece of the new board falls at the pace the first piece of a game
+     * does. */
+    CHECK(again.player[TENGEN_PLAYER_2].fall_timer ==
+           fresh.player[TENGEN_PLAYER_2].fall_timer);
+}
+
+static void test_only_a_race_restarts_one_board(void) {
+    /* handleGameOver branches on playMode first: 0 (1P) and $FF (coop, and
+     * WITH COMPUTER with it) go to initializeGameMode, which is a whole new
+     * game rather than one board. The port does not take that road — see
+     * CLAUDE.md — so in those modes A+B does nothing at all. */
+    TengenGame solo;
+    tengen_new_game(&solo, 0x1111, 0, false, false, false);
+    bury_board(&solo, TENGEN_PLAYER_1);
+    bool topped = false;
+    for (int frame = 0; frame < 600 && !topped; frame++)
+        topped = tengen_step(&solo, TENGEN_PLAYER_1, 0).topped_out;
+    CHECK(topped);
+    TengenStepResult r = tengen_step(&solo, TENGEN_PLAYER_1,
+                                      (uint8_t)(TENGEN_BTN_A | TENGEN_BTN_B));
+    CHECK(!r.restarted);
+    CHECK(!solo.player[TENGEN_PLAYER_1].game_active);
+    CHECK(!tengen_restart_player(&solo, TENGEN_PLAYER_1));
+
+    TengenGame coop;
+    tengen_new_game(&coop, 0x1111, 0, true, true, false);
+    bury_board(&coop, TENGEN_PLAYER_1);
+    topped = false;
+    for (int frame = 0; frame < 600 && !topped; frame++)
+        topped = tengen_step(&coop, TENGEN_PLAYER_1, 0).topped_out;
+    CHECK(topped);
+    r = tengen_step(&coop, TENGEN_PLAYER_1,
+                     (uint8_t)(TENGEN_BTN_A | TENGEN_BTN_B));
+    CHECK(!r.restarted);
+    CHECK(!coop.player[TENGEN_PLAYER_1].game_active);
+}
+
+static void test_a_restarted_board_is_buried_again_by_its_handicap(void) {
+    /* endPlayfieldInit runs the handicap again for the board it just laid out
+     * (main.asm.txt:3534-3542), and initHandicapGarbage reseeds rngSeed from
+     * savedRNGSeed at the top of EVERY call (:3554-3557) — so the pile is the
+     * same pile, and two equal handicaps bury two boards identically. */
+    TengenGame game;
+    tengen_new_game(&game, 0x0BAD, 0, true, false, false);
+    tengen_apply_handicap(&game, TENGEN_PLAYER_1, 2);
+    tengen_apply_handicap(&game, TENGEN_PLAYER_2, 2);
+
+    /* The cartridge's reseed, seen from outside: the same number deals the
+     * same pile, so the two boards come out identical. */
+    for (int row = 0; row < TENGEN_PF_HEIGHT; row++)
+        for (int col = 0; col < TENGEN_PF_WIDTH; col++)
+            CHECK(game.field[0].cell[row][col] == game.field[1].cell[row][col]);
+
+    int before = 0;
+    for (int row = 0; row < TENGEN_PF_HEIGHT; row++)
+        for (int col = 1; col < TENGEN_PF_WIDTH - 1; col++)
+            if (game.field[1].cell[row][col] != TT_NONE) before++;
+    CHECK(before > 0);
+
+    bury_board(&game, TENGEN_PLAYER_2);
+    bool topped = false;
+    for (int frame = 0; frame < 600 && !topped; frame++)
+        topped = tengen_step(&game, TENGEN_PLAYER_2, 0).topped_out;
+    CHECK(topped);
+    CHECK(tengen_restart_player(&game, TENGEN_PLAYER_2));
+
+    int after = 0;
+    for (int row = 0; row < TENGEN_PF_HEIGHT; row++)
+        for (int col = 1; col < TENGEN_PF_WIDTH - 1; col++)
+            if (game.field[1].cell[row][col] != TT_NONE) after++;
+    CHECK(after == before);
+    /* ...and cell for cell, because the seed is the game's own. */
+    for (int row = 0; row < TENGEN_PF_HEIGHT; row++)
+        for (int col = 0; col < TENGEN_PF_WIDTH; col++)
+            CHECK(game.field[1].cell[row][col] == game.field[0].cell[row][col]);
+}
+
+static void test_the_computer_never_holds_a_and_b_at_once(void) {
+    /* Which is why the port needs no copy of the VERSUS guard that stops the
+     * computer restarting itself (main.asm.txt:830C-830E): its driver picks
+     * one rotation button or the other, never both, so the chord cannot come
+     * out of it. If that ever changes, this is where it shows. */
+    TengenGame game;
+    TengenAi ai;
+    const uint8_t chord = TENGEN_BTN_A | TENGEN_BTN_B;
+    tengen_new_game(&game, 0x5A5A, 0, true, false, false);
+    tengen_ai_reset(&ai);
+    ai.soft_drop = true;
+
+    TengenTetromino last = TT_NONE;
+    for (int frame = 0; frame < 4000; frame++) {
+        TengenPlayerState *p = &game.player[TENGEN_PLAYER_2];
+        if (!p->game_active) break;
+        if (p->piece.current != last) {
+            last = p->piece.current;
+            tengen_ai_choose(&ai, &game, TENGEN_PLAYER_2);
+        }
+        uint8_t buttons = tengen_ai_buttons(&ai, &game, TENGEN_PLAYER_2,
+                                             (uint8_t)frame);
+        CHECK((buttons & chord) != chord);
+        tengen_step(&game, TENGEN_PLAYER_2, buttons);
+    }
+}
+
 static void test_a_coop_top_out_ends_the_game_for_both_players(void) {
     /* main.asm.txt:83D4-83DD. The store that clears `player1GameActive,x` is
      * preceded by a `bit playMode / bpl`, and on the negative playMode — the
@@ -2961,6 +3169,11 @@ int main(void) {
     test_the_computer_picks_a_placement_and_walks_to_it();
     test_the_computer_keeps_playing_and_does_not_bury_itself();
     test_coop_is_one_twelve_wide_board_over_the_cable();
+    test_a_plus_b_puts_a_dead_board_back_on_its_feet();
+    test_a_restarted_board_is_dealt_the_match_s_own_pieces();
+    test_only_a_race_restarts_one_board();
+    test_a_restarted_board_is_buried_again_by_its_handicap();
+    test_the_computer_never_holds_a_and_b_at_once();
     test_a_coop_top_out_ends_the_game_for_both_players();
     test_the_computers_soft_drop_does_not_eat_its_own_shifts();
     test_a_coop_line_clear_holds_both_players();

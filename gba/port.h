@@ -1734,6 +1734,12 @@ void leader_reset_table(int table);
 void leader_use_table(int skin);   /* -1 release, 0.. the prototypes */
 void draw_leader_row(int row);
 void draw_leaderboard(void);
+/* A match is starting: nothing owed, nothing owned. */
+void leader_new_match(void);
+/* ...and a board has died. The cartridge writes a game down as it ends, not
+ * at the end of the match, which is what lets a player start again over A+B
+ * and keep the game they just finished. See leader_record. */
+void leader_record(int slot);
 void leader_submit(void);
 /* Over a cable both players go on the board and only one of them is typed
  * here; these are the other one. See leader_submit and TengenNameSwap. */

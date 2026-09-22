@@ -231,6 +231,7 @@ int main(void) {
                 g_ai_last_partner = TT_NONE;
                 g_ai_frame = 0;
                 points_clear();
+                leader_new_match();
                 g_demo_over_frames = 0;
                 g_mix_step = 0;
                 g_shown_level = 0xFF;
@@ -495,6 +496,7 @@ int main(void) {
                 g_ai_last_partner = TT_NONE;
                 g_ai_frame = 0;
                 points_clear();
+                leader_new_match();
                 swallow_held_buttons(&g_session.game);
                 /* endPlayfieldInit's own place for it, right after the field
                  * is laid out (main.asm.txt:3536-3546). A shared board takes
@@ -600,6 +602,7 @@ int main(void) {
                 g_shown_piece = TT_NONE;
                 g_shown_piece2 = TT_NONE;
                 points_clear();
+                leader_new_match();
                 set_piece_palette(g_session.game.player[g_view].piece.current);
                 link_play_begin();
                 screen = SCREEN_PLAYING;
@@ -899,6 +902,12 @@ int main(void) {
          * rather than over the cable — by now the cable is shut down, and
          * neither player should have to wait for the other to agree. */
 #define GAMEOVER_RESTART (TENGEN_BTN_START | TENGEN_BTN_A | TENGEN_BTN_B)
+        /* ...EXCEPT WHILE THE OTHER BOARD IS STILL GOING, where A and B have
+         * a job of their own: held together they put this one back on its
+         * feet (handleGameOver, main.asm.txt:472-478, and the note on
+         * tengen_restart_player). A button that both leaves the race and
+         * starts it again is a button that does neither reliably, so in that
+         * one state the way out is START and nothing else. */
         /* THE BUTTON BELONGS TO THE BOARD IN FRONT OF THE PLAYER, not to the
          * match. The cartridge reads it per player — handleGameOver is called
          * with x on the dead side and restarts from there even while the other
@@ -914,6 +923,8 @@ int main(void) {
          * on the HIGH SCORES page with a score nobody played for. The demo
          * sees itself out above. */
         bool own_board_dead = !g_session.game.player[g_view].game_active;
+        uint8_t leave_buttons = (match_running && own_board_dead)
+                                 ? TENGEN_BTN_START : GAMEOVER_RESTART;
         /* AND THE PLAQUE LEAVES ON ITS OWN, WHICH IS THE CARTRIDGE'S WAY.
          * Its game over is a countdown to the high scores, not a prompt (see
          * GAMEOVER_HOLD_FRAMES); the port sat on the plaque until somebody
@@ -929,7 +940,7 @@ int main(void) {
          * quit still puts its score on the board. */
         if (!g_demo && (quit_match || over_expired ||
                          ((!match_running || own_board_dead) &&
-                          (pressed & GAMEOVER_RESTART)))) {
+                          (pressed & leave_buttons)))) {
             g_pause_confirm = false;
             /* Quitting out from under a match still running on the other side
              * of the cable: the cable has to be told, and put away, exactly as

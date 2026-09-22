@@ -183,7 +183,19 @@ running ROM; only the side panels need reflowing).
    `src/tengen_link.c` and tested on the host; the cable is `gba/link.c`,
    interrupt-driven so neither console can miss a transfer or send a stale
    word. `make gba-check` runs two mGBA cores with a cable between them and
-   asserts their game state matches byte for byte. See reference/NOTES.md.
+   asserts their game state matches byte for byte.
+   **AND A DEAD BOARD GETS UP AGAIN ON A+B**, which is the cartridge's
+   (`handleGameOver`, main.asm.txt:472-490) and what makes a race between two
+   people playable: the loser starts again on the spot — score and lines to
+   zero, the level back to the one THEY chose, the pieces the match opened
+   with, the handicap dealt again — while the winner plays on. Two things
+   about it. The restart runs INSIDE THE CORE off the held buttons, because
+   those buttons crossed the cable and the two consoles have to do it on the
+   same frame; done in the front end off the local keypad it would part the
+   two simulations for good. And **A and B stop being a way out while the
+   other board is still going**: there the way out is START, because a button
+   that both leaves the race and starts it again is a button that does
+   neither. See reference/NOTES.md.
 15. ~~The title screen's cathedral overlay and fireworks~~ — done, and by the
    same method as the audio: they are RUN, not reimplemented. Both are ROM
    subroutines that fill `oamStaging` and touch nothing else, so they execute
@@ -345,6 +357,13 @@ running ROM; only the side panels need reflowing).
    battery-backed SRAM under the cartridge's own 'LOGG' magic — which on the
    NES only carried it across a RESET. A cold table is @resetHighScores', 17000
    down to 3000 in thousands, which is why HIGH SCORE opens at 017000.
+   **A GAME IS WRITTEN DOWN AS IT ENDS, not at the end of the match.** L81DD
+   is called from the top-out itself (main.asm.txt:600), which is what stops
+   A+B's restart throwing away the game it just finished: five games are five
+   rows. The cartridge keeps one typing flag per PLAYER ($74/$75) and marks
+   each row's owner in the top two bits of its initials so Left and Right walk
+   a player between their own rows; the port types them one after the other,
+   oldest first.
    **AND OVER A CABLE BOTH PLAYERS GO ON IT, WITH THEIR OWN NAMES.** A linked
    match is lockstep — both consoles simulate both boards — so each one has
    known the rival's score and lines all along and simply never wrote them
@@ -590,6 +609,16 @@ does not is a bug.
   holds (roadmap 31), and a linked match is two consoles comparing state byte
   for byte, so one of them wearing a prototype's clothes would be a real
   divergence. The title's skin still cycles; a 2P board stays the release's.
+- **A+B RESTARTING THE WHOLE GAME in 1P and coop.** `handleGameOver` branches
+  on playMode before it does anything else: the race gets `restartVsMode`,
+  which the port takes, and 0 and `$FF` get `initializeGameMode` — a whole new
+  game, both boards, from the saved seed. The port's road out of a finished
+  solo game is the HIGH SCORES page and then the title (roadmap 25), and A and
+  B are what leaves it. A chord that means "start again" on a screen where the
+  same two buttons mean "leave" is the pause menu's old mistake over again
+  (roadmap 11), so in a race — where A and B have nothing else to do while the
+  other board is still going — the chord is the cartridge's, and everywhere
+  else the buttons stay the way out.
 - **The line counter's digit clamp** at 10000 (`main.asm.txt:3129-3133`). The
   score's wrap at 999999 IS reproduced; reaching ten thousand lines in one
   game is not a scenario worth carrying a bug for.
@@ -636,13 +665,7 @@ Ordered by what they buy against what they cost. Everything here is a
 decision waiting to be made, not a defect; the defects are bugs and get
 fixed.
 
-1. **The A+B restart of a dead board in 2P.** The cartridge lets a player
-   whose board is finished start again on the spot (`handleGameOver`,
-   main.asm.txt:82F3-830F) while the other plays on. The port ends the
-   match instead. With it, the question of what happens to a player's five
-   accumulated games at the leaderboard becomes real and `$74`/`$75` want
-   tracing to answer it.
-2. **The prototypes as a skin over the cable.** Asked for, and it is not a
+1. **The prototypes as a skin over the cable.** Asked for, and it is not a
    flag flip: a skinned board stores the PIECE'S OWN ID in a settled cell
    and the release stores a joined-block tile, so the two consoles' fields
    would differ byte for byte and lockstep would call it a divergence. A
@@ -651,14 +674,14 @@ fixed.
    is the lobby: exchange the skin so both boards wear the master's, with
    the release's RULES. Both consoles then agree on the cell format and the
    paint is real. See `piece_id_cells` and `skin_begin_match`.
-3. **`VBlankIntrWait` instead of the spin.** `vsync()` busy-waits at full
+2. **`VBlankIntrWait` instead of the spin.** `vsync()` busy-waits at full
    clock for the whole visible frame, which on a real console is battery
    and heat for nothing. The BIOS call halts instead. It wants the vblank
    interrupt in the vector the cable owns today.
-4. **The fireworks' distance and the dithered sky.** The bursts were moved
+3. **The fireworks' distance and the dithered sky.** The bursts were moved
    away from the frame to stop them colliding with it, and the cartridge's
    title has a dithered sunset behind them that the port does not draw.
-5. **The ten-line rule on the prototypes.** Still on the word of the list
+4. **The ten-line rule on the prototypes.** Still on the word of the list
    it came from; what the stacking bot needs is written up above.
 
 *(The coop HUD was on this list and is built: a panel per player, the

@@ -766,6 +766,180 @@ def records_check(rom):
         return 1
     print("OK: los dos acaban con la misma pagina de records, con el rival "
            "dentro y con su nombre.")
+    return restart_check(rom)
+
+
+def restart_check(rom):
+    """A+B PUTS A DEAD BOARD BACK ON ITS FEET, and the race carries on.
+
+    The cartridge reads the dead player's own pad every frame its board is
+    finished — activeGamePlay falls into handleGameOver the moment
+    player1GameActive,x reads zero, whether or not the other board is still
+    going (main.asm.txt:472-478) — and A and B held together run
+    restartVsMode. The port ended the match instead.
+
+    Over a cable this is the one that could quietly break everything: the
+    restart is driven by BUTTONS, which cross the wire, so it has to happen
+    inside the core on the frame both consoles agree on. If it were done in
+    the front end off the local keypad, the two simulations would part
+    company on that frame and never meet again. So what this measures, after
+    the restart, is the same thing every other check here measures: the whole
+    game state, byte for byte, on both consoles.
+    """
+    import run_rom
+
+    sym, why = symbol(rom, "g_session")
+    if sym is None:
+        print(f"SALTADO: {why}")
+        return 0
+    session_addr, session_size = sym
+    game_size = session_size - 4
+    off = run_rom.game_offsets(rom)
+
+    mgba.log.silence()
+    cores, screens = [], []
+    for _ in range(2):
+        core = mgba.core.load_path(rom)
+        screen = mgba.image.Image(SCREEN_W, SCREEN_H)
+        core.set_video_buffer(screen)   # must stay alive; see run_rom.load()
+        core.reset()
+        cores.append(core)
+        screens.append(screen)
+    master, slave = cores
+    cable = Cable(master, slave)
+    ends = [CableEnd(cable, True), CableEnd(cable, False)]
+    for core, end in zip(cores, ends):
+        core.attach_sio(end, lib.SIO_MULTI)
+
+    def both(frames, keys=None):
+        for _ in range(frames):
+            for i, core in enumerate(cores):
+                core.set_keys(*(keys[i] if keys else []))
+                core.run_frame()
+
+    def tap(name, who=None):
+        both(4, [[KEYS[name]] if who in (None, i) else [] for i in range(2)])
+        both(10, [[], []])
+
+    def hold(names, who, frames):
+        both(frames, [[KEYS[n] for n in names] if who == i else []
+                      for i in range(2)])
+        both(10, [[], []])
+
+    def alive(core, slot):
+        return core.memory.u8[session_addr + off["active"] + slot * off["stride"]]
+
+    def score(core, slot):
+        at = session_addr + off["score"] + slot * off["stride"]
+        return sum(core.memory.u8[at + k] << (8 * k) for k in range(4))
+
+    failures = []
+    both(8)
+    tap("START"); tap("DOWN"); tap("START")   # title -> 2 PLAYER -> the cable
+    both(50)
+    tap("START", who=0)
+    both(60)
+    if read_bytes(master, session_addr, game_size) == bytes(game_size):
+        print("SALTADO: la partida por cable no arranco")
+        return 0
+
+    # Player 2's board alone, buried identically on both cores — the only way
+    # to touch memory without breaking the lockstep this check is about.
+    field = session_addr + off["field"]
+    PF = TENGEN_PF_HEIGHT * TENGEN_PF_WIDTH
+    for core in cores:
+        # A score that belongs on the table (the cold one runs 17000 down to
+        # 3000), or "the game before the restart is still there" would be
+        # checking nothing.
+        at = session_addr + off["score"] + off["stride"]
+        for k in range(4):
+            core.memory.u8[at + k] = (33000 >> (8 * k)) & 0xFF
+        for r in range(TENGEN_PF_HEIGHT):
+            for c in range(TENGEN_PF_WIDTH):
+                core.memory.u8[field + PF + r * TENGEN_PF_WIDTH + c] = (
+                    CELL_WALL if c in (0, TENGEN_PF_WIDTH - 1)
+                    else (0 if c == 5 else 0x01))
+    both(240, [[], []])
+
+    if alive(master, 1):
+        print("SALTADO: el tablero del jugador 2 no llego a morir")
+        return 0
+    if not alive(master, 0):
+        failures.append("el jugador 1 murio tambien: el otro tablero deberia "
+                         "seguir corriendo")
+
+    # A ALONE MUST NOT LEAVE. It used to: START, A and B all took a dead board
+    # to the table, so the chord could never be held down long enough to mean
+    # anything. Now, while the other board is still going, the way out is
+    # START and A and B belong to the restart.
+    hold(["A"], 1, 20)
+    if "HIGH SCORES" in run_rom.tilemap_text(slave, 2, 0, 30):
+        failures.append("A solo se lleva a la tabla: el acorde no puede existir")
+    elif alive(slave, 1):
+        failures.append("A solo reinicio el tablero")
+    else:
+        print("  con el otro tablero vivo, A solo ni sale ni reinicia")
+
+    dead_score = score(master, 1)
+    hold(["A", "B"], 1, 20)
+    if not alive(master, 1):
+        failures.append("A+B no levanto el tablero muerto")
+    elif score(master, 1) != 0:
+        failures.append(f"el tablero reiniciado conserva {score(master, 1)} "
+                         "puntos: deberia empezar de cero")
+    elif not alive(master, 0):
+        failures.append("el reinicio se llevo por delante al otro jugador")
+    else:
+        settled = sum(1 for i in range(PF)
+                       if master.memory.u8[field + PF + i] not in (0, CELL_WALL))
+        if settled:
+            failures.append(f"el tablero reiniciado conserva {settled} celdas")
+        else:
+            print(f"  A+B levanta el tablero: {dead_score} puntos a cero y el "
+                   "campo limpio, sin tocar al rival")
+
+    # AND THE TWO CONSOLAS SIGUEN SIENDO LA MISMA PARTIDA. This is the claim
+    # that matters: the restart is driven by buttons that crossed the wire, so
+    # it has to have happened on the same frame on both machines.
+    both(120, [[], []])
+    if read_bytes(master, session_addr, game_size) != read_bytes(slave, session_addr, game_size):
+        failures.append("las dos consolas divergieron al reiniciar un tablero")
+    elif read_bytes(master, session_addr, session_size)[game_size + 2]:
+        failures.append("el enlace se declaro desincronizado tras el reinicio")
+    else:
+        print("  y las dos consolas siguen byte a byte en la misma partida")
+
+    # ...AND THE GAME IT JUST FINISHED IS ON THE BOARD. The cartridge writes a
+    # game down as it ends (L81DD from the top-out itself, main.asm.txt:600),
+    # which is what stops a restart throwing the last one away. Bury both and
+    # read the page: two rows for player 2's two games, and one for player 1.
+    for core in cores:
+        for board in (0, 1):
+            for r in range(TENGEN_PF_HEIGHT):
+                for c in range(TENGEN_PF_WIDTH):
+                    core.memory.u8[field + board * PF + r * TENGEN_PF_WIDTH + c] = (
+                        CELL_WALL if c in (0, TENGEN_PF_WIDTH - 1)
+                        else (0 if c == 5 else 0x01))
+    both(300, [[], []])
+    tap("START")
+    both(40, [[], []])
+    page = "".join(run_rom.tilemap_text(slave, run_rom.LEADER_FIRST_TY + i, 0, 30)
+                    for i in range(15))
+    if "HIGH SCORES" not in run_rom.tilemap_text(slave, 2, 0, 30):
+        failures.append("no se llega a la tabla tras el segundo game over")
+    elif f"{dead_score:06d}" not in page:
+        failures.append(f"la partida que acabo antes del reinicio ({dead_score}) "
+                         "no esta en la tabla: el reinicio se la comio")
+    else:
+        print(f"  y la partida anterior al reinicio ({dead_score}) sigue "
+               "anotada: cada partida es una fila")
+
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: A+B levanta un tablero muerto sin parar la carrera ni romper "
+           "el enlace.")
     return 0
 
 

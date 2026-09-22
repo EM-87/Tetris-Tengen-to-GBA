@@ -1000,6 +1000,7 @@ void tengen_new_game(TengenGame *game, uint16_t seed, uint8_t start_level,
     game->two_player = two_player;
     game->coop = coop;
     game->xe = xe;
+    game->seed = seed;          /* savedRNGSeed; see TengenGame */
 
     /* initPlayer1orCoopPlayfield (main.asm.txt:3468-3495): the wall columns
      * are written as solid nibbles in 1P/2P and left open in coop, which is
@@ -1056,9 +1057,22 @@ static uint8_t rng_times(TengenRng *rng, int n) {
 
 void tengen_apply_handicap(TengenGame *game, TengenPlayerSlot slot,
                             uint8_t handicap) {
+    /* Kept whatever the value, because restartVsMode deals it again. */
+    game->player[slot].handicap = handicap;
     if (handicap == 0 || handicap > TENGEN_HANDICAP_MAX) return;
     TengenPlayfield *field = &game->field[game->coop ? 0 : (int)slot];
     TengenRng *rng = &game->garbage_rng;
+
+    /* EVERY CALL STARTS FROM THE GAME'S OWN SEED, and this is the ROM's, not
+     * a tidiness: `lda savedRNGSeed / sta rngSeed` is the fifth thing
+     * initHandicapGarbage does (main.asm.txt:3554-3557), inside the routine
+     * rather than before it, so the two players' piles are dealt from the
+     * same number and two equal handicaps bury two boards identically. The
+     * port ran one sequence through both calls, which gave player 2 a
+     * different pile from player 1's for the same setting; and A+B's restart
+     * needs the reseed in any case, or the second pile would depend on how
+     * far the first had wound the generator. */
+    tengen_rng_seed(rng, game->seed);
 
     int rows = handicap * TENGEN_HANDICAP_ROWS_PER_STEP;
     for (int row = TENGEN_PF_HEIGHT - rows; row < TENGEN_PF_HEIGHT; row++) {
@@ -1196,12 +1210,88 @@ static void top_out(TengenGame *game, TengenPlayerSlot slot,
     result->topped_out = true;
 }
 
+/* restartVsMode (main.asm.txt:3402-3465), in its own order. See the header.
+ *
+ * The board is laid out again the way initPlayer1orCoopPlayfield lays it out
+ * — which in a race means the wall columns come back as solid nibbles — and
+ * then endPlayfieldInit deals the handicap pile again if that player has one.
+ * Only this player's half of anything is touched: the other board, the other
+ * score and the other RNG are somebody else's game and it is still running. */
+bool tengen_restart_player(TengenGame *game, TengenPlayerSlot slot) {
+    TengenPlayerState *p = &game->player[slot];
+
+    /* A RACE AND NOTHING ELSE. handleGameOver reads playMode first: 0 and
+     * $FF go to initializeGameMode, which is a whole new game. */
+    if (!game->two_player || game->coop) return false;
+    if (p->game_active) return false;
+
+    /* `lda #$30` into six score digits and four line digits (:3411-3424). */
+    p->score = 0;
+    p->lines = 0;
+    /* ...and the level back to the one this player chose, tens digit '0'
+     * (:3436-3441). menuPlayer1StartLevel is indexed by player, so the two
+     * can restart onto different levels. */
+    p->level = p->start_level;
+    /* The pieces the match opened with, all over again (:3432-3435). */
+    tengen_rng_seed(&p->rng, game->seed);
+
+    p->game_active = true;
+    p->piece.current = TT_NONE;
+    p->piece.next = TT_NONE;
+    p->piece.orientation = 0;
+    /* longBarCodeUsedP1,x and undoCodeUsedP1,x (:3452-3453): a restarted
+     * board gets both codes back. `player1BonusCounter,x` ($78) is cleared
+     * on the same run and has no field here — the port keeps the level's
+     * tally in clear_counts, which is the $6C-$72 half, cleared below. */
+    p->long_bar_code_used = 0;
+    p->undo_code_used = 0;
+    p->last_piece = TT_NONE;
+    for (int i = 0; i < 4; i++) p->clear_counts[i] = 0;
+    /* Not the ROM's, and not a guess either: these are zero on any board that
+     * has topped out — a top-out is a spawn that would not fit, which cannot
+     * happen mid-animation — and setting them says so rather than leaving a
+     * reader to work it out. */
+    p->line_clear_timer = 0;
+    p->clearing_rows = 0;
+
+    TengenPlayfield *field = &game->field[slot];
+    for (int row = 0; row < TENGEN_PF_HEIGHT; row++)
+        for (int col = 0; col < TENGEN_PF_WIDTH; col++)
+            field->cell[row][col] =
+                (col == 0 || col == TENGEN_PF_WIDTH - 1) ? TT_WALL
+                                                          : TENGEN_CELL_EMPTY;
+    tengen_apply_handicap(game, slot, p->handicap);
+
+    /* ...and the first piece, on the same terms tengen_new_game deals it: the
+     * ROM leaves `current` at zero and the next frame's getNextTetromino
+     * takes the spawn branch, so doing it here puts the board in exactly the
+     * state that frame would leave it in. See the note in tengen_new_game. */
+    spawn_piece(game, slot);
+    return true;
+}
+
 TengenStepResult tengen_step(TengenGame *game, TengenPlayerSlot slot, uint8_t held_buttons) {
     TengenStepResult result;
     memset(&result, 0, sizeof(result));
 
     TengenPlayerState *p = &game->player[slot];
-    if (!p->game_active) return result;
+    if (!p->game_active) {
+        /* handleGameOver (main.asm.txt:472-478): the DEAD player's own pad,
+         * read HELD rather than as a fresh press, every frame its board is
+         * finished — whether or not the other one is still going. */
+        const uint8_t chord = TENGEN_BTN_A | TENGEN_BTN_B;
+        if ((held_buttons & chord) == chord &&
+            tengen_restart_player(game, slot)) {
+            /* `sta player1ControllerNew,x` (:3450): the press that restarted
+             * the board is spent, so the piece it deals is not also rotated
+             * by it. */
+            p->held_last_frame = held_buttons;
+            result.restarted = true;
+            return result;
+        }
+        p->held_last_frame = held_buttons;
+        return result;
+    }
 
     /* ...AND ON A SHARED BOARD, EITHER PLAYER'S ANIMATION HOLDS BOTH OF THEM.
      * activeGamePlay tests its own timer first and then, on the negative
