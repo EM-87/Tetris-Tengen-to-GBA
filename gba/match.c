@@ -359,8 +359,8 @@ static void draw_pause_menu(void) {
          * eight pixels of nothing between them. Both of them can only sit
          * where they do because EXIT is four letters and SURE? is five: see
          * draw_pmenu_line for why the parity decides which layer each gets. */
-        draw_pmenu_line(PMENU_TY + 2, "EXIT", BANK_LABEL, false);
-        draw_pmenu_line(PMENU_TY + 3, "SURE?", BANK_LABEL, false);
+        draw_pmenu_line(PMENU_TY + 1, "EXIT", BANK_LABEL, false);
+        draw_pmenu_line(PMENU_TY + 2, "SURE?", BANK_LABEL, false);
         /* THE TWO ANSWERS STACK, like everything else in this box. Side by
          * side they had the arrow sitting exactly between them — as far from
          * YES as from NO, which is an arrow that answers nothing. One to a
@@ -370,18 +370,22 @@ static void draw_pause_menu(void) {
          * (No lowercase in this tile set either — $61 up are the braid and
          * the border, which is why 'yes' came out as two stray marks — so
          * capitals and an arrow are all there is to say it with.) */
-        draw_pmenu_line(PMENU_TY + 6, "YES", BANK_LABEL, g_pause_yes);
-        draw_pmenu_line(PMENU_TY + 7, "NO", BANK_LABEL, !g_pause_yes);
+        draw_pmenu_line(PMENU_TY + 4, "YES", BANK_LABEL, g_pause_yes);
+        draw_pmenu_line(PMENU_TY + 5, "NO", BANK_LABEL, !g_pause_yes);
         return;
     }
     /* PAUSE keeps its own colour because it is the heading and not a choice;
      * the three lines under it are all one colour now, and the arrow is what
      * says where you are. */
-    draw_pmenu_line(PMENU_TY + 2, "PAUSE", BANK_NOTE, false);
-    draw_pmenu_line(PMENU_TY + 4, "MUSIC", BANK_LABEL,
+    /* NO BLANK UNDER THE HEADING ANY MORE: PAUSE is a different colour from
+     * everything below it, which is what says it is a heading, and a row of
+     * nothing between three lines of text was most of what made this box
+     * twice the size of the cartridge's own. */
+    draw_pmenu_line(PMENU_TY + 1, "PAUSE", BANK_NOTE, false);
+    draw_pmenu_line(PMENU_TY + 2, "MUSIC", BANK_LABEL,
                      g_pause_row == PMENU_MUSIC);
-    draw_pmenu_line(PMENU_TY + 5, kMusicNames[g_music], BANK_LABEL, false);
-    draw_pmenu_line(PMENU_TY + 7, "EXIT", BANK_LABEL,
+    draw_pmenu_line(PMENU_TY + 3, kMusicNames[g_music], BANK_LABEL, false);
+    draw_pmenu_line(PMENU_TY + 5, "EXIT", BANK_LABEL,
                      g_pause_row == PMENU_EXIT);
 }
 

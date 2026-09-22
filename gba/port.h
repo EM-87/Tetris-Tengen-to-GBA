@@ -1362,15 +1362,16 @@ typedef enum {
 /* Two columns left of the list, which is the cartridge's own gap:
  * gameSelectArrowPpuAddrs ($A0AB) is $220A,$222A,$224A,$226A,$228A — column
  * $0A — and all five entries are written at column $0C. */
-#define GAME_SELECT_ARROW_TX (MENU_IN_TX + 3)
+/* AS FAR RIGHT AS THE LIST GOES: VERSUS COMPUTER, the longest of the five,
+ * ends one blank column short of the frame. The interior runs to
+ * MENU_IN_TX + MENU_IN_W - 1, so the list starts fifteen columns before that
+ * and the arrow two before the list. */
+#define GAME_SELECT_TX (MENU_IN_TX + MENU_IN_W - 1 - 1 - 15 + 1)
+#define GAME_SELECT_ARROW_TX (GAME_SELECT_TX - 2)
 /* AND THE LIST IS FLUSH LEFT, NOT CENTRED. Every entry starts at the same
  * nametable column on the cartridge — $0C for all five of them, whether the
  * entry is eight characters or fifteen — and centring them instead gave the
- * column a ragged edge that wandered four columns as the cursor moved. The
- * port keeps the BLOCK where it was, centred on its own narrower screen: the
- * flush edge is where VERSUS COMPUTER, the longest of the five, was already
- * starting. */
-#define GAME_SELECT_TX (GAME_SELECT_ARROW_TX + 2)
+ * column a ragged edge that wandered four columns as the cursor moved. */
 
 /* What the lobby is doing, while it does it. Two consoles reach this screen
  * independently, so it has to say which one this is and whether the other has
@@ -1636,7 +1637,15 @@ typedef enum {
  *      row 8   -
  */
 #define PMENU_W 14
-#define PMENU_H 10
+/* SEVEN ROWS, NOT TEN. The cartridge's own PAUSE is eight columns by two
+ * (pauseColsRows1, $B679) and its GAME OVER plaque is six by four; a box ten
+ * rows deep in a twenty-row screen is half the board covered by a menu that
+ * has three lines in it, which is out of proportion with both. The width
+ * cannot come down — KOROBEINIKI is eleven characters in a twelve-column
+ * interior, and thirteen columns cannot be centred (see below) — so the air
+ * comes out of the height: a heading, the entry and its value, one blank
+ * row, and EXIT. */
+#define PMENU_H 7
 #define PMENU_TX ((SCREEN_TW - PMENU_W) / 2)
 #define PMENU_TY ((SCREEN_TH - PMENU_H) / 2)
 #define PMENU_IN_TX (PMENU_TX + 1)
@@ -1710,6 +1719,7 @@ void oam_hide_all(void);
 
 /* hud.c */
 void draw_coop_dancers(int elapsed, int count);
+void draw_race_dancers(int elapsed, int count);  /* HUD VERSUS; see hud.c */
 void draw_dancers(int elapsed, int count);
 void dancers_begin(uint16_t seed, int cast);  /* the interlude's choreography; see hud.c */
 void dancers_step(int frame);
@@ -1729,26 +1739,41 @@ void clear_panel_region(int tx, int ty, int w, int h);
 void set_stats_tile(int tx, int ty, uint16_t entry);
 void set_histogram_tile(int tx, int ty, uint16_t entry);
 void clear_both(int tx, int ty, int w, int h);
-/* WHAT THE RIGHT BOX IS HOLDING. Two states for most of the game and THREE in
- * a race, because a race has a second board worth looking at:
+/* WHAT THE HUD IS, AND TWO PER MODE.
  *
- *   BANNER  the vertical TETRIS, which takes the whole column
+ * Four of them, and each game mode offers exactly two — the one it opens on
+ * and one alternative, walked with SELECT:
+ *
+ *   1 PLAYER         BANNER  then STATS
+ *   VERSUS COMPUTER  VERSUS  then STATS   (whose left box keeps RIVAL)
+ *   WITH COMPUTER    COOP    then STATS   (whose cells are the board's
+ *                                          totals once the chord is rung)
+ *   2 PLAYER         VERSUS  and nothing else
+ *   COOPERATIVE      COOP    and nothing else
+ *
+ * The two cable modes offer one apiece on purpose: the other player is a
+ * person who chose to play with you, so there is nothing to hide from them
+ * and no reason to take their panel away.
+ *
+ *   BANNER  the vertical TETRIS, which takes the whole right column
  *   STATS   the cossack on his shelf and the piece histogram under him
- *   RIVAL   the other player's panel — their NEXT, score, lines and LEVEL,
- *           laid out like coop's right-hand one. A race only.
- *
- * SELECT walks them. In RIVAL the left box gives up its own RIVAL cell and
- * goes back to the 1P panel's HIGH, because the rival's score is no longer
- * a number squeezed into somebody else's panel — it has a panel. */
-typedef enum { HUD_BANNER = 0, HUD_STATS = 1, HUD_RIVAL = 2, HUD_STATE_COUNT = 3 } HudBox;
+ *   VERSUS  the rival's own panel in the right box — their NEXT, score,
+ *           lines and LEVEL, laid out like coop's
+ *   COOP    both players' panels, which is the coop screen's own shape
+ */
+typedef enum { HUD_BANNER = 0, HUD_STATS = 1, HUD_VERSUS = 2, HUD_COOP = 3 } HudBox;
 extern uint8_t g_hud;
 #define hud_banner() (g_hud == HUD_BANNER)
 #define hud_stats()  (g_hud == HUD_STATS)
-#define hud_rival()  (g_hud == HUD_RIVAL)
-/* How many of them this match offers: RIVAL needs a rival on a board of their
- * own, so a race gets three and everything else two. */
-#define HUD_STATES() ((g_session.game.two_player && !g_session.game.coop) \
-                       ? HUD_STATE_COUNT : 2)
+#define hud_versus() (g_hud == HUD_VERSUS)
+#define hud_coop()   (g_hud == HUD_COOP)
+/* The pair this match offers, first the one it opens on. `n` receives how
+ * many there are — one for the cable modes. */
+enum { HUD_MODE_SOLO, HUD_MODE_VERSUS, HUD_MODE_WITH,
+        HUD_MODE_2P, HUD_MODE_COOP, HUD_MODE_COUNT };
+const uint8_t *hud_set(int *n);
+void hud_reset(void);        /* to whatever this mode was last left on */
+void hud_remember(void);     /* ...which SELECT is what writes down */
 void draw_field_braid(int tx, const uint8_t run[1][2]);
 void draw_dancer_stage(void);
 unsigned text_len(const char *s);

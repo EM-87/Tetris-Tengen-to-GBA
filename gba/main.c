@@ -232,6 +232,8 @@ int main(void) {
                 g_ai_frame = 0;
                 points_clear();
                 leader_new_match();
+                /* ...and the HUD this mode opens on. See hud_set. */
+                hud_reset();
                 g_demo_over_frames = 0;
                 g_mix_step = 0;
                 g_shown_level = 0xFF;
@@ -497,6 +499,8 @@ int main(void) {
                 g_ai_frame = 0;
                 points_clear();
                 leader_new_match();
+                /* ...and the HUD this mode opens on. See hud_set. */
+                hud_reset();
                 swallow_held_buttons(&g_session.game);
                 /* endPlayfieldInit's own place for it, right after the field
                  * is laid out (main.asm.txt:3536-3546). A shared board takes
@@ -603,6 +607,8 @@ int main(void) {
                 g_shown_piece2 = TT_NONE;
                 points_clear();
                 leader_new_match();
+                /* ...and the HUD this mode opens on. See hud_set. */
+                hud_reset();
                 set_piece_palette(g_session.game.player[g_view].piece.current);
                 link_play_begin();
                 screen = SCREEN_PLAYING;
@@ -761,11 +767,24 @@ int main(void) {
                 clear_both(COOP_R_TX, BRAID_T, COOP_PANEL_W,
                             COOP_LEDGE_FIRST - BRAID_T);
                 draw_coop_dancers(g_dancer_elapsed, g_dancer_cast);
-            } else if (!hud_banner()) {
+            } else if (hud_stats()) {
                 /* HUD STATS keeps its screen. Nothing is cleared and nothing
                  * has to be put back; the panel redraws every frame anyway,
                  * and the cossack standing in it takes the show. */
                 draw_panel();
+            } else if (hud_versus()) {
+                /* HUD VERSUS HAS TWO PANELS AND FOUR LEDGES A SIDE, which is
+                 * coop's shape, so the troupe comes on there rather than on a
+                 * stage blitted over the right column — and the counters go
+                 * for the length of the show, exactly as they do in coop. See
+                 * draw_race_dancers for what the cartridge does instead and
+                 * why the port cannot. */
+                clear_panel_region(BOX_L_TX, 0, BOX_W, SCREEN_TH);
+                clear_panel_region(BOX_R_TX, 0, BOX_W, SCREEN_TH);
+                clear_both(BOX_L_TX, BRAID_T, BOX_W, SHELF_FIRST - BRAID_T);
+                clear_both(BOX_R_IN, BRAID_T, BOX_IN, SHELF_FIRST - BRAID_T);
+                clear_stats_layer();
+                draw_race_dancers(g_dancer_elapsed, g_dancer_cast);
             } else {
                 /* The stage gets the WHOLE column, the way the cartridge's
                  * level-up blit gets the whole banner. Painting only the
@@ -808,13 +827,21 @@ int main(void) {
          * have been found. A screen reachable with SELECT that shows what the
          * chord is supposed to unlock is not a locked door. See
          * draw_coop_stats_panel and g_pause_unlocked. */
+        int hud_count = 1;
+        (void)hud_set(&hud_count);
         bool hud_swappable = screen == SCREEN_PLAYING && match_running &&
                               !g_session.game.paused &&
                               g_session.game.player[g_view].game_active &&
-                              (!g_session.game.coop ||
-                               (g_ai_active && !g_linked && g_pause_unlocked));
+                              hud_count > 1;
         if (hud_swappable && (pressed & TENGEN_BTN_SELECT)) {
-            g_hud = (uint8_t)((g_hud + 1) % HUD_STATES());
+            {
+                int n;
+                const uint8_t *set = hud_set(&n);
+                int at = 0;
+                for (int i = 0; i < n; i++) if (set[i] == g_hud) at = i;
+                g_hud = set[(at + 1) % n];
+                hud_remember();
+            }
             /* Both directions need the static screen back: going TO the
              * banner erases the braid box, and coming back from it has to
              * redraw one. Without this the box's border kept whatever the
@@ -830,7 +857,11 @@ int main(void) {
          * the same screen that disagree about when they are open is worse
          * than either rule. The chirp is its own: the screen has not changed,
          * so the screen's blip would be a lie. */
-        if (hud_swappable && shoulder_chord()) {
+        /* ...AND ONLY WHERE THERE IS A COSSACK TO RECOLOUR, which is HUD
+         * STATS and nowhere else. On any other HUD the chord changed a
+         * palette nothing on screen was using and chirped to say so, which is
+         * a control that answers and does nothing. */
+        if (hud_swappable && hud_stats() && shoulder_chord()) {
             g_idle_palette = (uint8_t)((g_idle_palette + 1) % IDLE_PALETTE_COUNT);
             nes_audio_play(NES_SOUND_CHIRP);
         }

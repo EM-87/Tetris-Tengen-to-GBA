@@ -1330,6 +1330,14 @@ def skin_check(rom_path):
 # cartridge's first three; the last two want the COMPUTER player.
 GAME_SELECT_ROWS = 5
 GAME_SELECT_TY = 10             # ...and they start here, one row apart
+# THE LIST IS FLUSH LEFT AND PUSHED RIGHT, the cartridge's own way of setting
+# it: every entry starts at the same column whatever its length, and VERSUS
+# COMPUTER — the longest at fifteen characters — ends one blank column short
+# of the frame. gba/port.h's GAME_SELECT_TX. The arrow is two columns before
+# it, so the scan below has to start AT the list rather than a few columns
+# left of it, or it reads the cursor's white as an entry in the wrong bank.
+GAME_SELECT_TX = 12
+GAME_SELECT_LONGEST = 15
 # The bank EVERY menu line is drawn in, chosen or not. It is bank 0 of
 # bgPalette1 -- kRomPalette_bg_menu's `0F 12 0F 0F`, the cartridge's menu BLUE.
 # Measured off the running cartridge: on its GAME SELECT all five entries come
@@ -1347,7 +1355,7 @@ MENU_ARROW_BANK = 11            # PAL_MENU_BASE + 3
 PALETTE_ADDR = 0x05000000
 TITLE_PAL_BASE = 4
 # ...and the cursor's column, gba/frontend.c's GAME_SELECT_ARROW_TX.
-MENU_ARROW_TX = 5
+MENU_ARROW_TX = GAME_SELECT_TX - 2
 # The shared coop board starts one column further left than the ten-wide
 # one, because it is twelve wide (SCREEN_COOP_FIELD_TX in the generated
 # header, and COOP_FIELD_TX in gba/port.h).
@@ -2224,10 +2232,10 @@ def versus_hud_check(rom_path):
         at = base + off["score"] + who * off["stride"]
         return sum(core.memory.u8[at + k] << (8 * k) for k in range(4))
 
-    # READ ON THE FRAME THEY ARE LOOKED AT. The board is still being played
-    # between one SELECT and the next — a piece landing is worth points — so
-    # the figure planted at the start is not the figure on the panel three
-    # presses later.
+    # TWO HUDS IN A RACE, AND IT OPENS ON HUD VERSUS. Read on the frame each
+    # is looked at: the board is still being played between one SELECT and
+    # the next, so the figure planted at the start is not the figure on the
+    # panel a press later.
     seen = []
     for step in range(3):
         if step:
@@ -2236,34 +2244,44 @@ def versus_hud_check(rom_path):
         seen.append((box(core, LEFT), box(core, RIGHT),
                       f"{score_now(0)}", f"{score_now(1)}"))
 
-    # The first two are the HUDs a race already had, and neither shows the
-    # rival's numbers anywhere but in the left box's last cell.
-    for i in (0, 1):
-        if "RIVAL" not in seen[i][0]:
-            failures.append(f"el HUD {i} perdio la celda RIVAL del cajon "
-                             f"izquierdo: {seen[i][0]!r}")
-        if seen[i][3] in seen[i][1]:
-            failures.append(f"el HUD {i} ya lleva los numeros del rival a la "
-                             f"derecha: {seen[i][1]!r}")
-    # ...and the third is the rival's own panel.
-    left, right, MINE, THEIRS = seen[2]
+    # [0] is the default and it is HUD VERSUS: the rival has the right box,
+    # and the left one is the 1P panel again — HIGH where RIVAL used to be.
+    left, right, MINE, THEIRS = seen[0]
     if THEIRS not in right:
-        failures.append(f"el tercer HUD no trae la puntuacion del rival al "
-                         f"cajon derecho: {right!r}")
-    elif "RIVAL" not in right:
-        failures.append(f"el tercer HUD no dice de quien es el panel: {right!r}")
+        failures.append(f"el HUD por defecto no trae la puntuacion del rival "
+                         f"al cajon derecho: {right!r}")
     elif "RIVAL" in left:
         failures.append(f"el cajon izquierdo conserva su celda RIVAL teniendo "
                          f"el panel al lado: {left!r}")
+    elif "RIVAL" in right:
+        failures.append(f"el panel del rival sigue rotulado RIVAL en su ultima "
+                         f"celda: {right!r}")
     elif "HIGH" not in left:
         failures.append(f"el cajon izquierdo no recupera HIGH: {left!r}")
     elif MINE not in left:
         failures.append(f"el cajon izquierdo dejo de llevar lo tuyo: {left!r}")
     else:
-        print("  SELECT recorre tres HUDs en una carrera, y el tercero da el "
-               "cajon derecho al rival")
-        print(f"    izquierda {left!r}")
-        print(f"    derecha   {right!r}")
+        print("  una carrera abre en HUD VERSUS: el rival tiene el cajon "
+               "derecho y el izquierdo recupera HIGH")
+
+    # [1] is HUD STATS, which is where the RIVAL cell lives now.
+    left, right, MINE, THEIRS = seen[1]
+    if "RIVAL" not in left:
+        failures.append(f"el segundo HUD no devuelve la celda RIVAL al cajon "
+                         f"izquierdo: {left!r}")
+    elif any(ch.isdigit() for ch in right):
+        failures.append(f"el segundo HUD deberia ser el histograma, no un "
+                         f"panel con numeros: {right!r}")
+    else:
+        print("  y el segundo es HUD STATS, con RIVAL de vuelta a la izquierda")
+
+    # ...and there are only two: HUD BANNER is not one of a race's.
+    if seen[2][:2] != seen[0][:2] and "RIVAL" in seen[2][0]:
+        failures.append("una carrera ofrece mas de dos HUDs")
+    elif not any(ch.isdigit() for ch in seen[2][1]):
+        failures.append("SELECT no vuelve al primer HUD: una carrera tiene dos")
+    else:
+        print("  y son dos: SELECT vuelve al primero, sin pasar por el cartel")
 
     # AND THE PAUSE SHOWS THE OTHER BOARD, under the chord and only there.
     # Two stacks nothing can confuse: yours on the left of your field, theirs
@@ -2761,15 +2779,19 @@ def counters_check(rom_path):
 # question's second line ride the counters' layer two pixels down, the
 # even-length ones the offset layer three across — but tilemap_text reads all
 # four, so these are just rows.
-PMENU_H = 10
+PMENU_H = 7
 PMENU_TY = (SCREEN_H // TILE - PMENU_H) // 2
-PM_HEAD = PMENU_TY + 2       # PAUSE
-PM_MUSIC = PMENU_TY + 4      # MUSIC
-PM_TUNE = PMENU_TY + 5       # ...and the tune's name under it
-PM_EXIT = PMENU_TY + 7       # EXIT
-PM_ASK = PMENU_TY + 2        # the question's EXIT
-PM_SURE = PMENU_TY + 3       # ...and its SURE?
-PM_ANSWER = PMENU_TY + 6     # YES, with NO under it
+# SEVEN ROWS NOW, not ten: the cartridge's own PAUSE is eight columns by two
+# and its GAME OVER plaque six by four, and a box half the height of the
+# screen for three lines of text is out of proportion with both. The blank
+# rows came out; see PMENU_H in gba/port.h.
+PM_HEAD = PMENU_TY + 1       # PAUSE
+PM_MUSIC = PMENU_TY + 2      # MUSIC
+PM_TUNE = PMENU_TY + 3       # ...and the tune's name under it
+PM_EXIT = PMENU_TY + 5       # EXIT
+PM_ASK = PMENU_TY + 1        # the question's EXIT
+PM_SURE = PMENU_TY + 2       # ...and its SURE?
+PM_ANSWER = PMENU_TY + 4     # YES, with NO under it
 # The box's own columns, which is all a check about the box should read: the
 # rest of the row is the HUD, and the braid decodes as stray letters.
 # FOURTEEN, not thirteen: an odd width cannot be centred on the board, and the
@@ -3101,10 +3123,10 @@ def pause_menu_visible(rom_path):
     # Las filas de la caja, de arriba abajo: el borde, PAUSE, MUSIC, el nombre
     # de la cancion, EXIT y el borde de abajo. Ninguna puede salir vacia.
     want = ((PMENU_TY, "el borde de arriba de la caja"),
-            (PMENU_TY + 2, "el titulo PAUSE"),
-            (PMENU_TY + 4, "la linea MUSIC"),
-            (PMENU_TY + 5, "el nombre de la cancion"),
-            (PMENU_TY + 7, "la linea EXIT"),
+            (PM_HEAD, "el titulo PAUSE"),
+            (PM_MUSIC, "la linea MUSIC"),
+            (PM_TUNE, "el nombre de la cancion"),
+            (PM_EXIT, "la linea EXIT"),
             (PMENU_TY + PMENU_H - 1, "el borde de abajo de la caja"))
     for ty, what in want:
         n = lit(ty, PMENU_TX + 2, PMENU_TX + PMENU_W_T - 2)
@@ -3355,24 +3377,23 @@ def coop_hud_check(rom_path):
         print(f"  sin acorde: izquierda {left!r}")
         print(f"              derecha   {right!r}")
 
-    # ...AND WITHOUT THE CHORD, SELECT DOES NOTHING HERE. The other coop HUD
-    # carries T.SCORE and T.LINES, which the panel itself only prints once the
-    # cheats have been found, so a screen SELECT could reach that shows them
-    # would be a locked door with the key in it.
-    # Measured by what the other HUD DOES — it hides the partner's panel —
-    # and not by comparing the two panels whole: the machine is playing while
-    # this happens, so every counter on them is a moving target.
+    # ...AND WITHOUT THE CHORD, SELECT STILL OPENS THE OTHER HUD — hiding the
+    # machine's panel is a difficulty setting and has nothing to do with the
+    # cheats — but the two cells it puts in its place are YOUR OWN score and
+    # lines, not the board's totals. The totals are the chord's.
     core.set_keys(KEYS["SELECT"]); run(core, 4); core.set_keys(); run(core, 60)
-    # "Still a panel", not "still 6789": the machine is playing and its score
-    # moves a point at a time. The other HUD puts the piece histogram here,
-    # which has no digits in it at all.
-    if not any(ch.isdigit() for ch in panel(core, RIGHT)):
-        failures.append("sin el acorde SELECT ya esconde el panel del "
-                         "companero, y ese HUD lleva los totales")
-    elif "T." in panel(core, LEFT):
-        failures.append("sin el acorde SELECT ya saca los totales")
+    left, right = panel(core, LEFT), panel(core, RIGHT)
+    if any(ch.isdigit() for ch in right):
+        failures.append(f"sin el acorde SELECT no esconde el panel del "
+                         f"companero: {right!r}")
+    elif "T." in left:
+        failures.append(f"sin el acorde ese HUD ya saca los totales: {left!r}")
+    elif "12345" not in left:
+        failures.append(f"sin el acorde ese HUD deberia llevar tu propia "
+                         f"puntuacion: {left!r}")
     else:
-        print("  ...y sin el acorde SELECT no abre el HUD que los lleva")
+        print("  ...y sin el acorde SELECT lo abre igual, con tu propia "
+               "puntuacion en vez de los totales")
 
     core = start(cheat=True)
     left, right = panel(core, LEFT), panel(core, RIGHT)
@@ -4681,7 +4702,8 @@ def leaving_title_check(rom_path):
     def entry_banks():
         return {core.memory.u16[SCREENBLOCK_ADDR + (r * 32 + x) * 2] >> 12
                 for r in range(GAME_SELECT_TY, GAME_SELECT_TY + GAME_SELECT_ROWS)
-                for x in range(6, 26)
+                for x in range(GAME_SELECT_TX,
+                                GAME_SELECT_TX + GAME_SELECT_LONGEST)
                 if core.memory.u16[SCREENBLOCK_ADDR + (r * 32 + x) * 2] & 0x3FF}
 
     banks = entry_banks()

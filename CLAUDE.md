@@ -110,6 +110,24 @@ running ROM; only the side panels need reflowing).
    drew nothing extra on screen and put every other dancer on a different
    branch; `make dance-check` is what found it, and it runs the 6502 driver
    beside the port's on one seed for both casts, six and coop's eight.
+   **AND IN A RACE THEY COME ON DOWN THE TWO PANELS**, which is the port's
+   arrangement of the cartridge's own show rather than the cartridge's. What
+   it does in 2P and VERSUS is run the same interlude it runs in 1P —
+   `showLevelBonus` sets gameState to LEVELUP, which stops both boards, and
+   `L8D6B` blits `levelUpAnimationColsRows1`, four columns by eighteen rows at
+   nametable (14,10), into the strip BETWEEN the two playfields. There is no
+   "the player who levelled up gets them on their side": one stage, in the
+   middle, and `L8D8B` counts BOTH players' triples and tetrises into one
+   cast. Only the coop screen skips the blit (`bit playMode / bmi`), because
+   its ledges are already drawn. The port shows ONE board of the two, so there
+   is no strip between them to stand a stage in — the middle of its screen is
+   the playfield. What it has is two panels with four ledges each, so in HUD
+   VERSUS the troupe comes on there, the counters go for the length of the
+   show, and the heights are the cartridge's own (`kDancerCoopY`; the ledge
+   rows are the same in both screens). The cast is still both players' work,
+   still capped at six, and the programmes are still the SOLO ones —
+   positions 0-5 — because that is what a race dances on the cartridge. Only
+   the floor is the port's. See `draw_race_dancers`.
 9. ~~Title and menu screens~~ — done, from the cartridge's own title art and
    menu frame. The title's frame is TWO frames and the screen's shape decides
    which: the port keeps the blue BRAID whole on all four sides and fills the
@@ -300,23 +318,34 @@ running ROM; only the side panels need reflowing).
    `make gba-check --panel` measures all of it off the framebuffer: four blue
    shelves found by colour, equal air under each, NEXT centred, and both ropes
    reaching the last scanline.
-   **AND A RACE HAS A THIRD HUD, WHICH IS THE RIVAL'S OWN PANEL.** A race is
-   two boards and the port only ever drew one of them: the other player was a
-   single number in the bottom cell of YOUR panel, which says who is winning
-   and nothing else — not what they are holding, not how fast they are going,
-   and above all not what LEVEL they are on, which in this game is the whole
-   of the bragging. SELECT walks three now: BANNER, STATS and RIVAL, where the
-   right box becomes their panel laid out exactly like coop's, and the left
-   box gives the RIVAL cell back and returns to the 1P panel's HIGH. The
-   ledges are drawn by the panel itself rather than with the static screen,
-   because it clears the column under the first shelf every frame and would
-   take them with it. Three states in a race and two everywhere else — RIVAL
-   needs a rival on a board of their own. See `HUD_STATES` and
-   `make gba-check --versushud`.
-   **AND COOP'S SECOND HUD IS BEHIND THE CHORD NOW.** It carries T.SCORE and
-   T.LINES, the board's totals, which the coop panel itself only prints once
-   the cheats have been found — so a screen SELECT could reach that showed
-   them was a locked door with the key left in it.
+   **AND THERE ARE FOUR HUDS, TWO PER MODE.** Each game mode offers the one
+   it opens on and one alternative, walked with SELECT and remembered per
+   mode — a choice that did not survive the next game meant picking the same
+   HUD again every time, and one remembered ACROSS modes meant VERSUS handing
+   WITH COMPUTER a HUD it had never been asked for, because STATS is in both
+   sets. One slot each (`g_hud_choice`) settles both.
+
+   | mode | opens on | and | 
+   | --- | --- | --- |
+   | 1 PLAYER | BANNER | STATS |
+   | VERSUS COMPUTER | VERSUS | STATS, whose left box keeps RIVAL |
+   | WITH COMPUTER | COOP | STATS, whose two cells are the board's totals once the chord is rung and your own score and lines until it is |
+   | 2 PLAYER | VERSUS | — |
+   | COOPERATIVE | COOP | — |
+
+   The two CABLE modes offer one apiece on purpose: the other player is a
+   person who chose to play with you, so there is nothing to hide from them
+   and no reason to take their panel away. HUD VERSUS is the rival's own
+   panel in the right box — their NEXT, score, lines and LEVEL, laid out like
+   coop's — and its fourth cell is EMPTY: it carried RIVAL for a while, which
+   is a caption on a caption, since the panel is the rival's. The left box
+   gives its own RIVAL cell back there and returns to the 1P panel's HIGH.
+   The ledges are drawn by the panel itself rather than with the static
+   screen, because it clears the column under the first shelf every frame and
+   would take them with it. **AND THE COSSACK'S COLOUR CHORD ANSWERS ONLY IN
+   HUD STATS**, which is the only HUD with a cossack in it — anywhere else it
+   changed a palette nothing on screen was using and chirped to say so.
+   See `hud_set` and `make gba-check --versushud`.
 21. ~~FOUR backgrounds, each for a scroll the others cannot share~~ — done,
    and this is the shape to keep in mind before adding anything to the HUD: a
    scroll is one number per background, so anything whose ink is not centred
@@ -437,7 +466,15 @@ running ROM; only the side panels need reflowing).
    no title theme. It sends the RESUME itself now, FIRST in the ring so its
    own blip is not swallowed, and `make gba-check --quit-audio` walks that
    road and listens at every screen. See reference/NOTES.md.
-   **AND FOURTEEN COLUMNS WIDE, BECAUSE THIRTEEN CANNOT BE CENTRED.** The box
+   **SEVEN ROWS, AND FOURTEEN COLUMNS BECAUSE THIRTEEN CANNOT BE CENTRED.**
+   It was ten rows deep, which in a twenty-row screen is half the board
+   covered by a menu with three lines in it — against the cartridge's own
+   PAUSE at eight columns by two (`pauseColsRows1`, `$B679`) and its GAME OVER
+   plaque at six by four, that is out of proportion with both. The width
+   cannot come down (KOROBEINIKI is eleven characters in a twelve-column
+   interior), so the air came out of the height: the blank row under the
+   heading went, and PAUSE is told apart from the lines below it by its
+   colour, which is what a heading is for. The box
    lands on the board, whose middle is x=120 — the screen's own — and a box of
    odd width on an even grid cannot be put there: thirteen columns sits four
    and a half pixels left, which against a playfield you are looking straight

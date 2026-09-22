@@ -165,6 +165,62 @@ void draw_coop_dancers(int elapsed, int count) {
         MEM_OAM[i * 4] = OBJ_ATTR0_HIDDEN;
 }
 
+/* THE RACE'S TROUPE, ON THE TWO PANELS — which is the port's arrangement of
+ * the cartridge's own show, and worth saying exactly how it differs.
+ *
+ * WHAT THE CARTRIDGE DOES IN 2P AND VERSUS. It runs the same interlude it
+ * runs in 1P: `showLevelBonus` (main.asm.txt:1926) sets gameState to LEVELUP,
+ * which stops BOTH boards, and `L8D6B` blits the dancers' stage —
+ * `levelUpAnimationColsRows1`, four columns by eighteen rows at nametable
+ * (14,10) — into the strip BETWEEN the two playfields. There is no "the
+ * player who levelled up gets the cossacks on their side": there is one
+ * stage, in the middle, and `L8D8B` counts the triples and tetrises of BOTH
+ * players into one cast. The coop screen is the only one that skips the blit
+ * (`bit playMode / bmi`), because its ledges are already drawn.
+ *
+ * WHAT THE PORT CANNOT DO. It shows one board of the two, so there is no
+ * strip between them to stand a stage in: the middle of this screen is the
+ * playfield itself. What it has instead is two panels with four ledges each,
+ * which is the coop screen's shape — so the troupe comes on there, four a
+ * side, and the counters go for the length of the show. The cast is still
+ * both players' work and still capped at six (`tengen_dancer_count`), and the
+ * programmes they dance are the SOLO ones, positions 0-5, because that is
+ * what a race dances on the cartridge. Only the floor is the port's.
+ *
+ * The ledge rows are the same in both screens — COOP_LEDGE_FIRST and
+ * SHELF_FIRST are both 8, both step 3 — so the heights are the cartridge's
+ * own, taken straight from kDancerCoopY. What is computed here is the two
+ * starting marks: sixteen pixels left of the board and flush with its right
+ * edge, which is where the coop screen's own marks sit relative to ITS wider
+ * field. They walk outward from there, and their programmes stop them. */
+void draw_race_dancers(int elapsed, int count) {
+    (void)elapsed;                      /* the driver keeps the clock now */
+    if (count > DANCER_COOP_COUNT) count = DANCER_COOP_COUNT;
+    int left_mark = field_tx() * 8 - 16;
+    int right_mark = (field_tx() + field_cols()) * 8;
+
+    for (int d = 0; d < count; d++) {
+        const uint8_t *tiles = g_dance_pose[d];
+        int walk = (int)g_dance_walk[d];
+        /* Even indices take the left panel and are mirrored, so a column
+         * walking left faces the way it is going; odd take the right. */
+        bool leftward = (d & 1) == 0;
+        int x = leftward ? left_mark : right_mark;
+        int y = (int)kDancerCoopY[d] - SCREEN_COOP_FIELD_TY * 8;
+
+        x += leftward ? -walk : walk;
+
+        for (int s = 0; s < DANCER_SPRITES; s++) {
+            int sx = x + (((s & 1) != 0) != leftward ? 8 : 0);
+            int sy = y + ((s & 2) ? 8 : 0);
+            oam_set(d * DANCER_SPRITES + s, sx, sy, tiles[s], leftward,
+                     PAL_OBJ_DANCER + (kDancerAttr[d % DANCER_COUNT] & 3));
+        }
+    }
+    for (int i = count * DANCER_SPRITES; i < 128; i++)
+        MEM_OAM[i * 4] = OBJ_ATTR0_HIDDEN;
+}
+
 /* Places the dancers for one frame of the interlude, in the ROM's own
  * positions: one column of six, 24 pixels apart, walking right off their
  * starting mark onto the ledges. */
@@ -458,6 +514,52 @@ void clear_both(int tx, int ty, int w, int h) {
  * way to play — no piece counts — which is why the level-up troupe is
  * reserved for it (see g_idle_show). */
 uint8_t g_hud = HUD_BANNER;
+
+/* WHICH TWO THIS MATCH OFFERS. See HudBox: the first is what it opens on.
+ *
+ * The mode is read off the game rather than off the menu entry, because that
+ * is what the rest of the drawing does: `coop` is what playModeTable makes of
+ * COOPERATIVE and WITH COMPUTER, `two_player` of everything but 1 PLAYER, and
+ * g_ai_active is what separates each cable mode from its computer twin. */
+static const uint8_t kHudSolo[]      = { HUD_BANNER, HUD_STATS };
+static const uint8_t kHudVersus[]    = { HUD_VERSUS, HUD_STATS };
+static const uint8_t kHudWith[]      = { HUD_COOP,   HUD_STATS };
+static const uint8_t kHudCable2p[]   = { HUD_VERSUS };
+static const uint8_t kHudCableCoop[] = { HUD_COOP };
+
+static int hud_mode(void) {
+    if (g_session.game.coop) return g_ai_active ? HUD_MODE_WITH : HUD_MODE_COOP;
+    if (g_session.game.two_player)
+        return g_ai_active ? HUD_MODE_VERSUS : HUD_MODE_2P;
+    return HUD_MODE_SOLO;
+}
+
+const uint8_t *hud_set(int *n) {
+    switch (hud_mode()) {
+        case HUD_MODE_VERSUS: *n = 2; return kHudVersus;
+        case HUD_MODE_WITH:   *n = 2; return kHudWith;
+        case HUD_MODE_2P:     *n = 1; return kHudCable2p;
+        case HUD_MODE_COOP:   *n = 1; return kHudCableCoop;
+        default:              *n = 2; return kHudSolo;
+    }
+}
+
+/* WHAT EACH MODE WAS LAST LEFT ON, which starts as what each mode opens on.
+ * A choice that did not survive the next game meant picking the same HUD
+ * again every time; one remembered ACROSS modes meant VERSUS handing WITH
+ * COMPUTER a HUD it had never been asked for, because STATS is in both sets.
+ * One slot each settles both. */
+static uint8_t g_hud_choice[HUD_MODE_COUNT] = {
+    HUD_BANNER, HUD_VERSUS, HUD_COOP, HUD_VERSUS, HUD_COOP
+};
+
+void hud_reset(void) {
+    g_hud = g_hud_choice[hud_mode()];
+}
+
+void hud_remember(void) {
+    g_hud_choice[hud_mode()] = g_hud;
+}
 
 /* One shelf, `w` columns of it. */
 static void draw_ledge(int tx, int ty, int w) {
@@ -1643,11 +1745,24 @@ static uint32_t coop_total_lines(void) {
 static void draw_coop_stats_panel(const TengenPlayerState *me) {
     draw_coop_next(COOP_L_TX, g_view, PAL_NEXT_BANK);
 
+    /* THE BOARD'S TOTALS ARE THE CHORD'S; YOUR OWN TWO ARE NOT. This HUD used
+     * to be behind the chord entirely, because its two counters were the
+     * totals and the totals are a cheat — which made the only way to hide the
+     * machine's panel a thing you had to know a chord to reach. The HUD is
+     * open now and the CELLS answer to the chord instead: your own score and
+     * lines until it is rung, the board's two after. */
     g_panel_layer = true;
-    draw_coop_text_counter(COOP_L_TX, COOP_COUNTER_TY, "T.SCORE",
-                            coop_total_score(), 6);
-    draw_coop_text_counter(COOP_L_TX, COOP_LOWER_TY, "T.LINES",
-                            coop_total_lines(), 4);
+    if (g_pause_unlocked) {
+        draw_coop_text_counter(COOP_L_TX, COOP_COUNTER_TY, "T.SCORE",
+                                coop_total_score(), 6);
+        draw_coop_text_counter(COOP_L_TX, COOP_LOWER_TY, "T.LINES",
+                                coop_total_lines(), 4);
+    } else {
+        draw_coop_counter(COOP_L_TX, COOP_COUNTER_TY, HUD_LABEL_SCORE,
+                           me->score, 6);
+        draw_coop_counter(COOP_L_TX, COOP_LOWER_TY, HUD_LABEL_LINES,
+                           me->lines, 4);
+    }
     draw_coop_counter(COOP_L_TX, COOP_THIRD_TY, HUD_LABEL_LEVEL, me->level, 2);
     draw_coop_text_counter(COOP_L_TX, COOP_TOTAL_TY, "HIGH", g_high_score, 6);
     g_panel_layer = false;
@@ -1726,12 +1841,12 @@ static void draw_rival_panel(void) {
     draw_rival_counter(ROW_SCORE, HUD_LABEL_SCORE, them->score, 6);
     draw_rival_counter(ROW_LINES, HUD_LABEL_LINES, them->lines, 4);
     draw_rival_counter(ROW_LEVEL, HUD_LABEL_LEVEL, them->level, 2);
-    /* ...and the fourth cell says whether they are still in it, which used to
-     * be the left box's job. The number under it is their score either way;
-     * frozen is what OUT means. */
+    /* THE FOURTH CELL STAYS EMPTY. It carried RIVAL for a while, which is a
+     * label with nothing to label: the panel IS the rival's, and saying so
+     * in its bottom cell is a caption on a caption. Coop's right panel leaves
+     * the same cell empty until the chord fills it, so an empty last cell is
+     * already what this shape looks like. */
     clear_region(BOX_R_IN, ROW_HIGH, BOX_IN, 2);
-    draw_text(BOX_R_IN + (BOX_IN - 5) / 2, ROW_HIGH,
-               them->game_active ? "RIVAL" : " OUT ", BANK_LABEL);
     g_panel_layer = was;
     hide_idle_cossack();
 }
@@ -1744,7 +1859,7 @@ static void draw_coop_panel(void) {
     if (me->score > g_high_score) g_high_score = me->score;
     if (them->score > g_high_score) g_high_score = them->score;
 
-    if (!hud_banner()) { draw_coop_stats_panel(me); return; }
+    if (hud_stats()) { draw_coop_stats_panel(me); return; }
 
     draw_coop_next(COOP_L_TX, g_view, PAL_NEXT_BANK);
     draw_coop_next(COOP_R_TX, g_view ^ 1, PAL_NEXT2_BANK);
@@ -1811,7 +1926,7 @@ void draw_panel(void) {
     draw_counter(ROW_LINES, HUD_LABEL_LINES, p->lines, 4, 1);
     draw_counter(ROW_LEVEL, HUD_LABEL_LEVEL, p->level, 2, 2);
 
-    if (g_session.game.two_player && !hud_rival()) {
+    if (g_session.game.two_player && !hud_versus()) {
         /* A race wants the other board's numbers where the high score would
          * be. The ROM keeps no piece histogram in 2P either, so nothing of
          * the cartridge's is being displaced. */
@@ -1861,7 +1976,7 @@ void draw_panel(void) {
      * the two columns nearest the board: those are the rope that frames the
      * playfield itself, and the playfield keeps its frame whatever the HUD is
      * doing. The box comes back when the banner goes away, through g_repaint. */
-    if (hud_rival()) {
+    if (hud_versus()) {
         draw_rival_panel();
     } else if (hud_banner()) {
         /* THE BANNER IS ART, NOT A COUNTER: it goes on the main map, aligned
@@ -1877,6 +1992,11 @@ void draw_panel(void) {
         /* No shelf for him in HUD Banner: the column is the banner's. */
         hide_idle_cossack();
     } else {
+        /* THE PANEL'S OWN LAYER GOES FIRST, because HUD VERSUS may have been
+         * here a frame ago and its counters are drawn on it: the static
+         * screen a repaint puts back is the MAIN map and wipes none of them,
+         * so the rival's score stood behind the histogram. */
+        clear_panel_region(BOX_R_IN, BOX_TOP_IN, BOX_IN, SCREEN_TH - BOX_TOP_IN);
         /* HUD STATS: THE COSSACK TAKES THE TOP OF THE RIGHT BOX, which is the
          * cell NEXT used to have, and the histogram keeps the rest of it.
          * He was tucked into the bottom of the left panel before, under four
