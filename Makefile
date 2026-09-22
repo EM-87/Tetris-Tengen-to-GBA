@@ -157,6 +157,15 @@ tune-check: $(GBA_ROM)
 	@test -n "$(ROM)" || { echo "usage: make tune-check ROM=/path/to/tetris.nes"; exit 1; }
 	python3 tools/probes/tune_vs_cartridge.py "$(ROM)" $(GBA_ROM)
 
+# ...AND THE JOINS A CLEARED ROW BREAKS, which `make trace` cannot reach:
+# its button script never completes a row. Plants one in both machines and
+# compares the cells the clear is supposed to rewrite.
+#   make clear-check ROM=/path/to/tetris.nes
+.PHONY: clear-check
+clear-check: $(GBA_ROM)
+	@test -n "$(ROM)" || { echo "usage: make clear-check ROM=/path/to/tetris.nes"; exit 1; }
+	python3 tools/probes/clear_joins.py "$(ROM)" $(GBA_ROM)
+
 TRACE_CORE := $(BUILD)/trace_core
 
 $(TRACE_CORE): tools/trace_core.c $(CORE_SRC) $(CORE_HDR) | $(BUILD)

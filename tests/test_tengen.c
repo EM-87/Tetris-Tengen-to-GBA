@@ -400,6 +400,82 @@ static void clear_lines_until(TengenGame *game, uint32_t target_lines) {
     }
 }
 
+static void test_a_cleared_row_breaks_the_joins_it_crossed(void) {
+    /* The block graphics $01-$0E each draw the separator for their own top
+     * and left edges and none where the cell is joined to a piece-mate,
+     * which is what makes four cells read as one tetromino — and which one a
+     * cell gets is settled when its piece locks. A row going away therefore
+     * leaves lies behind it, and the cartridge does not leave them: L8A85
+     * (main.asm.txt:1589) runs the row ABOVE a cleared one through a table
+     * that clears its downward joins, and the row BELOW through one that
+     * clears its upward ones. Measured on the dump before it was ported: a
+     * $06 under a cleared row comes back as $0F.
+     *
+     * Verbatim from the cartridge, planted here as tile ids rather than as
+     * piece ids, because that is what a settled cell holds. */
+    TengenPlayfield field;
+    memset(&field, 0, sizeof(field));
+    for (int row = 0; row < TENGEN_PF_HEIGHT; row++) {
+        field.cell[row][0] = TT_WALL;
+        field.cell[row][TENGEN_PF_WIDTH - 1] = TT_WALL;
+    }
+    const int CUT = TENGEN_PF_HEIGHT - 2;          /* the row that goes */
+    for (int col = 1; col < TENGEN_PF_WIDTH - 1; col++) field.cell[CUT][col] = 0x02;
+    /* Nine of the fourteen ids either side — every one the table changes —
+     * in nine of the ten playable columns. The tenth is left empty on
+     * purpose: fill it and these rows complete too, and clear with it. */
+    static const uint8_t planted[9] = { 4, 5, 6, 7, 8, 9, 10, 11, 12 };
+    for (int i = 0; i < 9; i++) {
+        field.cell[CUT - 1][1 + i] = planted[i];
+        field.cell[CUT + 1][1 + i] = planted[i];
+    }
+
+    CHECK(tengen_clear_full_rows(&field) == (1u << CUT));
+
+    /* The row above dropped one, and lost its DOWNWARD joins: $04 was joined
+     * only downward and becomes the standalone $0F, and $05 keeps its upward
+     * half as $06. */
+    const uint8_t lost_down[9] = { 0x0F, 0x06, 0x06, 0x07, 0x0D,
+                                    0x02, 0x0C, 0x01, 0x0C };
+    for (int i = 0; i < 9; i++)
+        CHECK(field.cell[CUT][1 + i] == lost_down[i]);
+
+    /* ...and the row under it lost its UPWARD ones, where it always was:
+     * $06 was joined only upward and is now $0F. */
+    const uint8_t lost_up[9] = { 0x04, 0x04, 0x0F, 0x02, 0x0B,
+                                  0x09, 0x0E, 0x0B, 0x03 };
+    for (int i = 0; i < 9; i++)
+        CHECK(field.cell[CUT + 1][1 + i] == lost_up[i]);
+
+    /* And the walls are not blocks: the table maps $0F to itself. */
+    CHECK(field.cell[CUT][0] == TT_WALL);
+    CHECK(field.cell[CUT + 1][TENGEN_PF_WIDTH - 1] == TT_WALL);
+}
+
+static void test_two_adjacent_clears_skip_each_other(void) {
+    /* L8A85's first act is to refuse a row that is itself clearing, which is
+     * what keeps two clears next to each other from rewriting each other's
+     * cells instead of their neighbours'. */
+    TengenPlayfield field;
+    memset(&field, 0, sizeof(field));
+    for (int row = 0; row < TENGEN_PF_HEIGHT; row++) {
+        field.cell[row][0] = TT_WALL;
+        field.cell[row][TENGEN_PF_WIDTH - 1] = TT_WALL;
+    }
+    const int LOW = TENGEN_PF_HEIGHT - 2, HIGH = TENGEN_PF_HEIGHT - 3;
+    for (int col = 1; col < TENGEN_PF_WIDTH - 1; col++) {
+        field.cell[LOW][col] = 0x02;
+        field.cell[HIGH][col] = 0x02;
+    }
+    field.cell[HIGH - 1][1] = 0x04;                /* joined downward only */
+    field.cell[LOW + 1][1] = 0x06;                 /* ...and upward only */
+
+    CHECK(tengen_clear_full_rows(&field) == ((1u << LOW) | (1u << HIGH)));
+    /* Both ends lost the join that crossed the pair, so both are standalone. */
+    CHECK(field.cell[LOW][1] == 0x0F);
+    CHECK(field.cell[LOW + 1][1] == 0x0F);
+}
+
 static void test_completed_rows_wait_before_they_collapse(void) {
     /* The ROM holds the game for lineClearTimerP1 frames after finding
      * completed rows, animates them, and only then collapses
@@ -2538,6 +2614,8 @@ int main(void) {
     test_a_row_of_walls_alone_is_not_a_full_row();
     test_move_rejects_out_of_bounds();
     test_line_clear_detects_and_collapses();
+    test_a_cleared_row_breaks_the_joins_it_crossed();
+    test_two_adjacent_clears_skip_each_other();
     test_level_up_thresholds_match_rom_table();
     test_das_charges_before_repeating();
     test_held_rotate_repeats_every_fifteen_frames();

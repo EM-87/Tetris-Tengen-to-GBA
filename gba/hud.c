@@ -1644,96 +1644,6 @@ void draw_panel(void) {
     g_panel_layer = false;
 }
 
-/* ----------------------------------------------------------------------- *
- * THE BLACK RULE BETWEEN TWO PIECES, and why it went missing
- *
- * The fourteen block graphics $01-$0E are not decoration: each one draws the
- * separator for its OWN top and left edges, and draws none where it is joined
- * to a piece-mate. That is what makes four cells read as one smooth
- * tetromino. Which of the fourteen a cell gets is decided ONCE, when the
- * piece locks, by where that cell sat inside that piece
- * (tengen_tile_id_for_cell, out of the cartridge's own tilesForI/T/O/…).
- *
- * So a cell that had a mate above it carries a tile with no top edge — for
- * ever. Clear the row that mate was in and the cell keeps the tile: nothing
- * in the cartridge recomputes it, and the next piece to land on that cell
- * reads as one shape with it. That is "las piezas se fusionan", and it is the
- * cartridge's behaviour, not a porting mistake. `make trace` compares these
- * very nibbles against the original frame for frame, which is exactly why
- * this CANNOT be fixed in the core without leaving the cartridge behind.
- *
- * It can be fixed in the DRAWING, and here it is. Derived from the two
- * tables above by tools, and checked to be a bijection: each of the fourteen
- * ids encodes exactly one set of four joins, and the fourteen sets are the
- * fourteen a four-cell piece can produce — all sixteen but "joined to
- * nothing" and "joined on all four sides", neither of which a tetromino has.
- *
- * With that, a cell's claim can be TESTED instead of trusted: two cells are
- * one piece only if the lower claims a join upward AND the upper claims one
- * downward. A cut piece claims upward and whatever is over it now does not
- * claim downward, so the claim is dropped and the tile becomes the same
- * graphic WITH its top edge. Nothing else changes: the down and right bits
- * only pick the shading, since no tile ever draws its own bottom or right
- * edge — those belong to the neighbour below and to the right.
- *
- * Costs nothing when there is nothing to fix, and is invisible where the
- * neighbour is empty: the separator is a row of the backdrop, and the
- * backdrop is black, so a rule drawn against nothing is black on black.
- * ----------------------------------------------------------------------- */
-#define JOIN_UP    8
-#define JOIN_DOWN  4
-#define JOIN_LEFT  2
-#define JOIN_RIGHT 1
-
-/* $01-$0E -> the joins that id claims. */
-static const uint8_t kTileJoins[15] = {
-    0,
-    JOIN_RIGHT,                           /* $01 left end of a row     */
-    JOIN_LEFT | JOIN_RIGHT,               /* $02 middle of a row       */
-    JOIN_LEFT,                            /* $03 right end of a row    */
-    JOIN_DOWN,                            /* $04 top of a column       */
-    JOIN_UP | JOIN_DOWN,                  /* $05 middle of a column    */
-    JOIN_UP,                              /* $06 bottom of a column    */
-    JOIN_UP | JOIN_LEFT | JOIN_RIGHT,     /* $07                       */
-    JOIN_UP | JOIN_DOWN | JOIN_RIGHT,     /* $08                       */
-    JOIN_DOWN | JOIN_LEFT | JOIN_RIGHT,   /* $09                       */
-    JOIN_UP | JOIN_DOWN | JOIN_LEFT,      /* $0A                       */
-    JOIN_DOWN | JOIN_RIGHT,               /* $0B                       */
-    JOIN_UP | JOIN_LEFT,                  /* $0C                       */
-    JOIN_UP | JOIN_RIGHT,                 /* $0D                       */
-    JOIN_DOWN | JOIN_LEFT,                /* $0E                       */
-};
-
-/* ...and back again. The two the cartridge has no graphic for are the two no
- * tetromino can make: "joined to nothing" takes $01, which draws both edges
- * and is what a lone block should look like, and "joined on all four" cannot
- * be reached from here at all — dropping a claim only ever clears bits. */
-static const uint8_t kJoinTiles[16] = {
-    0x01, 0x01, 0x03, 0x02, 0x04, 0x0B, 0x0E, 0x09,
-    0x06, 0x0D, 0x0C, 0x07, 0x05, 0x08, 0x0A, 0x07,
-};
-
-static uint8_t settled_tile(const TengenPlayfield *field, int row, int col) {
-    uint8_t cell = field->cell[row][col];
-    /* Empty, the wall, the handicap's garbage — and every cell on a skinned
-     * board, where a settled cell holds the PIECE'S id and one flat square is
-     * the whole of its art. Nothing there claims a join. */
-    if (cell < 1 || cell > 14 || g_session.game.piece_id_cells) return cell;
-
-    uint8_t join = kTileJoins[cell];
-    if (join & JOIN_UP) {
-        uint8_t up = row > 0 ? field->cell[row - 1][col] : 0;
-        if (!(up >= 1 && up <= 14 && (kTileJoins[up] & JOIN_DOWN)))
-            join &= (uint8_t)~JOIN_UP;
-    }
-    if (join & JOIN_LEFT) {
-        uint8_t left = col > 0 ? field->cell[row][col - 1] : 0;
-        if (!(left >= 1 && left <= 14 && (kTileJoins[left] & JOIN_RIGHT)))
-            join &= (uint8_t)~JOIN_LEFT;
-    }
-    return kJoinTiles[join];
-}
-
 void draw_field(void) {
     /* THE COOP BOARD IS field[0] FOR BOTH PLAYERS — the core shares it the
      * way the cartridge does (tengen_core.c, `game->coop ? 0 : slot`) — and
@@ -1762,8 +1672,7 @@ void draw_field(void) {
             /* A cell's value IS its tile index — that is the whole point of
              * the ROM's nibble encoding (notes.txt.txt:35). Empty is 0, which
              * is the blank tile. All of it draws in the level's palette. */
-            uint16_t entry = WITH_BANK(settled_tile(field, row,
-                                                     field_col0() + col), 0);
+            uint16_t entry = WITH_BANK(field->cell[row][field_col0() + col], 0);
 
             /* Behind the sweep the row is gone and the word is in its place,
              * one character per playable column (L89E9,

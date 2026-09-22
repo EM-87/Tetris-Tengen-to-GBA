@@ -392,8 +392,58 @@ uint32_t tengen_find_full_rows(const TengenPlayfield *field) {
     return mask;
 }
 
+/* ----------------------------------------------------------------------- *
+ * THE JOINS A CLEARED ROW BREAKS (VERIFIED, L8A85 at main.asm.txt:1589-1620
+ * with its table L8ABB at :1621-1624)
+ *
+ * The fourteen block graphics $01-$0E each draw the separator for their own
+ * top and left edges and none where the cell is joined to a piece-mate,
+ * which is what makes four cells read as one tetromino. Which of the
+ * fourteen a cell gets is decided when the piece locks, by where that cell
+ * sits inside it (kTileIds above).
+ *
+ * So a row going away leaves lies behind it: the cell above it still says
+ * "joined downward" and the cell below still says "joined upward", to a
+ * mate that is not there any more. The cartridge does not leave them. L8A5B
+ * walks up the playfield from the lowest cleared row, and at every row whose
+ * neighbour below is marked as clearing it runs both halves of this table:
+ * the row ABOVE loses its downward joins and the row BELOW loses its upward
+ * ones. A row that is itself clearing is skipped, which is what makes two
+ * adjacent clears come out right.
+ *
+ * The table is the cartridge's own bytes. Read against the joins each id
+ * claims it is exactly "clear one bit": half 0 clears DOWN, half 1 clears
+ * UP, and a cell left joined to nothing becomes $0F — the standalone block,
+ * the same graphic the handicap's garbage is drawn with, which is what a
+ * block with no piece around it should look like. Walls ($0F) and empty
+ * ($00) map to themselves, so this can run over a whole row untested.
+ * ----------------------------------------------------------------------- */
+static const uint8_t kJoinBreak[2][16] = {
+    /* the row ABOVE a cleared one: its downward joins go */
+    { 0x00, 0x01, 0x02, 0x03, 0x0F, 0x06, 0x06, 0x07,
+      0x0D, 0x02, 0x0C, 0x01, 0x0C, 0x0D, 0x03, 0x0F },
+    /* ...and the row BELOW: its upward ones */
+    { 0x00, 0x01, 0x02, 0x03, 0x04, 0x04, 0x0F, 0x02,
+      0x0B, 0x09, 0x0E, 0x0B, 0x03, 0x01, 0x0E, 0x0F },
+};
+
+static void break_joins(TengenPlayfield *field, int row, int half) {
+    for (int col = 0; col < TENGEN_PF_WIDTH; col++)
+        field->cell[row][col] = kJoinBreak[half][field->cell[row][col] & 0x0F];
+}
+
 uint32_t tengen_collapse_rows(TengenPlayfield *field, uint32_t mask) {
     if (mask == 0) return 0;
+
+    /* Before anything moves, and on the rows as they still stand: see
+     * kJoinBreak. */
+    for (int row = 0; row < TENGEN_PF_HEIGHT; row++) {
+        if (!(mask & (1u << row))) continue;
+        if (row > 0 && !(mask & (1u << (row - 1))))
+            break_joins(field, row - 1, 0);
+        if (row + 1 < TENGEN_PF_HEIGHT && !(mask & (1u << (row + 1))))
+            break_joins(field, row + 1, 1);
+    }
 
     /* Collapse: build a fresh field skipping cleared rows, matching the
      * ROM's plant-then-drop-remaining-rows behavior (main.asm.txt:856-908,

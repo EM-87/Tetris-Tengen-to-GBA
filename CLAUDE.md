@@ -546,7 +546,7 @@ does not is a bug.
   written up with the PC that does it in reference/NOTES.md. One frame, once,
   in one mode; every frame after it matches.
 
-## Two things that look like bugs and are the cartridge's
+## One thing that looks like a bug and is the cartridge's, and one that was not
 
 Both were reported from playing, both were measured, and both came back
 "this is what the original does". They are here so the next person to see
@@ -562,19 +562,21 @@ them does not spend the afternoon again.
   On the right the wall's LAST tile, `$74`, is lit to its edge, so that
   junction closes. Same art, same layout, same seam. Closing it would mean
   drawing a tile the cartridge does not have.
-- **Stacked pieces merging where a row was cleared** was the cartridge's,
-  and the port now draws its way out of it. The blocks' separator lives on
-  each tile's TOP row and LEFT column — `$01`-`$0E` — and which one a cell
-  gets is decided when the piece LOCKS, by where that cell sits inside that
-  piece (`tengen_tile_id_for_cell`). A cell whose piece-mate was above it
-  gets a tile with no top edge, and keeps it after the mate's row is
-  cleared, so whatever lands on it next reads as one shape with it. The
-  cartridge stores the same ids and collapses rows the same way, and `make
-  trace` compares those very nibbles against it frame for frame, so the
-  core could not be touched. `settled_tile` in gba/hud.c tests the claim
-  instead of trusting it, at draw time: two cells are one piece only if the
-  lower claims a join upward and the upper claims one downward. See the note
-  above it for the bijection that makes the test possible.
+- **Stacked pieces merging where a row was cleared** was not the cartridge's
+  after all, and the note that used to stand here said it was. The blocks'
+  separator lives on each tile's TOP row and LEFT column — `$01`-`$0E` — and
+  which one a cell gets is decided when the piece LOCKS. A row going away
+  therefore leaves lies behind it, and the cartridge does not leave them:
+  `L8A85` (main.asm.txt:1589-1624) runs the row ABOVE a cleared one through
+  a table that clears its downward joins and the row BELOW through one that
+  clears its upward ones, and a cell left joined to nothing becomes `$0F` —
+  the standalone block, the same graphic the handicap's garbage uses. The
+  port had none of it. Measured on the dump before it was ported (a `$06`
+  under a cleared row comes back as `$0F`), then found in the table, then
+  ported into `tengen_collapse_rows` where it belongs. `make clear-check`
+  plants a row in both machines and compares what the clear rewrote;
+  `make trace` cannot reach this, because its button script never completes
+  a row in three thousand frames.
 
 ## Melons — the things worth opening next
 
