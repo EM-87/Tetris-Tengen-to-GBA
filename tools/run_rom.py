@@ -1090,9 +1090,17 @@ def skin_check(rom_path):
     # every time; and both frames now reach the screen's edges, so counting lit
     # edge pixels cannot tell them apart either. Their frames are drawn from
     # different tiles, and tiles do not animate.
+    #
+    # THE WHOLE MAP, THOUGH, AND NOT THREE COLUMNS OF FRAME. Reading the
+    # border alone was enough while every dump had a border of its own; a
+    # fourth arrived whose screen differs from a third's in NOTHING BUT THE
+    # CATHEDRAL — same fret, same heading, same copyright lines, 127 cells of
+    # building — and three columns of identical rule read as "two skins
+    # drawing the same tiles". The picture is what is different, so the
+    # picture is what gets read.
     def frame_tiles():
         return [core.memory.u16[SCREENBLOCK_ADDR + (r * 32 + c) * 2]
-                for r in range(2, 18) for c in (0, 1, SCREEN_TW_TILES - 1)]
+                for r in range(SCREEN_H // TILE) for c in range(SCREEN_TW_TILES)]
 
     def tap(*keys, settle=12):
         core.set_keys(*keys)
@@ -2151,6 +2159,153 @@ def coop_ai_check(rom_path):
     return 0
 
 
+def versus_hud_check(rom_path):
+    """THE RACE'S THIRD HUD, and what a paused race shows.
+
+    A race is two boards and the port only ever drew one of them: the other
+    player was a single number in the bottom cell of YOUR panel. SELECT now
+    walks a third HUD that gives them the right box — their NEXT, score,
+    lines and LEVEL, laid out like coop's — and takes the RIVAL cell back out
+    of the left one, which goes back to the 1P panel's HIGH.
+
+    And under the chord, PAUSING a race shows the OTHER board. Against the
+    computer that is the only way to satisfy yourself it is really playing;
+    in any race it is what stops a pause being a free think about your own
+    stack.
+    """
+    off = game_offsets(rom_path)
+    base, why = game_state_address(rom_path)
+    if base is None:
+        print(f"SALTADO: {why}")
+        return 0
+
+    failures = []
+    LEFT, RIGHT = (0, 10), (20, 30)
+    PF = TENGEN_PF_HEIGHT * TENGEN_PF_WIDTH
+
+    def start(cheat):
+        core, screen = load(rom_path)   # `screen` must stay alive; see load()
+        _ = screen
+        run(core, 8)
+        press_start(core); run(core, 20)
+        if cheat:
+            core.set_keys(KEYS["L"], KEYS["R"]); run(core, 4)
+            core.set_keys(); run(core, 24)
+        for _ in range(3):                        # ...down to VERSUS COMPUTER
+            core.set_keys(KEYS["DOWN"]); run(core, 4)
+            core.set_keys(); run(core, 10)
+        press_start(core); run(core, 12)
+        press_start(core); run(core, 60)
+        # Two scores nothing else can be confused with, planted on both
+        # players. Below the table's last entry so a game over does not end
+        # up typing initials.
+        for who, score in ((0, 1234), (1, 2345)):
+            at = base + off["score"] + who * off["stride"]
+            for k in range(4):
+                core.memory.u8[at + k] = (score >> (8 * k)) & 0xFF
+        run(core, 40)
+        # WHAT THEY ACTUALLY READ, not what was planted: a piece landing is
+        # worth points, so the figure on the panel drifts a little above the
+        # one written in.
+        now = []
+        for who in range(2):
+            at = base + off["score"] + who * off["stride"]
+            now.append(sum(core.memory.u8[at + k] << (8 * k) for k in range(4)))
+        return core, screen, now
+
+    def box(core, cols):
+        return " ".join(t for t in (tilemap_text(core, ty, *cols)
+                                     for ty in range(8, 20)) if t)
+
+    core, screen, _score = start(cheat=False)
+    _ = screen
+
+    def score_now(who):
+        at = base + off["score"] + who * off["stride"]
+        return sum(core.memory.u8[at + k] << (8 * k) for k in range(4))
+
+    # READ ON THE FRAME THEY ARE LOOKED AT. The board is still being played
+    # between one SELECT and the next — a piece landing is worth points — so
+    # the figure planted at the start is not the figure on the panel three
+    # presses later.
+    seen = []
+    for step in range(3):
+        if step:
+            core.set_keys(KEYS["SELECT"]); run(core, 4)
+            core.set_keys(); run(core, 60)
+        seen.append((box(core, LEFT), box(core, RIGHT),
+                      f"{score_now(0)}", f"{score_now(1)}"))
+
+    # The first two are the HUDs a race already had, and neither shows the
+    # rival's numbers anywhere but in the left box's last cell.
+    for i in (0, 1):
+        if "RIVAL" not in seen[i][0]:
+            failures.append(f"el HUD {i} perdio la celda RIVAL del cajon "
+                             f"izquierdo: {seen[i][0]!r}")
+        if seen[i][3] in seen[i][1]:
+            failures.append(f"el HUD {i} ya lleva los numeros del rival a la "
+                             f"derecha: {seen[i][1]!r}")
+    # ...and the third is the rival's own panel.
+    left, right, MINE, THEIRS = seen[2]
+    if THEIRS not in right:
+        failures.append(f"el tercer HUD no trae la puntuacion del rival al "
+                         f"cajon derecho: {right!r}")
+    elif "RIVAL" not in right:
+        failures.append(f"el tercer HUD no dice de quien es el panel: {right!r}")
+    elif "RIVAL" in left:
+        failures.append(f"el cajon izquierdo conserva su celda RIVAL teniendo "
+                         f"el panel al lado: {left!r}")
+    elif "HIGH" not in left:
+        failures.append(f"el cajon izquierdo no recupera HIGH: {left!r}")
+    elif MINE not in left:
+        failures.append(f"el cajon izquierdo dejo de llevar lo tuyo: {left!r}")
+    else:
+        print("  SELECT recorre tres HUDs en una carrera, y el tercero da el "
+               "cajon derecho al rival")
+        print(f"    izquierda {left!r}")
+        print(f"    derecha   {right!r}")
+
+    # AND THE PAUSE SHOWS THE OTHER BOARD, under the chord and only there.
+    # Two stacks nothing can confuse: yours on the left of your field, theirs
+    # on the right of theirs.
+    def planted(core):
+        addr = base + off["field"]
+        for board in (0, 1):
+            for r in range(TENGEN_PF_HEIGHT):
+                for c in range(TENGEN_PF_WIDTH):
+                    core.memory.u8[addr + board * PF + r * TENGEN_PF_WIDTH + c] = (
+                        CELL_WALL if c in (0, TENGEN_PF_WIDTH - 1) else 0)
+        for c in range(1, 5):
+            core.memory.u8[addr + 19 * TENGEN_PF_WIDTH + c] = 1
+        for c in range(6, 10):
+            core.memory.u8[addr + PF + 19 * TENGEN_PF_WIDTH + c] = 1
+            core.memory.u8[addr + PF + 18 * TENGEN_PF_WIDTH + c] = 1
+        run(core, 4)
+
+    for cheat, want in ((False, "propio"), (True, "del rival")):
+        core, screen, _score = start(cheat)
+        _ = screen
+        planted(core)
+        press_start(core); run(core, 30)          # pause
+        rows = [map_row_text(core, r) for r in (18, 19)]
+        mine = rows[1].startswith("####") and "." in rows[0]
+        theirs = rows[0].count("#") == 4 and rows[1].count("#") == 4
+        got = "del rival" if theirs else ("propio" if mine else f"ni uno {rows!r}")
+        if got != want:
+            failures.append(f"con acorde={int(cheat)} la pausa muestra el "
+                             f"tablero {got}, deberia ser el {want}")
+    if not failures:
+        print("  y bajo el acorde la pausa cambia tu tablero por el del rival")
+
+    for f in failures:
+        print("FALLA:", f)
+    if failures:
+        return 1
+    print("OK: la carrera tiene un HUD para el rival, y su pausa ensena el "
+           "tablero de enfrente.")
+    return 0
+
+
 def points_check(rom_path):
     """THE POINTS THE PIECE WAS WORTH, beside the piece.
 
@@ -3199,6 +3354,25 @@ def coop_hud_check(rom_path):
     if not failures:
         print(f"  sin acorde: izquierda {left!r}")
         print(f"              derecha   {right!r}")
+
+    # ...AND WITHOUT THE CHORD, SELECT DOES NOTHING HERE. The other coop HUD
+    # carries T.SCORE and T.LINES, which the panel itself only prints once the
+    # cheats have been found, so a screen SELECT could reach that shows them
+    # would be a locked door with the key in it.
+    # Measured by what the other HUD DOES — it hides the partner's panel —
+    # and not by comparing the two panels whole: the machine is playing while
+    # this happens, so every counter on them is a moving target.
+    core.set_keys(KEYS["SELECT"]); run(core, 4); core.set_keys(); run(core, 60)
+    # "Still a panel", not "still 6789": the machine is playing and its score
+    # moves a point at a time. The other HUD puts the piece histogram here,
+    # which has no digits in it at all.
+    if not any(ch.isdigit() for ch in panel(core, RIGHT)):
+        failures.append("sin el acorde SELECT ya esconde el panel del "
+                         "companero, y ese HUD lleva los totales")
+    elif "T." in panel(core, LEFT):
+        failures.append("sin el acorde SELECT ya saca los totales")
+    else:
+        print("  ...y sin el acorde SELECT no abre el HUD que los lleva")
 
     core = start(cheat=True)
     left, right = panel(core, LEFT), panel(core, RIGHT)
@@ -4890,6 +5064,8 @@ def main():
                      help="check the COMPUTER player plays VERSUS and WITH")
     ap.add_argument("--coopai", action="store_true",
                      help="check the computer reads its partner under the chord")
+    ap.add_argument("--versushud", action="store_true",
+                     help="check the race's third HUD and its paused view")
     ap.add_argument("--demo", action="store_true",
                      help="check the title starts playing by itself")
     ap.add_argument("--loans", action="store_true",
@@ -4959,6 +5135,8 @@ def main():
         sys.exit(computer_check(args.rom))
     if args.coopai:
         sys.exit(coop_ai_check(args.rom))
+    if args.versushud:
+        sys.exit(versus_hud_check(args.rom))
     if args.demo:
         sys.exit(demo_check(args.rom))
     if args.gameover:

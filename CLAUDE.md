@@ -255,6 +255,22 @@ running ROM; only the side panels need reflowing).
    which are PRINTABLE because the tile set is ASCII-indexed. It has no
    parentheses, though — `$28`/`$29` are border art — so the handicap's note
    is separated by palette instead. Defaults: NO MUSIC and HUD Banner.
+   **AND GAME SELECT'S LIST IS FLUSH LEFT, which is the cartridge's and was
+   not the port's.** All five entries are written at nametable column `$0C`
+   whatever their length — the strings sit in the ROM's own upload stream with
+   their addresses in front of them — and the arrow is two columns before them
+   at `$0A` (`gameSelectArrowPpuAddrs`, `$A0AB`). Centring each entry instead
+   gave the column an edge that wandered four columns as the cursor moved down
+   it. The block stays where it was on the port's narrower screen: the flush
+   edge is where VERSUS COMPUTER, the longest of the five, already started. A
+   left-aligned line also has no middle to hit, so it rides the MAIN layer and
+   never the offset one — see draw_text_left.
+   **AND THE CREDITS TURN OVER EVERY FOUR SECONDS, not every one and two
+   thirds.** The cartridge prints all six of its credit lines at once down a
+   taller screen and never animates them, so there is no cadence to copy; the
+   rotation is the port's answer to a menu box twenty-six columns wide, and a
+   hundred frames was a line arriving faster than it could be read and leaving
+   before it had been — unreadable and impossible to ignore at the same time.
 20. ~~The HUD is the COOP screen's panel now~~ — and this is the shape to
    know before moving anything in it. The port's left box used to be a closed
    rectangle of rope with the cartridge's grey header rule between the
@@ -284,6 +300,23 @@ running ROM; only the side panels need reflowing).
    `make gba-check --panel` measures all of it off the framebuffer: four blue
    shelves found by colour, equal air under each, NEXT centred, and both ropes
    reaching the last scanline.
+   **AND A RACE HAS A THIRD HUD, WHICH IS THE RIVAL'S OWN PANEL.** A race is
+   two boards and the port only ever drew one of them: the other player was a
+   single number in the bottom cell of YOUR panel, which says who is winning
+   and nothing else — not what they are holding, not how fast they are going,
+   and above all not what LEVEL they are on, which in this game is the whole
+   of the bragging. SELECT walks three now: BANNER, STATS and RIVAL, where the
+   right box becomes their panel laid out exactly like coop's, and the left
+   box gives the RIVAL cell back and returns to the 1P panel's HIGH. The
+   ledges are drawn by the panel itself rather than with the static screen,
+   because it clears the column under the first shelf every frame and would
+   take them with it. Three states in a race and two everywhere else — RIVAL
+   needs a rival on a board of their own. See `HUD_STATES` and
+   `make gba-check --versushud`.
+   **AND COOP'S SECOND HUD IS BEHIND THE CHORD NOW.** It carries T.SCORE and
+   T.LINES, the board's totals, which the coop panel itself only prints once
+   the cheats have been found — so a screen SELECT could reach that showed
+   them was a locked door with the key left in it.
 21. ~~FOUR backgrounds, each for a scroll the others cannot share~~ — done,
    and this is the shape to keep in mind before adding anything to the HUD: a
    scroll is one number per background, so anything whose ink is not centred
@@ -572,6 +605,21 @@ running ROM; only the side panels need reflowing).
    cartridge is untouched — and both are pinned by tests, with what the mod
    actually does written down beside them.
 
+## One thing the port does that the cartridge does not, on purpose
+
+**A PAUSED RACE SHOWS THE OTHER BOARD**, under the same chord as the pause
+menu itself. Two reasons, and the second is the better one. A race against
+the COMPUTER never shows you the machine's stack at all, so there is no way
+to satisfy yourself that it is really playing rather than counting upwards —
+one press of Start and there it is. And a pause in this game is a player
+stopping to study their own stack, which is exactly what a race is supposed
+not to give you time for: take the stack away while they are looking at it
+and the pause is a pause again rather than a free think. Only in a race (1P
+has no other board and coop's is the same board), and only behind the chord,
+because it is the port's idea and not the cartridge's. Over a cable both
+consoles have the same door and a pause stops both boards, so neither player
+gets it for nothing. See `field_view`.
+
 ## What the port knowingly does NOT show
 
 Kept as a list rather than as scattered comments, because the last sweep found
@@ -605,6 +653,18 @@ does not is a bug.
 - **"HIGH SCORE" reads "HIGH"** in the 1P panel, for the same reason: the cell
   is eight tiles wide and the phrase is ten. The number under it is the number
   the cartridge puts there.
+- **A FOURTH PROTOTYPE TITLE THAT LOOKS LIKE THE THIRD.** A fourth dump
+  (`proto_d`) is a different build — 14898 bytes of PRG differ from
+  `proto_c`'s — and draws a title the eye cannot tell from it: same fret, same
+  heading, same copyright lines, and the 127 nametable cells that differ are
+  the same cathedral out of a differently numbered pattern table. The
+  extractor compares the PICTURE rather than the tile ids — each cell's 32
+  bytes of pixels, its attribute bank and the palette — and discards a dump
+  whose composed screen comes out identical, saying so in the generated
+  header. What it would have cost: a slot on the L/R cycle a player cannot
+  tell from the one before it, and a whole HIGH SCORES table (see
+  LEADER_TABLES). Pass the dump and the build says why it is not in; it is one
+  line in build_proto_header to take it anyway.
 - **A skinned board over the LINK CABLE.** A skin changes what a settled cell
   holds (roadmap 31), and a linked match is two consoles comparing state byte
   for byte, so one of them wearing a prototype's clothes would be a real

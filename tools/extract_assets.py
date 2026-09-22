@@ -1726,6 +1726,18 @@ PROTO_RECIPES = {
         "rows": _rows((1, 6), (10, 24), (28, 29)),
         "bank": 1,
     },
+    # ...AND THE SAME SCREEN AGAIN, from a fourth dump, differing from the one
+    # above in NOTHING BUT THE CATHEDRAL. Diffed cell by cell against it: the
+    # border, the heading, both copyright lines and every attribute byte are
+    # identical, and 127 cells across rows 10-23 are not — which is the
+    # building itself, drawn again. So it takes the same composition, for the
+    # same reason: the four rows of empty sky pay for a tower kept whole from
+    # the tip of its spike to the last course of its plinth.
+    "e81d2b5d223599dc33fe4e615ac1eeb6": {
+        "label": "THE SOVIET MIND GAME, redrawn",
+        "rows": _rows((1, 6), (10, 24), (28, 29)),
+        "bank": 1,
+    },
 }
 
 
@@ -2795,10 +2807,35 @@ def build_proto_header(paths):
         if skin is None:
             rejected.append(why)
             print(f"  prototipo descartado: {why}")
-        else:
-            skins.append(skin)
-            print(f"  prototipo: {skin['label']} <- {path} "
-                  f"(CHR {skin['bank']}, encaje {skin['how']})")
+            continue
+        # TWO DUMPS CAN BE TWO BUILDS AND ONE PICTURE, which is not a
+        # hypothetical: proto_d differs from proto_c in 14898 bytes of PRG
+        # and draws a title the eye cannot tell from it — same fret, same
+        # heading, same cathedral, and the 127 nametable cells that differ
+        # are the same art out of a differently numbered pattern table. What
+        # ships is a PICTURE, so what is compared is the picture: the composed
+        # tilemap, its attribute banks and the pixels they index. A skin that
+        # comes out identical is a slot on the L/R cycle a player cannot tell
+        # from the one before it, and a whole HIGH SCORES table besides.
+        # CELL BY CELL, and the PIXELS each one indexes rather than the index:
+        # the two dumps draw the same picture out of differently numbered
+        # pattern tables, so comparing tile ids says "different" and comparing
+        # what they point at says what the screen actually looks like.
+        art = (tuple(bytes(skin["chr"][t * 32:(t + 1) * 32])
+                     for t in skin["tiles"]),
+               tuple(skin["banks"]), bytes(skin["palette"]))
+        twin = next((s for s in skins if s["art"] == art), None)
+        if twin is not None:
+            why = (f"{path}: su pantalla se dibuja pixel a pixel igual que la "
+                   f"de {twin['source']} ({twin['label']}), asi que seria una "
+                   "skin que nadie puede distinguir de la anterior")
+            rejected.append(why)
+            print(f"  prototipo descartado: {why}")
+            continue
+        skin["art"] = art
+        skins.append(skin)
+        print(f"  prototipo: {skin['label']} <- {path} "
+              f"(CHR {skin['bank']}, encaje {skin['how']})")
     if not skins:
         return emit_proto_absent_header(rejected)
     notes = [" *", " * Descartados:"] + [f" *   {w}" for w in rejected] if rejected else []

@@ -455,6 +455,21 @@ static void draw_text_lifted(int ty, const char *text, int bank) {
         set_histogram_tile(tx + (int)i, ty, WITH_BANK(ascii_tile(text[i]), bank));
 }
 
+/* ...and the same at a column of the caller's choosing, for a list whose
+ * entries line up with each other rather than each with the middle. Always
+ * the MAIN layer: the offset layer exists to put an odd-length word on the
+ * middle of the screen, and a left-aligned column has no middle to hit —
+ * riding it would set every other entry three pixels in from the one above. */
+static void draw_text_left(int ty, int tx, const char *text, int bank) {
+    unsigned len = text_len(text);
+    for (int x = 0; x < MENU_IN_W; x++) {
+        set_map_tile(MENU_IN_TX + x, ty, T_BLANK);
+        set_stats_tile(MENU_IN_TX + x, ty, T_BLANK);
+    }
+    for (unsigned i = 0; i < len; i++)
+        set_map_tile(tx + (int)i, ty, WITH_BANK(ascii_tile(text[i]), bank));
+}
+
 static void draw_text_centred(int ty, const char *text, int bank) {
     unsigned len = text_len(text);
     int tx = MENU_IN_TX + ((int)MENU_IN_W - (int)len) / 2;
@@ -535,14 +550,17 @@ void draw_game_select(uint8_t choice) {
      * gameSelectArrowPpuAddrs ($A0AB) is $220A,$222A,$224A,$226A,$228A — five
      * addresses one nametable row apart. Two rows apart was fine for two of
      * them and does not fit five under a logo six rows tall. */
+    /* ...FLUSH LEFT, which is the cartridge's: all five are written at
+     * nametable column $0C whatever their length. See GAME_SELECT_TX. */
     for (int i = 0; i < GAME_COUNT; i++)
-        draw_text_centred(GAME_SELECT_TY + i, kGameNames[i], BANK_MENU);
+        draw_text_left(GAME_SELECT_TY + i, GAME_SELECT_TX, kGameNames[i],
+                        BANK_MENU);
     /* AND THE ARROW, which this screen had been doing without. The cartridge
      * marks its choice here exactly as it does on LEVEL SELECT — a white
      * arrow in the column left of the list (gameSelectArrowPpuAddrs, $A0AB,
      * five addresses one row apart) — and the port was leaning on colour
-     * alone. Its entries are centred rather than left-aligned, so the arrow
-     * goes a column clear of the longest of them. */
+     * alone. Two columns clear of the list, exactly as the cartridge has
+     * it. */
     for (int ty = GAME_SELECT_TY; ty < GAME_SELECT_TY + GAME_COUNT; ty++)
         set_map_tile(GAME_SELECT_ARROW_TX, ty, T_BLANK);
     set_map_tile(GAME_SELECT_ARROW_TX, GAME_SELECT_TY + choice,

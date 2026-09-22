@@ -1347,15 +1347,30 @@ typedef enum {
  * and the name, which is uniform and loses nothing.
  * ----------------------------------------------------------------------- */
 #define CREDIT_TY 16            /* ...and the name on CREDIT_TY + 1 */
-#define CREDIT_FRAMES 100
+/* FOUR SECONDS EACH, not one and two thirds. Six credits at a hundred frames
+ * is a line of text arriving faster than it can be read and leaving before it
+ * has been, which is both unreadable and impossible to ignore — the worst of
+ * both. The cartridge has no cadence to copy here: it prints all six at once
+ * down its own taller screen and never animates them, and the rotation is the
+ * port's answer to a menu box twenty-six columns wide. */
+#define CREDIT_FRAMES 240
 #define CREDIT_COUNT (sizeof kCredits / sizeof kCredits[0])
 
 #define MENU_ARROW_R '>'   /* tile $3E, and ASCII agrees for this one */
 
 #define GAME_SELECT_TY 10
-/* One column left of VERSUS COMPUTER, the longest entry: it is fifteen
- * characters centred in MENU_IN_W, so it starts at MENU_IN_TX + 5. */
+/* Two columns left of the list, which is the cartridge's own gap:
+ * gameSelectArrowPpuAddrs ($A0AB) is $220A,$222A,$224A,$226A,$228A — column
+ * $0A — and all five entries are written at column $0C. */
 #define GAME_SELECT_ARROW_TX (MENU_IN_TX + 3)
+/* AND THE LIST IS FLUSH LEFT, NOT CENTRED. Every entry starts at the same
+ * nametable column on the cartridge — $0C for all five of them, whether the
+ * entry is eight characters or fifteen — and centring them instead gave the
+ * column a ragged edge that wandered four columns as the cursor moved. The
+ * port keeps the BLOCK where it was, centred on its own narrower screen: the
+ * flush edge is where VERSUS COMPUTER, the longest of the five, was already
+ * starting. */
+#define GAME_SELECT_TX (GAME_SELECT_ARROW_TX + 2)
 
 /* What the lobby is doing, while it does it. Two consoles reach this screen
  * independently, so it has to say which one this is and whether the other has
@@ -1702,7 +1717,8 @@ extern uint8_t g_idle_palette;
 extern int g_dance_frames;
 void idle_cossack_celebrate(int lines);
 void draw_line_clear_sweep(void);
-int hud_clearing_slot(void);     /* whose rows are coming down; see hud.c */
+int hud_clearing_slot(void);
+int field_view(void);        /* whose board is drawn; see hud.c */
 void points_clear(void);
 void note_award(int slot, TengenStepResult step);
 void draw_points(void);
@@ -1713,7 +1729,26 @@ void clear_panel_region(int tx, int ty, int w, int h);
 void set_stats_tile(int tx, int ty, uint16_t entry);
 void set_histogram_tile(int tx, int ty, uint16_t entry);
 void clear_both(int tx, int ty, int w, int h);
-extern bool g_show_banner;
+/* WHAT THE RIGHT BOX IS HOLDING. Two states for most of the game and THREE in
+ * a race, because a race has a second board worth looking at:
+ *
+ *   BANNER  the vertical TETRIS, which takes the whole column
+ *   STATS   the cossack on his shelf and the piece histogram under him
+ *   RIVAL   the other player's panel — their NEXT, score, lines and LEVEL,
+ *           laid out like coop's right-hand one. A race only.
+ *
+ * SELECT walks them. In RIVAL the left box gives up its own RIVAL cell and
+ * goes back to the 1P panel's HIGH, because the rival's score is no longer
+ * a number squeezed into somebody else's panel — it has a panel. */
+typedef enum { HUD_BANNER = 0, HUD_STATS = 1, HUD_RIVAL = 2, HUD_STATE_COUNT = 3 } HudBox;
+extern uint8_t g_hud;
+#define hud_banner() (g_hud == HUD_BANNER)
+#define hud_stats()  (g_hud == HUD_STATS)
+#define hud_rival()  (g_hud == HUD_RIVAL)
+/* How many of them this match offers: RIVAL needs a rival on a board of their
+ * own, so a race gets three and everything else two. */
+#define HUD_STATES() ((g_session.game.two_player && !g_session.game.coop) \
+                       ? HUD_STATE_COUNT : 2)
 void draw_field_braid(int tx, const uint8_t run[1][2]);
 void draw_dancer_stage(void);
 unsigned text_len(const char *s);

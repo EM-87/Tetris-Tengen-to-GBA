@@ -266,6 +266,28 @@ int hud_clearing_slot(void) {
         g_session.game.player[g_view].line_clear_timer == 0 &&
         g_session.game.player[g_view ^ 1].line_clear_timer > 0)
         return g_view ^ 1;
+    return field_view();
+}
+
+/* WHOSE BOARD IS ON THE SCREEN, which is not always whose game it is.
+ *
+ * A PAUSED RACE SHOWS THE OTHER BOARD, under the chord. Two reasons, and the
+ * second is the better one. A race against the COMPUTER never shows you the
+ * machine's stack at all, so there is no way to satisfy yourself that it is
+ * really playing rather than counting upwards — one press of Start and there
+ * it is. And a pause in this game is a player stopping to study their own
+ * stack, which is exactly what a race is supposed not to give you time for:
+ * take the stack away while they are looking at it and the pause is a pause
+ * again rather than a free think.
+ *
+ * Only in a race, because there is no other board in 1P and coop's is the
+ * same board; and only behind the chord, because it is the port's idea and
+ * not the cartridge's. Over a cable both consoles have the same door and a
+ * pause stops both boards, so neither player gets it for nothing. */
+int field_view(void) {
+    if (g_session.game.paused && g_pause_unlocked &&
+        g_session.game.two_player && !g_session.game.coop)
+        return g_view ^ 1;
     return g_view;
 }
 
@@ -435,7 +457,7 @@ void clear_both(int tx, int ty, int w, int h) {
  * and the histogram is the thing you go and ask for. It is also the harder
  * way to play — no piece counts — which is why the level-up troupe is
  * reserved for it (see g_idle_show). */
-bool g_show_banner = true;
+uint8_t g_hud = HUD_BANNER;
 
 /* One shelf, `w` columns of it. */
 static void draw_ledge(int tx, int ty, int w) {
@@ -623,7 +645,10 @@ void draw_static_screen(void) {
      * under it the piece histogram. NOT in HUD Banner — there is nothing on
      * either side of it to separate, and a line across the middle of a
      * vertical TETRIS is a line across the middle of a vertical TETRIS. */
-    if (!g_show_banner) draw_ledge(BOX_R_IN, SHELF_FIRST, BOX_IN);
+    if (hud_stats()) draw_ledge(BOX_R_IN, SHELF_FIRST, BOX_IN);
+    /* HUD RIVAL rules its box every three rows, like coop's panels, and draws
+     * its own — see draw_rival_panel, which clears the column under the first
+     * shelf every frame and would take any drawn here with it. */
     set_credit_layer(false);
     /* Back from whatever the title lent it; see set_offset_layer. */
     set_offset_layer(STATS_SHIFT_PX);
@@ -1480,6 +1505,17 @@ void draw_counter(int ty, int label_first, int label_count,
     draw_number_blank(BOX_L_IN + value_indent, ty + 1, value, digits, BANK_VALUE);
 }
 
+/* The same for the right box, which has its own eight columns and centres
+ * both the word and the number in them the way coop's panels do. */
+static void draw_rival_counter(int ty, int label_first, int label_count,
+                                uint32_t value, int digits) {
+    draw_label(BOX_R_IN + (BOX_IN - label_count) / 2, ty, label_first,
+                label_count);
+    clear_region(BOX_R_IN, ty + 1, BOX_IN, 1);
+    draw_number_blank(BOX_R_IN + (BOX_IN - digits) / 2, ty + 1, value, digits,
+                       BANK_VALUE);
+}
+
 /* NEXT, IN ITS OWN COMPARTMENT AND CENTRED IN IT.
  *
  * A ROW OF AIR BETWEEN THE WORD AND THE PIECE, and it is not decoration. At
@@ -1641,6 +1677,65 @@ static void draw_coop_stats_panel(const TengenPlayerState *me) {
     draw_stats(me, COOP_R_TX);
 }
 
+/* THE RACE'S THIRD HUD: THE RIVAL'S OWN PANEL.
+ *
+ * A race is two boards and the port only ever draws one of them, so the other
+ * player has always been a single number squeezed into the bottom cell of
+ * YOUR panel — their score, under RIVAL or OUT. That is enough to know who is
+ * winning and nothing else: not what they are holding, not how fast they are
+ * going, and above all not what LEVEL they are on, which in this game is the
+ * whole of the bragging.
+ *
+ * So the right box becomes their panel, laid out exactly like coop's — the
+ * preview in the tall compartment, three counters in the short ones — because
+ * coop's is the shape the cartridge itself uses for "the other player's
+ * numbers", and the two boxes rule at the same height either way. It is eight
+ * columns here against coop's seven, which only means more air.
+ *
+ * AND THE LEFT BOX GIVES ITS RIVAL CELL BACK. With a whole panel saying what
+ * the other board is doing, repeating their score in the corner of yours is
+ * noise; the cell goes back to being HIGH, which is what the cartridge's own
+ * 1P panel has there and what a race had to give up to make room. */
+static void draw_rival_panel(void) {
+    const TengenPlayerState *them = &g_session.game.player[g_view ^ 1];
+
+    bool was = g_panel_layer;
+    g_panel_layer = false;
+    /* THE HISTOGRAM'S LAYER GOES FIRST. It is a map of its own and nothing
+     * else ever writes to it, so the bars and the row of piece icons HUD
+     * Stats left behind stood under this panel's own words — which is what
+     * "RIVAL" with a blue tetromino printed through it was. */
+    clear_stats_layer();
+    clear_both(BOX_R_IN, BRAID_T, BOX_IN, SHELF_FIRST - BRAID_T);
+    clear_panel_region(BOX_R_IN, BRAID_T, BOX_IN, SHELF_FIRST - BRAID_T);
+    clear_both(BOX_R_IN, SHELF_FIRST + 1, BOX_IN, SCREEN_TH - SHELF_FIRST - 1);
+    /* FOUR LEDGES, on coop's own rhythm: a tall compartment for the preview
+     * and three short ones under it. Coop gets them free — they are drawn
+     * into the cartridge's coop nametable — and a race plays on the 1P
+     * screen, so here they are drawn, after the clear above rather than with
+     * the static screen, which would put them back only on a repaint. */
+    for (int i = 0; i < 4; i++)
+        draw_ledge(BOX_R_IN, SHELF_FIRST + i * SHELF_STEP, BOX_IN);
+    /* PAL_NEXT2_BANK, the loan coop takes for the partner's preview: two
+     * previews on one screen cannot share one palette, because each is drawn
+     * in its own piece's colours. */
+    draw_next_label_and_piece(BOX_R_IN, ROW_NEXT, BOX_IN, g_view ^ 1,
+                               PAL_NEXT2_BANK);
+    g_panel_layer = true;
+
+    draw_rival_counter(ROW_SCORE, HUD_LABEL_SCORE, them->score, 6);
+    draw_rival_counter(ROW_LINES, HUD_LABEL_LINES, them->lines, 4);
+    draw_rival_counter(ROW_LEVEL, HUD_LABEL_LEVEL, them->level, 2);
+    /* ...and the fourth cell says whether they are still in it, which used to
+     * be the left box's job. The number under it is their score either way;
+     * frozen is what OUT means. */
+    clear_region(BOX_R_IN, ROW_HIGH, BOX_IN, 2);
+    draw_text(BOX_R_IN + (BOX_IN - 5) / 2, ROW_HIGH,
+               them->game_active ? "RIVAL" : " OUT ", BANK_LABEL);
+    g_panel_layer = was;
+    hide_idle_cossack();
+}
+
 static void draw_coop_panel(void) {
     const TengenPlayerState *me = &g_session.game.player[g_view];
     const TengenPlayerState *them = &g_session.game.player[g_view ^ 1];
@@ -1649,7 +1744,7 @@ static void draw_coop_panel(void) {
     if (me->score > g_high_score) g_high_score = me->score;
     if (them->score > g_high_score) g_high_score = them->score;
 
-    if (!g_show_banner) { draw_coop_stats_panel(me); return; }
+    if (!hud_banner()) { draw_coop_stats_panel(me); return; }
 
     draw_coop_next(COOP_L_TX, g_view, PAL_NEXT_BANK);
     draw_coop_next(COOP_R_TX, g_view ^ 1, PAL_NEXT2_BANK);
@@ -1716,7 +1811,7 @@ void draw_panel(void) {
     draw_counter(ROW_LINES, HUD_LABEL_LINES, p->lines, 4, 1);
     draw_counter(ROW_LEVEL, HUD_LABEL_LEVEL, p->level, 2, 2);
 
-    if (g_session.game.two_player) {
+    if (g_session.game.two_player && !hud_rival()) {
         /* A race wants the other board's numbers where the high score would
          * be. The ROM keeps no piece histogram in 2P either, so nothing of
          * the cartridge's is being displaced. */
@@ -1738,6 +1833,10 @@ void draw_panel(void) {
          * highScoreHundredThousands is the seventh entry of
          * statsDataAddresses (main.asm.txt:4100-4107), which is the top of
          * the HIGH SCORES table — see leader_reset. */
+        /* CLEARED FIRST, because this cell is not always HIGH: in a race
+         * the third HUD hands it back from RIVAL, which is a longer word,
+         * and drawing the shorter one over it left its R standing. */
+        clear_region(BOX_L_IN, ROW_HIGH, BOX_L_W, 1);
         draw_text(BOX_L_IN + 1, ROW_HIGH, "HIGH", BANK_LABEL);
         clear_region(BOX_L_IN, ROW_HIGH + 1, BOX_L_W, 1);
         draw_number_blank(BOX_L_IN, ROW_HIGH + 1, g_high_score, 6, BANK_VALUE);
@@ -1762,7 +1861,9 @@ void draw_panel(void) {
      * the two columns nearest the board: those are the rope that frames the
      * playfield itself, and the playfield keeps its frame whatever the HUD is
      * doing. The box comes back when the banner goes away, through g_repaint. */
-    if (g_show_banner) {
+    if (hud_rival()) {
+        draw_rival_panel();
+    } else if (hud_banner()) {
         /* THE BANNER IS ART, NOT A COUNTER: it goes on the main map, aligned
          * to the screen. Both borrowed maps are wiped first — the panel's
          * because the statistics box was there a frame ago, the offset one
@@ -1821,7 +1922,7 @@ void draw_field(void) {
      * second field, which coop never writes: an empty board with two pieces
      * falling through it. */
     const TengenPlayfield *field =
-        &g_session.game.field[g_session.game.coop ? 0 : g_view];
+        &g_session.game.field[g_session.game.coop ? 0 : field_view()];
     int clearing_slot = hud_clearing_slot();
     const TengenPlayerState *p = &g_session.game.player[clearing_slot];
 
@@ -1873,7 +1974,9 @@ void draw_field(void) {
      * goes down first so the local piece wins any overlap, which is the one
      * the player is steering. */
     for (int pass = 0; pass < 2; pass++) {
-        int slot = pass == 0 ? (g_view ^ 1) : g_view;
+        /* field_view, not g_view: a paused race shows the other board, and
+         * the piece falling on it is that board's. */
+        int slot = pass == 0 ? (field_view() ^ 1) : field_view();
         if (pass == 0 && !g_session.game.coop) continue;
         const TengenPlayerState *sp = &g_session.game.player[slot];
         if (!sp->game_active || sp->line_clear_timer > 0) continue;

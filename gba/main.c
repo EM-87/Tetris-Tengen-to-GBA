@@ -761,7 +761,7 @@ int main(void) {
                 clear_both(COOP_R_TX, BRAID_T, COOP_PANEL_W,
                             COOP_LEDGE_FIRST - BRAID_T);
                 draw_coop_dancers(g_dancer_elapsed, g_dancer_cast);
-            } else if (!g_show_banner) {
+            } else if (!hud_banner()) {
                 /* HUD STATS keeps its screen. Nothing is cleared and nothing
                  * has to be put back; the panel redraws every frame anyway,
                  * and the cossack standing in it takes the show. */
@@ -800,16 +800,21 @@ int main(void) {
          * the board. The game proper never reads SELECT — the cartridge's own
          * pause and cheat codes are on Start and the face buttons — so it is
          * free. */
-        /* ...AND COOP SWAPS TOO, BUT ONLY AGAINST THE MACHINE. Its other HUD
-         * hides the partner's board, which against the computer is a
-         * difficulty setting and against a person over the cable is just
-         * less game. See draw_coop_stats_panel. */
+        /* ...AND COOP SWAPS TOO, BUT ONLY AGAINST THE MACHINE AND ONLY UNDER
+         * THE CHORD. Its other HUD hides the partner's board, which against
+         * the computer is a difficulty setting and against a person over the
+         * cable is just less game — and it carries T.SCORE and T.LINES, the
+         * board's totals, which the panel itself only prints once the cheats
+         * have been found. A screen reachable with SELECT that shows what the
+         * chord is supposed to unlock is not a locked door. See
+         * draw_coop_stats_panel and g_pause_unlocked. */
         bool hud_swappable = screen == SCREEN_PLAYING && match_running &&
                               !g_session.game.paused &&
                               g_session.game.player[g_view].game_active &&
-                              (!g_session.game.coop || (g_ai_active && !g_linked));
+                              (!g_session.game.coop ||
+                               (g_ai_active && !g_linked && g_pause_unlocked));
         if (hud_swappable && (pressed & TENGEN_BTN_SELECT)) {
-            g_show_banner = !g_show_banner;
+            g_hud = (uint8_t)((g_hud + 1) % HUD_STATES());
             /* Both directions need the static screen back: going TO the
              * banner erases the braid box, and coming back from it has to
              * redraw one. Without this the box's border kept whatever the
