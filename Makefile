@@ -191,8 +191,8 @@ $(TRACE_CORE): tools/trace_core.c $(CORE_SRC) $(CORE_HDR) | $(BUILD)
 
 .PHONY: trace
 trace: $(TRACE_CORE)
-	@test -n "$(ROM)" || { echo "usage: make trace ROM=/path/to/tetris.nes [FRAMES=3000]"; exit 1; }
-	python3 tools/trace_match.py "$(ROM)" --frames $(or $(FRAMES),3000) --core $(TRACE_CORE) --outdir $(BUILD)
+	@test -n "$(ROM)" || { echo "usage: make trace ROM=/path/to/tetris.nes [FRAMES=3000] [MODE=coop|versus|with]"; exit 1; }
+	python3 tools/trace_match.py "$(ROM)" --frames $(or $(FRAMES),3000) --core $(TRACE_CORE) --outdir $(BUILD) $(if $(MODE),--$(MODE))
 
 # Verifies the asset conversion's format handling without needing a ROM.
 .PHONY: assets-check

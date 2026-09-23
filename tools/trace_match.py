@@ -54,7 +54,7 @@ def digits(nes, addr, n):
     return v
 
 
-def field(nes, coop=False):
+def field(nes, coop=False, base=0x600):
     """The playable columns of ROM rows 6..25.
 
     player1Playfield is at $0600 as EIGHT BYTES A ROW — sixteen nibbles, of
@@ -67,14 +67,43 @@ def field(nes, coop=False):
     out = []
     for r in range(6, 26):
         for nib in range(lo, hi):
-            b = nes.bus.ram[(0x600 + r * 8 + (nib >> 1)) & 0x7FF]
+            b = nes.bus.ram[(base + r * 8 + (nib >> 1)) & 0x7FF]
             out.append("%X" % ((b >> 4) if (nib & 1) == 0 else (b & 0xF)))
     return "".join(out)
 
 
-def cartridge_trace(rom, frames, out_path, coop=False):
+def versus_row(nes, f, shared=False):
+    """One frame of VERSUS COMPUTER, both boards, in trace_core.c's shape.
+
+    Player 2's copies of everything sit one byte (or one table) past player
+    1's: $61-$6B interleaved, score at $041E, lines at $0428, level at
+    $042E, and its playfield at $0700.
+    """
+    row = "%d" % f
+    for i in range(2):
+        if not nes.ram(0x4A + i):
+            row += " | fin"
+            continue
+        if nes.ram(0x1CE + i):
+            row += " | limpia"
+            continue
+        lvl = 0x42C + 2 * i
+        row += " | p%d o%d y%d x%d n%d t%d lvl%d L%d S%d %s" % (
+            nes.ram(0x64 + i), nes.ram(0x68 + i), nes.ram(0x60 + i),
+            nes.ram(0x62 + i), nes.ram(0x66 + i), nes.ram(0x6A + i),
+            (10 if nes.ram(lvl) != 0x30 else 0) + (nes.ram(lvl + 1) - 0x30),
+            digits(nes, 0x424 + 4 * i, 4), digits(nes, 0x418 + 6 * i, 6),
+            field(nes, coop=True) if shared
+            else field(nes, base=0x600 + 0x100 * i))
+    return row + " | T%d,%d" % (nes.ram(0x1CA), nes.ram(0x1CB))
+
+
+def cartridge_trace(rom, frames, out_path, coop=False, vs=False, with_=False):
     nes = NesConsole(rom)
-    nes.start_game(entry=2 if coop else 0)
+    # GAME SELECT's entries are menuGameMode's values: 1 PLAYER, 2 PLAYER,
+    # COOPERATIVE, VERSUS (the computer), WITH (the computer).
+    nes.start_game(entry=4 if with_ else 3 if vs else 2 if coop else 0)
+    computer = vs or with_
 
     # WAIT FOR THE LOOKAHEAD SEED, and only then start counting frames.
     # player1RNGSeed ($5C) is what tengen_new_game's `shared` corresponds to —
@@ -91,12 +120,22 @@ def cartridge_trace(rom, frames, out_path, coop=False):
     else:
         raise RuntimeError("player1RNGSeed never got set")
     lines = ["seed %04X" % seed]
+    clocks = []
     p1 = script(frames)
     # Player 2 reads the same generator from a different start, so the two
     # pads are independent without needing a second one.
     p2 = script(frames, seed=999983) if coop else [0] * frames
     for f in range(frames):
-        nes.frame(p1[f], p2[f])
+        # In VERSUS the second pad is the computer's: compInputForGameplay
+        # overwrites whatever it reads.
+        nes.frame(p1[f], 0 if computer else p2[f])
+        clocks.append(nes.ram(0x32))
+        if computer:
+            if nes.state != GAMESTATE_PLAYING:
+                lines.append("%d estado %02X" % (f, nes.state))
+            else:
+                lines.append(versus_row(nes, f, shared=with_))
+            continue
         if nes.state != GAMESTATE_PLAYING:
             lines.append("%d estado %02X" % (f, nes.state))
             continue
@@ -118,7 +157,55 @@ def cartridge_trace(rom, frames, out_path, coop=False):
         lines.append(row)
     with open(out_path, "w") as fh:
         fh.write("\n".join(lines) + "\n")
-    return seed
+    return seed, clocks
+
+
+def computer_match(args):
+    """VERSUS and WITH COMPUTER: the script on pad 1, computerMove on pad 2.
+
+    Both sides print both players and compTargetX/Orientation, so a
+    difference in the computer's CHOICE shows on the frame it is made, not
+    thirty frames later where the piece lands. The computer's cadence runs
+    off frameCounterLow; the cartridge's value on the first compared frame
+    is handed to the core, which counts on from it.
+
+    VERSUS deals a frame later than 1 PLAYER, as COOPERATIVE does (its deal
+    frame leaves the timers at 47); WITH deals when 1 PLAYER does. So the
+    cartridge's first line is compared in VERSUS and dropped in WITH.
+    """
+    mode = "with" if args.with_ else "vs"
+    rom_path = os.path.join(args.outdir, "trace_cartridge.txt")
+    print(f"corriendo el cartucho {args.frames} frames "
+          f"(un interprete; tarda ~15s por cada mil)...")
+    seed, clocks = cartridge_trace(args.rom, args.frames, rom_path,
+                                   vs=args.versus, with_=args.with_)
+    skip = 1 if args.with_ else 0
+    core_path = os.path.join(args.outdir, "trace_core.txt")
+    with open(core_path, "w") as fh:
+        subprocess.run([args.core, "%04X" % seed, str(args.frames + 1 - skip),
+                        mode, str(clocks[skip])], stdout=fh, check=True)
+
+    def body(line):
+        return line.split(" ", 1)[1]
+    with open(rom_path) as fh:
+        rom_lines = fh.read().splitlines()[1 + skip:]
+    with open(core_path) as fh:
+        core_lines = fh.read().splitlines()[1:]
+    for end, line in enumerate(rom_lines):
+        if "estado" in line:
+            rom_lines = rom_lines[:end]
+            break
+    n = min(len(rom_lines), len(core_lines))
+    for i in range(n):
+        if body(rom_lines[i]) != body(core_lines[i]):
+            print(f"FALLA: se separan en el frame {rom_lines[i].split()[0]}")
+            for name, l in (("cartucho", rom_lines[i]), ("port", core_lines[i])):
+                parts = l.split(" | ")
+                print(f"  {name}: " + " | ".join(p[:34] for p in parts[1:]))
+            return 1
+    print(f"OK: el port y el cartucho juegan la misma partida contra la "
+          f"maquina, {n} frames identicos.")
+    return 0
 
 
 def main():
@@ -128,15 +215,23 @@ def main():
     ap.add_argument("--coop", action="store_true",
                     help="COOPERATIVE: one twelve-wide board, two pads, and "
                          "the collision routine that keeps the pieces apart")
+    ap.add_argument("--versus", action="store_true",
+                    help="VERSUS COMPUTER: two boards, the script against "
+                         "the cartridge's computer")
+    ap.add_argument("--with", dest="with_", action="store_true",
+                    help="WITH COMPUTER: the same computer on the shared "
+                         "twelve-wide board")
     ap.add_argument("--core", default="build/trace_core",
                     help="the compiled tools/trace_core.c")
     ap.add_argument("--outdir", default="build")
     args = ap.parse_args()
+    if args.versus or args.with_:
+        return computer_match(args)
 
     rom_path = os.path.join(args.outdir, "trace_cartridge.txt")
     print(f"corriendo el cartucho {args.frames} frames "
           f"(un interprete; tarda ~15s por cada mil)...")
-    seed = cartridge_trace(args.rom, args.frames, rom_path, args.coop)
+    seed, _ = cartridge_trace(args.rom, args.frames, rom_path, args.coop)
     print(f"  savedRNGSeed = ${seed:04X}, escrito {rom_path}")
 
     core_path = os.path.join(args.outdir, "trace_core.txt")

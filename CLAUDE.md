@@ -104,7 +104,7 @@ minus those).
 | `make test` | no | always — the rules, in milliseconds |
 | `make gba` | headers | to build `build/tengen.gba` |
 | `make gba-check` | headers | before calling any change done: 42 checks on the running ROM in mGBA, two of them on two consoles with a cable |
-| `make trace ROM=...` | yes | after touching `tengen_step`: the port against the cartridge, frame by frame (`--coop` via `tools/trace_match.py`) |
+| `make trace ROM=... [MODE=coop\|versus\|with]` | yes | after touching `tengen_step` or `tengen_ai.c`: the port against the cartridge, frame by frame. Only `versus` and `with` clear rows — the 1P and coop scripts never complete one |
 | `make tune-check ROM=...` | yes | after touching audio: the four tunes against the cartridge, note by note |
 | `make dance-check ROM=...` | yes | after touching the dancers: their choreography against the cartridge's driver |
 | `make clear-check ROM=...` | yes | after touching line clears: the joins a clear breaks |
@@ -180,6 +180,11 @@ story behind each; the item number is in brackets.
 - **A game is written to the table as it ENDS** (L81DD at the top-out), so an
   A+B restart keeps it. Each build has its own table; a linked match uses the
   release's. [25]
+- **The frame a clear's timer reaches zero also deals.** mainLoop animates
+  both players before either plays, so the rows come down and the next
+  piece comes up together (29 frames after the lock; 1 in the prototypes).
+  In coop, player 1's step finishes a partner's clear that ends this frame.
+  It dealt a frame late until a trace first cleared a row.
 
 ## Decisions
 
@@ -220,12 +225,15 @@ What has been checked only against a READING of the disassembly (host tests,
 the harness) and never against the cartridge itself, which is where the
 last timing bugs were found every time:
 
-- **The computer player's choices.** `computerMove` is transcribed and
-  tested, but no trace puts it beside the cartridge's own computer on one
-  seed. `make trace` covers 1 PLAYER and COOPERATIVE with a button script;
-  VERSUS and WITH COMPUTER have no equivalent.
-- **The race on two boards** (2 PLAYER / VERSUS), and the starting handicap
-  with it: same situation.
+- **The starting handicap** against the cartridge's garbage. (The race on
+  two boards and the computer's choices are traced: `MODE=versus`/`with`.)
+- **The computer's pace in the GBA build.** Its CHOICES are the cartridge's
+  and traced; the soft drop and the settle in `gba/main.c` are the port's,
+  on purpose ("va un tanto lento"), so a GBA match against it is not the
+  cartridge's match.
+- **Prototype A's clear and spawn timing.** Its RAM map differs and the
+  probes cannot read it; B, C and D were measured (row and piece both one
+  frame after the lock).
 - **The attract demo** against the cartridge's.
 - **Two of the prototypes' rules**, taken from a list and not measured on the
   dumps: no cossacks or BONUS at a level-up, and PAUSE not silencing the

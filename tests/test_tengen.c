@@ -584,6 +584,11 @@ static void test_completed_rows_wait_before_they_collapse(void) {
     CHECK(game.player[0].lines == 1);
     CHECK(game.player[0].line_clear_timer == 0);
     CHECK(game.player[0].clearing_rows == 0);
+    /* ...AND THE NEXT PIECE IS ALREADY UP. mainLoop runs the animation stage
+     * before activeGamePlay, so the frame whose decrement reaches zero goes
+     * on to deal. Measured on the cartridge: the row goes and the piece
+     * comes on the same frame, 29 after the lock. */
+    CHECK(game.player[0].piece.current != TT_NONE);
 }
 
 static void test_line_clear_sweep_advances_every_other_frame(void) {
@@ -1825,6 +1830,43 @@ static void test_a_coop_line_clear_holds_both_players(void) {
     for (int frame = 0; frame < 60; frame++)
         tengen_step(&race, TENGEN_PLAYER_2, 0);
     CHECK(race.player[TENGEN_PLAYER_2].piece.y != was_y);
+}
+
+static void test_a_coop_partners_clear_ends_before_player_1_moves(void) {
+    /* mainLoop stages BOTH players' clear animations before either one's
+     * activeGamePlay (main.asm.txt:66-74). So on the frame player 2's timer
+     * runs out, player 1 already finds the rows down and the hold over —
+     * although the port steps player 1 first. Its step does player 2's
+     * collapse for it, and player 2's own step reports it. */
+    TengenGame game;
+    tengen_new_game(&game, 0x4242, 0, true, true, false);
+
+    int row = TENGEN_PF_HEIGHT - 1;
+    for (int col = 0; col < TENGEN_PF_WIDTH; col++)
+        game.field[0].cell[row][col] = TT_I;
+    TengenPlayerState *p1 = &game.player[TENGEN_PLAYER_1];
+    TengenPlayerState *p2 = &game.player[TENGEN_PLAYER_2];
+    p2->piece.current = TT_NONE;        /* it locked the piece that filled it */
+    p2->clearing_rows = 1u << row;
+    p2->line_clear_timer = 3;
+
+    for (int frame = 1; frame <= 3; frame++) {
+        uint8_t was_timer = p1->fall_timer;
+        tengen_step(&game, TENGEN_PLAYER_1, 0);
+        bool p1_moved = p1->fall_timer != was_timer;
+        TengenStepResult r2 = tengen_step(&game, TENGEN_PLAYER_2, 0);
+        if (frame < 3) {
+            CHECK(!p1_moved);
+            CHECK(!r2.lines_collapsed);
+        } else {
+            CHECK(p1_moved);
+            CHECK(r2.lines_collapsed);
+            CHECK(r2.rows_cleared_mask == (1u << row));
+            CHECK(p2->lines == 1);
+            CHECK(p2->piece.current != TT_NONE);
+        }
+    }
+    CHECK(p2->collapsed_early == 0);
 }
 
 static void test_the_computers_soft_drop_does_not_eat_its_own_shifts(void) {
@@ -3320,6 +3362,7 @@ int main(void) {
     test_a_coop_top_out_ends_the_game_for_both_players();
     test_the_computers_soft_drop_does_not_eat_its_own_shifts();
     test_a_coop_line_clear_holds_both_players();
+    test_a_coop_partners_clear_ends_before_player_1_moves();
     test_the_computer_can_be_told_to_look_first_and_to_drop();
     test_the_computer_can_be_told_to_read_the_partner();
     test_the_computer_waits_its_turn_on_a_shared_board();

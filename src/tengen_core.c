@@ -1285,6 +1285,54 @@ bool tengen_restart_player(TengenGame *game, TengenPlayerSlot slot) {
     return true;
 }
 
+/* The rows a clear has been animating come down, and the counters catch up.
+ * What stageLineClearAnimation does when its timer reaches zero (L88C8,
+ * main.asm.txt:1274-1335, and L94E4 after it). */
+static void finish_clear(TengenGame *game, TengenPlayerSlot slot,
+                          TengenStepResult *out) {
+    TengenPlayerState *p = &game->player[slot];
+    TengenPlayfield *field = &game->field[game->coop ? 0 : slot];
+    uint32_t cleared = p->clearing_rows;
+    p->clearing_rows = 0;
+
+    tengen_collapse_rows_joined(field, cleared, !game->piece_id_cells);
+
+    int count = 0;
+    for (int i = 0; i < TENGEN_PF_HEIGHT; i++) if (cleared & (1u << i)) count++;
+    p->lines += (uint32_t)count;
+    /* The level's bonus tally, $6C-$73. See clear_counts. */
+    if (count >= 1 && count <= 4 && p->clear_counts[count - 1] < 255)
+        p->clear_counts[count - 1]++;
+    out->lines_collapsed = true;
+    out->rows_cleared_mask = cleared;
+
+    /* L94E4 (main.asm.txt:3087-3092) clears lastCurrentBlock as the
+     * rows come down, which disarms the undo code: there is no longer
+     * a coherent board to put the piece back into. */
+    p->last_piece = TT_NONE;
+    if (game->coop) game->player[slot ^ 1].last_piece = TT_NONE;
+
+    /* No score is awarded here on purpose: this game pays per piece
+     * locked, not per line cleared (see add_lock_score). */
+    uint8_t new_level = level_for_lines(p->lines, p->start_level,
+                                         game->xe, game->proto_rules);
+    if (new_level > p->level) {
+        p->level = new_level;
+        out->leveled_up = true;
+        /* main.asm.txt:3189-3190: reaching a level by PLAY hands back
+         * the long bar. The cheat level-up does not. */
+        p->long_bar_code_used = 0;
+        /* ...AND IN COOP THE PARTNER GETS THE LEVEL TOO: the same
+         * routine, having stored it, tests playMode and stores it a
+         * second time two entries along (`bit playMode / bpl / tya /
+         * eor #$02 / tay`, main.asm.txt:3191-3199). One board, one
+         * gravity. cheat_level_up already did this; the play path
+         * had the comment and the test and not the line, and the
+         * test never cleared enough lines to notice. */
+        if (game->coop) game->player[slot ^ 1].level = new_level;
+    }
+}
+
 TengenStepResult tengen_step(TengenGame *game, TengenPlayerSlot slot, uint8_t held_buttons) {
     TengenStepResult result;
     memset(&result, 0, sizeof(result));
@@ -1308,72 +1356,63 @@ TengenStepResult tengen_step(TengenGame *game, TengenPlayerSlot slot, uint8_t he
         return result;
     }
 
-    /* ...AND ON A SHARED BOARD, EITHER PLAYER'S ANIMATION HOLDS BOTH OF THEM.
-     * activeGamePlay tests its own timer first and then, on the negative
-     * playMode that means coop, the OR of the two (main.asm.txt:82DC-82E7).
-     * One board, one pause: rows cannot be coming down under a piece that is
-     * still falling into them. The partner's timer is only read here — it is
-     * decremented by the step that owns it, below. */
-    if (game->coop && game->player[slot ^ 1].line_clear_timer > 0 &&
-        p->line_clear_timer == 0) {
-        p->held_last_frame = held_buttons;
-        return result;
+    /* A report owed from the partner's step: see the coop branch below. */
+    if (p->collapsed_early) {
+        result.lines_collapsed = true;
+        result.rows_cleared_mask = p->collapsed_early;
+        result.leveled_up = p->leveled_early;
+        p->collapsed_early = 0;
+        p->leveled_early = false;
     }
 
     /* While the line-clear animation runs the game is held still and the
      * completed rows are still standing, so a renderer can animate them. When
-     * the timer expires they collapse, the counters catch up, and the next
-     * piece is dealt. */
+     * the timer expires they collapse and the counters catch up...
+     *
+     * ...AND THE NEXT PIECE IS DEALT ON THAT SAME FRAME. mainLoop runs
+     * stageLineClearAnimation for both players BEFORE either one's
+     * activeGamePlay (main.asm.txt:66-74), so the frame whose decrement
+     * reaches zero goes straight on into gameplay, finds `current` zero and
+     * deals. Measured on the cartridge in VERSUS COMPUTER: player 2's timer
+     * reads 1 after one frame and 0 after the next, and that next frame has
+     * already put the new piece up. This used to return here and deal a
+     * frame late, which no trace caught because the 1 PLAYER button script
+     * never completes a row. */
     if (p->line_clear_timer > 0) {
         p->line_clear_timer--;
-        if (p->line_clear_timer == 0) {
-            TengenPlayfield *field = &game->field[game->coop ? 0 : slot];
-            uint32_t cleared = p->clearing_rows;
-            p->clearing_rows = 0;
-
-            tengen_collapse_rows_joined(field, cleared, !game->piece_id_cells);
-
-            int count = 0;
-            for (int i = 0; i < TENGEN_PF_HEIGHT; i++) if (cleared & (1u << i)) count++;
-            p->lines += (uint32_t)count;
-            /* The level's bonus tally, $6C-$73. See clear_counts. */
-            if (count >= 1 && count <= 4 && p->clear_counts[count - 1] < 255)
-                p->clear_counts[count - 1]++;
-            result.lines_collapsed = true;
-            result.rows_cleared_mask = cleared;
-
-            /* L94E4 (main.asm.txt:3087-3092) clears lastCurrentBlock as the
-             * rows come down, which disarms the undo code: there is no longer
-             * a coherent board to put the piece back into. */
-            p->last_piece = TT_NONE;
-            if (game->coop) game->player[slot ^ 1].last_piece = TT_NONE;
-
-            /* No score is awarded here on purpose: this game pays per piece
-             * locked, not per line cleared (see add_lock_score). */
-            uint8_t new_level = level_for_lines(p->lines, p->start_level,
-                                                 game->xe, game->proto_rules);
-            if (new_level > p->level) {
-                p->level = new_level;
-                result.leveled_up = true;
-                /* main.asm.txt:3189-3190: reaching a level by PLAY hands back
-                 * the long bar. The cheat level-up does not. */
-                p->long_bar_code_used = 0;
-                /* ...AND IN COOP THE PARTNER GETS THE LEVEL TOO: the same
-                 * routine, having stored it, tests playMode and stores it a
-                 * second time two entries along (`bit playMode / bpl / tya /
-                 * eor #$02 / tay`, main.asm.txt:3191-3199). One board, one
-                 * gravity. cheat_level_up already did this; the play path
-                 * had the comment and the test and not the line, and the
-                 * test never cleared enough lines to notice. */
-                if (game->coop) game->player[slot ^ 1].level = new_level;
-            }
-
-            /* NO SPAWN HERE. The piece was zeroed when it locked and the
-             * next frame deals its replacement; see activeGamePlay's spawn
-             * branch. */
+        if (p->line_clear_timer > 0) {
+            p->held_last_frame = held_buttons;
+            return result;
         }
-        p->held_last_frame = held_buttons;
-        return result;
+        finish_clear(game, slot, &result);
+    }
+
+    /* ...AND ON A SHARED BOARD, EITHER PLAYER'S ANIMATION HOLDS BOTH OF THEM.
+     * activeGamePlay tests its own timer first and then, on the negative
+     * playMode that means coop, the OR of the two (main.asm.txt:82DC-82E7).
+     * One board, one pause: rows cannot be coming down under a piece that is
+     * still falling into them.
+     *
+     * By then the ROM has run BOTH players' animation stages, and this step
+     * runs before player 2's. So player 1, finding its partner's timer at 1,
+     * is looking at a timer the cartridge has already taken to zero — and
+     * at rows it has already brought down. It does that here, on player 2's
+     * behalf, and leaves the news for player 2's own step to report. */
+    if (game->coop) {
+        TengenPlayerState *q = &game->player[slot ^ 1];
+        if (slot == TENGEN_PLAYER_1 && q->game_active &&
+            q->line_clear_timer == 1) {
+            TengenStepResult theirs;
+            memset(&theirs, 0, sizeof(theirs));
+            q->line_clear_timer = 0;
+            finish_clear(game, TENGEN_PLAYER_2, &theirs);
+            q->collapsed_early = theirs.rows_cleared_mask;
+            q->leveled_early = theirs.leveled_up;
+        }
+        if (q->line_clear_timer > 0) {
+            p->held_last_frame = held_buttons;
+            return result;
+        }
     }
 
     /* Paused: gameplay stops here. The ROM gates it on gameState being 0

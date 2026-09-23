@@ -195,6 +195,11 @@ typedef struct {
      * collapse when it reaches zero. */
     uint8_t line_clear_timer;
     uint32_t clearing_rows;   /* bit i set => row i is completed and waiting */
+    /* A collapse the PARTNER'S step did on this player's behalf, waiting to
+     * be reported by this player's own step the same frame. Coop only; see
+     * finish_clear in tengen_core.c. */
+    uint32_t collapsed_early;
+    bool leveled_early;
 
     /* THIS LEVEL'S TALLY: how many singles, doubles, triples and tetrises
      * since the last level-up. The ROM keeps them at $6C-$73, two players
