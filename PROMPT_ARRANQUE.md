@@ -46,6 +46,6 @@ comprobaciones sobre la ROM en mGBA, dos de ellas con dos consolas y cable)
 tienen que pasar antes de dar por terminado cualquier cambio; tras tocar
 `tengen_step`, además `make trace ROM=...` contra el cartucho.
 
-No hay nada pendiente en la lista de melones de `CLAUDE.md`. Cualquier
+No hay nada pendiente: ver la sección "Open" de `CLAUDE.md`. Cualquier
 cambio nuevo empieza por mirar el cartucho (`tools/render_nes.py`,
 `tools/nes_console.py`) antes que la memoria de cómo es "el Tetris".

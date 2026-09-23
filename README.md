@@ -80,7 +80,9 @@ Hay una ROM de GBA que arranca, se juega y corre las reglas reales de Tengen.
   realmente dibuje y se juegue (`make gba-check`), no solo que linkee:
   incluye ver la animación de línea completa sprite por sprite, comprobar
   que deja escrita la palabra correcta, y pausar y teclear los códigos de
-  trucos.
+  trucos. Las 42 comprobaciones viven en `tools/romcheck/`, un módulo por
+  familia (partida, audio, menú de pausa, pantallas previas, HUD, la
+  máquina, récords) más `harness.py` con lo que comparten.
 - `tools/run_link.py` — arranca **dos** mGBA y les pone un cable link
   simulado en medio: modela el modo multiplayer del GBA (quién es maestro,
   qué lee cada consola, el `$FFFF` del hueco vacío, la interrupción) y
@@ -109,9 +111,9 @@ handicap inicial, la tabla de HIGH SCORES guardada en la SRAM del cartucho
 cuenta de BONUS entre niveles con los cosacos y su coreografía real, y los
 títulos de tres prototipos como skins con sus reglas.
 
-Lo que se aparta del cartucho, y por qué, está escrito en `CLAUDE.md`:
-"One thing the port does that the cartridge does not" y "What the port
-knowingly does NOT show". Nada de eso es un olvido.
+Lo que se aparta del cartucho está listado en la sección "Decisions" de
+`CLAUDE.md`, y el porqué de cada cosa en `reference/HISTORY.md`. Nada de eso
+es un olvido.
 
 ## Controles
 
@@ -203,7 +205,8 @@ tengen_gba_port/
 ├── tools/                extracción de assets, verificación de ROM, gbafix
 ├── reference/
 │   ├── disasm/           disassembly completo de Tetris (NES, Tengen)
-│   └── NOTES.md          mecánicas verificadas, con citas a la ROM
+│   ├── NOTES.md          mecánicas verificadas, con citas a la ROM
+│   └── HISTORY.md        cómo llegó cada parte del port a su forma
 ├── CLAUDE.md             cómo trabajar en este proyecto
 └── PROMPT_ARRANQUE.md    resumen para retomar el trabajo en una sesión nueva
 ```

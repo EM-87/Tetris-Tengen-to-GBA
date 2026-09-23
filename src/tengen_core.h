@@ -326,7 +326,7 @@ typedef struct {
      * offer only 1 PLAYER and 2 PLAYER, a level select of their own, and no
      * handicap or music menus. Those would take away things
      * this port has and a player chose, on a chord rung at the title, so they
-     * are left to a decision rather than assumed. See CLAUDE.md roadmap 31.
+     * are left to a decision rather than assumed. See reference/HISTORY.md, 31.
      *
      * The caller sets this after tengen_new_game, which clears it. */
     bool proto_rules;

@@ -138,7 +138,7 @@ and each dancer's choreography script, which is not walked any more but RUN
 
 Their title screens ship (L+R on the title cycles them) and so does the rest
 of their look — the green fret round the board and the flat or striped blocks
-(CLAUDE.md roadmap 31). The frame is twenty-two tile slots re-uploaded in
+(HISTORY.md, 31). The frame is twenty-two tile slots re-uploaded in
 place, so it needs no new draw path at all.
 
 **THE CELL ENCODING IS NOT THE RELEASE'S, THOUGH.** The release has FOURTEEN
