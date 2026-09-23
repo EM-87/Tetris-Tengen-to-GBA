@@ -433,11 +433,19 @@ static void break_joins(TengenPlayfield *field, int row, int half) {
 }
 
 uint32_t tengen_collapse_rows(TengenPlayfield *field, uint32_t mask) {
+    return tengen_collapse_rows_joined(field, mask, true);
+}
+
+uint32_t tengen_collapse_rows_joined(TengenPlayfield *field, uint32_t mask,
+                                     bool joins) {
     if (mask == 0) return 0;
 
     /* Before anything moves, and on the rows as they still stand: see
-     * kJoinBreak. */
-    for (int row = 0; row < TENGEN_PF_HEIGHT; row++) {
+     * kJoinBreak. NOT on a board of piece ids: a prototype draws every cell
+     * of a piece with the same graphic, so there are no joins to break, and
+     * the table read a J (4) as "joined downward only" and made it the wall
+     * (15), an L into an S and a Z into a T, beside every clear. */
+    for (int row = 0; joins && row < TENGEN_PF_HEIGHT; row++) {
         if (!(mask & (1u << row))) continue;
         if (row > 0 && !(mask & (1u << (row - 1))))
             break_joins(field, row - 1, 0);
@@ -1316,7 +1324,7 @@ TengenStepResult tengen_step(TengenGame *game, TengenPlayerSlot slot, uint8_t he
             uint32_t cleared = p->clearing_rows;
             p->clearing_rows = 0;
 
-            tengen_collapse_rows(field, cleared);
+            tengen_collapse_rows_joined(field, cleared, !game->piece_id_cells);
 
             int count = 0;
             for (int i = 0; i < TENGEN_PF_HEIGHT; i++) if (cleared & (1u << i)) count++;

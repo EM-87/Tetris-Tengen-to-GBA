@@ -674,8 +674,17 @@ bool tengen_try_rotate(TengenGame *game, TengenPlayerSlot slot, bool clockwise);
 uint32_t tengen_find_full_rows(const TengenPlayfield *field);
 
 /* Removes the named rows and drops everything above them down, returning the
- * mask it acted on. Vacated rows at the top keep the frame's wall columns. */
+ * mask it acted on. Vacated rows at the top keep the frame's wall columns.
+ * The rows either side lose the joins that crossed into the cleared ones
+ * (kJoinBreak, L8A85) — the release's cells only. */
 uint32_t tengen_collapse_rows(TengenPlayfield *field, uint32_t mask);
+
+/* ...and the same with a say in the joins. `joins` false is a board whose
+ * cells are PIECE IDS (piece_id_cells), where there is nothing to break and
+ * kJoinBreak would read a J as the wall. tengen_step passes
+ * !piece_id_cells. */
+uint32_t tengen_collapse_rows_joined(TengenPlayfield *field, uint32_t mask,
+                                     bool joins);
 
 /* Find and collapse in one step. Kept for callers that don't care about the
  * animation phase; tengen_step uses the two halves separately. */

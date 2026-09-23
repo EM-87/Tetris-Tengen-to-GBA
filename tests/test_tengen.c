@@ -476,6 +476,37 @@ static void test_two_adjacent_clears_skip_each_other(void) {
     CHECK(field.cell[LOW + 1][1] == 0x0F);
 }
 
+static void test_a_skinned_board_has_no_joins_to_break(void) {
+    /* UNDER A SKIN A CELL IS A PIECE'S ID, NOT A JOINED-BLOCK TILE (see
+     * piece_id_cells), and the prototypes' cells have no joins for a clear to
+     * break: every cell of a piece is the same graphic. Run kJoinBreak over
+     * them anyway and it reads the ids as joins — a J (4) above a cleared row
+     * came back as 15, the wall, an L (5) as an S (6), and a Z (7) below one
+     * as a T (2). Pieces changed colour beside every clear. */
+    TengenGame game;
+    tengen_new_game(&game, 0x4242, 0, false, false, false);
+    game.piece_id_cells = true;
+    TengenPlayfield *field = &game.field[0];
+    const int CUT = TENGEN_PF_HEIGHT - 2;
+    for (int col = 1; col < TENGEN_PF_WIDTH - 1; col++)
+        field->cell[CUT][col] = TT_I;
+    field->cell[CUT - 1][1] = TT_J;
+    field->cell[CUT - 1][2] = TT_L;
+    field->cell[CUT + 1][1] = TT_Z;
+    field->cell[CUT + 1][2] = TT_S;
+    game.player[TENGEN_PLAYER_1].clearing_rows = 1u << CUT;
+    game.player[TENGEN_PLAYER_1].line_clear_timer = 1;
+
+    TengenStepResult r = tengen_step(&game, TENGEN_PLAYER_1, 0);
+    CHECK(r.lines_collapsed);
+    /* The row above dropped into the cleared one's place, ids intact... */
+    CHECK(field->cell[CUT][1] == TT_J);
+    CHECK(field->cell[CUT][2] == TT_L);
+    /* ...and the row below never moved, ids intact. */
+    CHECK(field->cell[CUT + 1][1] == TT_Z);
+    CHECK(field->cell[CUT + 1][2] == TT_S);
+}
+
 static void test_completed_rows_wait_before_they_collapse(void) {
     /* The ROM holds the game for lineClearTimerP1 frames after finding
      * completed rows, animates them, and only then collapses
@@ -3114,6 +3145,7 @@ int main(void) {
     test_line_clear_detects_and_collapses();
     test_a_cleared_row_breaks_the_joins_it_crossed();
     test_two_adjacent_clears_skip_each_other();
+    test_a_skinned_board_has_no_joins_to_break();
     test_level_up_thresholds_match_rom_table();
     test_das_charges_before_repeating();
     test_held_rotate_repeats_every_fifteen_frames();
