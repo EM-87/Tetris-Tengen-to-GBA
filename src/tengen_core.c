@@ -1469,17 +1469,13 @@ TengenStepResult tengen_step(TengenGame *game, TengenPlayerSlot slot, uint8_t he
     }
 
     /* Order mirrors doSomethingWithInputDuringGameplay: left, right, then
-     * B (cw) rotate, then A (ccw) rotate (main.asm.txt:96-183, 538-575). */
+     * B (cw) rotate, then A (ccw) rotate (main.asm.txt:96-183, 538-575).
+     * Collected here, applied after the fall timer below. */
     bool move_left, move_right, rotate_cw, rotate_ccw;
     apply_das(held_buttons, new_presses, TENGEN_BTN_LEFT, &p->das_left, &move_left);
     apply_das(held_buttons, new_presses, TENGEN_BTN_RIGHT, &p->das_right, &move_right);
     apply_autorotate(held_buttons, new_presses, TENGEN_BTN_B, &p->auto_rotate_counter_b, &rotate_cw);
     apply_autorotate(held_buttons, new_presses, TENGEN_BTN_A, &p->auto_rotate_counter_a, &rotate_ccw);
-
-    if (move_left) tengen_try_move(game, slot, -1);
-    if (move_right) tengen_try_move(game, slot, 1);
-    if (rotate_cw) tengen_try_rotate(game, slot, true);
-    if (rotate_ccw) tengen_try_rotate(game, slot, false);
 
     /* Soft drop (main.asm.txt:184-216) and natural gravity
      * (main.asm.txt:502-513 + L9AEE) are two separate paths that can each
@@ -1527,6 +1523,19 @@ TengenStepResult tengen_step(TengenGame *game, TengenPlayerSlot slot, uint8_t he
         gravity_tick = true;
         reload_fall_timer(p, game);
     }
+
+    /* ...AND ONLY THEN THE SHIFTS AND TURNS. L8320 (main.asm.txt:502-510)
+     * decrements the fall timer and, if that fires, reloads it (`jsr L9AEE`)
+     * before it applies a single one of the moves the input phase collected.
+     * It matters in coop: a shift the partner refuses runs the stagger, +2
+     * on a fall timer (L862E), and that +2 lands on the timer as reloaded.
+     * Moving first let the +2 put off a fall that was due this frame.
+     * Measured in a WITH COMPUTER trace: the cartridge's piece falls and
+     * ends the frame at 35 (33 reloaded, +2), where this held it at 2. */
+    if (move_left) tengen_try_move(game, slot, -1);
+    if (move_right) tengen_try_move(game, slot, 1);
+    if (rotate_cw) tengen_try_rotate(game, slot, true);
+    if (rotate_ccw) tengen_try_rotate(game, slot, false);
 
     if (gravity_tick) {
         p->piece.y++;

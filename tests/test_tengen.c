@@ -1869,6 +1869,37 @@ static void test_a_coop_partners_clear_ends_before_player_1_moves(void) {
     CHECK(p2->collapsed_early == 0);
 }
 
+static void test_a_refused_shift_staggers_the_timer_gravity_just_reloaded(void) {
+    /* L8320 (main.asm.txt:502-510) decrements the fall timer and, if that
+     * fires, reloads it BEFORE it applies the frame's shifts. So on the
+     * frame a piece is due to fall, a shift into the partner still lets it
+     * fall, and the stagger's +2 lands on the fresh timer. Measured in a WITH
+     * COMPUTER trace: the cartridge's piece fell and read 35 — 33 and 2. */
+    TengenGame game;
+    tengen_new_game(&game, 0x4242, 0, true, true, false);
+    TengenPlayerState *p1 = &game.player[TENGEN_PLAYER_1];
+    TengenPlayerState *p2 = &game.player[TENGEN_PLAYER_2];
+
+    /* Two O pieces side by side, player 1 higher, pressed together. */
+    p1->piece.current = TT_O; p1->piece.orientation = 0;
+    p2->piece.current = TT_O; p2->piece.orientation = 0;
+    p1->piece.x = 5; p1->piece.y = 8;
+    p2->piece.x = 7; p2->piece.y = 9;
+    CHECK(!tengen_coop_pieces_overlap(&game, TENGEN_PLAYER_1));
+    p1->piece.x++;
+    bool blocked = tengen_coop_pieces_overlap(&game, TENGEN_PLAYER_1);
+    p1->piece.x--;
+    CHECK(blocked);
+
+    p1->fall_timer = 1;
+    p1->held_last_frame = 0;
+    tengen_step(&game, TENGEN_PLAYER_1, TENGEN_BTN_RIGHT);
+    CHECK(p1->piece.x == 5);                   /* the shift was refused */
+    CHECK(p1->piece.y == 9);                   /* ...and it fell anyway */
+    CHECK(p1->fall_timer ==
+          tengen_frames_per_row(p1->level, 8, true, false) + 2);
+}
+
 static void test_the_computers_soft_drop_does_not_eat_its_own_shifts(void) {
     /* THE ONE THE CORE'S OWN QUIRK BREAKS. main.asm.txt:98-107 discards a
      * FRESH Left or Right outright if Down was held on the PREVIOUS frame,
@@ -3363,6 +3394,7 @@ int main(void) {
     test_the_computers_soft_drop_does_not_eat_its_own_shifts();
     test_a_coop_line_clear_holds_both_players();
     test_a_coop_partners_clear_ends_before_player_1_moves();
+    test_a_refused_shift_staggers_the_timer_gravity_just_reloaded();
     test_the_computer_can_be_told_to_look_first_and_to_drop();
     test_the_computer_can_be_told_to_read_the_partner();
     test_the_computer_waits_its_turn_on_a_shared_board();

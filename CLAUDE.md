@@ -104,7 +104,7 @@ minus those).
 | `make test` | no | always — the rules, in milliseconds |
 | `make gba` | headers | to build `build/tengen.gba` |
 | `make gba-check` | headers | before calling any change done: 42 checks on the running ROM in mGBA, two of them on two consoles with a cable |
-| `make trace ROM=... [MODE=coop\|versus\|with]` | yes | after touching `tengen_step` or `tengen_ai.c`: the port against the cartridge, frame by frame. Only `versus` and `with` clear rows — the 1P and coop scripts never complete one |
+| `make trace ROM=... [MODE=coop\|versus\|with]` | yes | after touching `tengen_step` or `tengen_ai.c`: the port against the cartridge, iteration by iteration. The 1P and coop scripts never complete a row; `MODE="with --pad1"` plays player 1 with the port's computer and clears plenty |
 | `make tune-check ROM=...` | yes | after touching audio: the four tunes against the cartridge, note by note |
 | `make dance-check ROM=...` | yes | after touching the dancers: their choreography against the cartridge's driver |
 | `make clear-check ROM=...` | yes | after touching line clears: the joins a clear breaks |
@@ -185,6 +185,13 @@ story behind each; the item number is in brackets.
   piece comes up together (29 frames after the lock; 1 in the prototypes).
   In coop, player 1's step finishes a partner's clear that ends this frame.
   It dealt a frame late until a trace first cleared a row.
+- **The fall timer ticks before the moves.** L8320 decrements and reloads it,
+  then shifts and turns, then drops; a shift the coop partner refuses adds
+  its +2 to the timer just reloaded.
+- **The cartridge's main loop does not always fit in a frame.** A heavy
+  iteration waits for the NMI halfway and finishes in the next frame. Read
+  at the NMI it looks a frame late (that was the "coop deals one frame
+  later" we once wrote down), so the traces read per iteration.
 
 ## Decisions
 
@@ -212,9 +219,9 @@ none); the "STATS" heading and the "SCORE" of "HIGH SCORE" (no room);
 proto_d as a fourth skin (its title is pixel-identical to proto_c's); a
 prototype's rules over the cable; A+B restarting the whole game in 1P and
 coop (there A and B are the way out); the line counter's clamp at 10000;
-one fall-timer frame at the start of a coop match; the prototypes' own
-front-end shape (two modes, their level select, no handicap or music); the
-computer sliding a piece under an overhang (tried twice, measured worse).
+the prototypes' own front-end shape (two modes, their level select, no
+handicap or music); the computer sliding a piece under an overhang (tried
+twice, measured worse).
 
 **Looks like a bug, is the cartridge's**: the one-pixel gap between the left
 panel's shelves and the rope — the wall tile `$6A` has a blank first column.

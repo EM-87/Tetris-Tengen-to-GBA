@@ -53,6 +53,17 @@ int main(int argc, char **argv) {
     TengenAi ai;
     tengen_ai_reset(&ai);
     TengenTetromino ai_piece = TT_NONE, partner_piece = TT_NONE;
+    /* "pad1": player 1 played by the port's own computer instead of the
+     * random script, and each frame's buttons printed as the line's last
+     * field, for trace_match.py to press on the cartridge. The random
+     * script tops the shared board out before WITH clears a single row;
+     * this plays long enough to clear them. It is only a source of buttons:
+     * what gets compared is still what both consoles do with them. */
+    bool pad1 = argc > 5 && argv[5][0] == 'p';
+    TengenAi ai1;
+    tengen_ai_reset(&ai1);
+    ai1.soft_drop = true;
+    ai1.coop_aware = true;
 
     TengenGame game;
     tengen_new_game(&game, (uint16_t)seed, 0, coop || vs, coop, false);
@@ -62,30 +73,25 @@ int main(int argc, char **argv) {
         tengen_ai_choose(&ai, &game, TENGEN_PLAYER_2);
         ai_piece = game.player[1].piece.current;
         partner_piece = game.player[0].piece.current;
+        if (pad1) tengen_ai_choose(&ai1, &game, TENGEN_PLAYER_1);
     }
 
-    /* FRAME 0 IS THE CARTRIDGE'S SPAWN FRAME, and tengen_new_game has just
-     * done that frame's work — piece dealt, fall timer loaded, nothing
-     * decremented. So the script starts one entry in and the loop at one. */
+    /* FRAME 0 IS THE CARTRIDGE'S DEAL, and tengen_new_game has just done
+     * that frame's work — piece dealt, fall timer loaded, nothing
+     * decremented. So the script starts one entry in and the loop at one:
+     * step f takes the entry the cartridge's iteration f took. */
     long s1 = 12345, s2 = 999983;
-    /* WITH COMPUTER deals on the same frame as 1 PLAYER, not COOPERATIVE's
-     * one later (its deal frame leaves the timers at 48), so it winds on too. */
-    if ((!coop && !computer) || with) {
-        (void)script_button(&s1);
-        (void)script_button(&s2);
-    }
-    /* IN COOPERATIVE THE CARTRIDGE SPENDS ONE FRAME MORE ON THE DEAL than it
-     * does in 1 PLAYER — its deal frame leaves both fall timers at 47 where
-     * 1 PLAYER's leaves one at 48 — and that frame eats a button too. So the
-     * script is NOT wound on here: this loop's step k takes the entry the
-     * cartridge's frame k-1 took, and trace_match.py drops the first line to
-     * put the two back on the same frame. See its note. */
+    (void)script_button(&s1);
+    (void)script_button(&s2);
 
     for (int f = 1; f < frames; f++) {
         uint8_t b1 = script_button(&s1);
         uint8_t b2 = script_button(&s2);
         const TengenPlayerState *p = &game.player[0];
         const TengenPlayerState *q = &game.player[1];
+        if (pad1)
+            b1 = p->game_active
+                ? tengen_ai_buttons(&ai1, &game, TENGEN_PLAYER_1, clock) : 0;
         /* mainLoop runs player 1 and then player 2, in that order
          * (main.asm.txt:71-74). */
         if (computer) {
@@ -102,6 +108,9 @@ int main(int argc, char **argv) {
         if (with && q->game_active && p->piece.current != partner_piece &&
             p->piece.current != TT_NONE)
             tengen_ai_choose(&ai, &game, TENGEN_PLAYER_2);
+        if (pad1 && p->piece.current != partner_piece &&
+            p->piece.current != TT_NONE)
+            tengen_ai_choose(&ai1, &game, TENGEN_PLAYER_1);
         partner_piece = p->piece.current;
         if (coop || vs) tengen_step(&game, TENGEN_PLAYER_2, b2);
         if (computer && q->game_active && q->piece.current != ai_piece &&
@@ -126,7 +135,9 @@ int main(int argc, char **argv) {
                     for (int c = with ? 0 : 1; c <= (with ? 11 : 10); c++)
                         printf("%X", game.field[with ? 0 : i].cell[row][c]);
             }
-            printf(" | T%d,%d\n", ai.target_x, ai.target_orientation);
+            printf(" | T%d,%d", ai.target_x, ai.target_orientation);
+            if (pad1) printf(" | B%d", b1);
+            printf("\n");
             continue;
         }
         /* BOTH SIDES REPORT WHAT THE FRAME LEFT BEHIND, which is the only way

@@ -102,7 +102,19 @@ class NesConsole:
         self.nmi = self.bus.read(0xFFFA) | (self.bus.read(0xFFFB) << 8)
         self.frames = 0
 
-    def frame(self, buttons=0, buttons2=0):
+    def frame(self, buttons=0, buttons2=0, hooks=None):
+        """One frame: the NMI, then a frame's worth of instructions.
+
+        `hooks`, if given, maps an address to a function called (with this
+        console) each time the CPU is about to execute the instruction there.
+        That is how a caller follows the GAME's loop rather than the NMI's:
+        an iteration of it does not always fit in its frame. One that queues
+        more tiles than the PPU slots hold waits for the NMI halfway through
+        (enableNMIAndWaitForRendering, $A3DB), finishes in the next frame and
+        the next iteration runs straight after it — so read at the NMI such a
+        frame is half done, and the pad a frame sets is read by the NEXT
+        iteration, not its own.
+        """
         self.bus.pad[0] = buttons
         self.bus.pad[1] = buttons2
         cpu = self.cpu
@@ -112,8 +124,15 @@ class NesConsole:
             cpu.push(cpu.pc & 0xFF)
             cpu.push(cpu.p | 0x20)
             cpu.pc = self.nmi
-        for _ in range(self.STEPS_PER_FRAME):
-            cpu.step()
+        if hooks is None:
+            for _ in range(self.STEPS_PER_FRAME):
+                cpu.step()
+        else:
+            for _ in range(self.STEPS_PER_FRAME):
+                hook = hooks.get(cpu.pc)
+                if hook is not None:
+                    hook(self)
+                cpu.step()
         self.frames += 1
 
     def run(self, count, buttons=0, buttons2=0):
