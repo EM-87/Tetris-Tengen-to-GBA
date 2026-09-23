@@ -53,8 +53,9 @@ static bool g_armed;
 
 /* ARM, and in internal WRAM (IWRAM_CODE), for the same reason the 6502
  * interpreter is: this runs at every transfer and must finish long before
- * the next one. It also must not be fetched over the cartridge bus while
- * that bus is busy.
+ * the next one, so none of it — the button read it calls included
+ * (read_buttons, IWRAM_CODE too) — is fetched over the cartridge bus with its
+ * wait states.
  *
  * It is not the interrupt handler itself any more. The program has ONE
  * (irq_handler, video.c), because the vertical blank takes an interrupt too

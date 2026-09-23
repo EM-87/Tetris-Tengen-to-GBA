@@ -1362,7 +1362,6 @@ typedef enum {
  * down its own taller screen and never animates them, and the rotation is the
  * port's answer to a menu box twenty-six columns wide. */
 #define CREDIT_FRAMES 240
-#define CREDIT_COUNT (sizeof kCredits / sizeof kCredits[0])
 
 #define MENU_ARROW_R '>'   /* tile $3E, and ASCII agrees for this one */
 
@@ -1882,7 +1881,6 @@ extern uint16_t g_title_frame;
 void init_title_sprites(void);
 void restart_title_sprites(void);
 void draw_title_sprites(void);
-extern const char *const kCredits[][2];
 void draw_game_select(uint8_t choice);
 void draw_link_wait(const TengenLobby *lobby, int elapsed);
 void draw_level_settings(int chosen, uint8_t start_level, uint8_t music,

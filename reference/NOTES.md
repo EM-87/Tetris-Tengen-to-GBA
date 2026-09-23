@@ -838,45 +838,15 @@ The port HAS that table now, but the demo does not go to it — a score nobody
 played for has no business on the board, and the cartridge agrees: the
 insertion (L81DD) is reached only when gameState is 0, which the demo's $FB
 is not. So the demo's game over holds for three seconds and the title comes
-back. Measured on the built ROM the computer lasts about 35,000
-frames — ten minutes — before burying itself, which is the same chooser at the
-same gravity the cartridge has.
+back.
 
-## The attract demo
-
-`demoStart` (`main.asm.txt:3216-3230`) is four lines and then the ordinary
-game init: gameState becomes `GAMESTATE_DEMO` (`$FB`), **playMode 0** — one
-board, one player — the music is SUSPENDED, player 1's score and lines digits
-are set to ASCII zeroes, and it falls into `skipOverScoreReset`. Nothing else
-about it is special. What makes it a demo is only who presses the buttons and
-what a press on the real pad does.
-
-**It starts off the title's own clock**: `frameCounterHigh` 5 and
-`frameCounterLow` `$20` (`:4154-4160`), which is 1312 frames — about
-twenty-two seconds, and 288 frames after the fireworks stop themselves at
-`frameCounterHigh` 4. The port already feeds that counter to the cartridge's
-firework code, so it starts the demo off the very same number.
-
-**The computer plays PLAYER 1 here**, not player 2:
-`loadComputerInputOrMoveScreen` reaches `@compInputForDemo` with X still zero
-(`:4118`), where the VS and WITH paths do an `inx` first. Same chooser, same
-driver, same cadence.
-
-**A press is the way out, not a move.** `processMenuInput`'s test for gameState
-`$FB` falls to `$9F9A`, where SELECT or START goes to GAME SELECT
-(`:4633-4638`) — and `handleGameOver` refuses to restart anything while the
-state is `$FB` (`cpy #$FB / beq`, `:477`), so the demo cannot be resurrected
-by holding A+B either.
-
-**What ends it is the port's own choice.** The cartridge's demo tops out and
-goes to its high-score table, and from there to the title on another timer.
-The port HAS that table now, but the demo does not go to it — a score nobody
-played for has no business on the board, and the cartridge agrees: the
-insertion (L81DD) is reached only when gameState is 0, which the demo's $FB
-is not. So the demo's game over holds for three seconds and the title comes
-back. Measured on the built ROM the computer lasts about 35,000
-frames — ten minutes — before burying itself, which is the same chooser at the
-same gravity the cartridge has.
+**Traced against the cartridge** (`make trace MODE=demo`): it waits on the
+title until the cartridge starts its demo by itself, then plays computerMove
+on player 1 at the cartridge's level 9 — 5999 frames identical. How long a
+demo lasts depends on its seed, which on the cartridge is whatever the title's
+main loop left in rngSeed (it spins genNextPseudoRandom while it waits) and
+so cannot be reproduced: one cartridge demo ran 91,500 frames, 403 lines,
+before topping out; one of the port's lasted about 35,000.
 
 ## The starting handicap
 

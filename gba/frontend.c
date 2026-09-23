@@ -504,7 +504,7 @@ static void draw_menu_frame(void) {
  * cartridge here. Its line was a licensing notice for a company that has not
  * existed since 1991, and the slot goes to whoever made THIS. The five that
  * remain are the people who made the game. */
-const char *const kCredits[][2] = {
+static const char *const kCredits[][2] = {
     { "PORTED WITH CLAUDE", "BY EDUARDO MARTINEZ" },
     { "CONCEPT BY",        "ALEXEY PAZHITNOV" },
     { "DESIGN BY",         "VADIM GERASIMOV"  },
@@ -512,6 +512,9 @@ const char *const kCredits[][2] = {
     { "VIDEO GRAPHICS BY", "KRIS MOSER"       },
     { "AUDIO BY",          "BRAD FULLER"      },
 };
+/* Here and not in port.h: sizeof needs the table's own definition in sight,
+ * and nothing outside this file reads it. */
+#define CREDIT_COUNT (sizeof kCredits / sizeof kCredits[0])
 
 static uint8_t g_credit;
 static uint16_t g_credit_timer;

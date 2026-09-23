@@ -19,8 +19,11 @@
 
 /* The two pads read the same generator from different starts, which is how
  * trace_match.py makes player 2 independent without a second one. */
-static uint8_t script_button(long *s) {
-    *s = (*s * 1103515245 + 12345) & 0x7FFFFFFF;
+static uint8_t script_button(uint32_t *s) {
+    /* Unsigned, so the multiply wraps as C guarantees wherever this is built;
+     * a signed one overflows where long is 32 bits. Masked to 31 bits it is
+     * the same sequence trace_match.py computes with Python's integers. */
+    *s = (*s * 1103515245u + 12345u) & 0x7FFFFFFFu;
     switch ((int)((*s >> 16) % 10)) {
         case 0: return TENGEN_BTN_LEFT;
         case 1: return TENGEN_BTN_RIGHT;
@@ -107,7 +110,7 @@ int main(int argc, char **argv) {
      * that frame's work — piece dealt, fall timer loaded, nothing
      * decremented. So the script starts one entry in and the loop at one:
      * step f takes the entry the cartridge's iteration f took. */
-    long s1 = 12345, s2 = 999983;
+    uint32_t s1 = 12345, s2 = 999983;
     (void)script_button(&s1);
     (void)script_button(&s2);
 

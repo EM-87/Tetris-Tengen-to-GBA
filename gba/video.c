@@ -179,6 +179,11 @@ __attribute__((noinline)) void vsync(void) {
 
 /* The GBA has every button the NES did, so this is a straight 1:1 remap with
  * no compromises — which is why the controls can be faithful. */
+/* IN IWRAM, because the serial interrupt calls it (link_read_buttons, at the
+ * instant of a transfer) and everything that interrupt runs is meant to be
+ * fetched from internal WRAM rather than over the cartridge bus — which this
+ * was not: it was the one call the handler made back out into ROM. */
+IWRAM_CODE uint8_t read_buttons(void);
 uint8_t read_buttons(void) {
     uint16_t keys = (uint16_t)(~REG_KEYINPUT & KEY_MASK); /* KEYINPUT is active low */
     uint8_t out = 0;
