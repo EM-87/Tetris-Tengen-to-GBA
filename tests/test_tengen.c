@@ -507,6 +507,37 @@ static void test_a_skinned_board_has_no_joins_to_break(void) {
     CHECK(field->cell[CUT + 1][2] == TT_S);
 }
 
+static uint8_t proto_level_after_one_clear(uint8_t start, uint32_t lines) {
+    TengenGame game;
+    tengen_new_game(&game, 0x4242, start, false, false, false);
+    game.proto_rules = true;
+    game.piece_id_cells = true;
+    TengenPlayfield *field = &game.field[0];
+    const int CUT = TENGEN_PF_HEIGHT - 1;
+    for (int col = 1; col < TENGEN_PF_WIDTH - 1; col++)
+        field->cell[CUT][col] = TT_I;
+    game.player[TENGEN_PLAYER_1].lines = lines;
+    game.player[TENGEN_PLAYER_1].clearing_rows = 1u << CUT;
+    game.player[TENGEN_PLAYER_1].line_clear_timer = 1;
+    tengen_step(&game, TENGEN_PLAYER_1, 0);
+    return game.player[TENGEN_PLAYER_1].level;
+}
+
+static void test_a_prototype_levels_up_at_the_higher_of_its_start_and_lines_over_ten(void) {
+    /* MEASURED ON THE DUMPS (tools/probes/proto_rules.py): from level 0 the
+     * level goes up every ten lines — 10, 20 — on all four; but started at 3
+     * on B and D it stays at 3 until FORTY lines, and started at 5 on C until
+     * sixty. So it is the higher of the two, not the start plus lines/10: the
+     * port had it adding, and a game started at 3 went to 4 at ten lines. */
+    CHECK(proto_level_after_one_clear(0, 9) == 1);    /* 10 lines */
+    CHECK(proto_level_after_one_clear(0, 19) == 2);   /* 20 lines */
+    CHECK(proto_level_after_one_clear(3, 9) == 3);    /* 10 lines: still 3 */
+    CHECK(proto_level_after_one_clear(3, 38) == 3);   /* 39 */
+    CHECK(proto_level_after_one_clear(3, 39) == 4);   /* 40 */
+    CHECK(proto_level_after_one_clear(5, 58) == 5);   /* 59 */
+    CHECK(proto_level_after_one_clear(5, 59) == 6);   /* 60 */
+}
+
 static void test_completed_rows_wait_before_they_collapse(void) {
     /* The ROM holds the game for lineClearTimerP1 frames after finding
      * completed rows, animates them, and only then collapses
@@ -3223,6 +3254,7 @@ int main(void) {
     test_a_cleared_row_breaks_the_joins_it_crossed();
     test_two_adjacent_clears_skip_each_other();
     test_a_skinned_board_has_no_joins_to_break();
+    test_a_prototype_levels_up_at_the_higher_of_its_start_and_lines_over_ten();
     test_level_up_thresholds_match_rom_table();
     test_das_charges_before_repeating();
     test_held_rotate_repeats_every_fifteen_frames();

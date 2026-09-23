@@ -215,9 +215,10 @@ and two in the front end: a level-up brings **no cossacks and no BONUS tally**
 and not a show), and **PAUSE does not silence the music**.
 
 **What is deliberately not taken** is the SHAPE of their front end — only
-1 PLAYER and 2 PLAYER, four difficulty steps (BEGINNER / INTERMEDIATE /
-ADVANCED / EXPERT = levels 0, 3, 6, 9) instead of ten levels, no handicap and
-no music menu — because taking those away on a chord rung at the title would
+1 PLAYER and 2 PLAYER, a LEVEL SELECT — 0 to 9 in plain text on B, C and D
+(measured), and four difficulty steps (BEGINNER / INTERMEDIATE / ADVANCED /
+EXPERT = levels 0, 3, 6, 9) on A by the list, whose menu is drawn as art —
+no handicap and no music menu — because taking those away on a chord rung at the title would
 remove things this port has and a player chose. Same for the GAME OVER
 plaque's blue border and their HIGH SCORE opening at 0 rather than 17000.
 All of them are a decision away, not a trace away.

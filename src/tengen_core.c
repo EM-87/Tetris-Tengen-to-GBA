@@ -909,10 +909,17 @@ static uint8_t level_for_lines(uint32_t lines, uint8_t start_level, bool xe,
                             sizeof(TENGEN_LEVEL_LINE_THRESHOLDS[0]);
     /* THE PROTOTYPES CLIMB EVERY TEN LINES, flat. The release's curve — 30,
      * 60, 90, 120, then every 50 — came later; these builds simply divide.
-     * See proto_rules. */
+     * See proto_rules.
+     *
+     * AND THE START IS A FLOOR, NOT AN OFFSET. Measured on the dumps
+     * (tools/probes/proto_rules.py): from level 0 all four go up at 10 and 20
+     * lines, but started at 3 on B and D the level holds until FORTY lines,
+     * and started at 5 on C until sixty. The level is the higher of the two.
+     * This said start + lines/10 for a long time, which from 0 is the same
+     * number and from anywhere else is not. */
     if (proto) {
-        unsigned level = (unsigned)start_level +
-                          (unsigned)(lines / TENGEN_PROTO_LINES_PER_LEVEL);
+        unsigned by_lines = (unsigned)(lines / TENGEN_PROTO_LINES_PER_LEVEL);
+        unsigned level = by_lines > start_level ? by_lines : start_level;
         if (level > TENGEN_LEVEL_CAP(xe)) level = TENGEN_LEVEL_CAP(xe);
         return (uint8_t)level;
     }

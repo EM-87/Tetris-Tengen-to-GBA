@@ -5,9 +5,15 @@ lista escrita por terceros. Esto las comprueba contra las ROMs:
 
   1. una fila completa se va EL FRAME que se completa, sin escoba;
   2. no hay patada de pared: una pieza pegada al muro no gira;
-  3. se sube de nivel cada DIEZ lineas -- esta NO se puede medir asi: plantar
-     filas en RAM sube el marcador de estas construcciones pero deja su cuenta
-     de LINEAS a cero, asi que haria falta un bot que apile de verdad.
+  3. se sube de nivel cada DIEZ lineas, y el nivel elegido es un SUELO: el
+     nivel es el mayor entre el de salida y lineas/10. Empezando en 0 sube en
+     10 y 20; empezando en 3 (B, D) aguanta hasta 40, en 5 (C) hasta 60.
+
+La tercera se dio por imposible de medir durante mucho tiempo: plantar una
+fila completa y dejar caer piezas parecia subir el marcador sin tocar las
+LINEAS. No era la ROM, era el experimento: la fila se plantaba debajo de un
+monton que ya existia y la pieza nueva nunca llegaba a tocarla. Vaciando el
+campo antes de cada fila, cada limpieza cuenta.
 
 El campo de juego de estas construcciones esta donde el del release: $0600,
 ocho bytes por fila (dieciseis nibbles), filas 6 a 25. Eso ya se midio antes
@@ -117,30 +123,66 @@ def measure_kick(path):
     return out, None
 
 
-def measure_levels(path, clears=12):
-    """LINEAS y NIVEL de la pantalla, tras cada fila completada."""
-    nes = boot(path)
+def empty_field(nes):
+    """Vacia las diez columnas jugables de todas las filas."""
+    for r in range(ROW0, ROW1):
+        for nib in range(3, 13):
+            i = (PF + r * 8 + (nib >> 1)) & 0x7FF
+            b = nes.bus.ram[i]
+            nes.bus.ram[i] = (b & 0x0F) if (nib & 1) == 0 else (b & 0xF0)
+
+
+def shown_number(nes, row):
+    d = "".join(ch for ch in screen_text(nes, row, 8, 16) if ch.isdigit())
+    return int(d) if d else None
+
+
+def boot_at_level(path, level):
+    """Como boot(), pero bajando `level` posiciones en su LEVEL SELECT (B, C y
+    D tienen uno de 0 a 9; el de A no es texto y se queda en 0)."""
+    nes = NesConsole(path)
+    nes.run(120)
+    chose = False
+    for _ in range(E.SKIN_PLAY_PRESSES):
+        if nes.ram(E.GAMESTATE_ADDR) == E.GAMESTATE_PLAYING:
+            break
+        if not chose and any("LEVEL SELECT" in screen_text(nes, r)
+                             for r in range(30)):
+            for _ in range(level):
+                nes.run(6, BTN["DOWN"]); nes.run(12)
+            chose = True
+        nes.run(6, BTN["START"]); nes.run(E.SKIN_PLAY_SETTLE)
+    if nes.ram(E.GAMESTATE_ADDR) != E.GAMESTATE_PLAYING:
+        return None, False
+    return nes, chose
+
+
+def measure_levels(path, start=0, clears=24):
+    """(LINEAS, NIVEL) cada vez que el nivel cambia, limpiando una fila tras
+    otra: el campo vaciado, una fila completa abajo, y abajo pulsado hasta que
+    la cuenta de LINEAS se mueve."""
+    nes, chose = boot_at_level(path, start)
     if nes is None:
         return None, "no llego a jugar"
-
-    def num(row):
-        t = screen_text(nes, row).strip()
-        d = "".join(ch for ch in t if ch.isdigit())
-        return int(d) if d else None
-
-    seen = []
+    if start and not chose:
+        return None, "no tiene LEVEL SELECT de texto"
+    changes, last = [], None
     for _ in range(clears):
+        empty_field(nes)
         fill_row(nes, ROW1 - 1)
-        before = len(occupied(nes))
-        for _ in range(400):
+        before = shown_number(nes, 4)
+        for _ in range(600):
             nes.run(1, BTN["DOWN"])
-            n = len(occupied(nes))
-            if n > before + 2:
+            if shown_number(nes, 4) != before:
                 break
-            before = min(before, n)
-        nes.run(40)
-        seen.append((num(4), num(6)))
-    return seen, None
+        else:
+            return None, "una fila completa no conto"
+        nes.run(30)
+        level = shown_number(nes, 6)
+        if level != last:
+            changes.append((shown_number(nes, 4), level))
+            last = level
+    return changes, None
 
 
 if __name__ == "__main__":
@@ -203,3 +245,10 @@ if __name__ == "__main__":
         print("  %-14s %d intentos: gira pegada %d, una columna dentro %d, "
               "y se desplaza al girar %d veces"
               % (path.split("/")[-1], tries, wall, inside, moved))
+
+    print("EL NIVEL: (lineas, nivel) cada vez que cambia")
+    for path in sys.argv[1:]:
+        for start, clears in ((0, 24), (3, 45)):
+            got, why = measure_levels(path, start, clears)
+            print("  %-14s desde %d: %s" % (path.split("/")[-1], start,
+                                             got if got else why))

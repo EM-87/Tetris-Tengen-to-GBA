@@ -313,7 +313,9 @@ typedef struct {
      * A, B and C, which is why they are one flag rather than three tables:
      *
      *   TENGEN_PROTO_LINES_PER_LEVEL — the level goes up every TEN lines, not
-     *     on the release's 30 / 60 / 90 / 120 / 150-then-every-50 curve.
+     *     on the release's 30 / 60 / 90 / 120 / 150-then-every-50 curve, and
+     *     the chosen level is a floor rather than an offset (measured on the
+     *     dumps; see level_for_lines).
      *   NO WALL KICK — "blocks often cannot be turned when they are pressed
      *     against the wall". The release kicks one column left and these do
      *     not kick at all, which is exactly what that sentence describes.
@@ -321,8 +323,8 @@ typedef struct {
      *     SINGLE / DOUBLE / TRIPLE / TETRIS written where they were.
      *
      * What is NOT here, deliberately, is the SHAPE of their front end: they
-     * offer only 1 PLAYER and 2 PLAYER, four difficulty steps instead of ten
-     * levels, and no handicap or music menus. Those would take away things
+     * offer only 1 PLAYER and 2 PLAYER, a level select of their own, and no
+     * handicap or music menus. Those would take away things
      * this port has and a player chose, on a chord rung at the title, so they
      * are left to a decision rather than assumed. See CLAUDE.md roadmap 31.
      *

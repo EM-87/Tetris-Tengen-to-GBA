@@ -679,24 +679,21 @@ running ROM; only the side panels need reflowing).
      those rotations does the piece change column. A kick is a rotation that
      displaces; these never displace. The tenth is the rotation that would
      have needed one, and it is refused.
-   * **the ten-line level is still on the list's word alone.** Planting
-     completed rows raises these builds' SCORE and leaves their LINES counter
-     at zero, so whatever that counter is fed by, it is not a row that
-     appeared in RAM without a piece putting it there. Measuring this one
-     properly wants a bot that stacks, not a memory poke — and a first bot
-     was tried: a one-column well at the right wall with the rest planted,
-     the I pieces turned and sent down it, everything else parked left. It
-     did not get a single real clear out of any of the three before topping
-     out, because these builds do not answer a two-frame tap the way the
-     release does and the console has no lock-detection of its own, so
-     several pieces fell under one held DOWN and piled up in the middle. The
-     rule stays unverified; the bot wants per-frame lock detection (the
-     falling piece IS written into $0600 in these builds, so a lock is the
-     frame a second set of unsettled cells appears at the top) and longer
-     presses before it can say anything.
+   * **the ten-line level is real, and the start is a FLOOR.** Clearing one
+     row at a time on all four dumps, from level 0 the level goes up at 10
+     and 20 lines. Started at 3 (B, D) it holds until FORTY lines, and at 5
+     (C) until sixty: the level is the higher of the chosen one and
+     lines/10. The port had it as start + lines/10 — the same from 0 and
+     wrong from anywhere else — and has the floor now, with a native test.
+     This one had been written off as unmeasurable, because planting a full
+     row seemed to raise SCORE and leave LINES alone. It was the experiment:
+     the row went in under a stack that was already there, so the next piece
+     never touched it. Emptying the field before every row, every clear
+     counts. `tools/probes/proto_rules.py` does it.
    What is deliberately NOT taken is the SHAPE of their front end: only
-   1 PLAYER and 2 PLAYER, four difficulty steps instead of ten levels, no
-   handicap and no music menu. Taking those away on a chord rung at the title
+   1 PLAYER and 2 PLAYER, a LEVEL SELECT of 0-9 on B, C and D (A's is four
+   difficulty steps, drawn as art rather than text), no handicap and no music
+   menu. Taking those away on a chord rung at the title
    would remove things this port has and a player chose, so they wait for a
    decision.
    **THE GAME OVER PLAQUE AND THE PIECE HISTOGRAM COME TOO**, and both had to
@@ -871,8 +868,8 @@ Ordered by what they buy against what they cost. Everything here is a
 decision waiting to be made, not a defect; the defects are bugs and get
 fixed.
 
-1. **The ten-line rule on the prototypes.** Still on the word of the list
-   it came from; what the stacking bot needs is written up above.
+Nothing is waiting here now. The last item, the ten-line rule on the
+prototypes, was measured and turned out half right: see roadmap 31.
 
 *(The fireworks were on this list too, as "their distance and the dithered
 sky". Both halves came out different from how they were written down. The
