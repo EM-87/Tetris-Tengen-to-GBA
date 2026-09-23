@@ -137,7 +137,8 @@ uint8_t g_view;
  * the mirror would leave it asleep for good. */
 IWRAM_CODE void irq_handler(void);
 void irq_handler(void) {
-    uint16_t flags = REG_IF;
+    /* Only the sources this program switched on: IF can latch others. */
+    uint16_t flags = REG_IF & REG_IE;
     if (flags & IRQ_SERIAL) link_serial_service();
     REG_IF = flags;
     BIOS_IF_MIRROR |= flags;

@@ -80,7 +80,7 @@ Hay una ROM de GBA que arranca, se juega y corre las reglas reales de Tengen.
   realmente dibuje y se juegue (`make gba-check`), no solo que linkee:
   incluye ver la animación de línea completa sprite por sprite, comprobar
   que deja escrita la palabra correcta, y pausar y teclear los códigos de
-  trucos. Las 46 comprobaciones viven en `tools/romcheck/`, un módulo por
+  trucos. Las 47 comprobaciones viven en `tools/romcheck/`, un módulo por
   familia (partida, audio, menú de pausa, pantallas previas, HUD, la
   máquina, récords) más `harness.py` con lo que comparten.
 - `tools/run_link.py` — arranca **dos** mGBA y les pone un cable link

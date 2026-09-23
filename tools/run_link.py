@@ -1179,6 +1179,83 @@ def skin_check(rom):
         return 1
     print("OK: los prototipos van por cable como skin, con las reglas del "
           "release, y las dos consolas siguen siendo la misma partida.")
+    return pause_check(rom)
+
+
+def pause_check(rom):
+    """OVER THE CABLE A PAUSE IS THE PLAQUE, even with the chord found.
+
+    The pause menu (tunes, EXIT?) is answered by pause_menu_input, which only
+    the solo frame calls: over the cable the pad goes down the wire raw. So a
+    player who had found the chord paused a linked match into a menu whose
+    cursor did nothing — and a tune or an EXIT chosen on one console alone
+    would be the two consoles playing different matches anyway. Both find
+    the chord on GAME SELECT, the master pauses, and neither may draw the
+    menu (g_pmenu_drawn_w stays 0) while both are paused.
+    """
+    sym, why = symbol(rom, "g_session")
+    drawn, why2 = symbol(rom, "g_pmenu_drawn_w")
+    unlocked, why3 = symbol(rom, "g_pause_unlocked")
+    if sym is None or drawn is None or unlocked is None:
+        print(f"SALTADO: {why or why2 or why3}")
+        return 0
+    import run_rom
+    off = run_rom.game_offsets(rom)
+
+    mgba.log.silence()
+    cores, screens = [], []
+    for _ in range(2):
+        core = mgba.core.load_path(rom)
+        screen = mgba.image.Image(SCREEN_W, SCREEN_H)
+        core.set_video_buffer(screen)   # must stay alive; see run_rom.load()
+        core.reset()
+        cores.append(core)
+        screens.append(screen)
+    cable = Cable(*cores)
+    ends = [CableEnd(cable, True), CableEnd(cable, False)]
+    for core, end in zip(cores, ends):
+        core.attach_sio(end, lib.SIO_MULTI)
+
+    def both(frames, keys=None):
+        for _ in range(frames):
+            for i, core in enumerate(cores):
+                core.set_keys(*(keys[i] if keys else []))
+                core.run_frame()
+
+    def tap(name, who=None):
+        both(4, [[KEYS[name]] if who in (None, i) else [] for i in range(2)])
+        both(10, [[], []])
+
+    both(8)
+    tap("START")                                  # title -> game select
+    both(4, [[KEYS["L"], KEYS["R"]]] * 2)         # the chord, on both
+    both(10, [[], []])
+    tap("DOWN"); tap("START")                     # -> 2 PLAYER -> the cable
+    both(50)
+    tap("START", who=0)
+    both(80)
+    tap("START", who=0)                           # the master pauses
+    both(20)
+
+    failures = []
+    paused = [c.memory.u8[sym[0] + off["paused"]] for c in cores]
+    found = [c.memory.u8[unlocked[0]] for c in cores]
+    widths = [c.memory.u8[drawn[0]] for c in cores]
+    if found != [1, 1]:
+        failures.append(f"el acorde no quedo encontrado en las dos: {found}")
+    elif paused != [1, 1]:
+        failures.append(f"la pausa no llego a las dos consolas: {paused}")
+    elif widths != [0, 0]:
+        failures.append(f"por cable se dibujo el menu de pausa, que no "
+                        f"responde: anchos {widths}")
+    else:
+        print("  con el acorde en las dos, la pausa por cable es la placa, "
+              "no el menu")
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: por cable la pausa no ofrece un menu que no se puede usar.")
     return 0
 
 

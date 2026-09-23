@@ -901,7 +901,10 @@ void draw_match(bool *sweeping) {
     /* Last, so they sit over whatever was just drawn. */
     if (!g_session.game.player[g_view].game_active) draw_game_over();
     if (g_session.game.paused) {
-        if (g_pause_unlocked) draw_pause_menu();
+        /* Not over the cable: pause_menu_input is the solo frame's, the pad
+         * goes down the wire raw, and a tune or an EXIT picked on one console
+         * alone would split the match. There the plaque, as on the cartridge. */
+        if (g_pause_unlocked && !g_linked) draw_pause_menu();
         else draw_pause_box();
     }
 

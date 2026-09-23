@@ -103,7 +103,7 @@ minus those).
 | --- | --- | --- |
 | `make test` | no | always — the rules, in milliseconds |
 | `make gba` | headers | to build `build/tengen.gba` |
-| `make gba-check` | headers | before calling any change done: 46 checks on the running ROM in mGBA, two of them on two consoles with a cable |
+| `make gba-check` | headers | before calling any change done: 47 checks on the running ROM in mGBA, six of them on two consoles with a cable |
 | `make trace ROM=... [MODE=coop\|versus\|with\|demo]` | yes | after touching `tengen_step` or `tengen_ai.c`: the port against the cartridge, iteration by iteration. The 1P and coop scripts never complete a row; `MODE="with --pad1"` plays player 1 with the port's computer and clears plenty; add `--handicap N` to any mode |
 | `make tune-check ROM=...` | yes | after touching audio: the four tunes against the cartridge, note by note |
 | `make dance-check ROM=...` | yes | after touching the dancers: their choreography against the cartridge's driver |
@@ -234,7 +234,9 @@ none); the "STATS" heading and the "SCORE" of "HIGH SCORE" (no room);
 proto_d as a fourth skin (its title is pixel-identical to proto_c's); a
 prototype's rules over the cable; A+B restarting the whole game in 1P and
 coop (there A and B are the way out); the line counter's clamp at 10000;
-the prototypes' own front-end shape (two modes, their level select, no
+the pause menu over the cable (its input is the solo frame's, and a tune or
+EXIT picked on one console would split the match: a linked pause is the
+plaque); the prototypes' own front-end shape (two modes, their level select, no
 handicap or music); the computer sliding a piece under an overhang (tried
 twice, measured worse); the demo's own game over and HIGH SCORES page (the
 cartridge's demo plays about 25 minutes, tops out, and shows both; the
