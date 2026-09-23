@@ -10,6 +10,9 @@
 
 
 int main(void) {
+    /* First: every screen from here on waits for its frame in vsync(), and
+     * vsync() sleeps until an interrupt that this is what switches on. */
+    irq_init();
     upload_tiles();
     upload_palettes();
     /* What the battery kept, or the cartridge's cold-boot table if there is

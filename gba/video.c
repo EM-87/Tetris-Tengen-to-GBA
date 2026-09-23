@@ -124,9 +124,52 @@ bool g_ai_active;
  * differ here and nowhere else. */
 uint8_t g_view;
 
-void vsync(void) {
-    while (REG_VCOUNT >= 160) { }
-    while (REG_VCOUNT < 160) { }
+/* THE PROGRAM'S ONE INTERRUPT HANDLER. Two sources: the vertical blank,
+ * which exists only to wake vsync() below, and the serial port, whose work
+ * is the cable's (link_serial_service). Every flag raised is acknowledged in
+ * IF and ORed into the BIOS's mirror, which is what VBlankIntrWait is
+ * actually sleeping on — a handler that acknowledged the hardware and not
+ * the mirror would leave it asleep for good. */
+IWRAM_CODE void irq_handler(void);
+void irq_handler(void) {
+    uint16_t flags = REG_IF;
+    if (flags & IRQ_SERIAL) link_serial_service();
+    REG_IF = flags;
+    BIOS_IF_MIRROR |= flags;
+}
+
+/* Installed once, at boot, before the first vsync(). The cable adds its own
+ * source when it starts (link_init) and takes it away when it stops; the
+ * vertical blank's stays on for good. */
+void irq_init(void) {
+    REG_IME = 0;
+    BIOS_IRQ_VECTOR = irq_handler;
+    REG_DISPSTAT |= DSTAT_VBL_IRQ;
+    REG_IE |= IRQ_VBLANK;
+    REG_IF = 0xFFFF;         /* discard anything already pending */
+    REG_IME = 1;
+}
+
+/* THE WAIT FOR THE NEXT FRAME SLEEPS. It used to spin on VCOUNT — first
+ * out of any blank already under way, then until line 160 — which on a real
+ * console is the CPU at full clock for the whole of the visible frame, and
+ * the rest of every frame is most of it: battery and heat for nothing. The
+ * BIOS's VBlankIntrWait (SWI 5) halts the CPU until the NEXT vertical-blank
+ * interrupt instead, discarding one already flagged, so it wakes on the same
+ * line the spin did and the frame's timing is unchanged — which every
+ * frame-counted check in gba-check (the golden audio, the tunes, the game
+ * over's 480 frames) would notice if it were not.
+ *
+ * SWI 5 is `swi 0x05` in Thumb and `swi 0x050000` in ARM, and this file is
+ * compiled Thumb; noinline keeps link-time optimisation from folding it into
+ * one of the ARM functions in IWRAM, where the Thumb encoding would be
+ * wrong. */
+__attribute__((noinline)) void vsync(void) {
+#if defined(__thumb__)
+    __asm__ volatile ("swi 0x05" ::: "r0", "r1", "r2", "r3", "memory");
+#else
+    __asm__ volatile ("swi 0x050000" ::: "r0", "r1", "r2", "r3", "memory");
+#endif
 }
 
 /* The GBA has every button the NES did, so this is a straight 1:1 remap with

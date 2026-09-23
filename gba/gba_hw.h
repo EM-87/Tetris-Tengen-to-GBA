@@ -30,6 +30,28 @@ typedef volatile uint32_t vu32;
 #define REG_BG3VOFS   (*(vu16 *)0x0400001E)
 #define REG_KEYINPUT  (*(vu16 *)0x04000130)
 
+/* INTERRUPTS. Two sources and one handler (irq_handler in video.c): the
+ * vertical blank, which is what vsync() sleeps on, and the serial port,
+ * which is what keeps a linked match in lockstep (see link.h). */
+#define REG_IE        (*(vu16 *)0x04000200)
+#define REG_IF        (*(vu16 *)0x04000202)
+#define REG_IME       (*(vu16 *)0x04000208)
+#define IRQ_VBLANK    0x0001
+#define IRQ_SERIAL    0x0080
+#define DSTAT_VBL_IRQ 0x0008   /* DISPSTAT: raise IRQ_VBLANK at line 160 */
+
+/* The BIOS jumps through this pointer on every interrupt, and its IntrWait
+ * family sleeps until the halfword below it has the flags it wants — which
+ * the handler has to OR in itself. Both addresses are the BIOS's, not this
+ * program's; they sit just above the IRQ stack the linker script sets up,
+ * which is why that stack stops at $03007F00. */
+#define BIOS_IRQ_VECTOR (*(void (**)(void))0x03007FFC)
+#define BIOS_IF_MIRROR  (*(vu16 *)0x03007FF8)
+
+/* ARM, and in internal WRAM: code that runs under an interrupt, or often
+ * enough that fetching it over the 16-bit cartridge bus would matter. */
+#define IWRAM_CODE __attribute__((section(".iwram"), long_call, target("arm")))
+
 /* DISPCNT */
 #define DCNT_MODE0    0x0000
 #define DCNT_BG0      0x0100

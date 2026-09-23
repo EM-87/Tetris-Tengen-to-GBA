@@ -2290,6 +2290,75 @@ def stats_show_check(rom_path):
     return 0
 
 
+def sleep_check(rom_path):
+    """THE WAIT FOR THE NEXT FRAME SLEEPS, it does not spin.
+
+    vsync() is the BIOS's VBlankIntrWait (SWI 5), which halts the CPU until
+    the vertical blank's interrupt. A spin on VCOUNT keeps it executing for
+    the whole of the visible frame — about 31,000 of the 43,000 instructions a
+    played frame used to take. So: the vector is the program's handler, the
+    vertical blank's interrupt is switched on at both ends, and in each frame
+    of play the CPU goes into the BIOS and stays there — a handful of steps
+    from entering it to the end of the frame, where a spin would be
+    thousands.
+    """
+    addr, why = game_state_address(rom_path, "irq_handler")
+    if addr is None:
+        print(f"SALTADO: {why}")
+        return 0
+    failures = []
+    core, screen = load(rom_path)   # `screen` must stay alive; see load()
+    _ = screen
+    start_game(core)
+    run(core, 60)
+
+    vector = core.memory.u32[0x03007FFC]
+    ie = core.memory.u16[0x04000200]
+    dispstat = core.memory.u16[0x04000004]
+    if vector != addr:
+        failures.append(f"el vector de interrupciones es {vector:#x}, no "
+                         f"irq_handler ({addr:#x})")
+    if not ie & 0x0001 or not dispstat & 0x0008:
+        failures.append(f"la interrupcion de vblank no esta encendida "
+                         f"(IE={ie:#06x}, DISPSTAT={dispstat:#06x})")
+
+    for _ in range(3):
+        start = core.frame_counter
+        steps = 0
+        # Steps from the LAST call out of the cartridge into the BIOS to the
+        # end of the frame. Not the first BIOS step: a frame opens still
+        # inside the previous frame's VBlankIntrWait, waking up.
+        tail = None
+        prev = core.cpu.pc
+        while core.frame_counter == start:
+            core.step()
+            steps += 1
+            pc = core.cpu.pc
+            if prev >= 0x08000000 and pc < 0x4000:
+                tail = 0
+            elif tail is not None:
+                tail += 1
+            prev = pc
+        if tail is None:
+            failures.append(f"un frame de {steps} pasos sin entrar en la BIOS: "
+                            f"vsync no llama a VBlankIntrWait")
+            break
+        if tail > 500:
+            failures.append(f"{tail} pasos entre la BIOS y el fin del frame: "
+                            f"eso es girar, no dormir")
+            break
+    else:
+        print(f"  un frame de partida: {steps} instrucciones, y {tail} desde "
+              f"que entra en VBlankIntrWait hasta el siguiente")
+
+    for f in failures:
+        print("FALLA:", f)
+    if failures:
+        return 1
+    print("OK: vsync duerme la CPU hasta el vblank en vez de dar vueltas.")
+    return 0
+
+
 def versus_hud_check(rom_path):
     """THE RACE'S THIRD HUD, and what a paused race shows.
 
@@ -5284,6 +5353,8 @@ def main():
                      help="check the COMPUTER player plays VERSUS and WITH")
     ap.add_argument("--coopai", action="store_true",
                      help="check the computer reads its partner under the chord")
+    ap.add_argument("--sleep", action="store_true",
+                     help="check vsync halts the CPU instead of spinning")
     ap.add_argument("--statsshow", action="store_true",
                      help="check HUD Stats's level-up troupe, in the left box")
     ap.add_argument("--versushud", action="store_true",
@@ -5361,6 +5432,8 @@ def main():
         sys.exit(versus_hud_check(args.rom))
     if args.statsshow:
         sys.exit(stats_show_check(args.rom))
+    if args.sleep:
+        sys.exit(sleep_check(args.rom))
     if args.demo:
         sys.exit(demo_check(args.rom))
     if args.gameover:

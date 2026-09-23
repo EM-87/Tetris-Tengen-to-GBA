@@ -65,6 +65,11 @@
  * late loading the send register. It must do nothing but read the keypad. */
 uint8_t link_read_buttons(void);
 
+/* A serial transfer has completed: queue what arrived and, during a match,
+ * load the next word. Called by the program's one interrupt handler
+ * (irq_handler in video.c), which also owns the acknowledging. */
+void link_serial_service(void);
+
 /* Puts the serial hardware in multiplayer mode and arms the interrupt.
  * Call once, on the way into the link screen. */
 void link_init(void);

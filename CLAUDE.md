@@ -852,15 +852,31 @@ fixed.
    is the lobby: exchange the skin so both boards wear the master's, with
    the release's RULES. Both consoles then agree on the cell format and the
    paint is real. See `piece_id_cells` and `skin_begin_match`.
-2. **`VBlankIntrWait` instead of the spin.** `vsync()` busy-waits at full
-   clock for the whole visible frame, which on a real console is battery
-   and heat for nothing. The BIOS call halts instead. It wants the vblank
-   interrupt in the vector the cable owns today.
-3. **The fireworks' distance and the dithered sky.** The bursts were moved
+2. **The fireworks' distance and the dithered sky.** The bursts were moved
    away from the frame to stop them colliding with it, and the cartridge's
    title has a dithered sunset behind them that the port does not draw.
-4. **The ten-line rule on the prototypes.** Still on the word of the list
+3. **The ten-line rule on the prototypes.** Still on the word of the list
    it came from; what the stacking bot needs is written up above.
+
+*(`VBlankIntrWait` was on this list and is in. `vsync()` spun on VCOUNT,
+which on a real console is the CPU at full clock through the whole visible
+frame; it is the BIOS's SWI 5 now, which HALTS until the vertical blank's
+interrupt. Measured in mGBA, a frame of play executes 11,982 instructions
+where it used to execute 42,922 — the other 31,000 were the spin, about
+seven tenths of every frame — and the title 18,000 against 50,000. The
+wake-up is on the same scanline the spin left on, so the timing did not
+move: the golden audio, the game over's 480 frames, the two-console link
+(same 188-transfer handshake, same 548 transfers, still byte-identical)
+all come out as they did. What it
+needed is what the note said: the vector belonged to the cable. There is
+ONE handler for the program now (`irq_handler`, video.c, in IWRAM, ARM),
+installed at boot by `irq_init` before the first vsync; it acknowledges
+every flag in IF AND in the BIOS's mirror at $03007FF8, which is what the
+BIOS actually sleeps on, and hands a serial interrupt to
+`link_serial_service`. The cable only switches its own source on and off.
+`make gba-check --sleep` checks the vector and the enables, and that each
+frame of play goes into the BIOS and stays there — 39 steps from the call to
+the next frame, where a spin puts back 43,000 and fails it.)*
 
 *(The coop HUD was on this list and is built: a panel per player, the
 board's totals under the chord, and a second HUD against the computer that
@@ -885,7 +901,8 @@ readable. It is five now, sharing `gba/port.h`:
   cross between the five. Anything used in only one file stays `static` where
   it is defined, which is most of them (84 of 220 at the split).
 - **`gba/video.c`** — the hardware: backgrounds and their scrolls, palettes
-  and their banks, tile and sprite uploads, the keypad, and the SKINS. The
+  and their banks, tile and sprite uploads, the keypad, the SKINS, and the
+  program's one interrupt handler with the vsync that sleeps on it. The
   rest of the port draws through its primitives and never touches a register.
 - **`gba/hud.c`** — what a match looks like: the two panels of rope, the
   board, the line-clear sweep, the cossacks, the piece histogram, the

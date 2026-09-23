@@ -1723,6 +1723,7 @@ typedef enum {
  * ----------------------------------------------------------------------- */
 
 /* video.c */
+void irq_init(void);
 void set_offset_layer(int px);
 void set_credit_layer(bool front_end);
 extern const char *const kClearWord[5];

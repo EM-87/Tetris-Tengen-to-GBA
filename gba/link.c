@@ -2,25 +2,13 @@
 #include "link.h"
 #include "gba_hw.h"
 
-/* The serial and interrupt registers. Deliberately declared here rather than
- * in gba_hw.h: nothing else in the port talks to the cable, and nothing else
- * takes an interrupt. */
+/* The serial registers. Declared here rather than in gba_hw.h: nothing else
+ * in the port talks to the cable. The interrupt registers are shared with the
+ * vertical blank and live there. */
 #define REG_SIOCNT      (*(vu16 *)0x04000128)
 #define REG_SIOMLT_SEND (*(vu16 *)0x0400012A)
 #define REG_SIOMULTI(n) (*(vu16 *)(0x04000120 + (n) * 2))
 #define REG_RCNT        (*(vu16 *)0x04000134)
-
-#define REG_IE          (*(vu16 *)0x04000200)
-#define REG_IF          (*(vu16 *)0x04000202)
-#define REG_IME         (*(vu16 *)0x04000208)
-#define IRQ_SERIAL      0x0080
-
-/* The BIOS jumps through this pointer on every interrupt, and ORs the flags
- * it has seen into the halfword below it. Both addresses are the BIOS's, not
- * this program's; they sit just above the IRQ stack the linker script sets
- * up, which is why that stack stops at $03007F00. */
-#define BIOS_IRQ_VECTOR (*(void (**)(void))0x03007FFC)
-#define BIOS_IF_MIRROR  (*(vu16 *)0x03007FF8)
 
 /* SIOCNT, multiplayer mode.
  *
@@ -63,16 +51,18 @@ static volatile uint8_t g_tx_frame;
 static volatile bool g_auto_tx;      /* the interrupt loads the buttons itself */
 static bool g_armed;
 
-/* ARM, and in internal WRAM, for the same reason the 6502 interpreter is:
- * this runs at every transfer and must finish long before the next one. It
- * also must not be fetched over the cartridge bus while that bus is busy. */
-#define IWRAM_CODE __attribute__((section(".iwram"), long_call, target("arm")))
-
-IWRAM_CODE void link_serial_irq(void);
-void link_serial_irq(void) {
-    uint16_t flags = REG_IF;
-
-    if (flags & IRQ_SERIAL) {
+/* ARM, and in internal WRAM (IWRAM_CODE), for the same reason the 6502
+ * interpreter is: this runs at every transfer and must finish long before
+ * the next one. It also must not be fetched over the cartridge bus while
+ * that bus is busy.
+ *
+ * It is not the interrupt handler itself any more. The program has ONE
+ * (irq_handler, video.c), because the vertical blank takes an interrupt too
+ * now that vsync() sleeps on it; that handler acknowledges both and calls
+ * this for a serial one. */
+IWRAM_CODE void link_serial_service(void);
+void link_serial_service(void) {
+    {
         uint16_t m = REG_SIOMULTI(0);
         uint16_t s = REG_SIOMULTI(1);
 
@@ -105,9 +95,6 @@ void link_serial_irq(void) {
             }
         }
     }
-
-    REG_IF = flags;
-    BIOS_IF_MIRROR |= flags;
 }
 
 void link_init(void) {
@@ -123,8 +110,9 @@ void link_init(void) {
     g_tx_frame = 0;
     g_auto_tx = false;
 
+    /* The vector is already irq_handler's (irq_init, at boot); the cable
+     * only has to switch its own source on. */
     REG_IME = 0;
-    BIOS_IRQ_VECTOR = link_serial_irq;
     REG_IE |= IRQ_SERIAL;
     REG_IF = IRQ_SERIAL;     /* discard anything already pending */
     REG_SIOCNT |= SIO_IRQ;

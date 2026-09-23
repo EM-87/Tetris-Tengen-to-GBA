@@ -220,6 +220,7 @@ gba-check: $(GBA_ROM)
 	python3 tools/run_rom.py $(GBA_ROM) --coopai
 	python3 tools/run_rom.py $(GBA_ROM) --versushud
 	python3 tools/run_rom.py $(GBA_ROM) --statsshow
+	python3 tools/run_rom.py $(GBA_ROM) --sleep
 	python3 tools/run_rom.py $(GBA_ROM) --demo
 	python3 tools/run_rom.py $(GBA_ROM) --falling
 	python3 tools/run_rom.py $(GBA_ROM) --points
