@@ -1,13 +1,24 @@
 """Las reglas de los prototipos, medidas en sus propios volcados.
 
-Tres cosas se dan por ciertas en el port bajo `proto_rules`, y vinieron de una
-lista escrita por terceros. Esto las comprueba contra las ROMs:
+Lo que el port hace bajo `proto_rules` vino de una lista escrita por terceros.
+Esto lo comprueba contra las ROMs:
 
   1. una fila completa se va EL FRAME que se completa, sin escoba;
   2. no hay patada de pared: una pieza pegada al muro no gira;
   3. se sube de nivel cada DIEZ lineas, y el nivel elegido es un SUELO: el
      nivel es el mayor entre el de salida y lineas/10. Empezando en 0 sube en
-     10 y 20; empezando en 3 (B, D) aguanta hasta 40, en 5 (C) hasta 60.
+     10 y 20; empezando en 3 (B, D) aguanta hasta 40, en 5 (C) hasta 60;
+  4. al subir de nivel no hay espectaculo: gameState no sale de 0 y los
+     programas de los cosacos ($019A/$01A2) no arrancan (el release pasa a 3
+     con la pieza parada). Tampoco hay sintonia: la cola de sonido ($0200-
+     $0207) no recibe nada nuevo, y C y D ni siquiera piden el sonido de la
+     linea en esa limpieza;
+  5. la pausa NO calla la musica... solo en proto_a. B, C y D la callan como
+     el release. La lista lo decia de todos.
+
+El 4 y el 5 los mide tambien tools/extract_assets.py al generar las skins
+(read_skin_levelup_sound, read_skin_pause_music), y de ahi salen las tablas
+que el port consulta.
 
 La tercera se dio por imposible de medir durante mucho tiempo: plantar una
 fila completa y dejar caer piezas parecia subir el marcador sin tocar las
@@ -252,3 +263,63 @@ if __name__ == "__main__":
             got, why = measure_levels(path, start, clears)
             print("  %-14s desde %d: %s" % (path.split("/")[-1], start,
                                              got if got else why))
+
+    print("LA SUBIDA DE NIVEL: espectaculo, y lo que pide a la cola de sonido")
+    for path in sys.argv[1:]:
+        nes = boot(path)
+        if nes is None:
+            continue
+        asked = []
+        real = nes.bus.write
+
+        def write(addr, value, real=real, asked=asked):
+            if 0x200 <= (addr & 0xFFFF) <= 0x207:
+                asked.append(value & 0xFF)
+            real(addr, value)
+        nes.bus.write = write
+        level = shown_number(nes, 6)
+        normal = None
+        for _ in range(60):
+            empty_field(nes)
+            fill_row(nes, ROW1 - 1)
+            lines = shown_number(nes, 4)
+            del asked[:]
+            for _ in range(600):
+                nes.run(1, BTN["DOWN"])
+                if shown_number(nes, 4) != lines:
+                    break
+            nes.run(60)
+            if shown_number(nes, 6) != level:
+                break
+            normal = sorted(set(asked))
+        states, dancers = set(), False
+        for _ in range(400):
+            nes.run(1)
+            states.add(nes.ram(0x29))
+            dancers = dancers or bool(nes.ram(0x19A) or nes.ram(0x1A2))
+        print("  %-14s estados %s, cosacos %s; limpieza normal pide %s, la "
+              "que sube %s" % (path.split("/")[-1],
+                               sorted(hex(x) for x in states), dancers,
+                               [hex(x) for x in normal or []],
+                               [hex(x) for x in sorted(set(asked))]))
+
+    print("LA PAUSA: escrituras de nota con la partida en pausa")
+    NOTES = (0x4002, 0x4003, 0x4006, 0x4007, 0x400A, 0x400B)
+    for path in sys.argv[1:]:
+        nes = boot(path)
+        if nes is None:
+            continue
+        nes.run(120)
+        nes.bus.drain()
+
+        def notes(frames):
+            n = 0
+            for _ in range(frames):
+                nes.run(1)
+                n += sum(1 for a, _v in nes.bus.drain() if a in NOTES)
+            return n
+        playing = notes(180)
+        nes.run(4, BTN["START"])
+        nes.bus.drain()
+        print("  %-14s jugando %d, en pausa %d" % (path.split("/")[-1],
+                                                    playing, notes(240)))

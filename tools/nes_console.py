@@ -150,11 +150,13 @@ class NesConsole:
     def state(self):
         return self.ram(0x29)
 
-    def start_game(self, entry=0):
+    def start_game(self, entry=0, handicap=0):
         """Title -> GAME TYPE -> LEVEL -> HANDICAP -> MUSIC -> playing.
 
         `entry` is how far down GAME SELECT's five to go: 0 is 1 PLAYER and 2
         is COOPERATIVE, in the order gameSelectArrowPpuAddrs lists them.
+        `handicap` is player 1's, 0-4, set on its own screen with DOWN — which
+        raises it there (UP lowers it, wrapping round from 0).
 
         Leaves the console ON THE GAME'S OWN FIRST FRAME, which matters: the
         cartridge deals its first piece during that frame, so anything that
@@ -165,8 +167,13 @@ class NesConsole:
         self.tap("START")                 # title -> GAME SELECT
         for _ in range(entry):
             self.tap("DOWN")
-        for _ in range(3):
+        for step in range(3):
             self.tap("START")             # level, handicap, music
+            if step == 1:                 # ...now on the handicap screen
+                for _ in range(handicap):
+                    self.tap("DOWN")
+        if self.ram(0x4F3) != handicap:   # menuPlayer1Handicap
+            raise RuntimeError(f"handicap {self.ram(0x4F3)}, wanted {handicap}")
         self.frame(BTN["START"])
         for _ in range(60):
             if self.state == GAMESTATE_PLAYING:

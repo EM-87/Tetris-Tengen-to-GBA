@@ -252,6 +252,47 @@ def main():
     if read_bytes(master, session_addr, game_size) != bytes(game_size):
         failures.append("el esclavo pudo arrancar la partida el solo")
 
+    # TWO HANDICAPS, AND SELECT PICKS WHICH. Only here: 2 PLAYER is the one
+    # mode with two on the cartridge's handicap screen (against the computer
+    # there is one cursor, and both boards take it). Up and Down already move
+    # the cursor and Left and Right the value, so SELECT — "the other one"
+    # everywhere else on this page — hops between the two numbers without
+    # leaving the line, and the one it is on is written in the cursor's
+    # white.
+    import run_rom
+
+    def hrow():
+        return run_rom.tilemap_text(master, run_rom.HANDICAP_ROW)
+
+    def white_digits():
+        text = hrow()
+        banks = [(master.memory.u16[run_rom.SCREENBLOCK_ADDR +
+                                    (run_rom.HANDICAP_ROW * 32 + c) * 2] >> 12) & 0xF
+                 for c in range(30)]
+        return "".join(ch for ch, b in zip(text, banks)
+                       if ch.isdigit() and b == run_rom.MENU_ARROW_BANK)
+
+    tap("DOWN", who=0)                    # the cursor onto HANDICAP
+    steps = []
+    if "HANDICAP 0 0" not in hrow():
+        failures.append(f"en 2 PLAYER la fila no trae dos numeros: {hrow()!r}")
+    else:
+        tap("RIGHT", who=0)
+        steps.append(("DERECHA sube el primero", white_digits() == "3"))
+        tap("SELECT", who=0)
+        steps.append(("SELECT pasa al segundo",
+                      white_digits() == "0" and ">" in hrow()))
+        tap("RIGHT", who=0); tap("RIGHT", who=0)
+        steps.append(("DERECHA sube el segundo", white_digits() == "6"))
+        tap("SELECT", who=0)
+        steps.append(("SELECT vuelve al primero", white_digits() == "3"))
+        if "HANDICAP 3 6" not in hrow() or not all(lit for _, lit in steps):
+            failures.append(f"SELECT y DERECHA no llevan cada handicap por su "
+                            f"lado: {hrow()!r}, pasos {steps}")
+        else:
+            print("  en 2 PLAYER SELECT pasa de un handicap al otro sin salir "
+                  "de la linea: 3 filas para uno, 6 para el otro")
+
     # The cable put the master on LEVEL SETTINGS already; one START from
     # there releases the handshake and both consoles go.
     tap("START", who=0)
@@ -269,6 +310,21 @@ def main():
         failures.append("la partida no arranco: el estado sigue en cero")
     if m_state != s_state:
         failures.append("las dos consolas empezaron con partidas distintas")
+
+    # ...and each board is buried under its own: 3 rows and 6. Garbage is
+    # the $F sentinel inside the walls.
+    PF_W, PF_H = 12, 20
+    buried = []
+    for board in (0, 1):
+        cells = m_state[board * PF_W * PF_H:(board + 1) * PF_W * PF_H]
+        buried.append(sum(1 for r in range(PF_H)
+                          if any(cells[r * PF_W + c] == 15 for c in range(1, 11))))
+    if buried != [3, 6]:
+        failures.append(f"los handicaps no llegan a los tableros: filas de "
+                        f"basura {buried}, deberian ser [3, 6]")
+    else:
+        print("  y cada tablero sale enterrado bajo el suyo, igual en las dos "
+              "consolas")
 
     # Each console must know which player it is, and they must not agree.
     view, why = symbol(rom, "g_view")

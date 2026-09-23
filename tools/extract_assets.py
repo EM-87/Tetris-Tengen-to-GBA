@@ -2101,6 +2101,100 @@ def find_skin_menu_logo(path, letters):
     return None
 
 
+def read_skin_pause_music(path):
+    """Whether this dump's PAUSE leaves its tune playing: (bool, why).
+
+    MEASURED, not taken from a list. The list said "pausing in-game doesn't
+    mute the music" of the prototypes as a family, and it is one of them:
+    proto_a's tune plays on under the plaque, while proto_b, proto_c and
+    proto_d go silent exactly as the release does. So: into a game, a few
+    seconds of its tune, then START, and count the note writes (the period
+    registers of the two pulses and the triangle) over four paused seconds.
+    A dump that plays no tune at all before the pause cannot answer, and
+    says so.
+    """
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from nes_console import NesConsole, BTN
+
+    nes = NesConsole(path)
+    nes.run(120)
+    for _ in range(SKIN_PLAY_PRESSES):
+        if nes.ram(GAMESTATE_ADDR) == GAMESTATE_PLAYING:
+            break
+        nes.run(6, BTN["START"])
+        nes.run(SKIN_PLAY_SETTLE)
+    if nes.ram(GAMESTATE_ADDR) != GAMESTATE_PLAYING:
+        return None, "no llego a una partida"
+    NOTES = (0x4002, 0x4003, 0x4006, 0x4007, 0x400A, 0x400B)
+
+    def notes(frames, keys=0):
+        count = 0
+        for _ in range(frames):
+            nes.run(1, keys)
+            count += sum(1 for a, _v in nes.bus.drain() if a in NOTES)
+        return count
+
+    nes.run(120)
+    nes.bus.drain()
+    if not notes(180):
+        return None, "no toca ninguna melodia antes de la pausa"
+    nes.run(4, BTN["START"])
+    nes.bus.drain()
+    return notes(240) > 0, None
+
+
+def read_skin_levelup_sound(path):
+    """What this dump plays on the clear that raises the level: (bool, why).
+
+    True if it asks for the same sounds as any other clear, False if the
+    line's sound goes missing on that one. There is no level-up jingle in
+    any of them — no new request reaches the sound queue ($0200-$0207) —
+    but proto_c and proto_d go further and drop the clear's own sound on
+    the clear that levels up, keeping only the drop's; proto_a and proto_b
+    play both as always. Measured the way tools/probes/proto_rules.py
+    measures the ten-line rule: the field emptied, one full row, and down
+    held until LINES moves.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    sys.path.insert(0, here)
+    sys.path.insert(0, os.path.join(here, "probes"))
+    import proto_rules as P
+    from nes_console import BTN
+
+    nes = P.boot(path)
+    if nes is None:
+        return None, "no llego a una partida"
+    asked = []
+    real = nes.bus.write
+
+    def write(addr, value):
+        if 0x200 <= (addr & 0xFFFF) <= 0x207:
+            asked.append(value & 0xFF)
+        real(addr, value)
+    nes.bus.write = write
+
+    level = P.shown_number(nes, 6)
+    normal = None
+    for _ in range(40):
+        P.empty_field(nes)
+        P.fill_row(nes, P.ROW1 - 1)
+        lines = P.shown_number(nes, 4)
+        del asked[:]
+        for _ in range(600):
+            nes.run(1, BTN["DOWN"])
+            if P.shown_number(nes, 4) != lines:
+                break
+        else:
+            return None, "una fila completa no conto"
+        nes.run(60)
+        if P.shown_number(nes, 6) != level:
+            if normal is None:
+                return None, "subio de nivel en la primera fila"
+            return sorted(set(asked)) == normal, None
+        normal = sorted(set(asked))
+    return None, "no subio de nivel en cuarenta filas"
+
+
 def read_skin_effects(path):
     """The two noises this dump's menus make: (effects, why).
 
@@ -2465,6 +2559,14 @@ def read_prototype(path):
             # release's, which is what it did before there were any.
             print(f"  {path}: sin efectos de menu ({fx_why})")
         play["effects"] = effects
+        keeps, why = read_skin_pause_music(path)
+        if keeps is None:
+            print(f"  {path}: la pausa no se pudo medir ({why}); la silencia")
+        play["pause_music"] = bool(keeps)
+        clear_sound, why = read_skin_levelup_sound(path)
+        if clear_sound is None:
+            print(f"  {path}: la subida de nivel no se pudo medir ({why})")
+        play["levelup_clear_sound"] = bool(clear_sound)
     return {
         "label": label,
         "how": how,
@@ -2700,6 +2802,21 @@ def emit_skin_play(skins):
            "static const uint8_t kSkinStatsPalette[SCREEN_PROTO_COUNT][4] = {",
            [p["stats_palette"] for p in plays], lambda b: f"0x{b:02X}", 4)
 
+    lines += [
+        "",
+        "/* WHETHER PAUSE LEAVES THE TUNE PLAYING, measured on each dump",
+        " * (read_skin_pause_music): only proto_a's does. */",
+        "#define SKIN_PAUSE_MUSIC 1",
+        "static const uint8_t kSkinPauseKeepsMusic[SCREEN_PROTO_COUNT] = { "
+        + ", ".join("1" if p.get("pause_music") else "0" for p in plays)
+        + " };",
+        "/* ...and what the clear that raises the level sounds like, measured",
+        " * too (read_skin_levelup_sound): never a jingle, and in proto_c and",
+        " * proto_d not even the line's own sound. */",
+        "static const uint8_t kSkinLevelUpClearSound[SCREEN_PROTO_COUNT] = { "
+        + ", ".join("1" if p.get("levelup_clear_sound") else "0" for p in plays)
+        + " };",
+    ]
     lines += emit_skin_effects(plays)
     return lines
 

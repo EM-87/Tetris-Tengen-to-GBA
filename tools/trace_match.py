@@ -34,6 +34,8 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from nes_console import NesConsole, GAMESTATE_PLAYING
 
+GAMESTATE_DEMO = 0xFB
+
 # The same nine lines as trace_core.c's generator. See the note there.
 BTN_LEFT, BTN_RIGHT, BTN_A, BTN_B, BTN_DOWN = 0x40, 0x80, 0x01, 0x02, 0x20
 
@@ -124,12 +126,23 @@ def versus_row(nes, f, shared=False):
 
 
 def cartridge_trace(rom, frames, out_path, coop=False, vs=False, with_=False,
-                    pad1=None):
+                    pad1=None, handicap=0, demo=False, info=None):
     nes = NesConsole(rom)
-    # GAME SELECT's entries are menuGameMode's values: 1 PLAYER, 2 PLAYER,
-    # COOPERATIVE, VERSUS (the computer), WITH (the computer).
-    nes.start_game(entry=4 if with_ else 3 if vs else 2 if coop else 0)
-    computer = vs or with_
+    if demo:
+        # THE ATTRACT DEMO, which the title starts by itself at frameCounterHigh
+        # 5 / low $20 (main.asm.txt:4150-4160). Nothing is pressed on the way.
+        for _ in range(3000):
+            nes.frame(0)
+            if nes.state == GAMESTATE_DEMO:
+                break
+        else:
+            raise RuntimeError("the cartridge's demo never started")
+    else:
+        # GAME SELECT's entries are menuGameMode's values: 1 PLAYER, 2 PLAYER,
+        # COOPERATIVE, VERSUS (the computer), WITH (the computer).
+        nes.start_game(entry=4 if with_ else 3 if vs else 2 if coop else 0,
+                       handicap=handicap)
+    computer = vs or with_ or demo
 
     # WAIT FOR THE LOOKAHEAD SEED, and only then start counting frames.
     # player1RNGSeed ($5C) is what tengen_new_game's `shared` corresponds to —
@@ -148,11 +161,16 @@ def cartridge_trace(rom, frames, out_path, coop=False, vs=False, with_=False,
     lines = ["seed %04X" % seed]
     clocks = []
 
-    p1 = pad1 if pad1 is not None else script(frames)
+    # The demo is left alone: a button pressed on it ends it.
+    # A few entries past `frames`: read per iteration, the cartridge fits one
+    # more iteration than frames into its run (its deal overruns into the
+    # next frame), and that one must get its button too.
+    p1 = (pad1 if pad1 is not None else [0] * (frames + 2) if demo
+          else script(frames + 2))
     # Player 2 reads the same generator from a different start, so the two
     # pads are independent without needing a second one. In the computer
     # modes pad 2 is the computer's: compInputForGameplay writes it.
-    p2 = script(frames, seed=999983) if coop else [0] * frames
+    p2 = script(frames + 2, seed=999983) if coop else [0] * (frames + 2)
 
     # THE TRACE FOLLOWS THE GAME'S LOOP, NOT THE FRAME: iteration i of
     # mainLoop is handed p1[i] and p2[i] as it starts and read as it ends
@@ -167,13 +185,16 @@ def cartridge_trace(rom, frames, out_path, coop=False, vs=False, with_=False,
 
     def iteration_end(n):
         i = len(lines) - 1
-        if n.state != GAMESTATE_PLAYING:
+        if n.state not in (GAMESTATE_PLAYING, GAMESTATE_DEMO):
             lines.append("%d estado %02X" % (i, n.state))
         elif computer:
             lines.append(versus_row(n, i, shared=with_))
         else:
             lines.append(solo_row(n, i, coop))
     hooks = {ITERATION_START: iteration_start, ITERATION_END: iteration_end}
+    if info is not None:
+        info["level"] = ((10 if nes.ram(0x42C) != 0x30 else 0)
+                         + (nes.ram(0x42D) - 0x30))
     for _ in range(frames):
         nes.frame(0, 0, hooks=hooks)
     with open(out_path, "w") as fh:
@@ -193,8 +214,9 @@ def computer_match(args):
     Read once per iteration, both deal when 1 PLAYER does (the timers at
     48), so the cartridge's deal line is dropped as it is there.
     """
-    mode = "with" if args.with_ else "vs"
+    mode = "demo" if args.demo else "with" if args.with_ else "vs"
     skip = 1
+    info = {}
     rom_path = os.path.join(args.outdir, "trace_cartridge.txt")
     core_path = os.path.join(args.outdir, "trace_core.txt")
 
@@ -202,7 +224,9 @@ def computer_match(args):
         with open(core_path, "w") as fh:
             subprocess.run([args.core, "%04X" % seed,
                             str(args.frames + 1 - skip), mode, str(clock)]
-                           + list(extra), stdout=fh, check=True)
+                           + list(extra) + ["h=%d" % args.handicap,
+                                            "l=%d" % info.get("level", 0)],
+                           stdout=fh, check=True)
 
     # --pad1: the core plays player 1 with the port's own computer and the
     # cartridge is handed the buttons it pressed. That needs the seed and
@@ -211,7 +235,8 @@ def computer_match(args):
     pad1 = None
     if args.pad1:
         seed, clocks = cartridge_trace(args.rom, skip + 2, rom_path,
-                                       vs=args.versus, with_=args.with_)
+                                       vs=args.versus, with_=args.with_,
+                                       handicap=args.handicap)
         run_core(seed, clocks[skip], ["pad1"])
         with open(core_path) as fh:
             pressed = [int(l.rsplit(" B", 1)[1])
@@ -222,7 +247,11 @@ def computer_match(args):
           f"(un interprete; tarda ~15s por cada mil)...")
     seed, clocks = cartridge_trace(args.rom, args.frames, rom_path,
                                    vs=args.versus, with_=args.with_,
-                                   pad1=pad1)
+                                   pad1=pad1, handicap=args.handicap,
+                                   demo=args.demo, info=info)
+    if args.demo:
+        print(f"  la demo del cartucho: semilla ${seed:04X}, nivel "
+              f"{info['level']}")
     run_core(seed, clocks[skip], ["pad1"] if args.pad1 else [])
 
     def body(line):     # the core's pressed-buttons field is not compared
@@ -265,20 +294,27 @@ def main():
     ap.add_argument("--with", dest="with_", action="store_true",
                     help="WITH COMPUTER: the same computer on the shared "
                          "twelve-wide board")
+    ap.add_argument("--demo", action="store_true",
+                    help="the attract demo: the title left alone until it "
+                         "starts playing by itself, computerMove on pad 1")
     ap.add_argument("--pad1", action="store_true",
                     help="with --versus/--with: player 1 played by the "
                          "port's computer, its buttons pressed on both")
+    ap.add_argument("--handicap", type=int, default=0, choices=range(5),
+                    help="player 1 starts under this many steps of garbage, "
+                         "three rows a step")
     ap.add_argument("--core", default="build/trace_core",
                     help="the compiled tools/trace_core.c")
     ap.add_argument("--outdir", default="build")
     args = ap.parse_args()
-    if args.versus or args.with_:
+    if args.versus or args.with_ or args.demo:
         return computer_match(args)
 
     rom_path = os.path.join(args.outdir, "trace_cartridge.txt")
     print(f"corriendo el cartucho {args.frames} frames "
           f"(un interprete; tarda ~15s por cada mil)...")
-    seed, _ = cartridge_trace(args.rom, args.frames, rom_path, args.coop)
+    seed, _ = cartridge_trace(args.rom, args.frames, rom_path, args.coop,
+                              handicap=args.handicap)
     print(f"  savedRNGSeed = ${seed:04X}, escrito {rom_path}")
 
     core_path = os.path.join(args.outdir, "trace_core.txt")
@@ -286,7 +322,8 @@ def main():
         # One more than frames: counted per iteration, the cartridge fits
         # one extra into the frames it ran (its deal overruns into the next).
         subprocess.run([args.core, "%04X" % seed, str(args.frames + 1)]
-                        + (["coop"] if args.coop else []),
+                        + (["coop"] if args.coop else ["solo"])
+                        + ["h=%d" % args.handicap],
                         stdout=fh, check=True)
     print(f"  escrito {core_path}")
 

@@ -632,3 +632,52 @@ def sweep_check(rom_path):
           "pasos por frame como el barrido del NES")
     print("OK: el sonido de la linea sube de tono como en el cartucho.")
     return 0
+
+
+def proto_pause_check(rom_path):
+    """UNDER PROTO_A'S SKIN, PAUSE LEAVES THE TUNE PLAYING; UNDER PROTO_B'S IT
+    DOES NOT.
+
+    The list said all the prototypes pause without muting. Measured on the
+    dumps (read_skin_pause_music in tools/extract_assets.py) it is proto_a's
+    alone: proto_b, proto_c and proto_d go silent like the release. On the
+    title L+R puts on the first skin (A) and R walks on from there.
+    """
+    failures = []
+    for skin, name, keeps in ((1, "proto_a", True), (2, "proto_b", False)):
+        core, screen = load(rom_path)    # `screen` must stay alive; see load()
+        run(core, 40)
+        core.set_keys(KEYS["L"], KEYS["R"]); run(core, 4)
+        core.set_keys(); run(core, 32)
+        for _ in range(skin - 1):
+            core.set_keys(KEYS["R"]); run(core, 4)
+            core.set_keys(); run(core, 32)
+        start_game(core, tune=1)         # LOGINSKA
+        heard = 0
+        for _ in range(180):
+            core.run_frame()
+            heard = max(heard, sound_state(core)["activos"])
+        core.set_keys(KEYS["START"]); run(core, 4)
+        core.set_keys(); run(core, 8)
+        paused = 0
+        for _ in range(120):
+            core.run_frame()
+            paused = max(paused, sound_state(core)["activos"])
+        del core, screen
+        if not heard:
+            failures.append(f"con la skin de {name} no sonaba nada que pausar")
+        elif keeps and not paused:
+            failures.append(f"con la skin de {name} la pausa calla la musica, y "
+                            f"en su volcado sigue sonando")
+        elif not keeps and paused:
+            failures.append(f"con la skin de {name} la pausa deja sonar la "
+                            f"musica, y en su volcado se calla")
+        else:
+            print(f"  {name}: en pausa la musica "
+                  f"{'sigue sonando' if keeps else 'se calla'}, como en su volcado")
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: solo la pausa de proto_a deja sonar la musica.")
+    return 0

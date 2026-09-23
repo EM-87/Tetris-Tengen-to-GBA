@@ -111,16 +111,33 @@ static void announce_step(TengenStepResult step) {
      * That is what a doubled tune sounds like. */
     if (step.lines_collapsed && !step.leveled_up)
         nes_audio_play(NES_SOUND_LINECLEAR);
+    /* A PROTOTYPE'S LEVEL-UP IS JUST A CLEAR. Measured on the dumps: none of
+     * them asks its sound queue for anything new when the level goes up —
+     * no jingle — and proto_c and proto_d do not even play the line's own
+     * sound on that clear. See levelup_clear_sound. Nothing else of the
+     * release's level-up follows either: no show, no music change. */
+    if (step.leveled_up && g_session.game.proto_rules && !g_linked) {
+        if (levelup_clear_sound()) nes_audio_play(NES_SOUND_LINECLEAR);
+        /* MUSIC MIX still turns over on a level — it is the port's, and a
+         * level is its unit — and with no interlude to restart the tune
+         * after, the next one starts on the spot, as over the cable. */
+        if (g_music == MUSIC_MIX) {
+            g_mix_step = (uint8_t)((g_mix_step + 1) % MIX_COUNT);
+            start_music(g_music);
+        }
+        return;
+    }
     if (step.leveled_up) {
         /* The cartridge's level-up music takes over; a hand-entered tune stands
          * down and start_music() puts it back when the dancers finish. */
         handtune_stop();
         /* THE INTRO, which is what the cartridge plays at this moment; the
          * looping tune comes in when the intro runs out. See
-         * NES_MUSIC_LEVELUP_INTRO. A linked match and a prototype's game have
-         * no show to hand it over to, and for them the jingle on its own is
-         * the right answer anyway: it ends by itself, where the loop had to
-         * be cut off by whatever came next. */
+         * NES_MUSIC_LEVELUP_INTRO. A linked match has no show to hand it
+         * over to, and for it the jingle on its own is the right answer
+         * anyway: it ends by itself, where the loop had to be cut off by
+         * whatever came next. (A prototype's game never gets here: see
+         * above.) */
         nes_audio_play(NES_MUSIC_LEVELUP_INTRO);
         /* MUSIC MIX turns over here, and here only. See MUSIC_MIX. */
         if (g_music == MUSIC_MIX) {
@@ -132,10 +149,10 @@ static void announce_step(TengenStepResult step) {
             if (g_linked) start_music(g_music);
         }
         /* NO COSSACKS IN A PROTOTYPE'S GAME. Those builds go up a level and
-         * carry straight on — no dancers, no BONUS tally — and the interlude
-         * is one of the release's later additions. The level-up jingle above
-         * still plays: it is a sound, not a show, and their level-up is not
-         * silent. See proto_rules. */
+         * carry straight on — no dancers, no BONUS tally. Measured on B, C
+         * and D: gameState never leaves 0 and the dancers' programs
+         * ($019A/$01A2) never start, where the release goes to 3 with the
+         * piece frozen. See proto_rules. */
         if (!g_linked && !g_session.game.proto_rules) {
             g_dancer_active = true;
             g_dancer_timer = DANCER_TIMER_START;
@@ -717,15 +734,17 @@ bool solo_play_frame(uint8_t buttons, uint8_t pressed, bool *quit) {
              * (main.asm.txt:7204-7211) — the same pair the front end uses to
              * go quiet, through the same two helpers so the port never loses
              * track of which state the engine is actually in. */
-            /* ...EXCEPT IN A PROTOTYPE'S GAME, where "pausing in-game doesn't
-             * mute the music" — the plaque goes up and the tune plays on.
-             * Only the SUSPEND is skipped, never the resume: a game that was
-             * paused before the skin was chosen, or one whose engine is
-             * already gagged for any other reason, still has to be let go of.
-             * See proto_rules. */
+            /* ...EXCEPT IN PROTO_A'S GAME, where the plaque goes up and the
+             * tune plays on. The list this came from said it of the
+             * prototypes as a family; measured on the dumps it is proto_a's
+             * alone — B, C and D go silent like the release (see
+             * pause_keeps_music). Only the SUSPEND is skipped, never the
+             * resume: a game that was paused before the skin was chosen, or
+             * one whose engine is already gagged for any other reason, still
+             * has to be let go of. */
             if (!g_session.game.paused)
                 nes_audio_play(NES_MUSIC_RESUME);
-            else if (!g_session.game.proto_rules)
+            else if (!pause_keeps_music())
                 nes_audio_play(NES_MUSIC_SUSPEND);
             /* ...and the mix, if the pause menu left it silent, starts here:
              * this is the frame the match comes back. See g_mix_held. */
@@ -760,7 +779,7 @@ bool solo_play_frame(uint8_t buttons, uint8_t pressed, bool *quit) {
                  * pause, where it is not silenced at all: a hand tune stopping
                  * over a plaque the cartridge's own tune plays through would
                  * be the two halves of the machine disagreeing. */
-                if (g_session.game.paused && !g_session.game.proto_rules)
+                if (g_session.game.paused && !pause_keeps_music())
                     handtune_suspend();
                 else if (!g_session.game.paused) {
                     if (handtune_current() == MUSIC_HANDTUNE_OF(tune))

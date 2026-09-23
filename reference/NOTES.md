@@ -210,9 +210,20 @@ three tables. In the core:
 | rotation against a wall | kicks one column LEFT | **no kick at all** — "blocks often cannot be turned when they are pressed against the wall" is exactly the absence of it |
 | a completed row | held 29 frames while a sweep crosses it and writes SINGLE / DOUBLE / TRIPLE / TETRIS | goes the frame it completes |
 
-and two in the front end: a level-up brings **no cossacks and no BONUS tally**
-(those builds carry straight on; the jingle still plays, because it is a sound
-and not a show), and **PAUSE does not silence the music**.
+and two in the front end, both now MEASURED on the dumps rather than taken
+from the list (`tools/probes/proto_rules.py`, and the extractor measures the
+sound halves again for every dump it is given):
+
+- **A level-up is just a clear.** No show — gameState never leaves 0 and the
+  dancers' programs ($019A/$01A2) never start, where the release goes to 3
+  with the piece frozen — and **no jingle either**: nothing new reaches the
+  sound queue ($0200-$0207). proto_c and proto_d go further and drop the
+  line's own sound on the clear that levels up; A and B play it as always.
+  (The port used to play the release's level-up jingle over them.)
+- **PAUSE does not silence the music — in proto_a only.** The list said it of
+  all of them; B, C and D go silent exactly as the release does. Measured:
+  over four paused seconds proto_a writes as many notes as it did playing,
+  the other three none.
 
 **What is deliberately not taken** is the SHAPE of their front end — only
 1 PLAYER and 2 PLAYER, a LEVEL SELECT — 0 to 9 in plain text on B, C and D

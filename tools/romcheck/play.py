@@ -420,20 +420,21 @@ def handicap_check(rom_path):
 
 
 def handicap_two_check(rom_path):
-    """EN UNA CARRERA HAY DOS HANDICAPS, Y SE ELIGEN CON SELECT.
+    """CONTRA LA MAQUINA HAY UN SOLO HANDICAP, Y ENTIERRA LOS DOS TABLEROS.
 
-    Antes se ponian con los gatillos, uno por lado del mando, y una Nintendo
-    Entertainment System no tenia gatillos. Arriba y abajo ya mueven el cursor
-    e izquierda y derecha ya cambian el valor, asi que queda SELECT, que en
-    esta pagina ya significa "el otro"; sobre la linea de HANDICAP salta entre
-    los dos numeros en vez de abandonarla, y el que esta elegido se escribe en
-    el blanco del cursor para que se vea cual de los dos mueve el mando.
-
-    Se comprueba lo que se ve y lo que hace: que los gatillos ya no tocan nada
-    aqui, que SELECT cambia de numero sin cambiar de linea, que el blanco se
-    muda con el, y que DERECHA sube el numero blanco y no el otro.
+    La pantalla de handicap del cartucho tiene dos cursores en 2 PLAYER y uno
+    solo en VERSUS COMPUTER, y endPlayfieldInit entierra los dos tableros bajo
+    ese numero (`bcs @computerIsPlaying`, main.asm.txt:3539-3542): la maquina
+    empieza tan enterrada como tu. Trazado contra el cartucho
+    (`make trace MODE="versus --handicap 3"`). Los dos numeros de 2 PLAYER,
+    que solo se alcanzan con cable, los comprueba tools/run_link.py.
     """
     failures = []
+    base, why = game_state_address(rom_path)
+    if base is None:
+        print(f"SALTADO: {why}")
+        return failures
+    off = game_offsets(rom_path)
     core, screen = load(rom_path)    # `screen` must stay alive; see load()
     _ = screen
 
@@ -441,83 +442,37 @@ def handicap_two_check(rom_path):
         core.set_keys(*[KEYS[n] for n in names]); run(core, hold)
         core.set_keys(); run(core, settle)
 
-    def banks():
-        """Los bancos de paleta de la fila del handicap, columna a columna."""
-        return [(core.memory.u16[SCREENBLOCK_ADDR + (HANDICAP_ROW * 32 + c) * 2]
-                 >> 12) & 0xF for c in range(30)]
-
-    def white_digits():
-        """Que numeros de la fila estan escritos en el blanco del cursor."""
-        text = tilemap_text(core, HANDICAP_ROW)
-        b = banks()
-        return "".join(ch for ch, bank in zip(text, b)
-                       if ch.isdigit() and bank == MENU_ARROW_BANK)
-
     run(core, 20)
     press_start(core); run(core, 10)      # title -> GAME SELECT
-    # VERSUS COMPUTER: dos tableros, dos handicaps, y sin segunda consola.
-    for _ in range(3):
+    for _ in range(3):                     # VERSUS COMPUTER
         tap("DOWN")
     press_start(core); run(core, 12)       # -> LEVEL SETTINGS
     tap("DOWN")                            # el cursor sobre HANDICAP
     row = tilemap_text(core, HANDICAP_ROW)
-    if "HANDICAP 0 0" not in row:
-        failures.append(f"en VERSUS la fila no trae dos numeros: {row!r}")
+    if "HANDICAP 0 0" in row or "HANDICAP 0" not in row:
+        failures.append(f"en VERSUS la fila deberia traer un solo numero: {row!r}")
         return failures
-
-    if white_digits() != "0":
-        failures.append(f"al abrir, el blanco no marca un solo numero: "
-                         f"{white_digits()!r} en {tilemap_text(core, HANDICAP_ROW)!r}")
-    else:
-        print("  en VERSUS el primer numero abre en blanco: es el que mueve el mando")
-
-    # LOS GATILLOS YA NO PONEN NADA. Uno solo, que es como se hacia antes.
-    before = tilemap_text(core, HANDICAP_ROW)
-    tap("L"); tap("R")
-    if tilemap_text(core, HANDICAP_ROW) != before:
-        failures.append(f"un gatillo sigue moviendo el handicap: {before!r} -> "
-                         f"{tilemap_text(core, HANDICAP_ROW)!r}")
-    else:
-        print("  ni L ni R mueven ya el handicap")
-
-    # DERECHA SUBE EL NUMERO BLANCO, que es el primero.
     tap("RIGHT")
-    if "HANDICAP 3 0" not in tilemap_text(core, HANDICAP_ROW):
-        failures.append(f"DERECHA no sube el primer handicap: "
-                         f"{tilemap_text(core, HANDICAP_ROW)!r}")
-    else:
-        print("  DERECHA sube el del jugador: 3 filas")
+    if "HANDICAP 3" not in tilemap_text(core, HANDICAP_ROW):
+        failures.append(f"DERECHA no sube el handicap: "
+                        f"{tilemap_text(core, HANDICAP_ROW)!r}")
+        return failures
+    print("  en VERSUS un solo numero, como en el cartucho")
 
-    # SELECT CAMBIA DE NUMERO SIN CAMBIAR DE LINEA.
-    tap("SELECT")
-    if ">" not in tilemap_text(core, HANDICAP_ROW):
-        failures.append("SELECT sobre HANDICAP se llevo el cursor de la linea")
-    elif white_digits() != "0":
-        failures.append(f"SELECT no pasa el blanco al segundo numero: "
-                         f"{white_digits()!r} en "
-                         f"{tilemap_text(core, HANDICAP_ROW)!r}")
+    press_start(core); run(core, 30)       # -> play
+    PF_W, PF_H = 12, 20
+    buried = []
+    for board in (0, 1):
+        at = base + off["field"] + board * PF_W * PF_H
+        buried.append(sum(1 for r in range(PF_H)
+                          if any(core.memory.u8[at + r * PF_W + c] == 15
+                                 for c in range(1, 11))))
+    if buried != [3, 3]:
+        failures.append(f"el handicap no entierra los dos tableros por igual: "
+                        f"filas de basura {buried}")
     else:
-        print("  SELECT pasa el blanco al handicap de la maquina, "
-               "sin salir de la linea")
-
-    tap("RIGHT"); tap("RIGHT")
-    if "HANDICAP 3 6" not in tilemap_text(core, HANDICAP_ROW):
-        failures.append(f"con el blanco en el segundo, DERECHA no lo sube a el: "
-                         f"{tilemap_text(core, HANDICAP_ROW)!r}")
-    else:
-        print("  ...y DERECHA sube el suyo: 3 para el jugador, 6 para la maquina")
-
-    # Y SELECT OTRA VEZ VUELVE, que si no la linea seria una trampa.
-    tap("SELECT")
-    if white_digits() != "3":
-        failures.append(f"SELECT no devuelve el blanco al primero: "
-                         f"{white_digits()!r}")
-    # ...y ABAJO sigue siendo la salida de la linea.
-    tap("DOWN")
-    if ">" in tilemap_text(core, HANDICAP_ROW):
-        failures.append("ABAJO ya no saca el cursor de la linea del handicap")
-    else:
-        print("  ABAJO sigue sacando el cursor de la linea")
+        print("  y entierra los dos tableros, el tuyo y el de la maquina, "
+              "3 filas cada uno")
     return failures
 
 

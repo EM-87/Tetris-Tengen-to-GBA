@@ -103,8 +103,8 @@ minus those).
 | --- | --- | --- |
 | `make test` | no | always — the rules, in milliseconds |
 | `make gba` | headers | to build `build/tengen.gba` |
-| `make gba-check` | headers | before calling any change done: 43 checks on the running ROM in mGBA, two of them on two consoles with a cable |
-| `make trace ROM=... [MODE=coop\|versus\|with]` | yes | after touching `tengen_step` or `tengen_ai.c`: the port against the cartridge, iteration by iteration. The 1P and coop scripts never complete a row; `MODE="with --pad1"` plays player 1 with the port's computer and clears plenty |
+| `make gba-check` | headers | before calling any change done: 44 checks on the running ROM in mGBA, two of them on two consoles with a cable |
+| `make trace ROM=... [MODE=coop\|versus\|with\|demo]` | yes | after touching `tengen_step` or `tengen_ai.c`: the port against the cartridge, iteration by iteration. The 1P and coop scripts never complete a row; `MODE="with --pad1"` plays player 1 with the port's computer and clears plenty; add `--handicap N` to any mode |
 | `make tune-check ROM=...` | yes | after touching audio: the four tunes against the cartridge, note by note |
 | `make dance-check ROM=...` | yes | after touching the dancers: their choreography against the cartridge's driver |
 | `make clear-check ROM=...` | yes | after touching line clears: the joins a clear breaks |
@@ -192,6 +192,9 @@ story behind each; the item number is in brackets.
   line clear is a rising sweep on pulse 2, and without it it was one low
   note. A period byte written replaces that byte of the SWEPT period, so the
   6502 core records writes (`apu_written`), not just values.
+- **Against the computer there is ONE handicap**, and it buries both
+  boards (`bcs @computerIsPlaying`, main.asm.txt:3539). Only 2 PLAYER has
+  two.
 - **The fall timer ticks before the moves.** L8320 decrements and reloads it,
   then shifts and turns, then drops; a shift the coop partner refuses adds
   its +2 to the timer just reloaded.
@@ -229,7 +232,11 @@ prototype's rules over the cable; A+B restarting the whole game in 1P and
 coop (there A and B are the way out); the line counter's clamp at 10000;
 the prototypes' own front-end shape (two modes, their level select, no
 handicap or music); the computer sliding a piece under an overhang (tried
-twice, measured worse).
+twice, measured worse); the demo's own game over and HIGH SCORES page (the
+cartridge's demo plays about 25 minutes, tops out, and shows both; the
+port's holds its GAME OVER three seconds and goes back to the title, and
+writes no score nobody played for); the demo's seed (the cartridge's
+depends on how many times its main loop spun on the title).
 
 **Looks like a bug, is the cartridge's**: the one-pixel gap between the left
 panel's shelves and the rope — the wall tile `$6A` has a blank first column.
@@ -240,16 +247,13 @@ What has been checked only against a READING of the disassembly (host tests,
 the harness) and never against the cartridge itself, which is where the
 last timing bugs were found every time:
 
-- **The starting handicap** against the cartridge's garbage. (The race on
-  two boards and the computer's choices are traced: `MODE=versus`/`with`.)
-- **Prototype A's clear and spawn timing.** Its RAM map differs and the
-  probes cannot read it; B, C and D were measured (row and piece both one
-  frame after the lock).
-- **The attract demo** against the cartridge's.
-- **Two of the prototypes' rules**, taken from a list and not measured on the
-  dumps: no cossacks or BONUS at a level-up, and PAUSE not silencing the
-  music. (The instant clear, the missing wall kick and the ten-line level
-  were measured.)
+- **Prototype A's clear and spawn timing**, and whether its level-up freezes
+  the piece. Its RAM map differs and the probes cannot read its piece; B, C
+  and D were measured (row and piece both one frame after the lock).
+
+Traced or measured since: the race and the computer (`MODE=versus`/`with`),
+the handicap (`--handicap N`, all modes), the attract demo (`--demo`), and
+the prototypes' level-up and pause (`tools/probes/proto_rules.py`).
 
 And what has run only in an emulator:
 

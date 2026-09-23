@@ -360,7 +360,11 @@ int main(void) {
              * value's, which leaves exactly SELECT, and SELECT already means
              * "the other one" everywhere else on this page. Down still leaves
              * the line, so nothing is trapped there. */
-            bool two_handicaps = (game_mode == GAME_2P || game_mode == GAME_VS);
+            /* ONLY 2 PLAYER HAS TWO. Against the computer the cartridge's
+             * handicap screen has one cursor, and endPlayfieldInit buries
+             * both boards under that one number (`bcs @computerIsPlaying`,
+             * main.asm.txt:3539-3542). Traced: MODE=versus --handicap. */
+            bool two_handicaps = game_mode == GAME_2P;
             bool pick_side = (pressed & TENGEN_BTN_SELECT) && two_handicaps &&
                               menu_field == MENU_FIELD_HANDICAP;
             if (pick_side) handicap_who ^= 1;
@@ -502,11 +506,13 @@ int main(void) {
                 swallow_held_buttons(&g_session.game);
                 /* endPlayfieldInit's own place for it, right after the field
                  * is laid out (main.asm.txt:3536-3546). A shared board takes
-                 * one burial, not two. */
+                 * one burial, not two; and the computer's own board takes
+                 * PLAYER 1'S — the cartridge offers no second number against
+                 * it (see two_handicaps). */
                 tengen_apply_handicap(&g_session.game, TENGEN_PLAYER_1, handicap[0]);
                 if (g_ai_active && !g_session.game.coop)
                     tengen_apply_handicap(&g_session.game, TENGEN_PLAYER_2,
-                                           handicap[1]);
+                                           handicap[0]);
                 g_mix_step = 0;      /* every game opens on the same tune */
                 g_shown_level = 0xFF;
                 g_shown_piece = TT_NONE;
@@ -527,11 +533,10 @@ int main(void) {
                 continue;
             }
             vsync();
-            /* Only a RACE has two handicaps — two boards to bury. A shared
-             * board, coop's or WITH COMPUTER's, takes one. */
+            /* Only a race between two people has two handicaps: see
+             * two_handicaps. */
             draw_level_settings(menu_field, start_level, g_music, handicap,
-                                 game_mode == GAME_2P || game_mode == GAME_VS,
-                                 handicap_who);
+                                 game_mode == GAME_2P, handicap_who);
             audio_frame();
             continue;
         }

@@ -1750,6 +1750,8 @@ int front_skin(void);
 int play_skin(void);
 int plaque_bank(void);
 void screen_blip(void);
+bool pause_keeps_music(void);   /* a prototype whose PAUSE plays on: see video.c */
+bool levelup_clear_sound(void); /* ...and what its level-up clear plays */
 void cursor_blip(void);
 uint8_t piece_cell_tile(TengenTetromino piece, uint8_t orientation,
                                 int occupied_index);

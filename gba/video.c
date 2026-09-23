@@ -643,6 +643,30 @@ static bool skin_effect(int which) {
 static bool skin_effect(int which) { (void)which; return false; }
 #endif
 
+/* WHETHER THIS GAME'S PAUSE LETS ITS TUNE PLAY ON. Only a prototype's rules
+ * can, and only the prototype whose dump measured that way
+ * (read_skin_pause_music): proto_a. The other three silence it, as the
+ * release does. */
+bool pause_keeps_music(void) {
+#if SCREEN_PROTO_AVAILABLE && SCREEN_SKIN_PLAY && defined(SKIN_PAUSE_MUSIC)
+    if (g_session.game.proto_rules && g_board_skin >= 0)
+        return kSkinPauseKeepsMusic[g_board_skin] != 0;
+#endif
+    return false;
+}
+
+/* ...AND WHAT A PROTOTYPE'S LEVEL-UP SOUNDS LIKE: no jingle in any of them,
+ * and in proto_c and proto_d not even the line's own sound on that clear
+ * (read_skin_levelup_sound). True if this game's level-up clear should sound
+ * like any other clear. */
+bool levelup_clear_sound(void) {
+#if SCREEN_PROTO_AVAILABLE && SCREEN_SKIN_PLAY && defined(SKIN_PAUSE_MUSIC)
+    if (g_session.game.proto_rules && g_board_skin >= 0)
+        return kSkinLevelUpClearSound[g_board_skin] != 0;
+#endif
+    return true;
+}
+
 /* The blip a screen change makes... */
 void screen_blip(void) {
 #if SCREEN_PROTO_AVAILABLE && SCREEN_SKIN_PLAY && SCREEN_SKIN_FX

@@ -33,7 +33,8 @@ static uint8_t script_button(long *s) {
 int main(int argc, char **argv) {
     if (argc < 3) {
         fprintf(stderr, "usage: trace_core <seed-hex> <frames> "
-                        "[coop | vs <frame-counter>]\n");
+                        "[coop | vs|with|demo <frame-counter> [pad1]] "
+                        "[h=<handicap>] [l=<level>]\n");
         return 2;
     }
     unsigned seed = (unsigned)strtoul(argv[1], NULL, 16);
@@ -49,7 +50,17 @@ int main(int argc, char **argv) {
     bool with = argc > 4 && argv[3][0] == 'w';
     bool computer = vs || with;
     coop = coop || with;
-    uint8_t clock = computer ? (uint8_t)atoi(argv[4]) : 0;
+    /* THE ATTRACT DEMO: 1 PLAYER with computerMove on player 1's pad
+     * (compInputForDemo, main.asm.txt:4178), planning on its own spawns
+     * (getNextTetromino, :3731-3736). Same clock as the other two. */
+    bool demo = argc > 4 && argv[3][0] == 'd';
+    uint8_t clock = (computer || demo) ? (uint8_t)atoi(argv[4]) : 0;
+    /* "l=N": the level the game starts on — the demo's is whatever the level
+     * menu was last left on. */
+    uint8_t start_level = 0;
+    for (int i = 3; i < argc; i++)
+        if (argv[i][0] == 'l' && argv[i][1] == '=')
+            start_level = (uint8_t)atoi(argv[i] + 2);
     TengenAi ai;
     tengen_ai_reset(&ai);
     TengenTetromino ai_piece = TT_NONE, partner_piece = TT_NONE;
@@ -62,11 +73,23 @@ int main(int argc, char **argv) {
     bool pad1 = argc > 5 && argv[5][0] == 'p';
     TengenAi ai1;
     tengen_ai_reset(&ai1);
-    ai1.soft_drop = true;
-    ai1.coop_aware = true;
+    ai1.soft_drop = !demo;          /* the demo's is the cartridge's, as is */
+    ai1.coop_aware = !demo;
+    pad1 = pad1 || demo;
 
     TengenGame game;
-    tengen_new_game(&game, (uint16_t)seed, 0, coop || vs, coop, false);
+    tengen_new_game(&game, (uint16_t)seed, start_level, coop || vs, coop, false);
+    /* "h=N": player 1's starting handicap, laid the way endPlayfieldInit
+     * lays it, right after the playfield is set up (main.asm.txt:3536). */
+    /* Against the computer BOTH boards take player 1's (`bcs
+     * @computerIsPlaying` skips the per-player read, :3539-3542); a shared
+     * board takes it once. */
+    for (int i = 3; i < argc; i++)
+        if (argv[i][0] == 'h' && argv[i][1] == '=') {
+            uint8_t h = (uint8_t)atoi(argv[i] + 2);
+            tengen_apply_handicap(&game, TENGEN_PLAYER_1, h);
+            if (vs) tengen_apply_handicap(&game, TENGEN_PLAYER_2, h);
+        }
     printf("seed %04X\n", seed);
     /* The deal frame's getNextTetromino has already called computerMove. */
     if (computer) {
@@ -74,6 +97,10 @@ int main(int argc, char **argv) {
         ai_piece = game.player[1].piece.current;
         partner_piece = game.player[0].piece.current;
         if (pad1) tengen_ai_choose(&ai1, &game, TENGEN_PLAYER_1);
+    }
+    if (demo) {
+        tengen_ai_choose(&ai1, &game, TENGEN_PLAYER_1);
+        partner_piece = game.player[0].piece.current;
     }
 
     /* FRAME 0 IS THE CARTRIDGE'S DEAL, and tengen_new_game has just done
@@ -100,6 +127,8 @@ int main(int argc, char **argv) {
             b2 = q->game_active
                 ? tengen_ai_buttons(&ai, &game, TENGEN_PLAYER_2, clock) : 0;
             clock++;
+        } else if (demo) {
+            clock++;
         }
         tengen_step(&game, TENGEN_PLAYER_1, b1);
         /* ...and plans inside getNextTetromino, on the frame a piece appears
@@ -118,7 +147,7 @@ int main(int argc, char **argv) {
             tengen_ai_choose(&ai, &game, TENGEN_PLAYER_2);
         ai_piece = q->piece.current;
 
-        if (computer) {
+        if (computer || demo) {
             /* Two boards, each its own game: one ending or clearing does not
              * stop the other being compared. */
             printf("%d", f);
@@ -135,7 +164,8 @@ int main(int argc, char **argv) {
                     for (int c = with ? 0 : 1; c <= (with ? 11 : 10); c++)
                         printf("%X", game.field[with ? 0 : i].cell[row][c]);
             }
-            printf(" | T%d,%d", ai.target_x, ai.target_orientation);
+            const TengenAi *shown = demo ? &ai1 : &ai;   /* whose compTarget */
+            printf(" | T%d,%d", shown->target_x, shown->target_orientation);
             if (pad1) printf(" | B%d", b1);
             printf("\n");
             continue;
