@@ -2461,13 +2461,29 @@ def versus_hud_check(rom_path):
                         rows.add(ty)
         return len(rows)
 
+    # ...AND THE COLOURS GO WITH IT: the level's palette for the settled
+    # blocks (bg bank 0) and the falling piece's own (bank 12) are the board
+    # on screen's, not yours. Two levels and two pieces nothing can confuse.
+    PAL = 0x05000000
+
+    def colours(bank):
+        return [core.memory.u16[PAL + (bank * 16 + i) * 2] for i in (1, 2, 3)]
+
+    palettes = {}
     for cheat, want in ((False, "propio"), (True, "del rival")):
         core, screen, _score = start(cheat)
         _ = screen
         planted(core)
         core.memory.u8[base + off["next"]] = TT_I_ID
         core.memory.u8[base + off["next"] + off["stride"]] = TT_O_ID
+        core.memory.u8[base + off["level"]] = 0
+        core.memory.u8[base + off["level"] + off["stride"]] = 3
+        core.memory.u8[base + off["current"]] = TT_I_ID
+        core.memory.u8[base + off["current"] + off["stride"]] = TT_O_ID
+        run(core, 2)
+        before = (colours(0), colours(12))
         press_start(core); run(core, 30)          # pause
+        palettes[cheat] = (before, (colours(0), colours(12)))
         rows = [map_row_text(core, r) for r in (18, 19)]
         mine = rows[1].startswith("####") and "." in rows[0]
         theirs = rows[0].count("#") == 4 and rows[1].count("#") == 4
@@ -2480,9 +2496,18 @@ def versus_hud_check(rom_path):
         if got_next != want:
             failures.append(f"con acorde={int(cheat)} el NEXT de la pausa es "
                              f"el {got_next}, deberia ser el {want}")
+    (mine0, mine_paused), (_mine1, theirs_paused) = palettes[False], palettes[True]
+    if mine_paused != mine0:
+        failures.append("sin acorde la pausa cambia los colores del tablero")
+    elif theirs_paused[0] == mine0[0]:
+        failures.append("bajo el acorde el tablero del rival se pinta con la "
+                         "paleta de tu nivel")
+    elif theirs_paused[1] == mine0[1]:
+        failures.append("bajo el acorde la pieza del rival cae con los colores "
+                         "de la tuya")
     if not failures:
         print("  y bajo el acorde la pausa cambia tu tablero por el del rival, "
-              "con su NEXT")
+              "con su NEXT y sus colores")
 
     for f in failures:
         print("FALLA:", f)

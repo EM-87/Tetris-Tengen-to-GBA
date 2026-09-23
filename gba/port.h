@@ -1676,20 +1676,22 @@ typedef enum {
 #define PMENU_IN_TX (PMENU_TX + 1)
 #define PMENU_IN_W (PMENU_W - 2)
 
-/* THE QUESTION HAS A BOX OF ITS OWN, as narrow as it can be. It is three
- * short lines — EXIT?, YES, NO — and in the column's fourteen the arrow stood
- * at the interior's left edge with NO centred six columns away from it. EXIT?
- * is five characters, so the interior is six and the box eight, which is
- * even and so centres on the board like the other one. The answers are
- * written two columns right of the arrow, the cartridge's own spacing for
- * its menu cursor (`gameSelectArrowPpuAddrs`, $0A against the text's $0C).
- * Same height and same rows as the column, so the heading and both answers
- * sit where PAUSE and its two entries sat. */
-#define PQUEST_W 8
+/* THE QUESTION HAS A BOX OF ITS OWN, ten columns to the column's fourteen.
+ * It is three short lines — EXIT?, YES, NO — and in the column's box the
+ * arrow stood at the interior's left edge with NO centred six columns away.
+ *
+ * TEN AND NOT EIGHT, because all three are centred on the box itself and
+ * the arrow has to stand clear of them. In eight columns EXIT? fills the
+ * interior and a centred YES starts eleven pixels in, which is where the
+ * arrow's tip is: welded. In ten, EXIT? starts at 11, YES at 19 and NO at
+ * 24, every one within a pixel of the middle, and an arrow fixed three
+ * pixels in (the offset layer's column 0) is eight clear of YES and thirteen
+ * of NO. Even, so it centres on the board like the other. Same height and
+ * the same rows, so only the sides move. See draw_pmenu_line. */
+#define PQUEST_W 10
 #define PQUEST_TX ((SCREEN_TW - PQUEST_W) / 2)
 #define PQUEST_IN_TX (PQUEST_TX + 1)
 #define PQUEST_IN_W (PQUEST_W - 2)
-#define PQUEST_ANSWER_DX 2
 
 /* The headings' letters, one pixel higher: see the note above PMENU_H and
  * upload_tiles. Nine tiles in the charblock's free top above the prototype

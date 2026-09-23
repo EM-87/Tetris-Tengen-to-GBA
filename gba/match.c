@@ -246,7 +246,11 @@ static void ai_play_frame(void) {
 /* The level's colours and the falling piece's, each reinstalled the frame it
  * changes — the two things the ROM rewrites its palettes for. */
 static void refresh_palettes(void) {
-    const TengenPlayerState *p = &g_session.game.player[g_view];
+    /* field_view, not g_view: the colours belong to the BOARD on the screen.
+     * A paused race under the chord shows the other board, and with g_view
+     * here its stack came up in your level's palette and its falling piece
+     * in the colours of the piece YOU were holding. */
+    const TengenPlayerState *p = &g_session.game.player[field_view()];
     if (p->level != g_shown_level) {
         g_shown_level = p->level;
         set_field_palette_for_level(g_shown_level);
@@ -313,43 +317,56 @@ static void draw_box_frame(int tx, int ty, int w, int h) {
  * its letters — see PMENU_RAISED_BASE. */
 /* What a line is, which decides where it goes in its box. */
 enum {
-    PL_HEADING,   /* PAUSE, EXIT?: raised letters, centred on the whole box */
+    PL_HEADING,   /* PAUSE: raised letters, on its entries' axis, no cursor */
     PL_ENTRY,     /* the column's choices: the cursor's column, then centred */
-    PL_ANSWER     /* YES / NO: the cursor, then two columns along, flush left */
+    PL_QUESTION,  /* EXIT?: raised letters, centred on the whole box */
+    PL_ANSWER     /* YES / NO: centred on the whole box, the arrow fixed */
 };
 
 static void draw_pmenu_line(int in_tx, int in_w, int ty, const char *text,
                              int bank, int kind, bool cursor) {
     unsigned len = text_len(text);
-    /* THE CURSOR HAS A COLUMN OF ITS OWN, at the interior's left edge, and
-     * the text is centred in what is left. That is the settings screen's
-     * arrangement (MENU_CURSOR_TX) and it is what lets the word MUSIC go:
-     * an arrow two columns left of KOROBEINIKI does not fit in this box, and
-     * an arrow one column left of anything is an arrow welded to it — $3E's
-     * shaft runs the full width of its tile and the letters start at the edge
-     * of theirs.
+    /* ONE AXIS PER BOX, and the heading is on it. "Centred" means centred
+     * against the lines under it, not against the frame — PAUSE centred on
+     * the whole box stood half a tile left of the EXIT under it, and that is
+     * what the eye compares.
+     *
+     * THE COLUMN'S AXIS IS BESIDE THE CURSOR. The cursor has a column of its
+     * own at the interior's left edge and the text is centred in what is
+     * left. That is the settings screen's arrangement (MENU_CURSOR_TX) and it
+     * is what lets the word MUSIC go: an arrow two columns left of
+     * KOROBEINIKI does not fit in this box, and an arrow one column left of
+     * anything is an arrow welded to it — $3E's shaft runs the full width of
+     * its tile and the letters start at the edge of theirs. The heading has
+     * no cursor but stands on the same axis, over its entries.
+     *
+     * THE QUESTION'S AXIS IS THE BOX'S OWN. Its lines are short enough that
+     * all three can be centred on the frame and the arrow still stand clear
+     * of them: it is fixed at the interior's left edge on the offset layer,
+     * three pixels in, which leaves eight pixels to YES and thirteen to NO
+     * (see PQUEST_W). A cursor column there would push all three half a tile
+     * right of the box's middle.
      *
      * THE CURSOR IS AN ARROW, NOT A COLOUR. Picking the line out by palette
      * was this menu's first idea and it does not read: words in four colours
      * is a colour scheme, not a cursor, and nothing on screen says which
-     * colour means "here".
-     *
-     * A HEADING HAS NO CURSOR, so it has no cursor's column to stand clear
-     * of, and centres on the whole interior. Centred beside the column like
-     * the entries, PAUSE sat half a tile right of the box's own middle. */
-    int first = kind == PL_HEADING ? in_tx : in_tx + 1;
-    int field = kind == PL_HEADING ? in_w : in_w - 1;
-    int tx = kind == PL_ANSWER ? in_tx + PQUEST_ANSWER_DX
-                               : first + (field - (int)len) / 2;
-    /* The three pixels across go to whichever parity needs them. A flush
-     * answer needs none: it is not centred on anything. */
-    bool offset = kind != PL_ANSWER && (((int)len ^ field) & 1) != 0;
+     * colour means "here". */
+    bool whole = kind == PL_QUESTION || kind == PL_ANSWER;
+    bool raised = kind == PL_HEADING || kind == PL_QUESTION;
+    int first = whole ? in_tx : in_tx + 1;
+    int field = whole ? in_w : in_w - 1;
+    int tx = first + (field - (int)len) / 2;
+    /* The three pixels across go to whichever parity needs them. */
+    bool offset = (((int)len ^ field) & 1) != 0;
 
-    for (int i = in_tx; i < tx + (int)len; i++) {
+    if (kind == PL_ANSWER) {
+        set_stats_tile(in_tx, ty, WITH_BANK(cursor ? T_ARROW_R : T_BLANK, bank));
+    }
+    int from = kind == PL_ENTRY ? in_tx : tx;
+    for (int i = from; i < tx + (int)len; i++) {
         uint16_t tile =
-            (i == in_tx && kind != PL_HEADING) ? (cursor ? T_ARROW_R : T_BLANK)
-            : (i < tx) ? T_BLANK
-            : kind == PL_HEADING ? raised_tile(text[i - tx])
+            (i < tx) ? (i == in_tx && cursor ? T_ARROW_R : T_BLANK)
+            : raised ? raised_tile(text[i - tx])
             : ascii_tile(text[i - tx]);
         uint16_t entry = WITH_BANK(tile, bank);
         if (offset) set_stats_tile(i, ty, entry);
@@ -395,7 +412,7 @@ static void draw_pause_menu(void) {
          * here that is not the cartridge's — see ascii_tile. */
         draw_box_frame(PQUEST_TX, PMENU_TY, PQUEST_W, PMENU_H);
         draw_pmenu_line(PQUEST_IN_TX, PQUEST_IN_W, PMENU_TY + 1, "EXIT?",
-                         BANK_NOTE, PL_HEADING, false);
+                         BANK_NOTE, PL_QUESTION, false);
         /* THE TWO ANSWERS STACK, like everything else in this box. Side by
          * side they had the arrow sitting exactly between them — as far from
          * YES as from NO, which is an arrow that answers nothing. One to a

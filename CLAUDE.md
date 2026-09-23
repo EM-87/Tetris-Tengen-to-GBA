@@ -535,17 +535,24 @@ running ROM; only the side panels need reflowing).
    to the gap beneath it. The heading meets the frame above it the way the
    last line meets the frame below, and stands two pixels clear of a list
    whose lines are one clear of each other. `tilemap_text` maps those tiles
-   back to letters. A heading also centres on the WHOLE interior now — it has
-   no cursor, so no cursor column to stand clear of, and centred beside one it
-   sat half a tile right of the box's middle.
-   **AND THE QUESTION HAS ITS OWN BOX, EIGHT WIDE.** Fourteen is the column's
-   floor, not the question's: EXIT? is five characters, so its interior is six
-   and the box eight, even and so centred like the other. The answers are
-   written two columns right of the arrow — the cartridge's own menu spacing,
-   `gameSelectArrowPpuAddrs` at `$0A` against the text's `$0C` — where in the
-   wide box NO was centred six columns from it. Same rows, so only the sides
-   move, and the braid the wide box covered is put back through `g_repaint`
-   on the way in and out. See `PQUEST_W`.
+   back to letters.
+   **CENTRED MEANS AGAINST THE LINES UNDER IT, not against the frame.** One
+   axis per box and the heading is on it. The column's axis is BESIDE the
+   cursor's column — KOROBEINIKI leaves no other way to have an arrow — so
+   PAUSE stands on that axis over its entries; centred on the whole box it
+   stood half a tile left of the EXIT under it, which is what the eye
+   compares. Measured off the screen, the three lines' ink centres are 123,
+   122.5 and 122.
+   **AND THE QUESTION HAS ITS OWN BOX, TEN WIDE**, with all three lines on the
+   box's own axis. Fourteen is the column's floor, not the question's: in the
+   wide box NO was centred six columns from the arrow. Eight was tried and is
+   one step too narrow — EXIT? fills it, and a centred YES starts exactly where
+   the arrow's tip is. In ten, EXIT?, YES and NO come out at 118.5, 118.5 and
+   119.5 against a middle of 120, and an arrow fixed three pixels into the
+   interior (the offset layer's column 0) is eight pixels clear of YES and
+   thirteen of NO. Same rows as the column, so only the sides move, and the
+   braid the wide box covered is put back through `g_repaint` on the way in
+   and out. See `PQUEST_W`.
    **THE CURSOR IS AN ARROW IN A COLUMN OF ITS OWN.** It used to sit two
    columns left of the line it marked, which is where the settings screen
    puts its own — and with MUSIC gone the line it marks is the tune's name,
@@ -720,9 +727,12 @@ to satisfy yourself that it is really playing rather than counting upwards —
 one press of Start and there it is. And a pause in this game is a player
 stopping to study their own stack, which is exactly what a race is supposed
 not to give you time for: take the stack away while they are looking at it
-and the pause is a pause again rather than a free think. And NEXT goes with the board: a stack
-with somebody else's preview over it is two boards on one screen, so the
-left box's preview follows `field_view` as well. Only in a race (1P
+and the pause is a pause again rather than a free think. And NEXT and the COLOURS go with the board:
+a stack with somebody else's preview over it is two boards on one screen, and
+the level's palette and the falling piece's are the board's own — both of
+them followed `g_view` for a while, so the rival's stack came up in your
+level's colours and their piece in the colours of the one you were holding.
+`refresh_palettes` and the left box's preview both read `field_view`. Only in a race (1P
 has no other board and coop's is the same board), and only behind the chord,
 because it is the port's idea and not the cartridge's. Over a cable both
 consoles have the same door and a pause stops both boards, so neither player
