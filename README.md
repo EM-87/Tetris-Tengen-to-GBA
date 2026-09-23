@@ -186,6 +186,12 @@ brew install --cask gcc-arm-embedded   # macOS
 Para `make gba-check`, además: `pip install pygba` y la librería de mGBA
 (`apt-get install libmgba0.10`).
 
+En GitHub, cada push y cada PR que toque `tengen_gba_port/` corre lo que no
+necesita el dump (`.github/workflows/tengen-gba-port.yml`): `make test`
+con `-Werror` y otra vez con los sanitizers, `make assets-check`, el núcleo
+compilado para el GBA y el arnés de `make trace`. `make gba-check` y las
+comparaciones contra el cartucho necesitan el dump y se corren en local.
+
 ## Estructura
 
 ```
