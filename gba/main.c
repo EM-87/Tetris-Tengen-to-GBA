@@ -249,7 +249,7 @@ int main(void) {
                 screen = SCREEN_PLAYING;
                 match_running = true;
                 over_frames = 0;
-                skin_begin_match(false);
+                skin_begin_match(false, -1);
                 /* MUSIC_SUSPEND, which is demoStart's own second act
                  * (main.asm.txt:3220-3221): the attract mode is silent but
                  * for the game's effects. */
@@ -309,6 +309,13 @@ int main(void) {
                         (uint16_t)(seed_source.lo | (seed_source.hi << 8));
                     link_init();
                     link_lobby_start_held(&lobby, seed);
+                    /* THE PROTOTYPES AS A SKIN OVER THE CABLE: this build's
+                     * skins, and the title's choice as the offer — which only
+                     * counts if this console turns out to be the master. See
+                     * tengen_lobby_skins. */
+                    uint16_t prints[TENGEN_SKIN_MAX];
+                    int count = skin_prints(prints, TENGEN_SKIN_MAX);
+                    tengen_lobby_skins(&lobby, prints, count, front_skin());
                     screen = SCREEN_LINK_WAIT;
                 } else {
                     screen = SCREEN_LEVEL_SELECT;
@@ -522,7 +529,7 @@ int main(void) {
                 screen = SCREEN_PLAYING;
                 match_running = true;
                 over_frames = 0;
-                skin_begin_match(false);
+                skin_begin_match(false, -1);
                 g_front_tune = FRONT_NOTHING;
                 start_music(g_music);
                 vsync();
@@ -617,7 +624,7 @@ int main(void) {
                 screen = SCREEN_PLAYING;
                 match_running = true;
                 over_frames = 0;
-                skin_begin_match(true);
+                skin_begin_match(true, lobby.skin);
                 g_front_tune = FRONT_NOTHING;
                 start_music(g_music);
                 /* The lobby's cossack is four sprites nothing on the play

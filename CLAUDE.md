@@ -610,10 +610,31 @@ running ROM; only the side panels need reflowing).
    `piece_id_cells` on TengenGame makes `lock_piece` store the piece's id, and
    `piece_cell_tile` in gba/video.c does the same for the falling piece and the
    preview. Occupancy is `cell != 0` everywhere and TT_WALL is 15 either way,
-   so nothing downstream notices. **NOT OVER THE CABLE**: a linked match is
-   two consoles comparing state byte for byte, and one of them in a
-   prototype's clothes would diverge in the playfield itself, so
-   `skin_begin_match` refuses there. **THE MENUS AND THE HIGH SCORES PAGE WEAR
+   so nothing downstream notices — except one thing, found late: a clear's
+   join-breaking (`kJoinBreak`, L8A85) reads cells as joined tiles, and run
+   over piece ids it turned a J beside a cleared row into the wall value, an L
+   into an S and a Z into a T. A board of piece ids has no joins to break, and
+   `tengen_step` skips it there (`tengen_collapse_rows_joined`).
+   **AND OVER THE CABLE IT IS PAINT, WORN BY BOTH.** A linked match is two
+   consoles comparing state byte for byte, so what they must agree on is the
+   CELL FORMAT, and the lobby settles it: a SKIN stage between HANDICAP and
+   GO, in which the master offers its title's skin by a FINGERPRINT of the
+   art (eleven bits of FNV over its 51 slots and its palette) and the slave
+   answers in its echo whether it has the same art. The skin goes on only if
+   both — and both consoles know both facts, so both reach the same answer.
+   By the art and not by the index, because two builds may list their skins
+   in different orders or not have the same ones; a build that predates the
+   stage echoes it back empty, which reads as "no", so an old console and a
+   new one fall back to the release together. The master's choice wins, as
+   for the level and the tune, and on the slave it can be a skin its own
+   title is not wearing (`g_board_skin`, apart from `g_title_skin`). What the
+   cable does NOT carry is the prototypes' RULES: a rule the two players did
+   not both choose is not a race, so a skinned linked match plays by the
+   release's, and goes on the release's HIGH SCORES page, where the records
+   swap needs both consoles. `tools/run_link.py` plays it on two cores: the
+   master in a prototype, the slave left in the release, both screens in the
+   fret, both boards piece ids, byte for byte; and a skin on the slave's
+   title alone dresses nobody. **THE MENUS AND THE HIGH SCORES PAGE WEAR
    IT AS WELL**, which took three things a first pass got wrong: the frame is
    TWENTY-FOUR tiles (four corners and four runs), not the six the board
    happens to use, so replacing six left those screens two thirds blue braid
@@ -790,10 +811,10 @@ does not is a bug.
   tell from the one before it, and a whole HIGH SCORES table (see
   LEADER_TABLES). Pass the dump and the build says why it is not in; it is one
   line in build_proto_header to take it anyway.
-- **A skinned board over the LINK CABLE.** A skin changes what a settled cell
-  holds (roadmap 31), and a linked match is two consoles comparing state byte
-  for byte, so one of them wearing a prototype's clothes would be a real
-  divergence. The title's skin still cycles; a 2P board stays the release's.
+- **A prototype's RULES over the link cable.** Its paint goes (roadmap 31);
+  its ten-line level, missing wall kick and instant clear do not, because
+  neither player chose them for the other. Both consoles play the release's
+  rules under the master's skin.
 - **A+B RESTARTING THE WHOLE GAME in 1P and coop.** `handleGameOver` branches
   on playMode before it does anything else: the race gets `restartVsMode`,
   which the port takes, and 0 and `$FF` get `initializeGameMode` — a whole new
@@ -850,16 +871,7 @@ Ordered by what they buy against what they cost. Everything here is a
 decision waiting to be made, not a defect; the defects are bugs and get
 fixed.
 
-1. **The prototypes as a skin over the cable.** Asked for, and it is not a
-   flag flip: a skinned board stores the PIECE'S OWN ID in a settled cell
-   and the release stores a joined-block tile, so the two consoles' fields
-   would differ byte for byte and lockstep would call it a divergence. A
-   prototype has no art above `$07` to draw the release's ids with either —
-   `$08` and up is lettering in proto_b and the fret in proto_c. The way in
-   is the lobby: exchange the skin so both boards wear the master's, with
-   the release's RULES. Both consoles then agree on the cell format and the
-   paint is real. See `piece_id_cells` and `skin_begin_match`.
-2. **The ten-line rule on the prototypes.** Still on the word of the list
+1. **The ten-line rule on the prototypes.** Still on the word of the list
    it came from; what the stacking bot needs is written up above.
 
 *(The fireworks were on this list too, as "their distance and the dithered

@@ -1112,9 +1112,9 @@ static void test_the_lobby_agrees_on_a_game_and_both_leave_together(void) {
     CHECK(slave.seed == 0xBEEF);
     CHECK(slave.start_level == 7);
     CHECK(slave.music == 2);
-    /* Six stages, two transfers each, and no more: a handshake that quietly
+    /* Seven stages, two transfers each, and no more: a handshake that quietly
      * took twice as long as it should would still pass every check above. */
-    CHECK(transfers == 12);
+    CHECK(transfers == 14);
 }
 
 static void test_the_lobby_survives_transfers_that_do_not_arrive(void) {
@@ -1133,6 +1133,80 @@ static void test_the_lobby_survives_transfers_that_do_not_arrive(void) {
     CHECK(slave.music == 3);
 }
 
+/* THE PROTOTYPES AS A SKIN OVER THE CABLE. What the two consoles have to
+ * agree on is not the paint but the CELL FORMAT: a skinned board stores piece
+ * ids (piece_id_cells), and lockstep compares the boards byte for byte. So
+ * the skin goes on only when both can wear it, and both always reach the same
+ * answer. */
+static void run_skin_lobby(TengenLobby *m, TengenLobby *s, int lossy) {
+    for (int i = 0; i < 200 && !(m->ready && s->ready); i++)
+        lobby_transfer(m, s, lossy ? (i % 3) != 0 : true);
+}
+
+static void test_the_cable_agrees_on_a_skin_by_its_art(void) {
+    const uint16_t A = 0x123, B = 0x456, C = 0x789;
+    TengenLobby m, s;
+
+    /* The master offers its second skin, B. The slave's build lists the same
+     * art in a different order — B is its first — and has one the master
+     * does not. The same prototype on both, each by its own index. */
+    const uint16_t mine[3] = { A, B, C }, theirs[2] = { B, 0x0AA };
+    tengen_lobby_start(&m, 0xBEEF, 7, 2);
+    tengen_lobby_start(&s, 0, 0, 0);
+    tengen_lobby_skins(&m, mine, 3, 1);
+    tengen_lobby_skins(&s, theirs, 2, 0);   /* the slave's own choice loses */
+    run_skin_lobby(&m, &s, 0);
+    CHECK(m.ready && s.ready);
+    CHECK(m.skin == 1);
+    CHECK(s.skin == 0);
+
+    /* ...a slave without that art: BOTH play the release. */
+    const uint16_t other[1] = { C };
+    tengen_lobby_start(&m, 0xBEEF, 7, 2);
+    tengen_lobby_start(&s, 0, 0, 0);
+    tengen_lobby_skins(&m, mine, 3, 1);
+    tengen_lobby_skins(&s, other, 1, 0);
+    run_skin_lobby(&m, &s, 0);
+    CHECK(m.ready && s.ready);
+    CHECK(m.skin == -1 && s.skin == -1);
+
+    /* ...a master in the release offers nothing, whatever the slave has. */
+    tengen_lobby_start(&m, 0xBEEF, 7, 2);
+    tengen_lobby_start(&s, 0, 0, 0);
+    tengen_lobby_skins(&m, mine, 3, -1);
+    tengen_lobby_skins(&s, mine, 3, 2);
+    run_skin_lobby(&m, &s, 0);
+    CHECK(m.skin == -1 && s.skin == -1);
+
+    /* ...a slave that never heard of skins (no list at all) still echoes
+     * the stage, with nothing in it, and that is a no. */
+    tengen_lobby_start(&m, 0xBEEF, 7, 2);
+    tengen_lobby_start(&s, 0, 0, 0);
+    tengen_lobby_skins(&m, mine, 3, 0);
+    run_skin_lobby(&m, &s, 0);
+    CHECK(m.ready && s.ready);
+    CHECK(m.skin == -1 && s.skin == -1);
+
+    /* ...and a third of the transfers lost changes none of it. */
+    tengen_lobby_start(&m, 0xBEEF, 7, 2);
+    tengen_lobby_start(&s, 0, 0, 0);
+    tengen_lobby_skins(&m, mine, 3, 2);
+    tengen_lobby_skins(&s, mine, 3, -1);
+    run_skin_lobby(&m, &s, 1);
+    CHECK(m.ready && s.ready);
+    CHECK(m.skin == 2 && s.skin == 2);
+}
+
+static void test_a_skin_fingerprint_is_its_art(void) {
+    uint8_t art[64];
+    for (int i = 0; i < 64; i++) art[i] = (uint8_t)(i * 7);
+    uint16_t a = tengen_skin_fingerprint(art, sizeof(art));
+    CHECK(a == tengen_skin_fingerprint(art, sizeof(art)));
+    CHECK(a <= TENGEN_SKIN_PRINT_MASK);
+    art[40] ^= 1;
+    CHECK(tengen_skin_fingerprint(art, sizeof(art)) != a);
+}
+
 static void test_a_lobby_with_nothing_on_the_other_end_gives_up(void) {
     TengenLobby master;
     tengen_lobby_start(&master, 1, 0, 0);
@@ -1149,7 +1223,10 @@ static void test_no_lobby_word_can_look_like_an_absent_console(void) {
      * so the handshake's words have to stay clear of it too. */
     TengenLobby lobby;
     tengen_lobby_start(&lobby, 0xFFFF, 0x0F, 0x0F);
-    for (int stage = TENGEN_LOBBY_NONE; stage <= TENGEN_LOBBY_GO; stage++) {
+    const uint16_t prints[1] = { TENGEN_SKIN_PRINT_MASK };
+    tengen_lobby_skins(&lobby, prints, 1, 0);
+    lobby.echo_payload = TENGEN_SKIN_HAVE;
+    for (int stage = TENGEN_LOBBY_NONE; stage <= TENGEN_LOBBY_SKIN; stage++) {
         lobby.stage = (uint8_t)stage;
         lobby.echo = (uint8_t)stage;
         CHECK(tengen_lobby_word(&lobby, true) != 0xFFFF);
@@ -3185,6 +3262,8 @@ int main(void) {
     test_the_lobby_connects_first_and_the_master_chooses_after();
     test_the_lobby_agrees_on_a_game_and_both_leave_together();
     test_the_lobby_survives_transfers_that_do_not_arrive();
+    test_the_cable_agrees_on_a_skin_by_its_art();
+    test_a_skin_fingerprint_is_its_art();
     test_a_lobby_with_nothing_on_the_other_end_gives_up();
     test_no_lobby_word_can_look_like_an_absent_console();
     test_a_lobby_hands_straight_over_to_a_matching_pair_of_games();

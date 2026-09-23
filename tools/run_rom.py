@@ -507,7 +507,8 @@ def game_offsets(rom_path):
         core, screen = load(rom_path)   # `screen` must stay alive; see load()
         (field, player, stride, cur, y, level, stats,
          paused, held, nxt, alive, x, score, lines,
-         counts, orient) = (core.memory.u16[addr + i * 2] for i in range(16))
+         counts, orient, piece_ids, proto_rules) = (
+            core.memory.u16[addr + i * 2] for i in range(18))
         _GAME_PROBE_CACHE[rom_path] = {
             "field": field, "player": player, "stride": stride,
             "current": player + cur, "y": player + y,
@@ -517,6 +518,7 @@ def game_offsets(rom_path):
             "score": player + score,
             "lines": player + lines, "counts": player + counts,
             "orientation": player + orient,
+            "piece_ids": piece_ids, "proto_rules": proto_rules,
         }
     return _GAME_PROBE_CACHE[rom_path]
 

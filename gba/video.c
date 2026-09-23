@@ -73,7 +73,7 @@ uint16_t ascii_tile(char c) {
  * program does -- and LTO can see that across the whole image where a single
  * translation unit could not. */
 __attribute__((used, retain))
-const uint16_t kGameProbe[16] = {
+const uint16_t kGameProbe[18] = {
     (uint16_t)offsetof(TengenGame, field),
     (uint16_t)offsetof(TengenGame, player),
     (uint16_t)sizeof(TengenPlayerState),
@@ -90,6 +90,11 @@ const uint16_t kGameProbe[16] = {
     (uint16_t)offsetof(TengenPlayerState, lines),
     (uint16_t)offsetof(TengenPlayerState, clear_counts),
     (uint16_t)offsetof(TengenPlayerState, piece.orientation),
+    /* ...and the two flags a skin sets, which the cable check reads on both
+     * consoles: the cell format has to agree, the rules have to be the
+     * release's. */
+    (uint16_t)offsetof(TengenGame, piece_id_cells),
+    (uint16_t)offsetof(TengenGame, proto_rules),
 };
 
 TengenLink g_session;
@@ -489,36 +494,64 @@ void apply_skin(int skin) {
 #endif
 }
 
-/* Whether the BOARD is in a skin at the moment, which is not quite the same
- * question as which title screen is up.
+/* WHICH SKIN THE BOARD IS WEARING, which is not always the title's.
  *
- * NOT OVER THE CABLE. A skinned board stores the piece's id in a settled cell
- * where the release stores a joined-block tile (see piece_id_cells), and a
- * linked match is two consoles simulating the same game and comparing state
- * byte for byte. One of them wearing a prototype's clothes and the other not
- * would be a divergence in the playfield itself, not just on the screen. The
- * title's skin still cycles; the board simply stays the release's for a 2P
- * match, which is also the only mode where the other player did not choose
- * it. */
-static bool g_skin_on;
+ * Alone, it is the title's choice, and it brings that build's RULES with it
+ * (proto_rules). Over the cable it is whatever the lobby agreed
+ * (tengen_lobby_skins): the MASTER's choice, worn only if the other console
+ * has the same art, and as PAINT ONLY — both play by the release's rules,
+ * because a rule the two did not both choose is not a race. What the two
+ * consoles must agree on is the cell format, since a skinned board stores
+ * piece ids (piece_id_cells) and lockstep compares the boards byte for byte;
+ * the lobby's answer is the same on both, so they do. On the slave the index
+ * can differ from its own title's — it is this build's index for the
+ * master's art. */
+static int8_t g_board_skin = -1;
 
-/* Called as a match starts: decides whether this one is skinned, and tells
- * the core to store its cells the way the skin's art is indexed. `linked` is
- * a match over the cable, which never is — see g_skin_on. */
-void skin_begin_match(bool linked) {
+/* Called as a match starts. `cable_skin` is the lobby's answer, an index into
+ * this build's own skins or -1; it is ignored unless `linked`. */
+void skin_begin_match(bool linked, int cable_skin) {
 #if SCREEN_PROTO_AVAILABLE && SCREEN_SKIN_PLAY
-    g_skin_on = !linked && g_title_skin != 0;
+    if (linked)
+        g_board_skin = (int8_t)((cable_skin >= 0 && cable_skin < SCREEN_PROTO_COUNT)
+                                    ? cable_skin : -1);
+    else
+        g_board_skin = (int8_t)(g_title_skin ? (int)g_title_skin - 1 : -1);
 #else
     (void)linked;
-    g_skin_on = false;
+    (void)cable_skin;
+    g_board_skin = -1;
 #endif
     /* ...and this match's scores go in this build's table. A prototype is a
-     * different game — see LEADER_TABLES. */
-    leader_use_table(play_skin());
-    g_session.game.piece_id_cells = g_skin_on;
-    /* ...and their RULES with their paint: the level every ten lines, no wall
-     * kick, and rows that go the frame they complete. See proto_rules. */
-    g_session.game.proto_rules = g_skin_on;
+     * different game — see LEADER_TABLES — but over the cable it is the
+     * release in other clothes, and the records swap needs both consoles on
+     * the same page. */
+    leader_use_table(linked ? -1 : play_skin());
+    g_session.game.piece_id_cells = g_board_skin >= 0;
+    /* ...and their RULES with their paint, alone: the level every ten lines,
+     * no wall kick, and rows that go the frame they complete. See
+     * proto_rules. */
+    g_session.game.proto_rules = !linked && g_board_skin >= 0;
+}
+
+/* THIS BUILD'S SKINS AS THE CABLE KNOWS THEM: a fingerprint of each one's
+ * board art — the 51 slots it swaps in and its palette — which the same dump
+ * produces in any build. See tengen_lobby_skins. */
+int skin_prints(uint16_t *out, int max) {
+#if SCREEN_PROTO_AVAILABLE && SCREEN_SKIN_PLAY
+    int n = SCREEN_PROTO_COUNT < max ? SCREEN_PROTO_COUNT : max;
+    for (int i = 0; i < n; i++) {
+        uint16_t a = tengen_skin_fingerprint(kSkinTiles[i], sizeof(kSkinTiles[i]));
+        uint16_t b = tengen_skin_fingerprint(kRomPalette_bg_skin[i],
+                                             sizeof(kRomPalette_bg_skin[i]));
+        out[i] = (uint16_t)((a ^ (uint16_t)(b * 31u)) & TENGEN_SKIN_PRINT_MASK);
+    }
+    return n;
+#else
+    (void)out;
+    (void)max;
+    return 0;
+#endif
 }
 
 /* What the FRONT END should be wearing. Unlike the board it follows the
@@ -532,13 +565,9 @@ int front_skin(void) {
 #endif
 }
 
-/* ...and what the board should be wearing, from the title's own choice. */
+/* ...and what the board is wearing: see g_board_skin. */
 int play_skin(void) {
-#if SCREEN_PROTO_AVAILABLE && SCREEN_SKIN_PLAY
-    return (g_skin_on && g_title_skin) ? (int)g_title_skin - 1 : -1;
-#else
-    return -1;
-#endif
+    return g_board_skin;
 }
 
 /* WHICH PALETTE THE GAME OVER PLAQUE AND THE PAUSE BOX ARE DRAWN IN.

@@ -85,6 +85,37 @@ void tengen_lobby_start(TengenLobby *lobby, uint16_t seed, uint8_t start_level,
     lobby->music = music;
     lobby->stage = TENGEN_LOBBY_HELLO;
     lobby->echo = TENGEN_LOBBY_NONE;
+    lobby->skin_offer = -1;
+    lobby->skin = -1;
+}
+
+void tengen_lobby_skins(TengenLobby *lobby, const uint16_t *prints, int count,
+                         int offer) {
+    if (count < 0) count = 0;
+    if (count > TENGEN_SKIN_MAX) count = TENGEN_SKIN_MAX;
+    for (int i = 0; i < count; i++)
+        lobby->skins[i] = (uint16_t)(prints[i] & TENGEN_SKIN_PRINT_MASK);
+    lobby->skin_count = (uint8_t)count;
+    lobby->skin_offer = (int8_t)((offer >= 0 && offer < count) ? offer : -1);
+}
+
+uint16_t tengen_skin_fingerprint(const uint8_t *bytes, unsigned len) {
+    uint32_t h = 2166136261u;
+    for (unsigned i = 0; i < len; i++) {
+        h ^= bytes[i];
+        h *= 16777619u;
+    }
+    return (uint16_t)((h ^ (h >> 11) ^ (h >> 22)) & TENGEN_SKIN_PRINT_MASK);
+}
+
+/* The order the master walks the stages in. SKIN is numbered after the
+ * records swap's two tags but runs between HANDICAP and GO. */
+static uint8_t next_stage(uint8_t stage) {
+    switch (stage) {
+        case TENGEN_LOBBY_HANDICAP: return TENGEN_LOBBY_SKIN;
+        case TENGEN_LOBBY_SKIN:     return TENGEN_LOBBY_GO;
+        default:                    return (uint8_t)(stage + 1);
+    }
 }
 
 void tengen_lobby_start_held(TengenLobby *lobby, uint16_t seed) {
@@ -106,7 +137,9 @@ void tengen_lobby_release(TengenLobby *lobby, uint16_t seed,
 }
 
 uint16_t tengen_lobby_word(const TengenLobby *lobby, bool master) {
-    if (!master) return tagged((TengenLobbyTag)lobby->echo, 0);
+    if (!master)
+        return tagged((TengenLobbyTag)lobby->echo,
+                       lobby->echo == TENGEN_LOBBY_SKIN ? lobby->echo_payload : 0);
     switch ((TengenLobbyTag)lobby->stage) {
         case TENGEN_LOBBY_HELLO:
             return tagged(TENGEN_LOBBY_HELLO, 0);
@@ -129,6 +162,11 @@ uint16_t tengen_lobby_word(const TengenLobby *lobby, bool master) {
             return tagged(TENGEN_LOBBY_HANDICAP,
                            (uint16_t)((lobby->handicap[0] & 0x0F) |
                                       ((lobby->handicap[1] & 0x0F) << 4)));
+        case TENGEN_LOBBY_SKIN:
+            if (lobby->skin_offer < 0) return tagged(TENGEN_LOBBY_SKIN, 0);
+            return tagged(TENGEN_LOBBY_SKIN,
+                           (uint16_t)(TENGEN_SKIN_OFFER |
+                                      lobby->skins[lobby->skin_offer]));
         default:
             return tagged(TENGEN_LOBBY_GO, 0);
     }
@@ -155,8 +193,17 @@ void tengen_lobby_apply(TengenLobby *lobby, bool master, bool got,
              * back every transfer, so neither end is anywhere near its
              * timeout; the handshake is simply parked. */
             if (lobby->hold && lobby->stage == TENGEN_LOBBY_HELLO) return;
+            /* The slave's answer about the skin rides in its echo. A build
+             * that predates the SKIN stage echoes the tag with nothing in
+             * it, which reads as "I do not have it" — so an old console and
+             * a new one fall back to the release together rather than
+             * disagreeing about what a cell holds. */
+            if (lobby->stage == TENGEN_LOBBY_SKIN)
+                lobby->skin = (lobby->skin_offer >= 0 &&
+                               (slave_word & TENGEN_SKIN_HAVE))
+                                  ? lobby->skin_offer : -1;
             if (lobby->stage == TENGEN_LOBBY_GO) lobby->ready = true;
-            else lobby->stage++;
+            else lobby->stage = next_stage(lobby->stage);
         }
         return;
     }
@@ -180,6 +227,18 @@ void tengen_lobby_apply(TengenLobby *lobby, bool master, bool got,
         case TENGEN_LOBBY_HANDICAP:
             lobby->handicap[0] = (uint8_t)(payload & 0x0F);
             lobby->handicap[1] = (uint8_t)((payload >> 4) & 0x0F);
+            break;
+        case TENGEN_LOBBY_SKIN:
+            /* Found by the ART, not by the index: the two builds may list
+             * their skins in different orders, or not have the same ones. */
+            lobby->skin = -1;
+            if (payload & TENGEN_SKIN_OFFER)
+                for (int i = 0; i < lobby->skin_count; i++)
+                    if (lobby->skins[i] == (payload & TENGEN_SKIN_PRINT_MASK)) {
+                        lobby->skin = (int8_t)i;
+                        break;
+                    }
+            lobby->echo_payload = lobby->skin >= 0 ? TENGEN_SKIN_HAVE : 0;
             break;
         case TENGEN_LOBBY_GO:
             /* NOT ready on the first GO. The master is still waiting to see

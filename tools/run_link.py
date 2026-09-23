@@ -940,6 +940,154 @@ def restart_check(rom):
         return 1
     print("OK: A+B levanta un tablero muerto sin parar la carrera ni romper "
            "el enlace.")
+    return skin_check(rom)
+
+
+def skin_check(rom):
+    """THE PROTOTYPES AS A SKIN OVER THE CABLE.
+
+    The master wears a prototype chosen on its own title, the slave is left
+    in the release, and the match that follows has to be the master's skin on
+    BOTH screens, played by the release's RULES on both, and still the same
+    game byte for byte. What makes that hard is not the paint: a skinned board
+    stores piece ids where the release stores joined-block tiles
+    (piece_id_cells), so the two consoles have to agree on the cell format or
+    lockstep is over on the first piece. The lobby's SKIN stage settles it by
+    the art's fingerprint, and both reach the same answer.
+
+    And the other way round: with no skin on the master's title, neither
+    console wears one, whatever the slave's title says.
+    """
+    import run_rom
+
+    sym, why = symbol(rom, "g_session")
+    title_sym, why2 = symbol(rom, "g_title_skin")
+    if sym is None or title_sym is None:
+        print(f"SALTADO: {why or why2}")
+        return 0
+    session_addr, session_size = sym
+    game_size = session_size - 4
+    off = run_rom.game_offsets(rom)
+    PF = TENGEN_PF_HEIGHT * TENGEN_PF_WIDTH
+
+    def match(master_chord, slave_chord):
+        mgba.log.silence()
+        cores, screens = [], []
+        for _ in range(2):
+            core = mgba.core.load_path(rom)
+            screen = mgba.image.Image(SCREEN_W, SCREEN_H)
+            core.set_video_buffer(screen)   # must stay alive; see run_rom.load()
+            core.reset()
+            cores.append(core)
+            screens.append(screen)
+        cable = Cable(*cores)
+        ends = [CableEnd(cable, True), CableEnd(cable, False)]
+        for core, end in zip(cores, ends):
+            core.attach_sio(end, lib.SIO_MULTI)
+
+        def both(frames, keys=None):
+            for _ in range(frames):
+                for i, core in enumerate(cores):
+                    core.set_keys(*(keys[i] if keys else []))
+                    core.run_frame()
+
+        def tap(name, who=None):
+            both(4, [[KEYS[name]] if who in (None, i) else [] for i in range(2)])
+            both(10, [[], []])
+
+        both(60)
+        # THE TITLE'S CHORD, on whichever console is asked to wear a skin.
+        chord = [[KEYS["L"], KEYS["R"]] if want else []
+                 for want in (master_chord, slave_chord)]
+        both(4, chord)
+        both(30, [[], []])
+        titles = [core.memory.u8[title_sym[0]] for core in cores]
+        tap("START"); tap("DOWN"); tap("START")   # -> 2 PLAYER -> the cable
+        both(50)
+        tap("START", who=0)
+        both(60)
+        # Play: both hold Down for a while so pieces lock on both boards.
+        both(400, [[KEYS["DOWN"]], [KEYS["DOWN"]]])
+        both(20, [[], []])
+        return cores, screens, titles
+
+    failures = []
+
+    def flags(core):
+        return (core.memory.u8[session_addr + off["piece_ids"]],
+                core.memory.u8[session_addr + off["proto_rules"]])
+
+    def settled(core):
+        field = session_addr + off["field"]
+        return [core.memory.u8[field + i] for i in range(2 * PF)
+                if core.memory.u8[field + i] not in (0, CELL_WALL)]
+
+    def frame_colour(screen):
+        # The left box's braid, where a skin puts its fret: a pixel of the
+        # rope's inner run.
+        px = run_rom.pixels(screen)
+        cols = [px[y][x] for y in range(40, 120) for x in range(64, 80)]
+        cols = [c for c in cols if sum(c) > 60]
+        n = max(len(cols), 1)
+        r, g, b = (sum(c[k] for c in cols) // n for k in range(3))
+        # The release's braid is blue through and through; a prototype's fret
+        # is a dark green-grey with red in it (about 84, 80, 80 measured).
+        return "release" if b > r + 40 and b > g + 20 else "prototipo"
+
+    cores, screens, titles = match(True, False)
+    if not titles[0]:
+        print("SALTADO: esta ROM no trae prototipos (make assets PROTO=...)")
+        return 0
+    if titles[1]:
+        failures.append("el acorde del maestro cambio el titulo del esclavo")
+    fm, fs = flags(cores[0]), flags(cores[1])
+    if fm != (1, 0) or fs != (1, 0):
+        failures.append(f"con skin en el maestro: piece_id_cells/proto_rules "
+                        f"{fm} y {fs}, deberian ser (1, 0) en las dos")
+    else:
+        print(f"  el maestro lleva la skin {titles[0]} y el esclavo el release: "
+              "las dos consolas juegan con celdas de pieza y reglas del release")
+    if read_bytes(cores[0], session_addr, game_size) != \
+            read_bytes(cores[1], session_addr, game_size):
+        failures.append("con skin por cable las dos consolas divergieron")
+    else:
+        cells = settled(cores[0])
+        if not cells:
+            failures.append("ninguna pieza llego a asentarse")
+        elif max(cells) > 7:
+            failures.append(f"hay celdas que no son ids de pieza: "
+                            f"{sorted(set(cells))}")
+        else:
+            print(f"  {len(cells)} celdas asentadas, todas ids de pieza, "
+                  "identicas byte a byte en las dos consolas")
+    colours = [frame_colour(sc) for sc in screens]
+    if colours != ["prototipo", "prototipo"]:
+        failures.append(f"el marco no es la greca del prototipo en las dos "
+                        f"pantallas: {colours}")
+    else:
+        print("  y las dos pantallas llevan la greca del prototipo, tambien la "
+              "del esclavo, que dejo su titulo en el release")
+
+    # ...and the master's title decides: a skin on the SLAVE's title alone
+    # puts none on either board.
+    cores, screens, titles = match(False, True)
+    fm, fs = flags(cores[0]), flags(cores[1])
+    if fm != (0, 0) or fs != (0, 0):
+        failures.append(f"con skin solo en el esclavo: {fm} y {fs}, deberian "
+                        "ser (0, 0)")
+    elif [frame_colour(sc) for sc in screens] != ["release", "release"]:
+        failures.append("con skin solo en el esclavo algun tablero no es el "
+                        "del release")
+    else:
+        print("  y una skin solo en el titulo del esclavo no viste a nadie: "
+              "manda el maestro")
+
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: los prototipos van por cable como skin, con las reglas del "
+          "release, y las dos consolas siguen siendo la misma partida.")
     return 0
 
 

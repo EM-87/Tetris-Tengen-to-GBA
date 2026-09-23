@@ -96,8 +96,9 @@ static inline uint16_t tengen_link_send_word(const TengenLink *link,
  *
  * Tags live in the top four bits, which is why they exist only here: once the
  * match starts the whole 16 bits carry buttons and a frame counter. The
- * largest tagged word is $6FFF, so a lobby word can no more be mistaken for
- * an absent console's $FFFF than a match word can.
+ * largest tag is SKIN's 9, so the largest tagged word is $9FFF, and a lobby
+ * word can no more be mistaken for an absent console's $FFFF than a match
+ * word can. Tags stop short of $F for exactly that reason.
  * ----------------------------------------------------------------------- */
 typedef enum {
     TENGEN_LOBBY_NONE    = 0,
@@ -115,8 +116,23 @@ typedef enum {
      * swap, below. They share the tag space because they share the wire and
      * the same rule about $FFFF. */
     TENGEN_LOBBY_TYPING  = 7,   /* nothing to say yet; bit 8 is the receipt */
-    TENGEN_LOBBY_NAME    = 8    /* one letter of three; see TengenNameSwap */
+    TENGEN_LOBBY_NAME    = 8,   /* one letter of three; see TengenNameSwap */
+    /* THE MASTER'S SKIN, between HANDICAP and GO, and numbered last only
+     * because it came last: the stages run in the order next_stage says.
+     * Master: bit 11 set if it is offering one, bits 0-10 the skin's
+     * fingerprint. Slave's echo: bit 0 set if it HAS that skin. See
+     * tengen_lobby_skins. */
+    TENGEN_LOBBY_SKIN    = 9
 } TengenLobbyTag;
+
+/* A skin's fingerprint is eleven bits of a hash of its own art, which is what
+ * lets two DIFFERENT BUILDS agree on one: the same prototype dump produces the
+ * same bytes whichever order a build lists its skins in, and a build without
+ * it has nothing that matches. */
+#define TENGEN_SKIN_OFFER       0x0800
+#define TENGEN_SKIN_PRINT_MASK  0x07FF
+#define TENGEN_SKIN_HAVE        0x0001
+#define TENGEN_SKIN_MAX         8
 
 #define TENGEN_LOBBY_TAG_SHIFT 12
 #define TENGEN_LOBBY_PAYLOAD_MASK 0x0FFF
@@ -141,6 +157,18 @@ typedef struct {
     uint16_t idle;       /* consecutive failed transfers */
     bool linked;         /* the other end has answered at least once */
     bool hold;           /* master: stay at HELLO until the player has chosen */
+    /* THE SKIN. Each console lists the fingerprints of the skins IT has
+     * (skins/skin_count); the master also says which of its own it is
+     * offering (skin_offer, -1 for none). The result is `skin`: an index into
+     * THIS console's own list, or -1, and the two consoles always agree on
+     * whether it is -1 — the only thing the simulation has to agree on, since
+     * a skinned board stores piece ids (piece_id_cells). See
+     * tengen_lobby_skins. */
+    uint16_t skins[TENGEN_SKIN_MAX];
+    uint8_t skin_count;
+    int8_t skin_offer;   /* master: which of its own it is offering */
+    int8_t skin;         /* the agreed skin, as this console's own index */
+    uint8_t echo_payload;   /* slave: what its SKIN echo says */
 } TengenLobby;
 
 /* Starts a lobby. The master's seed/level/music are the ones that count; on
@@ -164,6 +192,22 @@ void tengen_lobby_start_held(TengenLobby *lobby, uint16_t seed);
 void tengen_lobby_release(TengenLobby *lobby, uint16_t seed,
                            uint8_t start_level, uint8_t music,
                            const uint8_t handicap[2], bool coop, bool xe);
+
+/* THE PROTOTYPES AS A SKIN OVER THE CABLE. Call on both consoles after the
+ * lobby starts: `prints` is this console's own skins' fingerprints
+ * (tengen_skin_fingerprint), and `offer` the index of the one the master is
+ * offering — the title's choice — or -1. The slave's `offer` is ignored: the
+ * master's choice wins, as it does for the level and the tune.
+ *
+ * The skin goes on only if the master offers one AND the slave has the same
+ * art; both consoles learn both facts in the SKIN stage, so both reach the
+ * same answer. Otherwise both play the release. It is PAINT ONLY — over the
+ * cable a skinned match plays by the release's rules. */
+void tengen_lobby_skins(TengenLobby *lobby, const uint16_t *prints, int count,
+                         int offer);
+
+/* Eleven bits of FNV-1a over a skin's art. */
+uint16_t tengen_skin_fingerprint(const uint8_t *bytes, unsigned len);
 
 /* What this machine should put on the wire next. */
 uint16_t tengen_lobby_word(const TengenLobby *lobby, bool master);
