@@ -665,9 +665,10 @@ int main(void) {
              * six hundred tiles a frame for a blinking letter would be a
              * whole vertical blank spent on nothing. */
             if (g_leader_row >= 0) draw_leader_row(g_leader_row);
-            /* ...and the rival's row once, on the frame their name lands. */
+            /* ...and the rival's rows once, on the frame their name lands —
+             * ALL of them: one per game, if they restarted with A+B. */
             if (swap_landed && !swap_drawn && leader_rival_row() >= 0) {
-                draw_leader_row(leader_rival_row());
+                draw_rival_leader_rows();
                 swap_drawn = true;
             }
             audio_frame();

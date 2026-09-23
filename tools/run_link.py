@@ -978,7 +978,17 @@ def restart_check(rom):
                     core.memory.u8[field + board * PF + r * TENGEN_PF_WIDTH + c] = (
                         CELL_WALL if c in (0, TENGEN_PF_WIDTH - 1)
                         else (0 if c == 5 else 0x01))
+    # Player 2's second game has to make the table too, or there is only one
+    # row of theirs to name: plant a score on it on both consoles, the same
+    # on each so the two stay the same game.
+    # (Player 1's too, so the master is on the page to see the name arrive.)
+    for core in cores:
+        for slot, planted in ((0, 20000), (1, 50000)):
+            at = session_addr + off["score"] + slot * off["stride"]
+            for k in range(4):
+                core.memory.u8[at + k] = (planted >> (8 * k)) & 0xFF
     both(300, [[], []])
+    last_score = score(master, 1)      # player 2's second game
     tap("START")
     both(40, [[], []])
     page = " ".join(run_rom.tilemap_text(slave, run_rom.LEADER_FIRST_TY + i, 0, 30)
@@ -991,6 +1001,29 @@ def restart_check(rom):
     else:
         print(f"  y la partida anterior al reinicio ({dead_score}) sigue "
                "anotada: cada partida es una fila")
+
+    # ...AND THE NAME THAT CROSSES THE CABLE GOES ON BOTH OF THEM. Player 2
+    # has two rows on the master's page, one per game; the slave types its
+    # name once, and the master must show it on each, not just the newest.
+    for _ in range(LEADER_INITIALS):
+        both(3, [[KEYS["A"]], []]); both(6, [[], []])
+    # The slave has one row per game to type, in the order they were played,
+    # and the name only crosses once both are done.
+    for _ in range(2 * LEADER_INITIALS):
+        for _ in range(3):
+            both(3, [[], [KEYS["UP"]]]); both(5, [[], []])
+        both(3, [[], [KEYS["A"]]]); both(6, [[], []])
+    both(150, [[], []])
+    mrows = [run_rom.tilemap_text(master, run_rom.LEADER_FIRST_TY + i, 0, 30)
+             for i in range(15)]
+    for sc in (dead_score, last_score):
+        row = next((r for r in mrows if str(sc) in r.split()), "")
+        if "DDD" not in row:
+            failures.append(f"en el maestro la fila del rival de {sc} no lleva "
+                            f"su nombre DDD: {row!r}")
+    if not any("fila del rival" in f for f in failures):
+        print("  y el nombre del rival llega a sus dos filas en la pantalla "
+              "del maestro")
 
     for f in failures:
         print(f"FALLA: {f}")

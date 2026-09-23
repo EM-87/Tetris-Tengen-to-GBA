@@ -330,9 +330,8 @@ AUDIO_ALIGN_SEARCH = 90   # frames of the ROM to look through for the match
 AUDIO_GOLDEN_SKIP = 60    # ...and of the golden, whose first frames the ROM
                           # covers with the screen-switch effect
 
-# GBA sound registers, read back to confirm the translation reached them.
-REG_SOUNDCNT_X = 0x04000084
-REG_SOUND1CNT_H = 0x04000062
+# The GBA sound registers the checks read back are all together below, with
+# what each one says (REG_SOUND1CNT_H and the rest).
 
 
 # Restarting a GBA sound channel resets its phase and reloads its volume, so

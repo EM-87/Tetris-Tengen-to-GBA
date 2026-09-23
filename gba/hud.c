@@ -268,6 +268,23 @@ static void hide_idle_cossack(void) {
         MEM_OAM[(IDLE_OAM_BASE + i) * 4] = OBJ_ATTR0_HIDDEN;
 }
 
+/* THE CABLE WENT, said in the right box's big cell. The rival's preview and
+ * cossack stood there, and a board that is no longer being played has
+ * nothing to preview: the cell is emptied first, on every layer that draws
+ * in it, so the words do not land on top of a piece. Called after
+ * draw_panel, every frame the frozen board is up. */
+void draw_link_lost(void) {
+    bool was = g_panel_layer;
+    g_panel_layer = false;
+    clear_both(BOX_R_IN, BRAID_T, BOX_IN, SHELF_FIRST - BRAID_T);
+    clear_panel_region(BOX_R_IN, BRAID_T, BOX_IN, SHELF_FIRST - BRAID_T);
+    hide_idle_cossack();
+    int mid = (BRAID_T + SHELF_FIRST) / 2;
+    draw_text(BOX_R_IN + 1, mid - 1, "CABLE", BANK_LABEL);
+    draw_text(BOX_R_IN + 1, mid, "LOST", BANK_LABEL);
+    g_panel_layer = was;
+}
+
 /* Starts the reaction. `lines` is 1-4; anything else is ignored. */
 void idle_cossack_celebrate(int lines) {
     if (lines < 1) return;
@@ -1276,6 +1293,16 @@ static int g_leader_own_row = -1;              /* the newest of this console's *
 
 int leader_rival_row(void) {
     return g_leader_rivals_n ? g_leader_rivals[g_leader_rivals_n - 1] : -1;
+}
+
+/* ...and every row of theirs redrawn, once their name has landed. A rival who
+ * restarted with A+B made the table once per game, leader_rival_initials
+ * names all of those rows, and so all of them are redrawn: drawing only the
+ * newest left the earlier ones reading AAA on screen over a name that was
+ * already in memory and in the SRAM. */
+void draw_rival_leader_rows(void) {
+    for (int i = 0; i < g_leader_rivals_n; i++)
+        draw_leader_row(g_leader_rivals[i]);
 }
 
 void leader_own_initials(uint8_t out[LEADER_INITIALS]) {

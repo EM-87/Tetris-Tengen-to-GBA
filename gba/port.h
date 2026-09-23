@@ -1781,6 +1781,7 @@ void clear_panel_region(int tx, int ty, int w, int h);
 void set_stats_tile(int tx, int ty, uint16_t entry);
 void set_histogram_tile(int tx, int ty, uint16_t entry);
 void clear_both(int tx, int ty, int w, int h);
+void draw_link_lost(void);        /* the cable went: said in the right box */
 /* WHAT THE HUD IS, AND TWO PER MODE.
  *
  * Four of them, and each game mode offers exactly two — the one it opens on
@@ -1846,6 +1847,7 @@ void leader_submit(void);
 /* Over a cable both players go on the board and only one of them is typed
  * here; these are the other one. See leader_submit and TengenNameSwap. */
 int  leader_rival_row(void);                        /* -1: nobody's */
+void draw_rival_leader_rows(void);                  /* all of theirs, one per game */
 void leader_own_initials(uint8_t out[LEADER_INITIALS]);
 void leader_rival_initials(const uint8_t in[LEADER_INITIALS]);
 bool leader_type(uint8_t held, uint8_t pressed);

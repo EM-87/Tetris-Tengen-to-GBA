@@ -405,9 +405,9 @@ static int g_pmenu_drawn_w;
  * with it. */
 static void clear_pmenu_layers(int w) {
     int tx = (SCREEN_TW - w) / 2;
+    clear_panel_region(tx, PMENU_TY, w, PMENU_H);
     for (int y = 0; y < PMENU_H; y++)
         for (int x = 0; x < w; x++) {
-            clear_panel_region(tx + x, PMENU_TY + y, 1, 1);
             set_stats_tile(tx + x, PMENU_TY + y, T_BLANK);
             set_histogram_tile(tx + x, PMENU_TY + y, T_BLANK);
         }
@@ -839,7 +839,11 @@ void draw_match(bool *sweeping) {
     refresh_palettes();
     draw_field();
     draw_panel();
-    if (g_link_lost) draw_text(BOX_R_IN + 1, BOX_TOP_IN + 2, "LINK", BANK_LABEL);
+    /* THE CABLE WENT: said in words for as long as the frozen board stays up
+     * — the lobby says NO CABLE FOUND for one that never answered — and not
+     * on top of the rival's preview. See draw_link_lost. The match is over;
+     * the records page comes next as after any other ending. */
+    if (g_link_lost) draw_link_lost();
 
     /* The sweep's sprites, and the one tidy-up when it finishes. */
     if (g_session.game.player[hud_clearing_slot()].line_clear_timer > 0) {
