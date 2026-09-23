@@ -866,8 +866,9 @@ where it used to execute 42,922 — the other 31,000 were the spin, about
 seven tenths of every frame — and the title 18,000 against 50,000. The
 wake-up is on the same scanline the spin left on, so the timing did not
 move: the golden audio, the game over's 480 frames, the two-console link
-(same 188-transfer handshake, same 548 transfers, still byte-identical)
-all come out as they did. What it
+(same 188-transfer handshake, same 548 transfers, still byte-identical),
+and against the cartridge `make tune-check` (the four tunes note by note
+over 1500 frames) and `make dance-check` all come out as they did. What it
 needed is what the note said: the vector belonged to the cable. There is
 ONE handler for the program now (`irq_handler`, video.c, in IWRAM, ARM),
 installed at boot by `irq_init` before the first vsync; it acknowledges
