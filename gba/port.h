@@ -1643,12 +1643,23 @@ typedef enum {
  * FOR IT. The idea was to lift the tune onto the counters' layer, which is
  * the port's only sub-tile vertical nudge and goes UP (PANEL_SHIFT_PX), so
  * the heading would close up by two pixels and the choices open out by two
- * without spending a row. What it does instead is OVERLAP: these glyphs fill
- * their eight-pixel tiles top to bottom — there is no internal leading to
- * borrow — so a line moved two pixels up puts its capitals through the
- * descenders of the line above it, and PAUSE came out written across NO
- * MUSIC. Any lift is an overlap here, whatever its size. The row was won by
- * dropping the blank rows outright, which is why this is five and not six.
+ * without spending a row. What it does instead is OVERLAP: these glyphs are
+ * seven pixels of ink under ONE blank row, which is all the leading two
+ * stacked lines have — so a line moved two pixels up puts its capitals
+ * through the bottom of the line above it, and PAUSE came out written across
+ * NO MUSIC. A layer's lift can only close that one pixel, never open one. The
+ * row was won by dropping the blank rows outright, which is why this is five
+ * and not six.
+ *
+ * AND THE ONE PIXEL UNDER A HEADING COMES FROM THE LETTERS, not from a
+ * layer. The interior is three lines of seven-over-one exactly, with the
+ * last line already standing on the frame, so there is no pixel spare to
+ * move a line into. What can move is the ink inside a tile: the heading is
+ * drawn with copies of its own letters shifted up one row (PMENU_RAISED_BASE,
+ * made at boot out of the cartridge's glyphs), which hands its blank row to
+ * the gap underneath. The heading then meets the frame above it exactly as
+ * the last line meets the frame below — and is two pixels clear of the list
+ * where every line in the list is one clear of the next.
  *
  * AND THE CURSOR MOVES INTO A COLUMN OF ITS OWN, which is what lets the word
  * MUSIC go at all. The arrow used to sit two columns left of the line it
@@ -1664,6 +1675,28 @@ typedef enum {
 #define PMENU_TY ((SCREEN_TH - PMENU_H) / 2)
 #define PMENU_IN_TX (PMENU_TX + 1)
 #define PMENU_IN_W (PMENU_W - 2)
+
+/* THE QUESTION HAS A BOX OF ITS OWN, as narrow as it can be. It is three
+ * short lines — EXIT?, YES, NO — and in the column's fourteen the arrow stood
+ * at the interior's left edge with NO centred six columns away from it. EXIT?
+ * is five characters, so the interior is six and the box eight, which is
+ * even and so centres on the board like the other one. The answers are
+ * written two columns right of the arrow, the cartridge's own spacing for
+ * its menu cursor (`gameSelectArrowPpuAddrs`, $0A against the text's $0C).
+ * Same height and same rows as the column, so the heading and both answers
+ * sit where PAUSE and its two entries sat. */
+#define PQUEST_W 8
+#define PQUEST_TX ((SCREEN_TW - PQUEST_W) / 2)
+#define PQUEST_IN_TX (PQUEST_TX + 1)
+#define PQUEST_IN_W (PQUEST_W - 2)
+#define PQUEST_ANSWER_DX 2
+
+/* The headings' letters, one pixel higher: see the note above PMENU_H and
+ * upload_tiles. Nine tiles in the charblock's free top above the prototype
+ * histogram's window (SKIN_STATS_BASE + 56 = 952), and only the letters
+ * the two headings use, since nothing else wants them. */
+#define PMENU_RAISED_BASE 960
+#define PMENU_RAISED_CHARS "PAUSEXIT?"
 
 /* The frame's own tiles, out of the plaque the game over is drawn with. */
 #define T_BOX_TL 0x29
@@ -1693,6 +1726,7 @@ void set_credit_layer(bool front_end);
 extern const char *const kClearWord[5];
 extern const uint8_t kPauseTiles[PAUSE_H][PAUSE_W];
 uint16_t ascii_tile(char c);
+uint16_t raised_tile(char c);
 extern TengenLink g_session;
 int field_tx(void);
 int field_col0(void);
@@ -1731,8 +1765,9 @@ void oam_hide_all(void);
 /* hud.c */
 void draw_coop_dancers(int elapsed, int count);
 void draw_race_dancers(int elapsed, int count);  /* HUD VERSUS; see hud.c */
+void draw_stats_show(int elapsed, int count);    /* HUD STATS; see hud.c */
 void draw_dancers(int elapsed, int count);
-void dancers_begin(uint16_t seed, int cast);  /* the interlude's choreography; see hud.c */
+void dancers_begin(uint16_t seed, int cast, bool pairs);  /* the interlude's choreography; see hud.c */
 void dancers_step(int frame);
 extern uint8_t g_idle_palette;
 extern int g_dance_frames;

@@ -748,6 +748,14 @@ int main(void) {
                 tengen_clear_bonus_counts(&g_session.game);
                 draw_static_screen();
                 start_music(g_music);
+            } else if (hud_stats()) {
+                /* HUD STATS GIVES THE SHOW ITS LEFT BOX, on either screen:
+                 * the histogram in the right one is what the HUD is for and
+                 * stays, the counters on the left go for the length of the
+                 * show, and the troupe walks on there from the screen's edge.
+                 * The resident over the histogram dances it in place. See
+                 * draw_stats_show. */
+                draw_stats_show(g_dancer_elapsed, g_dancer_cast);
             } else if (g_session.game.coop) {
                 /* COOP HAS THE STAGE ALREADY: the ledges are part of the
                  * cartridge's own screen, four of them down each panel, and
@@ -767,11 +775,6 @@ int main(void) {
                 clear_both(COOP_R_TX, BRAID_T, COOP_PANEL_W,
                             COOP_LEDGE_FIRST - BRAID_T);
                 draw_coop_dancers(g_dancer_elapsed, g_dancer_cast);
-            } else if (hud_stats()) {
-                /* HUD STATS keeps its screen. Nothing is cleared and nothing
-                 * has to be put back; the panel redraws every frame anyway,
-                 * and the cossack standing in it takes the show. */
-                draw_panel();
             } else if (hud_versus()) {
                 /* HUD VERSUS HAS TWO PANELS AND FOUR LEDGES A SIDE, which is
                  * coop's shape, so the troupe comes on there rather than on a

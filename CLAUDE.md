@@ -128,6 +128,20 @@ running ROM; only the side panels need reflowing).
    still capped at six, and the programmes are still the SOLO ones —
    positions 0-5 — because that is what a race dances on the cartridge. Only
    the floor is the port's. See `draw_race_dancers`.
+   **AND IN HUD STATS THEY COME ON THROUGH THE LEFT BOX, in every mode.** The
+   right box is the histogram, which is what that HUD is for, so the show
+   takes the other one: its counters go for the length of the show and the
+   cartridge's solo column of six walks on from the screen's open edge. It
+   fits exactly — the column is six dancers 24 pixels apart and the panel is
+   ruled every three rows, so the bottom one stands on the screen's edge, the
+   next four on the four ledges, and the sixth on a ledge drawn for the show
+   in the tall compartment where NEXT was. Solo programmes and the solo cap of
+   six even on coop's board, whose pairs run down BOTH panels — capped when
+   the show STARTS, not only when it is drawn, because every dancer handed a
+   programme rolls the shared dice. The resident over the histogram dances it
+   in place and is not one of the cast. It used to be him alone, which threw
+   away the one thing the cast says: how well the level went. See
+   `draw_stats_show` and `make gba-check --statsshow`.
 9. ~~Title and menu screens~~ — done, from the cartridge's own title art and
    menu frame. The title's frame is TWO frames and the screen's shape decides
    which: the port keeps the blue BRAID whole on all four sides and fills the
@@ -353,7 +367,12 @@ running ROM; only the side panels need reflowing).
    he celebrates when THEIR board clears rather than when yours does
    (`cossack_slot` picks the board by which panel the HUD gives the rival,
    and `cossack_watch` is called once per board per step). Two cossacks never
-   appear at once: HUD VERSUS has the rival's and HUD STATS has your own.
+   appear at once: HUD VERSUS has the rival's and HUD STATS has your own. And
+   he is never in YOUR colours: two figures in the same compartment of two
+   HUDs in the same clothes read as one figure who changed sides. He takes the
+   cartridge's dancer palette half-way round the four from yours
+   (`rival_cossack_palette`) — green against the default blue and red, and
+   out of reach of whatever the colour chord makes of yours.
    **AND THE COSSACK'S COLOUR CHORD ANSWERS ONLY IN HUD STATS** — anywhere
    else it changed a palette nothing on screen was using and chirped to say
    so, and in HUD VERSUS the cossack on screen is not yours to paint.
@@ -503,11 +522,30 @@ running ROM; only the side panels need reflowing).
    nothing at all.
    **TWO PIXELS INSTEAD OF THAT LAST BLANK ROW WAS TRIED AND OVERLAPS.** The
    counters' layer is the port's only sub-tile vertical nudge, so a line can
-   be lifted two pixels onto it — but these glyphs fill their eight-pixel
-   tiles top to bottom, with no internal leading to borrow, and a lifted line
-   simply writes through the one above it: PAUSE came out across NO MUSIC.
-   Any lift is an overlap here, whatever its size. The row was won by dropping
-   the blank outright instead.
+   be lifted two pixels onto it — but these glyphs are seven pixels of ink
+   under ONE blank row, which is all the leading two stacked lines have, and a
+   line lifted two writes through the one above it: PAUSE came out across NO
+   MUSIC. The row was won by dropping the blank outright instead.
+   **THE ONE PIXEL UNDER A HEADING IS IN ITS LETTERS.** The interior is three
+   lines of seven-over-one exactly, with the last one already standing on the
+   frame, so no layer can make room and there is no room to make. What moves
+   is the ink inside the tile: PAUSE and EXIT? are drawn with copies of their
+   own letters shifted up a row (`PMENU_RAISED_BASE`, nine tiles built at
+   boot out of the cartridge's glyphs), which gives the heading's blank row
+   to the gap beneath it. The heading meets the frame above it the way the
+   last line meets the frame below, and stands two pixels clear of a list
+   whose lines are one clear of each other. `tilemap_text` maps those tiles
+   back to letters. A heading also centres on the WHOLE interior now — it has
+   no cursor, so no cursor column to stand clear of, and centred beside one it
+   sat half a tile right of the box's middle.
+   **AND THE QUESTION HAS ITS OWN BOX, EIGHT WIDE.** Fourteen is the column's
+   floor, not the question's: EXIT? is five characters, so its interior is six
+   and the box eight, even and so centred like the other. The answers are
+   written two columns right of the arrow — the cartridge's own menu spacing,
+   `gameSelectArrowPpuAddrs` at `$0A` against the text's `$0C` — where in the
+   wide box NO was centred six columns from it. Same rows, so only the sides
+   move, and the braid the wide box covered is put back through `g_repaint`
+   on the way in and out. See `PQUEST_W`.
    **THE CURSOR IS AN ARROW IN A COLUMN OF ITS OWN.** It used to sit two
    columns left of the line it marked, which is where the settings screen
    puts its own — and with MUSIC gone the line it marks is the tune's name,
@@ -682,7 +720,9 @@ to satisfy yourself that it is really playing rather than counting upwards —
 one press of Start and there it is. And a pause in this game is a player
 stopping to study their own stack, which is exactly what a race is supposed
 not to give you time for: take the stack away while they are looking at it
-and the pause is a pause again rather than a free think. Only in a race (1P
+and the pause is a pause again rather than a free think. And NEXT goes with the board: a stack
+with somebody else's preview over it is two boards on one screen, so the
+left box's preview follows `field_view` as well. Only in a race (1P
 has no other board and coop's is the same board), and only behind the chord,
 because it is the port's idea and not the cartridge's. Over a cable both
 consoles have the same door and a pause stops both boards, so neither player

@@ -176,6 +176,32 @@ void upload_tiles(void) {
     for (unsigned i = 0; i < sizeof(kGameTiles); i += 2) {
         dst[i / 2] = (uint16_t)(src[i] | (src[i + 1] << 8));
     }
+
+    /* THE PAUSE MENU'S HEADINGS, ONE PIXEL HIGHER. The cartridge's letters
+     * are seven pixels of ink under one blank row, so two lines stacked on
+     * the grid are one pixel apart and nothing else is; the box's interior is
+     * three lines of that exactly, with the bottom line already standing on
+     * the frame. There is no layer that moves one pixel, and no pixel spare
+     * in the box to move INTO — so the letters move instead: the same art,
+     * shifted up a row inside its tile, which gives the blank row to the gap
+     * UNDER the heading. See PMENU_RAISED_BASE. */
+    const char *raised = PMENU_RAISED_CHARS;
+    for (int i = 0; raised[i]; i++) {
+        const uint8_t *g = kGameTiles + ascii_tile(raised[i]) * 32;
+        vu16 *out = dst + (PMENU_RAISED_BASE + i) * 16;
+        for (int row = 0; row < 8; row++) {
+            const uint8_t *from = row < 7 ? g + (row + 1) * 4 : NULL;
+            out[row * 2] = from ? (uint16_t)(from[0] | (from[1] << 8)) : 0;
+            out[row * 2 + 1] = from ? (uint16_t)(from[2] | (from[3] << 8)) : 0;
+        }
+    }
+}
+
+uint16_t raised_tile(char c) {
+    const char *raised = PMENU_RAISED_CHARS;
+    for (int i = 0; raised[i]; i++)
+        if (raised[i] == c) return (uint16_t)(PMENU_RAISED_BASE + i);
+    return ascii_tile(c);
 }
 
 /* One updatePalette set — four palettes of four entries — into four GBA

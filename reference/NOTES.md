@@ -1002,12 +1002,19 @@ traced 32 seconds, and only the DRAWING differs:
 
 * **HUD BANNER** gets the cartridge's show: the stage, the ledges, and one to
   six dancers by `L8D8B`'s count.
-* **HUD STATS** keeps its screen exactly as it was, and the one cossack
-  already standing in the left box dances it alone (`g_idle_show`), cycling
-  the pose table at the show's own eight-frame cadence.
+* **HUD STATS** keeps the histogram and gives the show its OTHER box: the
+  counters in the left panel go for the length of the show and the same
+  troupe, by the same count, walks on there from the screen's open edge —
+  the solo column's six floors are the panel's four ledges, the screen's
+  bottom edge and one ledge drawn for the show in NEXT's compartment. The
+  cossack already standing over the histogram dances it in place
+  (`g_idle_show`) at the show's own eight-frame cadence. See
+  `draw_stats_show`.
 
-The troupe is what HUD BANNER is FOR. It is the harder way to play — no piece
-counts — and the six of them are what it pays back.
+(It used to be him alone, on the reasoning that the troupe was what HUD
+BANNER paid back for giving up the piece counts. What that threw away is the
+one thing the cast SAYS — how well the level went, one to six — so HUD STATS
+now has the troupe too.)
 
 **And he stops when the game does.** A cossack swaying behind the PAUSE plaque
 while the music is suspended was the one part of the screen that had not

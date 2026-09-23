@@ -99,7 +99,7 @@ static void dance_settle(int d) {
  * anyway left them rolling too, and the dice are SHARED — two extra rolls
  * moved every other dancer onto a different branch. It cost nothing on
  * screen (they were never drawn) and the whole choreography downstream. */
-void dancers_begin(uint16_t seed, int cast) {
+void dancers_begin(uint16_t seed, int cast, bool pairs) {
     uint8_t *ram = nes_rom_ram();
     /* The dice want a seed and the cartridge's own is not in this RAM — the
      * port runs the sound engine here, not the game. The match's is as good
@@ -112,7 +112,7 @@ void dancers_begin(uint16_t seed, int cast) {
      * has and 6-13 in the pairs coop runs down both of its panels. There
      * are only two distinct programmes in the table — $B14D and $B167 —
      * but which dancer gets which is what keeps them out of step. */
-    int base = g_session.game.coop ? DANCE_COOP_POSITION : 0;
+    int base = pairs ? DANCE_COOP_POSITION : 0;
     if (cast > DANCER_COOP_COUNT) cast = DANCER_COOP_COUNT;
     for (int d = 0; d < DANCER_COOP_COUNT; d++) {
         g_dance_walk[d] = 0;
@@ -256,14 +256,11 @@ static const uint8_t kIdlePoses[2] = { 0, 1 };
 uint8_t g_idle_palette;
 int g_dance_frames;      /* frames of the reaction still to play */
 static int g_dance_length;      /* ...and how many it started with */
-/* THE LEVEL-UP SHOW, DANCED ALONE. The cartridge's interlude sends a troupe
- * out onto a stage that takes the whole right-hand column — which is the
- * TETRIS banner's column, so it can only be had by giving up the statistics.
- * In HUD STATS the interlude still happens, with its own music and its own
- * traced 32 seconds, but the screen stays exactly where it was and the one
- * cossack who is already standing there dances it by himself. The troupe is
- * what HUD BANNER is FOR: it is the harder way to play, since it costs you
- * the piece histogram, and the six of them are what it pays back. */
+/* THE RESIDENT DANCES THE SHOW WITH THE TROUPE. In HUD STATS the cossack
+ * standing over the histogram is already on screen when the level turns
+ * over, so he dances the interlude in place, off the show's own clock, while
+ * the troupe comes on through the other box — see draw_stats_show. He is not
+ * one of the cast: the cast is L8D8B's count and it is on the left. */
 static bool g_idle_show;
 
 static void hide_idle_cossack(void) {
@@ -283,7 +280,7 @@ void idle_cossack_celebrate(int lines) {
 
 /* `running` false freezes him where he stands — which is what a game over
  * should look like from the wings. */
-static void draw_idle_cossack(int elapsed, bool running,
+static void draw_idle_cossack(int elapsed, bool running, int palette,
                                int tx, int ty, int w, int h) {
     int pose;
     if (g_idle_show) {
@@ -304,7 +301,18 @@ static void draw_idle_cossack(int elapsed, bool running,
     int y = ty * 8 + (h * 8 - 16) / 2;
     for (int s = 0; s < DANCER_SPRITES; s++)
         oam_set(IDLE_OAM_BASE + s, x + ((s & 1) ? 8 : 0), y + ((s & 2) ? 8 : 0),
-                 tiles[s], false, PAL_OBJ_DANCER + g_idle_palette);
+                 tiles[s], false, PAL_OBJ_DANCER + palette);
+}
+
+/* THE RIVAL'S COSSACK IS NEVER YOURS IN ANOTHER HAT. Two figures in the same
+ * compartment of the same box, one in HUD STATS and one in HUD VERSUS, in the
+ * same colours, read as one figure who changed his mind about whose clears he
+ * is celebrating. Half-way round the cartridge's four dancer palettes from
+ * yours (spritePalette2 banks 0-3): the default puts him in bank 2, the green
+ * one, against your blue and red, and whatever the chord has made of yours
+ * he cannot land on it. */
+static int rival_cossack_palette(void) {
+    return (g_idle_palette + IDLE_PALETTE_COUNT / 2) % IDLE_PALETTE_COUNT;
 }
 
 /* The puff of smoke crossing each completed row: five sprites in a row, the
@@ -623,6 +631,76 @@ static void draw_braid_panel(int tx, int w, bool inner_right, bool shelves) {
     if (!shelves) return;
     for (int i = 0; i < SHELF_COUNT; i++)
         draw_ledge(in_tx, SHELF_FIRST + i * SHELF_STEP, w - BRAID_T);
+}
+
+/* HUD STATS'S TROUPE, THROUGH THE LEFT BOX — in every mode, coop's board
+ * included. The right box is the histogram and the histogram is what this
+ * HUD is for, so the show takes the other one: its counters go for the
+ * length of the show, as they do in HUD VERSUS and HUD COOP, and the
+ * cartridge's column of six walks on there.
+ *
+ * IT IS THE SOLO STAGE, LAID DOWN THE PANEL. The cartridge's solo column is
+ * six dancers 24 pixels apart (kDancerStartY), and the panel's four ledges
+ * are three rows apart too: lined up so the bottom one stands on the screen's
+ * own bottom edge, the next four have the four ledges, and the sixth wants a
+ * ledge one step higher still — in the tall compartment, where NEXT was. That
+ * ledge is drawn for the show and goes with it (the static screen comes back
+ * when it ends), exactly the way the HUD BANNER stage draws a floor the
+ * cartridge's bottom dancer gets from the screen border. The programmes are
+ * the solo ones, positions 0-5, and so is the cap: coop's pairs (positions
+ * 6-13) run down BOTH panels, and one panel has six floors. See match.c for
+ * where the cast is capped to match.
+ *
+ * THEY COME IN FROM THE SCREEN'S EDGE, because that is the side this box is
+ * open on: the starting mark is the HUD BANNER stage's, sixteen pixels left
+ * of a four-column stage centred in the panel, and their programmes walk them
+ * right onto it. In an eight-column box that mark is the screen's first
+ * pixel. */
+static void stats_stage(int *in_tx, int *in_w) {
+    *in_tx = g_session.game.coop ? COOP_L_TX : BOX_L_TX;
+    *in_w = g_session.game.coop ? COOP_PANEL_W : BOX_IN;
+}
+
+void draw_stats_show(int elapsed, int count) {
+    int in_tx, in_w;
+    stats_stage(&in_tx, &in_w);
+    int first_ledge = g_session.game.coop ? COOP_LEDGE_FIRST : SHELF_FIRST;
+
+    /* The panel's words go, on every layer they can be on: the counters on
+     * theirs, NEXT and its piece on the main and offset ones. The ledges are
+     * frame art on the main layer below the tall compartment and stay. */
+    clear_panel_region(in_tx, 0, in_w, SCREEN_TH);
+    clear_both(in_tx, BRAID_T, in_w, first_ledge - BRAID_T);
+    draw_ledge(in_tx, first_ledge - SHELF_STEP, in_w);
+
+    if (count > DANCER_COUNT) count = DANCER_COUNT;
+    int mark = in_tx * 8 + (in_w * 8 - DANCER_STAGE_COLS * 8) / 2
+               - DANCER_START_OFFSET;
+    for (int d = 0; d < count; d++) {
+        const uint8_t *tiles = g_dance_pose[d];
+        int x = mark + (int)g_dance_walk[d];
+        /* Feet on the screen's bottom edge for the first, then a ledge a
+         * dancer: the same arithmetic as the race's, whose heights are the
+         * coop screen's and whose ledges are on these same rows. */
+        int y = (int)kDancerStartY[d] - SCREEN_COOP_FIELD_TY * 8;
+        for (int s = 0; s < DANCER_SPRITES; s++)
+            oam_set(d * DANCER_SPRITES + s, x + ((s & 1) ? 8 : 0),
+                     y + ((s & 2) ? 8 : 0), tiles[s], false,
+                     PAL_OBJ_DANCER + (kDancerAttr[d] & 3));
+    }
+    for (int i = count * DANCER_SPRITES; i < IDLE_OAM_BASE; i++)
+        MEM_OAM[i * 4] = OBJ_ATTR0_HIDDEN;
+
+    /* ...and the resident, dancing it where he stands. After the troupe,
+     * whose tidy-up above stops short of his slots. */
+    g_idle_show = true;
+    if (g_session.game.coop)
+        draw_idle_cossack(elapsed, true, g_idle_palette, COOP_R_TX, BRAID_T,
+                           COOP_PANEL_W, COOP_LEDGE_FIRST - BRAID_T);
+    else
+        draw_idle_cossack(elapsed, true, g_idle_palette,
+                           BOX_R_IN, ROW_DANCER, BOX_IN, ROW_DANCER_H);
+    g_idle_show = false;
 }
 
 /* The stage the level-up blit paints where the banner was. */
@@ -1775,7 +1853,7 @@ static void draw_coop_stats_panel(const TengenPlayerState *me) {
         hide_idle_cossack();
     } else {
         bool alive = me->game_active && !g_session.game.paused;
-        draw_idle_cossack(g_idle_frame, alive, COOP_R_TX, BRAID_T,
+        draw_idle_cossack(g_idle_frame, alive, g_idle_palette, COOP_R_TX, BRAID_T,
                            COOP_PANEL_W, COOP_LEDGE_FIRST - BRAID_T);
         if (alive) g_idle_frame++;
     }
@@ -1861,7 +1939,8 @@ static void draw_rival_panel(void) {
         hide_idle_cossack();
     } else {
         bool alive = them->game_active && !g_session.game.paused;
-        draw_idle_cossack(g_idle_frame, alive, BOX_R_IN, BRAID_T,
+        draw_idle_cossack(g_idle_frame, alive, rival_cossack_palette(),
+                           BOX_R_IN, BRAID_T,
                            BOX_IN, SHELF_FIRST - BRAID_T);
         if (alive) g_idle_frame++;
     }
@@ -1935,7 +2014,12 @@ void draw_panel(void) {
      * 40-pixel cell can be) and eleven against six. The preview's own layer
      * is held at the grid to match; see the note by REG_BG1VOFS below. */
     g_panel_layer = false;
-    draw_next_label_and_piece(BOX_L_TX, ROW_NEXT, BOX_IN, g_view, PAL_NEXT_BANK);
+    /* field_view, not g_view: a paused race that shows the other board shows
+     * the other board's NEXT with it. A stack with somebody else's preview
+     * over it is two boards' worth of information on one screen, and the
+     * whole point of the swap is that you are looking at THEIRS. */
+    draw_next_label_and_piece(BOX_L_TX, ROW_NEXT, BOX_IN, field_view(),
+                               PAL_NEXT_BANK);
     g_panel_layer = true;
 
     draw_counter(ROW_SCORE, HUD_LABEL_SCORE, p->score, 6, 0);
@@ -2032,7 +2116,7 @@ void draw_panel(void) {
          * own clock so it lasts exactly as long as the show does. */
         g_idle_show = g_dancer_active;
         draw_idle_cossack(g_idle_show ? (int)g_dancer_elapsed : g_idle_frame,
-                           alive || g_idle_show,
+                           alive || g_idle_show, g_idle_palette,
                            BOX_R_IN, ROW_DANCER, BOX_IN, ROW_DANCER_H);
         g_idle_show = false;
         if (alive) g_idle_frame++;

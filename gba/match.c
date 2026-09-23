@@ -146,12 +146,22 @@ static void announce_step(TengenStepResult step) {
              * at the top of showLevelBonus, and how well the level went is
              * what decides how many cossacks come on. */
             g_dancer_cast = tengen_dancer_count(&g_session.game);
+            /* COOP'S PAIRS ARE FOR COOP'S TWO PANELS. In HUD STATS the troupe
+             * comes on through one box, on the solo column's six floors
+             * (draw_stats_show), so it dances the solo programmes and has the
+             * solo cap — which has to be applied HERE and not only when
+             * drawing, because every dancer given a programme rolls the
+             * shared dice (see dancers_begin) and a seventh and eighth that
+             * were never drawn would still move the other six. */
+            bool pairs = g_session.game.coop && !hud_stats();
+            if (!pairs && g_dancer_cast > DANCER_COUNT)
+                g_dancer_cast = DANCER_COUNT;
             /* ...and every one of them back to the head of its own
              * programme, with the match's own number for the dice. See the
              * driver in gba/hud.c. */
             dancers_begin((uint16_t)(g_session.game.player[g_view].rng.lo |
                                       (g_session.game.player[g_view].rng.hi << 8)),
-                           g_dancer_cast);
+                           g_dancer_cast, pairs);
         }
     }
     if (step.topped_out) {
@@ -297,13 +307,19 @@ static void draw_box_frame(int tx, int ty, int w, int h) {
  * fourteen because thirteen could not be centred on the board at all; see
  * PMENU_W. Nothing here is free.)
  *
- * NOTHING SUB-TILE DOWNWARD, which is why every gap in this box is a whole
- * blank row. The only vertical nudge the port has is the counters' layer and
- * that is two pixels UP (PANEL_SHIFT_PX), which under a box's ceiling is the
- * wrong direction; and it cannot be combined with the three across anyway, so
- * the lines that would want it are exactly the ones that cannot have it. */
-static void draw_pmenu_line(int ty, const char *text, int bank,
-                             bool cursor, bool lift) {
+ * DOWNWARD, NOTHING MOVES A LINE: the only vertical nudge the port has is
+ * the counters' layer, two pixels UP, and there is no pixel spare in this box
+ * to move a line into anyway. The one pixel the heading has under it is in
+ * its letters — see PMENU_RAISED_BASE. */
+/* What a line is, which decides where it goes in its box. */
+enum {
+    PL_HEADING,   /* PAUSE, EXIT?: raised letters, centred on the whole box */
+    PL_ENTRY,     /* the column's choices: the cursor's column, then centred */
+    PL_ANSWER     /* YES / NO: the cursor, then two columns along, flush left */
+};
+
+static void draw_pmenu_line(int in_tx, int in_w, int ty, const char *text,
+                             int bank, int kind, bool cursor) {
     unsigned len = text_len(text);
     /* THE CURSOR HAS A COLUMN OF ITS OWN, at the interior's left edge, and
      * the text is centred in what is left. That is the settings screen's
@@ -316,30 +332,28 @@ static void draw_pmenu_line(int ty, const char *text, int bank,
      * THE CURSOR IS AN ARROW, NOT A COLOUR. Picking the line out by palette
      * was this menu's first idea and it does not read: words in four colours
      * is a colour scheme, not a cursor, and nothing on screen says which
-     * colour means "here". */
-    int field = PMENU_IN_W - 1;
-    int tx = PMENU_IN_TX + 1 + (field - (int)len) / 2;
-    /* The three pixels across go to whichever parity needs them — and never
-     * on a LIFTED line, which is already spoken for by the counters' layer:
-     * the two scrolls cannot be combined, so that line centres to the whole
-     * column. See PMENU_H. */
-    bool offset = !lift && (((int)len ^ field) & 1) != 0;
+     * colour means "here".
+     *
+     * A HEADING HAS NO CURSOR, so it has no cursor's column to stand clear
+     * of, and centres on the whole interior. Centred beside the column like
+     * the entries, PAUSE sat half a tile right of the box's own middle. */
+    int first = kind == PL_HEADING ? in_tx : in_tx + 1;
+    int field = kind == PL_HEADING ? in_w : in_w - 1;
+    int tx = kind == PL_ANSWER ? in_tx + PQUEST_ANSWER_DX
+                               : first + (field - (int)len) / 2;
+    /* The three pixels across go to whichever parity needs them. A flush
+     * answer needs none: it is not centred on anything. */
+    bool offset = kind != PL_ANSWER && (((int)len ^ field) & 1) != 0;
 
-    for (int i = PMENU_IN_TX; i < tx + (int)len; i++) {
-        uint16_t entry =
-            (i == PMENU_IN_TX) ? WITH_BANK(cursor ? T_ARROW_R : T_BLANK, bank)
-            : (i < tx) ? WITH_BANK(T_BLANK, bank)
-            : WITH_BANK(ascii_tile(text[i - tx]), bank);
-        if (lift) {
-            bool was = g_panel_layer;
-            g_panel_layer = true;
-            set_map_tile(i, ty, entry);
-            g_panel_layer = was;
-        } else if (offset) {
-            set_stats_tile(i, ty, entry);
-        } else {
-            set_map_tile(i, ty, entry);
-        }
+    for (int i = in_tx; i < tx + (int)len; i++) {
+        uint16_t tile =
+            (i == in_tx && kind != PL_HEADING) ? (cursor ? T_ARROW_R : T_BLANK)
+            : (i < tx) ? T_BLANK
+            : kind == PL_HEADING ? raised_tile(text[i - tx])
+            : ascii_tile(text[i - tx]);
+        uint16_t entry = WITH_BANK(tile, bank);
+        if (offset) set_stats_tile(i, ty, entry);
+        else set_map_tile(i, ty, entry);
     }
 }
 
@@ -367,51 +381,51 @@ static void draw_pause_menu(void) {
      * printing straight through it. It is also what wipes the line the cursor
      * was on a frame ago, now that the lines move between layers. */
     clear_pmenu_layers();
-    draw_box_frame(PMENU_TX, PMENU_TY, PMENU_W, PMENU_H);
 
     if (g_pause_confirm) {
-        /* THE QUESTION MARK IS THE POINT OF THE SECOND LINE. It is not in the
-         * cartridge's tile set at all — see ascii_tile — and without it the
-         * two words read as a label rather than as a question.
+        /* THE QUESTION GETS A BOX ITS OWN WIDTH, eight columns to the
+         * column's fourteen: its longest line is five characters, and in the
+         * wide box the arrow stood six columns from the NO it was pointing
+         * at. It is the same height on the same rows, so only the sides move;
+         * see PQUEST_W. The strip the narrower box uncovers is the board,
+         * which draw_field has just drawn, and the braid either side, which
+         * the static screen puts back on the way in and out (g_repaint).
          *
-         * A blank row keeps EXIT off the box's ceiling, and SURE? rides two
-         * pixels lower than its own row so the two words are spaced without
-         * eight pixels of nothing between them. Both of them can only sit
-         * where they do because EXIT is four letters and SURE? is five: see
-         * draw_pmenu_line for why the parity decides which layer each gets. */
-        /* ONE LINE FOR THE QUESTION, not two: "EXIT / SURE?" was two rows
-         * of a box that has five, and the question mark is what makes it a
-         * question either way. It is the one glyph here that is not the
-         * cartridge's — see ascii_tile. */
-        draw_pmenu_line(PMENU_TY + 1, "EXIT?", BANK_NOTE, false, false);
+         * THE QUESTION MARK IS WHAT MAKES IT A QUESTION. It is the one glyph
+         * here that is not the cartridge's — see ascii_tile. */
+        draw_box_frame(PQUEST_TX, PMENU_TY, PQUEST_W, PMENU_H);
+        draw_pmenu_line(PQUEST_IN_TX, PQUEST_IN_W, PMENU_TY + 1, "EXIT?",
+                         BANK_NOTE, PL_HEADING, false);
         /* THE TWO ANSWERS STACK, like everything else in this box. Side by
          * side they had the arrow sitting exactly between them — as far from
          * YES as from NO, which is an arrow that answers nothing. One to a
-         * line each gets its own, in the same column as the cursor upstairs,
-         * and there is no reading it wrong.
+         * line each gets its own, and there is no reading it wrong.
          *
          * (No lowercase in this tile set either — $61 up are the braid and
          * the border, which is why 'yes' came out as two stray marks — so
          * capitals and an arrow are all there is to say it with.) */
-        draw_pmenu_line(PMENU_TY + 2, "YES", BANK_LABEL, g_pause_yes, false);
-        draw_pmenu_line(PMENU_TY + 3, "NO", BANK_LABEL, !g_pause_yes, false);
+        draw_pmenu_line(PQUEST_IN_TX, PQUEST_IN_W, PMENU_TY + 2, "YES",
+                         BANK_LABEL, PL_ANSWER, g_pause_yes);
+        draw_pmenu_line(PQUEST_IN_TX, PQUEST_IN_W, PMENU_TY + 3, "NO",
+                         BANK_LABEL, PL_ANSWER, !g_pause_yes);
         return;
     }
-    /* PAUSE keeps its own colour because it is the heading and not a choice;
-     * the three lines under it are all one colour now, and the arrow is what
-     * says where you are. */
-    /* NO BLANK UNDER THE HEADING ANY MORE: PAUSE is a different colour from
-     * everything below it, which is what says it is a heading, and a row of
+    draw_box_frame(PMENU_TX, PMENU_TY, PMENU_W, PMENU_H);
+    /* PAUSE keeps its own colour because it is the heading and not a choice,
+     * and a pixel more under it than there is between the choices (see
+     * PMENU_RAISED_BASE); the lines under it are all one colour, and the
+     * arrow is what says where you are. No blank row anywhere: a row of
      * nothing between three lines of text was most of what made this box
      * twice the size of the cartridge's own. */
     /* THE TUNE'S NAME IS THE ENTRY. A label over a value that is itself the
      * choice is a label saying nothing, and it cost a row of a box that only
      * has five. See PMENU_H. */
-    draw_pmenu_line(PMENU_TY + 1, "PAUSE", BANK_NOTE, false, false);
-    draw_pmenu_line(PMENU_TY + 2, kMusicNames[g_music], BANK_LABEL,
-                     g_pause_row == PMENU_MUSIC, false);
-    draw_pmenu_line(PMENU_TY + 3, "EXIT", BANK_LABEL,
-                     g_pause_row == PMENU_EXIT, false);
+    draw_pmenu_line(PMENU_IN_TX, PMENU_IN_W, PMENU_TY + 1, "PAUSE",
+                     BANK_NOTE, PL_HEADING, false);
+    draw_pmenu_line(PMENU_IN_TX, PMENU_IN_W, PMENU_TY + 2, kMusicNames[g_music],
+                     BANK_LABEL, PL_ENTRY, g_pause_row == PMENU_MUSIC);
+    draw_pmenu_line(PMENU_IN_TX, PMENU_IN_W, PMENU_TY + 3, "EXIT",
+                     BANK_LABEL, PL_ENTRY, g_pause_row == PMENU_EXIT);
 }
 
 /* One frame of it. Returns true if the menu ate the input, which is what
@@ -427,7 +441,7 @@ static bool pause_menu_input(uint8_t pressed, bool *leaving) {
      * remember rather than read. It is handed STRAIGHT ON to the core, which
      * is what actually unpauses; the question is dropped on the way out, so
      * the next pause opens on the column and not on a half-answered
-     * "SURE?". A takes a choice, B backs out of one. */
+     * "EXIT?". A takes a choice, B backs out of one. */
     if (pressed & TENGEN_BTN_START) {
         g_pause_confirm = false;
         g_repaint = true;
@@ -444,6 +458,7 @@ static bool pause_menu_input(uint8_t pressed, bool *leaving) {
             g_pause_yes = !g_pause_yes;
         if (pressed & TENGEN_BTN_B) {
             g_pause_confirm = false;
+            g_repaint = true;     /* the wide box again: see PQUEST_W */
             screen_blip();
         } else if (pressed & TENGEN_BTN_A) {
             if (g_pause_yes) {
@@ -472,6 +487,7 @@ static bool pause_menu_input(uint8_t pressed, bool *leaving) {
                 *leaving = true;
             } else {
                 g_pause_confirm = false;
+                g_repaint = true;
             }
             screen_blip();
         }
@@ -523,6 +539,10 @@ static bool pause_menu_input(uint8_t pressed, bool *leaving) {
      * cost the menu its way out — see the note at the top. */
     if (g_pause_row == PMENU_EXIT && (pressed & TENGEN_BTN_A)) {
         g_pause_confirm = true;
+        /* The question's box is narrower than the column's, and what the
+         * wide one covered — the braid either side of the board — has to be
+         * put back from under it. */
+        g_repaint = true;
         g_pause_yes = false;   /* NO first: a pause menu does not lose games */
         screen_blip();
     }

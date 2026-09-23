@@ -934,9 +934,13 @@ def tilemap_text(core, row, first=0, last=30):
     reads as "EXIT" and the pause menu's question looks like its EXIT line.
     """
     QUESTION = 0xF0    # TILES_GAME_QUESTION in gba/tiles_game.h
+    # ...and the pause menu's headings, drawn with copies of their letters one
+    # pixel higher (PMENU_RAISED_BASE / PMENU_RAISED_CHARS in gba/port.h).
+    RAISED_BASE, RAISED = 960, "PAUSEXIT?"
 
     def readable(t):
-        return 32 <= t < 127 or t == QUESTION
+        return (32 <= t < 127 or t == QUESTION
+                or RAISED_BASE <= t < RAISED_BASE + len(RAISED))
 
     out = []
     for x in range(first, last):
@@ -950,6 +954,8 @@ def tilemap_text(core, row, first=0, last=30):
             tile = core.memory.u16[SCREENBLOCK_PANEL_ADDR + off] & 0x3FF
         if tile == QUESTION:
             out.append("?")
+        elif RAISED_BASE <= tile < RAISED_BASE + len(RAISED):
+            out.append(RAISED[tile - RAISED_BASE])
         else:
             out.append(chr(tile) if 32 <= tile < 127 else " ")
     return "".join(out).strip()
@@ -2180,6 +2186,110 @@ def coop_ai_check(rom_path):
     return 0
 
 
+def stats_show_check(rom_path):
+    """HUD STATS'S LEVEL-UP SHOW, THROUGH THE LEFT BOX, IN EVERY MODE.
+
+    The right box is the histogram, and the histogram is what HUD STATS is
+    for, so the troupe comes on through the left one: its counters go for the
+    length of the show, the cartridge's solo column of six walks on from the
+    screen's edge onto its four ledges plus one drawn in the tall compartment
+    and the screen's own bottom edge, and the resident cossack over the
+    histogram dances it in place. Run in the three modes whose HUD STATS is
+    reachable without a cable: 1 PLAYER, VERSUS COMPUTER (a race; the cast
+    counts both boards) and WITH COMPUTER (coop's screen, whose pairs would
+    run down both panels — here the solo column and its cap of six).
+    """
+    off = game_offsets(rom_path)
+    base, why = game_state_address(rom_path)
+    if base is None:
+        print(f"SALTADO: {why}")
+        return 0
+
+    IDLE_OAM_BASE = 124           # gba/port.h
+    failures = []
+    # (name, GAME SELECT entries down, tetrises planted per board,
+    #  boards whose tally counts, left panel's width in pixels)
+    for name, down, tetrises, boards, panel_px in (
+            ("1 PLAYER", 0, 1, 1, 64),
+            ("VERSUS COMPUTER", 3, 1, 2, 64),
+            ("WITH COMPUTER", 4, 3, 2, 56)):
+        core, screen = load(rom_path)   # `screen` must stay alive; see load()
+        _ = screen
+
+        def tap(key):
+            core.set_keys(KEYS[key]); run(core, 4)
+            core.set_keys(); run(core, 12)
+
+        run(core, 8)
+        press_start(core); run(core, 20)
+        for _ in range(down):
+            tap("DOWN")
+        press_start(core); run(core, 12)
+        press_start(core); run(core, 60)
+        tap("SELECT"); run(core, 20)      # every mode's second HUD is STATS
+        for who in (0, 1):
+            at = base + off["stride"] * who
+            core.memory.u8[at + off["lines"]] = 28
+            core.memory.u8[at + off["lines"] + 1] = 0
+            core.memory.u8[at + off["counts"] + 3] = tetrises
+        fill_rows(core, base + off["field"], (19, 18))
+        level = core.memory.u8[base + off["level"]]
+        for _ in range(60):
+            core.set_keys(KEYS["DOWN"]); run(core, 8)
+            core.set_keys(); run(core, 2)
+            if core.memory.u8[base + off["level"]] != level:
+                break
+        else:
+            failures.append(f"{name}: el nivel no subio")
+            continue
+        # Hands off the pad: a press fast-forwards the show.
+        run(core, 400)
+
+        want = min(6, 1 + 2 * tetrises * boards)
+        seen = []
+        for d in range(8):
+            at = OAM_ADDR + d * 4 * 8
+            if core.memory.u16[at] & 0x0200:
+                continue
+            y = core.memory.u16[at] & 0xFF
+            x = core.memory.u16[at + 2] & 0x1FF
+            seen.append((x - 512 if x >= 256 else x, y))
+        at = OAM_ADDR + IDLE_OAM_BASE * 8
+        resident = None
+        if not core.memory.u16[at] & 0x0200:
+            resident = core.memory.u16[at + 2] & 0x1FF
+        left = " ".join(tilemap_text(core, ty, 0, panel_px // 8)
+                        for ty in range(2, 20))
+
+        if len(seen) != want:
+            failures.append(f"{name}: salen {len(seen)} cosacos, el reparto "
+                             f"es {want}")
+        elif any(x < 0 or x + 16 > panel_px for x, _y in seen):
+            failures.append(f"{name}: un cosaco fuera del cajon izquierdo: "
+                             f"{seen}")
+        elif sorted(y for _x, y in seen) != sorted(144 - 24 * d
+                                                    for d in range(want)):
+            failures.append(f"{name}: los cosacos no estan en las baldas: "
+                             f"{seen}")
+        elif any(w in left for w in ("SCORE", "LINES", "LEVEL", "NEXT")):
+            failures.append(f"{name}: el cajon izquierdo conserva sus "
+                             f"contadores durante el baile: {left!r}")
+        elif resident is None or resident < 160:
+            failures.append(f"{name}: el cosaco del histograma no baila en "
+                             f"su cajon (x={resident})")
+        else:
+            print(f"  {name}: {want} cosacos por el cajon izquierdo, sin "
+                  f"contadores, y el del histograma baila en el suyo")
+
+    for f in failures:
+        print("FALLA:", f)
+    if failures:
+        return 1
+    print("OK: en HUD Stats el baile sale por el cajon izquierdo, en los tres "
+          "modos.")
+    return 0
+
+
 def versus_hud_check(rom_path):
     """THE RACE'S THIRD HUD, and what a paused race shows.
 
@@ -2250,12 +2360,24 @@ def versus_hud_check(rom_path):
     # the next, so the figure planted at the start is not the figure on the
     # panel a press later.
     seen = []
+    cossack_bank = []
+
+    IDLE_OAM_BASE = 124     # gba/port.h
+
+    def idle_bank(core):
+        # attr2's palette bits, or None when the figure is hidden.
+        at = OAM_ADDR + IDLE_OAM_BASE * 8
+        if core.memory.u16[at] & 0x0200:
+            return None
+        return core.memory.u16[at + 4] >> 12
+
     for step in range(3):
         if step:
             core.set_keys(KEYS["SELECT"]); run(core, 4)
             core.set_keys(); run(core, 60)
         seen.append((box(core, LEFT), box(core, RIGHT),
                       f"{score_now(0)}", f"{score_now(1)}"))
+        cossack_bank.append(idle_bank(core))
 
     # [0] is the default and it is HUD VERSUS: the rival has the right box,
     # and the left one is the 1P panel again — HIGH where RIVAL used to be.
@@ -2276,6 +2398,17 @@ def versus_hud_check(rom_path):
     else:
         print("  una carrera abre en HUD VERSUS: el rival tiene el cajon "
                "derecho y el izquierdo recupera HIGH")
+
+    # TWO COSSACKS IN THE SAME COMPARTMENT, one per HUD, and never the same
+    # colours: the rival's is not yours in another hat.
+    if None in cossack_bank[:2]:
+        failures.append(f"falta un cosaco: bancos {cossack_bank[:2]}")
+    elif cossack_bank[0] == cossack_bank[1]:
+        failures.append(f"el cosaco del rival lleva los colores del tuyo "
+                         f"(banco {cossack_bank[0]})")
+    else:
+        print(f"  el cosaco del rival va en el banco {cossack_bank[0]}, "
+              f"el tuyo en el {cossack_bank[1]}")
 
     # [1] is HUD STATS, which is where the RIVAL cell lives now.
     left, right, MINE, THEIRS = seen[1]
@@ -2313,10 +2446,27 @@ def versus_hud_check(rom_path):
             core.memory.u8[addr + PF + 18 * TENGEN_PF_WIDTH + c] = 1
         run(core, 4)
 
+    # ...AND NEXT GOES WITH IT. Two previews nothing can confuse: an I, one
+    # row deep, for you, and an O, two rows deep, for them. The preview is
+    # read as the number of rows of the NEXT cell that carry a block tile.
+    TT_I_ID, TT_O_ID = 1, 3
+
+    def next_rows(core):
+        rows = set()
+        for ty in range(1, 8):
+            for tx in range(0, 10):
+                o = (ty * 32 + tx) * 2
+                for sb in (SCREENBLOCK_ADDR, SCREENBLOCK_OFFSET_ADDR):
+                    if 1 <= (core.memory.u16[sb + o] & 0x3FF) <= 15:
+                        rows.add(ty)
+        return len(rows)
+
     for cheat, want in ((False, "propio"), (True, "del rival")):
         core, screen, _score = start(cheat)
         _ = screen
         planted(core)
+        core.memory.u8[base + off["next"]] = TT_I_ID
+        core.memory.u8[base + off["next"] + off["stride"]] = TT_O_ID
         press_start(core); run(core, 30)          # pause
         rows = [map_row_text(core, r) for r in (18, 19)]
         mine = rows[1].startswith("####") and "." in rows[0]
@@ -2325,8 +2475,14 @@ def versus_hud_check(rom_path):
         if got != want:
             failures.append(f"con acorde={int(cheat)} la pausa muestra el "
                              f"tablero {got}, deberia ser el {want}")
+        depth = next_rows(core)
+        got_next = {1: "propio", 2: "del rival"}.get(depth, f"{depth} filas")
+        if got_next != want:
+            failures.append(f"con acorde={int(cheat)} el NEXT de la pausa es "
+                             f"el {got_next}, deberia ser el {want}")
     if not failures:
-        print("  y bajo el acorde la pausa cambia tu tablero por el del rival")
+        print("  y bajo el acorde la pausa cambia tu tablero por el del rival, "
+              "con su NEXT")
 
     for f in failures:
         print("FALLA:", f)
@@ -5103,6 +5259,8 @@ def main():
                      help="check the COMPUTER player plays VERSUS and WITH")
     ap.add_argument("--coopai", action="store_true",
                      help="check the computer reads its partner under the chord")
+    ap.add_argument("--statsshow", action="store_true",
+                     help="check HUD Stats's level-up troupe, in the left box")
     ap.add_argument("--versushud", action="store_true",
                      help="check the race's third HUD and its paused view")
     ap.add_argument("--demo", action="store_true",
@@ -5176,6 +5334,8 @@ def main():
         sys.exit(coop_ai_check(args.rom))
     if args.versushud:
         sys.exit(versus_hud_check(args.rom))
+    if args.statsshow:
+        sys.exit(stats_show_check(args.rom))
     if args.demo:
         sys.exit(demo_check(args.rom))
     if args.gameover:
