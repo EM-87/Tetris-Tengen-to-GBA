@@ -247,13 +247,12 @@ What has been checked only against a READING of the disassembly (host tests,
 the harness) and never against the cartridge itself, which is where the
 last timing bugs were found every time:
 
-- **Prototype A's clear and spawn timing**, and whether its level-up freezes
-  the piece. Its RAM map differs and the probes cannot read its piece; B, C
-  and D were measured (row and piece both one frame after the lock).
-
-Traced or measured since: the race and the computer (`MODE=versus`/`with`),
-the handicap (`--handicap N`, all modes), the attract demo (`--demo`), and
-the prototypes' level-up and pause (`tools/probes/proto_rules.py`).
+Nothing. Traced or measured since: the race and the computer
+(`MODE=versus`/`with`), the handicap (`--handicap N`, all modes), the
+attract demo (`--demo`), and all four prototypes' clear, level-up and pause
+(`tools/probes/proto_rules.py` — proto_a draws its falling piece into the
+field and walls with 8, so it is measured by letting the piece complete the
+row itself: gone one frame after the lock, as in B, C and D).
 
 And what has run only in an emulator:
 

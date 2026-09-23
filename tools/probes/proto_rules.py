@@ -16,6 +16,11 @@ Esto lo comprueba contra las ROMs:
   5. la pausa NO calla la musica... solo en proto_a. B, C y D la callan como
      el release. La lista lo decia de todos.
 
+proto_a pinta la pieza que cae dentro del tablero y sus paredes valen 8, asi
+que las medidas que miran $64 no lo leen; measure_clear_by_piece si, y da en
+los cuatro prototipos lo mismo: la fila se va, y sale la pieza siguiente, un
+frame despues de que la pieza se asiente.
+
 El 4 y el 5 los mide tambien tools/extract_assets.py al generar las skins
 (read_skin_levelup_sound, read_skin_pause_music), y de ahi salen las tablas
 que el port consulta.
@@ -132,6 +137,49 @@ def measure_kick(path):
         after = occupied(n2)
         out[name] = (before != after)
     return out, None
+
+
+def measure_clear_by_piece(path):
+    """(frame en que la pieza completa la fila, frame en que la fila se va).
+
+    Vale para los cinco volcados, proto_a incluido: ese pinta la pieza que cae
+    DENTRO del tablero (y sus paredes valen 8, no F), asi que "cuando asienta"
+    no se puede leer de $64 como en los demas. Se deja caer la primera pieza
+    en un tablero vacio para ver que celda de la fila de abajo ocupa, y en un
+    arranque identico se planta esa fila llena salvo ahi: la completa la
+    propia pieza. La pieza se asienta el frame siguiente al que la completa.
+    """
+    def bottom_cells(nes):
+        return {n for n in range(3, 13) if row_cells(nes, ROW1 - 1)[n]}
+
+    nes = boot(path)
+    if nes is None:
+        return None, "no llego a jugar"
+    empty_field(nes)
+    hole = None
+    for _ in range(400):
+        nes.run(1, BTN["DOWN"])
+        if bottom_cells(nes):
+            hole = bottom_cells(nes)
+            break
+    if not hole:
+        return None, "la primera pieza no llego abajo"
+    nes = boot(path)
+    empty_field(nes)
+    for nib in range(3, 13):
+        if nib not in hole:
+            i = (PF + (ROW1 - 1) * 8 + (nib >> 1)) & 0x7FF
+            b = nes.bus.ram[i]
+            nes.bus.ram[i] = (b | 0x10) if (nib & 1) == 0 else (b | 0x01)
+    full = None
+    for f in range(400):
+        nes.run(1, BTN["DOWN"])
+        n = len(bottom_cells(nes))
+        if full is None and n == 10:
+            full = f
+        elif full is not None and n < 10:
+            return (full, f), None
+    return None, "la fila no se fue"
 
 
 def empty_field(nes):
@@ -323,3 +371,11 @@ if __name__ == "__main__":
         nes.bus.drain()
         print("  %-14s jugando %d, en pausa %d" % (path.split("/")[-1],
                                                     playing, notes(240)))
+
+    print("LA FILA QUE COMPLETA LA PROPIA PIEZA: completa -> se va (frames)")
+    for path in sys.argv[1:]:
+        got, why = measure_clear_by_piece(path)
+        print("  %-14s %s" % (path.split("/")[-1],
+                              "completa en f%d, se va en f%d: %d frames"
+                              % (got[0], got[1], got[1] - got[0]) if got
+                              else why))

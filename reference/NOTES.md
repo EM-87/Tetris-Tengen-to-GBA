@@ -225,6 +225,13 @@ sound halves again for every dump it is given):
   over four paused seconds proto_a writes as many notes as it did playing,
   the other three none.
 
+And the clear, in all four: the row goes, and the next piece is dealt, ONE
+frame after the lock (`measure_clear_by_piece` in the probe). proto_a needed
+its own method — it draws the falling piece INTO the playfield at $0600 and
+its walls are $8, not $F, so nothing that reads the piece at $64 sees it —
+but it gives the same answer as B, C and D, and so does its level-up: no
+show, the game carries on.
+
 **What is deliberately not taken** is the SHAPE of their front end — only
 1 PLAYER and 2 PLAYER, a LEVEL SELECT — 0 to 9 in plain text on B, C and D
 (measured), and four difficulty steps (BEGINNER / INTERMEDIATE / ADVANCED /
