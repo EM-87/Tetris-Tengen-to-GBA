@@ -24,8 +24,9 @@ encima del segundo. Por eso en la NES el campo de 1P queda bien corrido a la
 izquierda — que en una pantalla de GBA con un solo jugador se ve raro. Así
 que las columnas del cartucho no solo se recortan: se **reordenan**, cada
 tramo entero, para dejar el campo justo en el centro (80 px de pantalla a
-cada lado) con el HUD repartido: puntaje, líneas, nivel y estadísticas a la
-izquierda, próxima pieza a la derecha. Nada se escala ni se recorta; las 2
+cada lado) con el HUD en dos cajones de la misma greca, uno a cada lado:
+próxima pieza y contadores a la izquierda; a la derecha, según el HUD que
+elijas, el banner de TETRIS, las estadísticas o el panel del otro jugador. Nada se escala ni se recorta; las 2
 columnas que sobran son el marco de ese segundo campo, que ya no enmarca
 nada. En vertical el NES tiene 30 filas y el GBA 20, y el campo se lleva las
 20 exactas: por eso la franja de etiquetas que el NES pone *arriba* del campo
@@ -98,23 +99,19 @@ Hay una ROM de GBA que arranca, se juega y corre las reglas reales de Tengen.
   verdad, y `reference/NOTES.md` con el resumen curado de qué está
   verificado y contra qué línea de la ROM.
 
-### Lo que falta
+### Qué tiene
 
-- **Coop y el jugador de la máquina**: el core ya modela el coop (incluido
-  su campo de 12 columnas), pero la capa GBA todavía no lo ofrece; el
-  GAME SELECT lista solo los dos modos que sí están, con las palabras del
-  cartucho. Falta también el handicap inicial del 2P
-  (`initHandicapGarbage`) y el jugador de la máquina de la ROM
-  (`computerMove`), que es el único modo de dos jugadores que no necesita
-  ni segunda consola ni cable.
-- **Coreografía exacta de los bailarines**: están los seis, con su arte, sus
-  poses, sus posiciones y su escenario reales — el blit de subida de nivel no
-  solo despeja el banner, además dibuja las repisas sobre las que se paran, y
-  eso ya está. Lo que falta son los datos del script individual de cada uno.
-  El intérprete de esos scripts sí está trazado (ver `reference/NOTES.md`:
-  cada entrada es una pose, un salto o una bifurcación al azar según contra
-  qué dirección se compare), pero los datos no están cargados todavía, así
-  que recorren la tabla de poses desde puntos escalonados.
+Los cinco modos del GAME SELECT del cartucho: **1 PLAYER**, **2 PLAYER** y
+**COOPERATIVE** por cable link, y **VERSUS COMPUTER** y **WITH COMPUTER**
+contra el jugador de la máquina de la ROM (`computerMove`, transcrito). El
+handicap inicial, la tabla de HIGH SCORES guardada en la SRAM del cartucho
+(y cruzada por cable, con los nombres de los dos), la demo de atracción, la
+cuenta de BONUS entre niveles con los cosacos y su coreografía real, y los
+títulos de tres prototipos como skins con sus reglas.
+
+Lo que se aparta del cartucho, y por qué, está escrito en `CLAUDE.md`:
+"One thing the port does that the cartridge does not" y "What the port
+knowingly does NOT show". Nada de eso es un olvido.
 
 ## Controles
 
@@ -123,24 +120,15 @@ secas: Abajo+lateral no acelera, igual que en el original), **A** y **B**
 rotan — y si los dejás apretados 15 frames la pieza empieza a girar sola,
 que es una rareza real de Tengen, no un bug del port —, y **START** pausa.
 
-En la pantalla de selección, **arriba/abajo** elige entre las cuatro músicas
-del juego (Loginska, Bradinsky, Karinka, Troika), que es la selección de
-música que el menú original también ofrece.
+Lo que el GBA tiene de más:
 
-## Dos jugadores
-
-**GAME SELECT → 2 PLAYER**, con un cable link entre las dos consolas y el
-mismo cartucho en las dos. Quién es jugador 1 lo decide el cable, no el
-software: la consola enchufada en el extremo de maestro juega de jugador 1 y
-es la que manda su nivel y su música: las dos pasan por la pantalla de
-selección, pero la del maestro es la que cuenta, y en la pantalla de cable se
-ve cuál quedó. Cada consola muestra su propio campo, centrado igual que en un
-jugador, con la puntuación del rival en el panel de la izquierda.
-
-Es una carrera, como en el cartucho: no se manda basura de un lado al otro.
-Cualquiera de los dos puede pausar (la ROM original hace el OR de los dos
-mandos, y eso vale también por cable). Si el cable se va, las dos consolas lo
-detectan y terminan la partida en vez de quedarse esperando.
+| Dónde | Botón | Qué hace |
+|---|---|---|
+| Partida | SELECT | cambia de HUD (dos por modo) |
+| Partida, HUD Stats | L+R | cambia el color del cosaco |
+| GAME SELECT o LEVEL SETTINGS | L+R | destapa las canciones ocultas (Korobeiniki, Katiuska, MUSIC MIX), los niveles 18-19 y el menú de pausa |
+| Título | L+R | recorre los títulos de los prototipos (su skin llega al juego) |
+| Carrera, tablero muerto | A+B | se levanta y sigue, como en el cartucho |
 
 Con el juego en pausa entran los tres códigos originales, un botón por
 frame:
@@ -155,6 +143,16 @@ Están reproducidos con sus manías: un botón que rompe la secuencia se come
 esa pulsación, y al completar un código el cursor no se rebobina, así que
 volver a pulsar **A** repite el último — que es como se sube de nivel a
 pulsos de A.
+
+## Dos jugadores
+
+**GAME SELECT → 2 PLAYER** (o COOPERATIVE), con un cable link entre las dos
+consolas. Quién es jugador 1 lo decide el cable: el maestro elige nivel,
+handicap, música y skin, y el otro espera con un cosaco. Las dos consolas
+simulan la misma partida desde la misma semilla y solo se mandan botones, y
+`tools/run_link.py` comprueba que acaben idénticas byte a byte. Si el cable
+se va, las dos lo detectan. Las dos necesitan esta misma versión del ROM
+(con otra más vieja se conectan igual, pero sin skin).
 
 ## Compilar
 

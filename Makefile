@@ -8,11 +8,11 @@
 #                       against the disassembly here, on the host, before it
 #                       ever touches a GBA.
 #
-#   make gba            Cross-compiles the core (unmodified) into a .gba ROM
-#                       once the GBA-side rendering/input layer exists under
-#                       gba/. Requires devkitARM (devkitPro) with DEVKITARM
-#                       set. This target is a stub until that layer is
-#                       written — see CLAUDE.md's roadmap.
+#   make gba            Cross-compiles the core (unmodified) and the gba/
+#                       layer into build/tengen.gba, header fixed so it boots
+#                       on hardware. Needs arm-none-eabi-gcc (devkitARM too,
+#                       if DEVKITARM is set) and the headers `make assets`
+#                       generates from a cartridge dump.
 
 CC      ?= gcc
 CFLAGS  ?= -std=c99 -Wall -Wextra -Wpedantic -g -O1
@@ -66,7 +66,15 @@ ARMCC      := $(ARMPREFIX)gcc
 ARMOBJCOPY := $(ARMPREFIX)objcopy
 
 # ARM7TDMI. -mthumb keeps the code small, which matters because it runs from
-# the 16-bit-wide cartridge bus.
+# the 16-bit-wide cartridge bus: an ARM instruction is two bus reads there and
+# a Thumb one is one. FOR A LONG TIME IT DID NOT APPLY: the compile line below
+# ended in `-marm gba/crt0.s ...`, and the last of two conflicting flags wins,
+# so every C file was built ARM whatever this said. crt0.s carries its own
+# `.arm` and needs no flag. Built as the comment always claimed, the image is
+# 9KB smaller and the worst frame measured (VERSUS COMPUTER, the computer
+# choosing) goes from 67% of the frame to 53%. Code that must be ARM says so
+# per function (IWRAM_CODE in gba_hw.h), and vsync picks its SWI encoding by
+# __thumb__.
 #
 # -flto IS NOT A NICETY HERE, it is what keeps the drawing inside the vertical
 # blank. The front end was one file for a long time and the compiler could
@@ -118,7 +126,7 @@ $(GBA_ELF): $(GBA_SRC) $(CORE_HDR) gba/port.h gba/gba_hw.h gba/link.h \
 	    echo "not committed here. Generate them once with:"; \
 	    echo "    make assets ROM=/path/to/tetris.nes"; \
 	    exit 1; }; done
-	$(ARMCC) $(ARMFLAGS) $(ARMLDFLAGS) -marm gba/crt0.s $(GBA_SRC) -o $@
+	$(ARMCC) $(ARMFLAGS) $(ARMLDFLAGS) gba/crt0.s $(GBA_SRC) -o $@
 
 GBAFIX := $(BUILD)/gbafix
 

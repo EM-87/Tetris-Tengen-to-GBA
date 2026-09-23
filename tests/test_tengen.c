@@ -1840,7 +1840,7 @@ static void test_the_computers_soft_drop_does_not_eat_its_own_shifts(void) {
      * frame the driver asks for a shift, did the piece move? */
     TengenGame game;
     TengenAi ai;
-    tengen_new_game(&game, 0x31337, 0, true, false, false);
+    tengen_new_game(&game, 0x1337, 0, true, false, false);
     tengen_ai_reset(&ai);
     ai.soft_drop = true;
 

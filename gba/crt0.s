@@ -4,12 +4,12 @@
 @ stock arm-none-eabi toolchain (see gba_hw.h for the same reasoning).
 @
 @ NOTE ON THE HEADER: bytes 4..159 are the Nintendo logo, which the real BIOS
-@ compares against its own copy before booting. It is left zeroed here — this
-@ ROM therefore runs in emulators (mGBA, VBA-M, no$gba) but will NOT boot on
-@ real hardware or a BIOS-strict emulator. Filling it in, and fixing up the
-@ header checksum at byte 189, is what devkitPro's `gbafix` does; see
-@ ../README.md. That step needs Nintendo's logo data, which is not
-@ reproduced here.
+@ compares against its own copy before booting. It is left zeroed HERE, in
+@ the source, and filled in by the build: `make gba` runs devkitPro's
+@ `gbafix` (vendored in tools/gbafix/) over the linked image, which writes the
+@ logo and the header checksum at byte 189, and tools/check_header.py
+@ verifies both. The .gba it produces boots on real hardware; the .elf does
+@ not, and nothing should be flashed from it.
 
     .section .init, "ax"
     .global _start

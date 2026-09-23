@@ -2120,8 +2120,9 @@ def coop_ai_check(rom_path):
         print(f"SALTADO: {why}")
         return 0
     ai, why = game_state_address(rom_path, "g_ai")
-    if ai is None:
-        print(f"SALTADO: {why}")
+    last_piece, why2 = game_state_address(rom_path, "g_ai_last_piece")
+    if ai is None or last_piece is None:
+        print(f"SALTADO: {why or why2}")
         return 0
 
     failures = []
@@ -2163,6 +2164,14 @@ def coop_ai_check(rom_path):
         core.memory.u8[base + off["orientation"] + st] = 0
         core.memory.u8[base + off["y"] + st] = 4
         core.memory.u8[base + off["x"] + st] = 9
+        # ...AND TELL IT SO. ai_input chooses again when the piece in its hand
+        # differs from the last one it chose for, and this plants an O: if
+        # the game happened to have dealt it an O already, it never chose at
+        # all and the column read back was from another board. Which piece
+        # that is depends on the seed, and the seed on how many main-loop
+        # turns the menus took — which a faster build of the same code
+        # changes. So the fixture says "new piece" outright.
+        core.memory.u8[last_piece] = 0
         run(core, 2)
 
     for chord in (False, True):
