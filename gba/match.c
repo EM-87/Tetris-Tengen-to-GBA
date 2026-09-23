@@ -353,7 +353,7 @@ static int pmenu_start_px(int in_w, int len, bool *offset) {
  * two clear of the frame. */
 #define PMENU_ARROW_ROOM_PX (TILE_PX + PMENU_ARROW_GAP_PX + 2)
 static int pmenu_width(const char *const *lines, int count) {
-    for (int w = PMENU_W_MIN; w < PMENU_W_MAX; w += 2) {
+    for (int w = PMENU_W_MIN; w <= PMENU_W_MAX; w += 2) {
         bool fits = true;
         for (int i = 0; i < count && fits; i++) {
             int len = (int)text_len(lines[i]);
@@ -391,6 +391,42 @@ static void draw_pmenu_line(int in_tx, int in_w, int ty, const char *text,
 /* The box drawn last, so a change of width can clean up after it. */
 static int g_pmenu_drawn_w;
 
+/* WHAT THE WIDEST BOX WOULD COVER, on all four layers, saved as the box
+ * first goes up. Nothing under it changes while the game is paused, so a box
+ * that gets narrower — another tune, or the EXIT? question — puts back the
+ * strips it uncovers from here. It used to ask for a whole repaint of the
+ * static screen instead, and those frames finished a scanline past the
+ * vertical blank. */
+static const uint8_t kPmenuLayers[4] = {
+    SCREENBLOCK, SCREENBLOCK_STATS, SCREENBLOCK_PANEL, SCREENBLOCK_HISTOGRAM
+};
+static uint16_t g_pmenu_under[4][PMENU_H][PMENU_W_MAX];
+
+static void pmenu_save_under(void) {
+    int tx0 = (SCREEN_TW - PMENU_W_MAX) / 2;
+    for (int l = 0; l < 4; l++) {
+        vu16 *map = MEM_SCREENBLOCK(kPmenuLayers[l]);
+        for (int y = 0; y < PMENU_H; y++)
+            for (int x = 0; x < PMENU_W_MAX; x++)
+                g_pmenu_under[l][y][x] = map[(PMENU_TY + y) * MAP_W + tx0 + x];
+    }
+}
+
+/* Puts back the columns a box `from` wide covered and one `to` wide does
+ * not. */
+static void pmenu_restore_strips(int from, int to) {
+    int tx0 = (SCREEN_TW - PMENU_W_MAX) / 2;
+    int a = (SCREEN_TW - from) / 2, b = (SCREEN_TW - to) / 2;
+    for (int l = 0; l < 4; l++) {
+        vu16 *map = MEM_SCREENBLOCK(kPmenuLayers[l]);
+        for (int y = 0; y < PMENU_H; y++)
+            for (int tx = a; tx < a + from; tx++) {
+                if (tx >= b && tx < b + to) continue;
+                map[(PMENU_TY + y) * MAP_W + tx] = g_pmenu_under[l][y][tx - tx0];
+            }
+    }
+}
+
 /* WHAT THE BOX LEAVES BEHIND WHEN IT GOES. The frame and the rows that centre
  * exactly are on the main background, and a repaint of the static screen
  * covers those; the rest of the menu is on the offset and counter layers,
@@ -423,14 +459,16 @@ static void draw_pause_menu(void) {
     const char *menu[] = { "PAUSE", kMusicNames[g_music], "EXIT" };
     const char *const *lines = g_pause_confirm ? ask : menu;
     int w = pmenu_width(lines, 3);
+    /* The first box since the screen was last whole: keep what it covers. */
+    if (!g_pmenu_drawn_w) pmenu_save_under();
+    /* A box narrower than the last one uncovers the board, the braid and the
+     * panels' edges: put back just those strips. */
+    else if (w < g_pmenu_drawn_w) pmenu_restore_strips(g_pmenu_drawn_w, w);
     /* THE OTHER THREE LAYERS HAVE TO GET OUT OF THE WAY where the box lands:
      * the counters' background is drawn ABOVE the main one, and a box that
      * met one would have the panel printing straight through it. It is also
      * what wipes the line the cursor was on a frame ago. */
-    clear_pmenu_layers(w > g_pmenu_drawn_w ? w : g_pmenu_drawn_w);
-    /* A box narrower than the last one uncovers the board, the braid and the
-     * panels' edges, which only a repaint puts back. */
-    if (g_pmenu_drawn_w && w < g_pmenu_drawn_w) g_repaint = true;
+    clear_pmenu_layers(w);
     g_pmenu_drawn_w = w;
 
     int tx = (SCREEN_TW - w) / 2;
@@ -477,7 +515,6 @@ static bool pause_menu_input(uint8_t pressed, bool *leaving) {
             g_pause_yes = !g_pause_yes;
         if (pressed & TENGEN_BTN_B) {
             g_pause_confirm = false;
-            g_repaint = true;     /* the other box again: see pmenu_width */
             screen_blip();
         } else if (pressed & TENGEN_BTN_A) {
             if (g_pause_yes) {
@@ -506,7 +543,6 @@ static bool pause_menu_input(uint8_t pressed, bool *leaving) {
                 *leaving = true;
             } else {
                 g_pause_confirm = false;
-                g_repaint = true;
             }
             screen_blip();
         }
@@ -558,10 +594,8 @@ static bool pause_menu_input(uint8_t pressed, bool *leaving) {
      * cost the menu its way out — see the note at the top. */
     if (g_pause_row == PMENU_EXIT && (pressed & TENGEN_BTN_A)) {
         g_pause_confirm = true;
-        /* The question's box is narrower than the column's, and what the
-         * wide one covered — the braid either side of the board — has to be
-         * put back from under it. */
-        g_repaint = true;
+        /* The question's box is narrower than the column's; what the wide
+         * one covered comes back from under it (pmenu_restore_strips). */
         g_pause_yes = false;   /* NO first: a pause menu does not lose games */
         screen_blip();
     }

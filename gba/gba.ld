@@ -81,6 +81,12 @@ SECTIONS
      * the handler is installed through. */
     __sp_irq = ORIGIN(iwram) + LENGTH(iwram) - 0x100;
     __sp_usr = __sp_irq - 0x100;
+    /* THE USER STACK GROWS DOWN FROM __sp_usr INTO WHATEVER IS LEFT ABOVE
+     * .bss. Nothing would say so if that space ran out — the stack would
+     * simply start writing over the last variables — so the link refuses a
+     * layout that leaves it less than 4KB. Today it has about 10.7KB. */
+    ASSERT(__sp_usr - __bss_end >= 0x1000,
+           "IWRAM: less than 4KB left for the stack above .bss")
 
     /DISCARD/ : { *(.ARM.exidx*) *(.ARM.extab*) *(.comment) }
 }

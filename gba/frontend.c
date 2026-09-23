@@ -590,10 +590,17 @@ void draw_link_wait(const TengenLobby *lobby, int elapsed) {
     draw_guest_dancer(elapsed);
 }
 
-/* Appends a number with no leading zeroes. Returns the new length. */
+/* Appends a number with no leading zeroes, however many digits it has.
+ * Returns the new length. (The callers today pass a level and a handicap's
+ * rows, two digits at most, but nothing here should depend on that.) */
 static unsigned append_number(char *row, unsigned n, unsigned value) {
-    if (value >= 10) row[n++] = (char)('0' + value / 10);
-    row[n++] = (char)('0' + value % 10);
+    char digits[10];
+    unsigned k = 0;
+    do {
+        digits[k++] = (char)('0' + value % 10);
+        value /= 10;
+    } while (value);
+    while (k) row[n++] = digits[--k];
     return n;
 }
 

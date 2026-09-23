@@ -103,7 +103,7 @@ minus those).
 | --- | --- | --- |
 | `make test` | no | always — the rules, in milliseconds |
 | `make gba` | headers | to build `build/tengen.gba` |
-| `make gba-check` | headers | before calling any change done: 44 checks on the running ROM in mGBA, two of them on two consoles with a cable |
+| `make gba-check` | headers | before calling any change done: 45 checks on the running ROM in mGBA, two of them on two consoles with a cable |
 | `make trace ROM=... [MODE=coop\|versus\|with\|demo]` | yes | after touching `tengen_step` or `tengen_ai.c`: the port against the cartridge, iteration by iteration. The 1P and coop scripts never complete a row; `MODE="with --pad1"` plays player 1 with the port's computer and clears plenty; add `--handicap N` to any mode |
 | `make tune-check ROM=...` | yes | after touching audio: the four tunes against the cartridge, note by note |
 | `make dance-check ROM=...` | yes | after touching the dancers: their choreography against the cartridge's driver |
@@ -195,6 +195,10 @@ story behind each; the item number is in brackets.
 - **Against the computer there is ONE handicap**, and it buries both
   boards (`bcs @computerIsPlaying`, main.asm.txt:3539). Only 2 PLAYER has
   two.
+- **Drawing must end inside the vertical blank.** `--vblank` reads the
+  scanline where `draw_match` finishes: a full repaint is the heaviest frame
+  (line ~220 of 227). Anything that repaints often — the pause box changing
+  width did — puts back only what it uncovered instead.
 - **The fall timer ticks before the moves.** L8320 decrements and reloads it,
   then shifts and turns, then drops; a shift the coop partner refuses adds
   its +2 to the timer just reloaded.

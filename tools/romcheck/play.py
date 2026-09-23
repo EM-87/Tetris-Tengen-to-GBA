@@ -3,6 +3,9 @@ A game being played: the board, the line clear, pause and the
 cheat codes, points, the counters, game over, the handicap, the
 frame budget.
 """
+import os
+import subprocess
+
 from .harness import (
     CELL_BLOCK, CELL_WALL, CHARBLOCK_ADDR, CLEAR_WORDS,
     CODE_LEVEL_UP, CODE_LONG_BAR, CODE_UNDO, COL_BOX_L,
@@ -1061,4 +1064,92 @@ def xe_check(rom_path):
     if failures:
         return 1
     print("OK: el acorde abre los niveles 18 y 19, y solo eso.")
+    return 0
+
+
+def vblank_check(rom_path):
+    """EL DIBUJADO DE CADA FRAME TERMINA DENTRO DEL BLANCO VERTICAL.
+
+    draw_match espera al vblank, escribe el mapa de tiles, el OAM y las
+    paletas, y al final llama a audio_frame. La linea de barrido (VCOUNT) en
+    ese momento es donde acabo de dibujar: tiene que estar en 160-227. Una que
+    ya ha vuelto a 0-159 es un dibujado que se paso, y pasarse no avisa: se
+    ve como que falta la parte de arriba de lo ultimo que se dibujo (asi se
+    perdio una vez el titulo del menu de pausa). --onscreen caza el sintoma;
+    esto mide el margen, en los frames mas pesados que hay: el menu de pausa
+    cambiando de ancho y de caja, quitar la pausa (que repinta la pantalla
+    entera) y una limpieza de cuatro filas.
+    """
+    elf = os.path.splitext(rom_path)[0] + ".elf"
+    try:
+        out = subprocess.check_output(
+            [os.environ.get("NM", "arm-none-eabi-nm"), elf]).decode()
+    except (OSError, subprocess.CalledProcessError) as exc:
+        print(f"SALTADO: no pude leer {elf}: {exc}")
+        return 0
+    audio = next((int(l.split()[0], 16) for l in out.splitlines()
+                  if l.endswith(" audio_frame")), None)
+    base, why = game_state_address(rom_path)
+    if audio is None or base is None:
+        print(f"SALTADO: {why or 'el ELF no exporta audio_frame'}")
+        return 0
+    off = game_offsets(rom_path)
+
+    def measure(core, frames):
+        ends, f0, seen = [], core.frame_counter, None
+        while core.frame_counter < f0 + frames:
+            core.step()
+            fc = core.frame_counter
+            if (core.cpu.pc & ~1) in (audio, audio + 4) and seen != fc:
+                seen = fc
+                ends.append(core.memory.u16[0x04000006])
+        return ends
+
+    def tap_measure(core, keys, frames=14):
+        core.set_keys(*[KEYS[k] for k in keys])
+        got = measure(core, 4)
+        core.set_keys()
+        return got + measure(core, frames)
+
+    results = {}
+    core, screen = load(rom_path)   # `screen` must stay alive; see load()
+    run(core, 8)
+    press_start(core); run(core, 10)
+    core.set_keys(KEYS["L"], KEYS["R"]); run(core, 4); core.set_keys(); run(core, 12)
+    press_start(core); run(core, 12)
+    press_start(core); run(core, 30)
+    got = tap_measure(core, ["START"])
+    for _ in range(8):                        # every tune: every box width
+        got += tap_measure(core, ["RIGHT"])
+    results["menu de pausa, de cancion en cancion"] = got
+    got = []
+    for keys in (["DOWN"], ["A"], ["B"], ["A"], ["START"]):
+        got += tap_measure(core, keys)
+    results["la pregunta EXIT?, volver, y quitar la pausa"] = got
+    del core, screen
+
+    core, screen = load(rom_path)
+    start_game(core)
+    fill_rows(core, base + off["field"], [16, 17, 18, 19])
+    core.set_keys(KEYS["DOWN"])
+    results["una limpieza de cuatro filas"] = measure(core, 120)
+    del core, screen
+
+    failures = []
+    for what, ends in results.items():
+        late = [v for v in ends if v < 160]
+        inside = [v for v in ends if v >= 160]
+        if not ends:
+            failures.append(f"{what}: no se vio terminar ningun dibujado")
+        elif late:
+            failures.append(f"{what}: {len(late)} de {len(ends)} frames acaban "
+                            f"fuera del blanco (linea {late})")
+        else:
+            print(f"  {what}: {len(ends)} frames, el ultimo acaba en la linea "
+                  f"{max(inside)} de 227")
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: el dibujado de cada frame termina dentro del blanco vertical.")
     return 0

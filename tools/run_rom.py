@@ -93,6 +93,8 @@ def main():
                      help="check the COMPUTER player plays VERSUS and WITH")
     ap.add_argument("--coopai", action="store_true",
                      help="check the computer reads its partner under the chord")
+    ap.add_argument("--vblank", action="store_true",
+                     help="check each frame's drawing ends inside the vertical blank")
     ap.add_argument("--proto-pause", action="store_true",
                      help="check only proto_a's pause leaves the tune playing")
     ap.add_argument("--sweep", action="store_true",
@@ -180,6 +182,8 @@ def main():
         sys.exit(sleep_check(args.rom))
     if args.sweep:
         sys.exit(sweep_check(args.rom))
+    if args.vblank:
+        sys.exit(vblank_check(args.rom))
     if args.proto_pause:
         sys.exit(proto_pause_check(args.rom))
     if args.demo:

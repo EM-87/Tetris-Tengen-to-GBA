@@ -32,11 +32,16 @@
 #define SIO_START       0x0080
 #define SIO_IRQ         0x4000
 
-/* The interrupt hands transfers to the main loop through this. Four is
- * plenty: the two consoles' clocks differ by parts per million, so the queue
- * holds one entry almost always and two on the rare frame where the drift
- * puts two transfers inside one of our frames. */
-#define RX_QUEUE 4
+/* The interrupt hands transfers to the main loop through this. The two
+ * consoles' clocks differ by parts per million, so the queue holds one entry
+ * almost always and two on the rare frame where the drift puts two transfers
+ * inside one of ours. SIXTEEN anyway: a word dropped on a full queue is a
+ * desync and the end of the match, and sixteen is a quarter of a second of
+ * this console falling behind — a stall no frame here comes near in mGBA,
+ * bought for 48 bytes, on hardware that is not mGBA. It costs no latency:
+ * the queue only fills when this side is behind, and LINK_MAX_CATCHUP
+ * drains it. */
+#define RX_QUEUE 16
 
 /* How long after the last real transfer this console still calls itself
  * linked: half a second, many frames more than any hiccup and far less than
