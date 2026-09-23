@@ -101,15 +101,21 @@ def computer_check(rom_path):
         core3.set_keys(); run(core3, 10)
     press_start(core3); run(core3, 12)
     press_start(core3); run(core3, 30)
-    run(core3, 2500)
-    addr = base + off["field"]
-    after = sum(1 for i in range(PF) if core3.memory.u8[addr + i])
-    if after < 40:
-        failures.append(f"tras la demo el ordenador no juega: solo {after} "
-                         "celdas en el tablero compartido")
+    # PLAYING IS MOVING. At the cartridge's pace — no soft drop, gravity
+    # alone — a few thousand frames is only a handful of pieces, so counting
+    # cells says little; a computer that is playing shifts its piece off the
+    # spawn column, and one left on the demo's slot never does.
+    x_at = base + off["x"] + off["stride"]
+    xs = set()
+    for _ in range(2500):
+        core3.run_frame()
+        xs.add(core3.memory.u8[x_at])
+    if len(xs) < 3:
+        failures.append(f"tras la demo el ordenador no juega: su pieza solo "
+                         f"ha estado en las columnas {sorted(xs)}")
     else:
         print(f"  ...y sigue jugando despues de la demo de atraccion "
-               f"({after} celdas)")
+               f"(su pieza pasa por {len(xs)} columnas)")
 
     for f in failures:
         print("FALLA:", f)
@@ -206,9 +212,10 @@ def coop_ai_check(rom_path):
         for partner_x in (9, 10, 11):
             core, screen = start(4, chord)
             _ = screen
-            if core.memory.u8[ai + AI_SOFT_DROP] != 1:
-                failures.append("g_ai no esta donde se cree: soft_drop deberia "
-                                 "valer 1 en una partida de WITH COMPUTER")
+            # At the cartridge's pace: computerMove never holds Down.
+            if core.memory.u8[ai + AI_SOFT_DROP] != 0:
+                failures.append("la maquina baja sus piezas con abajo: el "
+                                 "cartucho no lo hace (soft_drop deberia ser 0)")
                 break
             plant(core, partner_x)
             aware = core.memory.u8[ai + AI_COOP_AWARE]

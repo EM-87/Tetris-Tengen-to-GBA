@@ -4,7 +4,7 @@ and its way out.
 """
 from .harness import (
     KEYS, LEADER_HEAD_TY, MUSIC_COUNT_MAX, MUSIC_ROW,
-    PMENU_H, PMENU_TX, PMENU_TY, PMENU_W_T,
+    PMENU_H, PMENU_TX, PMENU_TY, PMENU_W_T, pmenu_span,
     PM_EXIT, PM_HEAD, PM_L, PM_MUSIC,
     PM_R, PM_SURE, PM_TUNE, REG_SOUND1CNT_X,
     SCREENBLOCK_ADDR, SCREEN_TW_TILES, SCREEN_W, TILE,
@@ -45,8 +45,8 @@ def pausemenu_check(rom_path):
         core.set_keys(); run(core, settle)
 
     def row(r):
-        """Only the pause box's own columns: see PM_L."""
-        return tilemap_text(core, r, PM_L, PM_R)
+        """Only the pause box's own columns: see PM_L and pmenu_span."""
+        return tilemap_text(core, r, *pmenu_span(core))
 
     # FIRST: a game with the chord never rung. The plaque must stay a plaque.
     start_game(core)

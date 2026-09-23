@@ -8,7 +8,7 @@ from .harness import (
     GAME_SELECT_TX, GAME_SELECT_TY, HANDICAP_ROW, KEYS,
     LEVEL_ROW, LIMIT_SKINS, LINK_MSG_ROW, LINK_TIMEOUT_FRAMES,
     MENU_ARROW_TX, MENU_TEXT_BANK, MUSIC_ROW, OAM_ADDR,
-    ONSCREEN_MIN_INK, PALETTE_ADDR, PM_EXIT, PM_L,
+    ONSCREEN_MIN_INK, PALETTE_ADDR, PM_EXIT, PM_L, pmenu_span,
     PM_R, SCREENBLOCK_ADDR, SCREEN_H, SCREEN_TW_TILES,
     SCREEN_W, TENGEN_PF_HEIGHT, TENGEN_PF_WIDTH, TILE,
     TITLE_PAL_BASE, TITLE_SHOW_FRAMES, game_offsets, game_state_address,
@@ -519,7 +519,7 @@ def loans_check(rom_path):
     tap("L", "R"); run(core, 20)           # ...y el acorde lo vuelve menu
     # EXIT, y SI. START aqui seria reanudar, no salir.
     for _ in range(3):
-        if ">" in tilemap_text(core, PM_EXIT, PM_L, PM_R):
+        if ">" in tilemap_text(core, PM_EXIT, *pmenu_span(core)):
             break
         tap("DOWN")
     tap("A")                                # abre la pregunta

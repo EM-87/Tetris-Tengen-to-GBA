@@ -42,6 +42,12 @@ def leaderboard_check(rom_path):
         return [tilemap_text(core, LEADER_FIRST_TY + i, 0, 30)
                 for i in range(15)]
 
+    def score_lines(row):
+        """A row's score and lines as printed: leading zeros blanked, as the
+        cartridge prints them ("17000", and "0" for no lines)."""
+        words = row.split()
+        return (words[3], words[4]) if len(words) >= 5 else ("?", "?")
+
     def to_gameover(core, score):
         """Plant a score, bury the board, and take the plaque's way out."""
         for i in range(4):
@@ -60,14 +66,15 @@ def leaderboard_check(rom_path):
     # The cold table, seen through the panel's own HIGH counter first.
     to_gameover(core, 20)
     table = rows(core)
-    wanted = [f"{17 - i}000" for i in range(15)]
-    got = ["".join(ch for ch in row if ch.isdigit())[-9:-3] for row in table]
-    if not all(w in g for w, g in zip(wanted, got)):
+    wanted = [(f"{17 - i}000", "0") for i in range(15)]
+    got = [score_lines(row) for row in table]
+    if got != wanted:
         failures.append(f"la tabla fria no es la del cartucho: {got[:3]} ...")
     elif "AAA" not in table[0]:
         failures.append(f"la primera entrada no sale como AAA: {table[0]!r}")
     else:
-        print("  arranca con las quince del cartucho, de 17000 a 3000, todas AAA")
+        print("  arranca con las quince del cartucho, de 17000 a 3000, todas AAA,"
+              " sin ceros a la izquierda")
 
     # ...and back out, then a score that belongs on it.
     press_start(core); run(core, 40)
@@ -76,9 +83,10 @@ def leaderboard_check(rom_path):
     press_start(core); run(core, 30)   # -> play
     to_gameover(core, 50000)
     table = rows(core)
-    if "050" not in table[0] or "017000" not in table[1]:
+    scores = [score_lines(row)[0] for row in table]
+    if not scores[0].startswith("50") or scores[1] != "17000":
         failures.append(f"un 50000 no entra en cabeza: {table[0]!r} / {table[1]!r}")
-    elif "003000" in "".join(table):
+    elif "3000" in scores:
         failures.append("la ultima entrada no se cayo de la tabla")
     else:
         print("  un 50000 entra el primero y empuja a las demas una fila abajo")
@@ -243,8 +251,14 @@ def tables_check(rom_path):
     # The board is played for a few frames on the way to being buried, so the
     # score that lands is the planted one plus whatever those frames paid.
     run(core, 40)
+    def score_of(row):
+        """A row's score, as printed: leading zeros blanked, as the cartridge
+        prints them. 0 if the row has none."""
+        words = row.split()
+        return int(words[3]) if len(words) >= 4 and words[3].isdigit() else 0
+
     release_first = play_and_lose(80000)
-    if "0800" not in release_first[0]:
+    if not 80000 <= score_of(release_first[0]) < 90000:
         failures.append(f"el 80000 no entro en la tabla del release: "
                          f"{release_first[0]!r}")
 
@@ -252,16 +266,16 @@ def tables_check(rom_path):
     tap(KEYS["L"], KEYS["R"]); run(core, 30)
     proto_first = play_and_lose(60000)
     # The TOP ROW, not the whole table: 8000 is one of the cartridge's own
-    # fifteen and would match an 80000 anywhere looser than this. If the two
+    # fifteen, so the score is read as a number from that row alone. If the two
     # builds shared a table the release's 80000 would be sitting above the
     # prototype's 60000, which is exactly what this asks.
-    if "0800" in proto_first[0]:
+    if 80000 <= score_of(proto_first[0]) < 90000:
         failures.append(f"la tabla del prototipo abre con el record del "
                          f"release: {proto_first[0]!r}")
-    elif "0600" not in proto_first[0]:
+    elif not 60000 <= score_of(proto_first[0]) < 70000:
         failures.append(f"el 60000 no entro en la tabla del prototipo: "
                          f"{proto_first[0]!r}")
-    elif "017000" not in proto_first[1]:
+    elif score_of(proto_first[1]) != 17000:
         failures.append("bajo el record del prototipo no estan las quince del "
                          f"cartucho: {proto_first[1]!r}")
     else:
@@ -272,10 +286,10 @@ def tables_check(rom_path):
     # the ring backwards, so one press from the first prototype is it.
     tap(KEYS["L"]); run(core, 24)
     back = play_and_lose(10)
-    if "0600" in back[0]:
+    if 60000 <= score_of(back[0]) < 70000:
         failures.append(f"la tabla del release abre con el record del "
                          f"prototipo: {back[0]!r}")
-    elif "0800" not in back[0]:
+    elif not 80000 <= score_of(back[0]) < 90000:
         failures.append(f"el release perdio su propio record: {back[0]!r}")
     else:
         print("  y el release conserva el suyo, sin el del prototipo")

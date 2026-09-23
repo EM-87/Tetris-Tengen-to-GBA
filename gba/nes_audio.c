@@ -170,14 +170,52 @@ static uint16_t envelope_bits(uint8_t vol_byte) {
     return (uint16_t)((15 << 12) | (v & 7) << 8);             /* decay from full */
 }
 
+/* THE SWEEP, which the NES does in hardware and this engine leans on: the
+ * line clear is pulse 2 with `$4005 = $8A` — on, pitch rising, shift 2 — so
+ * each of its notes is a fast upward zip, and without the sweep it was the
+ * zip's first and lowest note held flat ("mas grave"). The GBA's own sweep is
+ * on channel 1 only and works on the frequency rather than the period, so it
+ * is done here, as the NES does it, on the period:
+ *
+ *  - clocked twice a frame (the frame counter's half-frames, 120Hz), through
+ *    a divider of P+1 clocks, reloaded by a write to $4001/$4005;
+ *  - target = period +/- (period >> shift), and pulse 1's negate subtracts
+ *    one more (ones' complement), pulse 2's does not;
+ *  - on a clock with the divider at zero, the sweep on and shift non-zero,
+ *    and the channel not muted, the period becomes the target;
+ *  - MUTED while the period is under 8 or the target over $7FF — whether the
+ *    sweep is on or not, which is the NES's and not a choice;
+ *  - and a write to a period byte replaces THAT byte of the period the sweep
+ *    has moved, the other byte staying where the sweep left it. */
+typedef struct {
+    uint16_t period;     /* the timer period the channel is really playing */
+    uint8_t divider;
+    bool reload;
+    bool muted;
+} PulseSweep;
+static PulseSweep g_sweep[2];
+
+static uint16_t sweep_target(int channel, uint16_t period, uint8_t reg) {
+    uint16_t change = (uint16_t)(period >> (reg & 7));
+    if (reg & 0x08)
+        return (uint16_t)(period - change - (channel == 0 ? 1 : 0));
+    return (uint16_t)(period + change);
+}
+
+static bool sweep_mutes(int channel, uint16_t period, uint8_t reg) {
+    if (period < 8) return true;
+    return !(reg & 0x08) && sweep_target(channel, period, reg) > 0x7FF;
+}
+
 static void apply_pulse(int channel, const uint8_t *apu, bool enabled) {
     int base = channel == 0 ? R_SQ1_VOL : R_SQ2_VOL;
     uint8_t vol = apu[base + 0];
-    uint16_t period = (uint16_t)(apu[base + 2] | ((apu[base + 3] & 0x07) << 8));
+    uint16_t period = g_sweep[channel].period;
 
     uint16_t duty = (uint16_t)((vol >> 6) & 3);
     uint16_t cnt_h = (uint16_t)((duty << 6) | envelope_bits(vol));
-    if (!enabled) cnt_h &= 0x0FFF;   /* silence by volume; the GBA has no per-channel mute */
+    /* Silence by volume; the GBA has no per-channel mute. */
+    if (!enabled || g_sweep[channel].muted) cnt_h &= 0x0FFF;
 
     /* Bit 15 restarts the channel, and it has to be set: on this hardware a
      * new volume in the envelope register only takes effect on a restart.
@@ -189,13 +227,56 @@ static void apply_pulse(int channel, const uint8_t *apu, bool enabled) {
     uint16_t cnt_x = (uint16_t)(0x8000 | (gba_rate(period) & 0x7FF));
 
     if (channel == 0) {
-        REG_SOUND1CNT_L = 0;         /* no sweep: this engine does its own */
+        REG_SOUND1CNT_L = 0;         /* the GBA's sweep is not the NES's; see above */
         REG_SOUND1CNT_H = cnt_h;
         REG_SOUND1CNT_X = cnt_x;
     } else {
         REG_SOUND2CNT_L = cnt_h;
         REG_SOUND2CNT_H = cnt_x;
     }
+}
+
+/* The frame's writes, into the period the channel is playing. */
+static void sweep_take_writes(int channel, const uint8_t *apu, uint32_t written) {
+    int base = channel == 0 ? R_SQ1_VOL : R_SQ2_VOL;
+    PulseSweep *sw = &g_sweep[channel];
+    if (written & (1u << (base + 2)))
+        sw->period = (uint16_t)((sw->period & 0x700) | apu[base + 2]);
+    if (written & (1u << (base + 3)))
+        sw->period = (uint16_t)((sw->period & 0x0FF) | ((apu[base + 3] & 7) << 8));
+    if (written & (1u << (base + 1))) sw->reload = true;
+    sw->muted = sweep_mutes(channel, sw->period, apu[base + 1]);
+}
+
+/* The frame's two half-frame clocks. True if what the channel sounds like
+ * changed: a new period, or muted or let go. */
+static bool sweep_clock(int channel, const uint8_t *apu) {
+    int base = channel == 0 ? R_SQ1_VOL : R_SQ2_VOL;
+    uint8_t reg = apu[base + 1];
+    PulseSweep *sw = &g_sweep[channel];
+    uint16_t was_period = sw->period;
+    bool was_muted = sw->muted;
+    for (int half = 0; half < 2; half++) {
+        bool muted = sweep_mutes(channel, sw->period, reg);
+        if (sw->divider == 0 && (reg & 0x80) && (reg & 7) && !muted)
+            sw->period = sweep_target(channel, sw->period, reg);
+        if (sw->divider == 0 || sw->reload) {
+            sw->divider = (uint8_t)((reg >> 4) & 7);
+            sw->reload = false;
+        } else {
+            sw->divider--;
+        }
+    }
+    sw->muted = sweep_mutes(channel, sw->period, reg);
+    return sw->period != was_period || sw->muted != was_muted;
+}
+
+/* ...and a swept period reaching the GBA WITHOUT a restart, which would
+ * reset the waveform's phase sixty times a second. */
+static void sweep_retune(int channel) {
+    uint16_t rate = (uint16_t)(gba_rate(g_sweep[channel].period) & 0x7FF);
+    if (channel == 0) REG_SOUND1CNT_X = rate;
+    else REG_SOUND2CNT_H = rate;
 }
 
 static void apply_triangle(const uint8_t *apu, bool enabled) {
@@ -304,8 +385,23 @@ void nes_audio_frame(void) {
      * enable bits are part of "changed", and a port that models the length
      * counters instead gets nothing for the trouble: they never count down
      * in this game. Measured, not assumed. */
-    if (changed(apu, R_SQ1_VOL, R_SQ1_HI, 0x01)) apply_pulse(0, apu, enables & 0x01);
-    if (changed(apu, R_SQ2_VOL, R_SQ2_HI, 0x02)) apply_pulse(1, apu, enables & 0x02);
+    uint32_t written = g_cpu.bus.apu_written;
+    g_cpu.bus.apu_written = 0;
+    for (int c = 0; c < 2; c++) {
+        uint8_t bit = (uint8_t)(1 << c);
+        int base = c == 0 ? R_SQ1_VOL : R_SQ2_VOL;
+        sweep_take_writes(c, apu, written);
+        bool was_muted = g_sweep[c].muted;
+        bool restart = changed(apu, base, base + 3, bit);
+        /* The sweep moves the note between the engine's writes, on the
+         * NES's clock; see PulseSweep. A new note restarts as before, with
+         * whatever period the clocks leave it on. */
+        bool moved = sweep_clock(c, apu);
+        if (restart || (moved && g_sweep[c].muted != was_muted))
+            apply_pulse(c, apu, enables & bit);
+        else if (moved)
+            sweep_retune(c);
+    }
     if (changed(apu, R_TRI_LIN, R_TRI_HI, 0x04)) apply_triangle(apu, enables & 0x04);
     if (changed(apu, R_NOISE_VOL, 0x0F, 0x08)) apply_noise(apu, enables & 0x08);
 

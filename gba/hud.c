@@ -549,10 +549,16 @@ static int hud_mode(void) {
     return HUD_MODE_SOLO;
 }
 
+/* ...AND AGAINST THE COMPUTER, STATS ONLY BEHIND THE CHORD. The cartridge's
+ * VERSUS and WITH screens have no histogram; 1 PLAYER is the only mode whose
+ * own screen carries one. So the second HUD of the two computer modes is one
+ * more thing the chord uncovers (see g_pause_unlocked), and without it they
+ * offer their own screen alone. */
 const uint8_t *hud_set(int *n) {
+    int extra = g_pause_unlocked ? 2 : 1;
     switch (hud_mode()) {
-        case HUD_MODE_VERSUS: *n = 2; return kHudVersus;
-        case HUD_MODE_WITH:   *n = 2; return kHudWith;
+        case HUD_MODE_VERSUS: *n = extra; return kHudVersus;
+        case HUD_MODE_WITH:   *n = extra; return kHudWith;
         case HUD_MODE_2P:     *n = 1; return kHudCable2p;
         case HUD_MODE_COOP:   *n = 1; return kHudCableCoop;
         default:              *n = 2; return kHudSolo;
@@ -569,7 +575,12 @@ static uint8_t g_hud_choice[HUD_MODE_COUNT] = {
 };
 
 void hud_reset(void) {
-    g_hud = g_hud_choice[hud_mode()];
+    /* A choice made behind the chord does not outlive it. */
+    int n;
+    const uint8_t *set = hud_set(&n);
+    g_hud = set[0];
+    for (int i = 0; i < n; i++)
+        if (set[i] == g_hud_choice[hud_mode()]) g_hud = set[i];
 }
 
 void hud_remember(void) {
@@ -734,17 +745,9 @@ void draw_text(int tx, int ty, const char *text, int bank) {
     for (int i = 0; text[i]; i++) set_map_tile(tx + i, ty, WITH_BANK(ascii_tile(text[i]), bank));
 }
 
-static void draw_number(int tx, int ty, uint32_t value, int digits, int bank) {
-    for (int i = digits - 1; i >= 0; i--) {
-        set_map_tile(tx + i, ty, WITH_BANK(ascii_tile((char)('0' + (value % 10))), bank));
-        value /= 10;
-    }
-}
-
-/* ...and the same with the leading zeros left blank. The counters keep theirs
- * — the cartridge's SCORE really does read 000000 — but the level's tally does
- * not: it prints " 1 TETRIS" and "X100=  1300", blanking everything left of
- * the first digit the way L8EA2's own staging does. */
+/* A number with its leading zeros left blank, which is how the cartridge
+ * prints every figure the port draws: the counters, the level's tally
+ * (" 1 TETRIS", "X100=  1300", L8EA2's staging) and the HIGH SCORES page. */
 static void draw_number_blank(int tx, int ty, uint32_t value, int digits, int bank) {
     for (int i = digits - 1; i >= 0; i--) {
         bool ink = value != 0 || i == digits - 1;
@@ -1223,10 +1226,12 @@ void draw_leader_row(int row) {
         int tx = SCREEN_LEADER_NAME_TX + c;
         set_map_tile(tx, ty, WITH_BANK(ascii_tile(ch), leader_bank(tx, ty)));
     }
-    draw_number(SCREEN_LEADER_SCORE_TX, ty, e->score, 6,
-                 leader_bank(SCREEN_LEADER_SCORE_TX, ty));
-    draw_number(SCREEN_LEADER_LINES_TX, ty, e->lines, 3,
-                 leader_bank(SCREEN_LEADER_LINES_TX, ty));
+    /* Leading zeros blanked, as the cartridge prints them: "17000" and a
+     * lone "0" for no lines, not "017000" and "000". */
+    draw_number_blank(SCREEN_LEADER_SCORE_TX, ty, e->score, 6,
+                       leader_bank(SCREEN_LEADER_SCORE_TX, ty));
+    draw_number_blank(SCREEN_LEADER_LINES_TX, ty, e->lines, 3,
+                       leader_bank(SCREEN_LEADER_LINES_TX, ty));
 }
 
 void draw_leaderboard(void) {
@@ -2064,6 +2069,12 @@ void draw_panel(void) {
                    o->game_active ? "RIVAL" : " OUT", BANK_LABEL);
         clear_region(BOX_L_IN, ROW_HIGH + 1, BOX_L_W, 1);
         draw_number_blank(BOX_L_IN, ROW_HIGH + 1, o->score, 6, BANK_VALUE);
+    } else if (g_session.game.two_player) {
+        /* ...AND IN HUD VERSUS, NOTHING. The cartridge's race screen has
+         * SCORE, LINES and LEVEL for each player and no HIGH: its HIGH SCORE
+         * is the 1 PLAYER screen's. The rival's numbers are in the right box
+         * in this HUD, so the cell has nothing of its own to hold. */
+        clear_region(BOX_L_IN, ROW_HIGH, BOX_L_W, 2);
     } else {
         /* The cartridge's own 1P panel carries a HIGH SCORE beside the score
          * — "HIGH" and "SCORE" in plain ASCII at nametable row 2, and

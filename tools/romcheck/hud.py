@@ -258,6 +258,11 @@ def stats_show_check(rom_path):
 
         run(core, 8)
         press_start(core); run(core, 20)
+        # VERSUS and WITH have STATS only behind the chord (hud_set): the
+        # cartridge's screens for them carry no histogram.
+        if down:
+            core.set_keys(KEYS["L"], KEYS["R"]); run(core, 4)
+            core.set_keys(); run(core, 24)
         for _ in range(down):
             tap("DOWN")
         press_start(core); run(core, 12)
@@ -384,7 +389,25 @@ def versus_hud_check(rom_path):
         return " ".join(t for t in (tilemap_text(core, ty, *cols)
                                      for ty in range(8, 20)) if t)
 
+    # WITHOUT THE CHORD A RACE HAS ONE HUD: the cartridge's race screen has no
+    # histogram, so HUD STATS is behind the chord, and SELECT changes nothing.
     core, screen, _score = start(cheat=False)
+    _ = screen
+    before = (box(core, LEFT), box(core, RIGHT))
+    core.set_keys(KEYS["SELECT"]); run(core, 4)
+    core.set_keys(); run(core, 30)
+    after = (box(core, LEFT), box(core, RIGHT))
+    if not any(ch.isdigit() for ch in after[1]):
+        failures.append(f"sin el acorde SELECT saca HUD STATS en una carrera: "
+                        f"{after[1]!r}")
+    elif "HIGH" in before[0]:
+        failures.append(f"el HUD VERSUS lleva HIGH, y la pantalla de carrera "
+                        f"del cartucho no: {before[0]!r}")
+    else:
+        print("  sin el acorde una carrera tiene un solo HUD, sin HIGH")
+    del core, screen
+
+    core, screen, _score = start(cheat=True)
     _ = screen
 
     def score_now(who):
@@ -416,7 +439,8 @@ def versus_hud_check(rom_path):
         cossack_bank.append(idle_bank(core))
 
     # [0] is the default and it is HUD VERSUS: the rival has the right box,
-    # and the left one is the 1P panel again — HIGH where RIVAL used to be.
+    # and the left one has no RIVAL cell and no HIGH either — the cartridge's
+    # race screen carries neither.
     left, right, MINE, THEIRS = seen[0]
     if THEIRS not in right:
         failures.append(f"el HUD por defecto no trae la puntuacion del rival "
@@ -427,13 +451,13 @@ def versus_hud_check(rom_path):
     elif "RIVAL" in right:
         failures.append(f"el panel del rival sigue rotulado RIVAL en su ultima "
                          f"celda: {right!r}")
-    elif "HIGH" not in left:
-        failures.append(f"el cajon izquierdo no recupera HIGH: {left!r}")
+    elif "HIGH" in left:
+        failures.append(f"el cajon izquierdo lleva HIGH en una carrera: {left!r}")
     elif MINE not in left:
         failures.append(f"el cajon izquierdo dejo de llevar lo tuyo: {left!r}")
     else:
         print("  una carrera abre en HUD VERSUS: el rival tiene el cajon "
-               "derecho y el izquierdo recupera HIGH")
+               "derecho y el izquierdo no lleva ni RIVAL ni HIGH")
 
     # TWO COSSACKS IN THE SAME COMPARTMENT, one per HUD, and never the same
     # colours: the rival's is not yours in another hat.
@@ -446,7 +470,8 @@ def versus_hud_check(rom_path):
         print(f"  el cosaco del rival va en el banco {cossack_bank[0]}, "
               f"el tuyo en el {cossack_bank[1]}")
 
-    # [1] is HUD STATS, which is where the RIVAL cell lives now.
+    # [1] is HUD STATS — under the chord — which is where the RIVAL cell
+    # lives now.
     left, right, MINE, THEIRS = seen[1]
     if "RIVAL" not in left:
         failures.append(f"el segundo HUD no devuelve la celda RIVAL al cajon "
@@ -635,23 +660,16 @@ def coop_hud_check(rom_path):
         print(f"  sin acorde: izquierda {left!r}")
         print(f"              derecha   {right!r}")
 
-    # ...AND WITHOUT THE CHORD, SELECT STILL OPENS THE OTHER HUD — hiding the
-    # machine's panel is a difficulty setting and has nothing to do with the
-    # cheats — but the two cells it puts in its place are YOUR OWN score and
-    # lines, not the board's totals. The totals are the chord's.
+    # ...AND WITHOUT THE CHORD, SELECT DOES NOTHING. The cartridge's WITH
+    # COMPUTER screen has no histogram, so HUD STATS is one more thing the
+    # chord uncovers (hud_set): without it the partner's panel stays.
     core.set_keys(KEYS["SELECT"]); run(core, 4); core.set_keys(); run(core, 60)
-    left, right = panel(core, LEFT), panel(core, RIGHT)
-    if any(ch.isdigit() for ch in right):
-        failures.append(f"sin el acorde SELECT no esconde el panel del "
-                         f"companero: {right!r}")
-    elif "T." in left:
-        failures.append(f"sin el acorde ese HUD ya saca los totales: {left!r}")
-    elif "12345" not in left:
-        failures.append(f"sin el acorde ese HUD deberia llevar tu propia "
-                         f"puntuacion: {left!r}")
+    left2, right2 = panel(core, LEFT), panel(core, RIGHT)
+    if "6789" not in right2:
+        failures.append(f"sin el acorde SELECT cambia de HUD en WITH COMPUTER: "
+                        f"{right2!r}")
     else:
-        print("  ...y sin el acorde SELECT lo abre igual, con tu propia "
-               "puntuacion en vez de los totales")
+        print("  ...y sin el acorde SELECT no cambia nada: WITH tiene un HUD")
 
     core = start(cheat=True)
     left, right = panel(core, LEFT), panel(core, RIGHT)

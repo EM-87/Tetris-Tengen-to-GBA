@@ -93,6 +93,8 @@ def main():
                      help="check the COMPUTER player plays VERSUS and WITH")
     ap.add_argument("--coopai", action="store_true",
                      help="check the computer reads its partner under the chord")
+    ap.add_argument("--sweep", action="store_true",
+                     help="check the line clear's rising pulse sweep")
     ap.add_argument("--sleep", action="store_true",
                      help="check vsync halts the CPU instead of spinning")
     ap.add_argument("--statsshow", action="store_true",
@@ -174,6 +176,8 @@ def main():
         sys.exit(stats_show_check(args.rom))
     if args.sleep:
         sys.exit(sleep_check(args.rom))
+    if args.sweep:
+        sys.exit(sweep_check(args.rom))
     if args.demo:
         sys.exit(demo_check(args.rom))
     if args.gameover:

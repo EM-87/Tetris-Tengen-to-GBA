@@ -30,6 +30,11 @@ typedef struct {
      * filled by nes6502_init. */
     const uint8_t *code;
     uint8_t apu[0x18];     /* $4000-$4017, last value written (also read back) */
+    /* One bit per APU register, set by every write to it and cleared by
+     * whoever reads it (nes_audio_frame). The sweep needs WRITES, not values:
+     * a write to a period byte replaces that byte of the period the sweep
+     * has already moved, even with the value it held before. */
+    uint32_t apu_written;
 } Nes6502Bus;
 
 typedef struct {

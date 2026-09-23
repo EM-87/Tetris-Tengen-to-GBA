@@ -588,3 +588,47 @@ def handtunes_check(rom_path):
     print("OK: las dos canciones de mas estan escondidas, suenan, "
           "y no pisan al cartucho.")
     return 0
+
+
+def sweep_check(rom_path):
+    """THE LINE CLEAR RISES, as the NES's pulse sweep makes it.
+
+    The effect is pulse 2 with `$4005 = $8A` — sweep on, pitch rising, shift
+    2 — and a period of $5B0. The NES then takes a quarter off the period on
+    every half-frame, two a frame: $5B0 -> $444 -> $333 in the first frame,
+    $333 -> $267 -> $1CE in the next, and so on up, until the engine writes
+    the next note's low byte over what the sweep has left. Without the sweep
+    the GBA held $5B0 flat, which is the zip's lowest note and the reason it
+    sounded low ("mas grave").
+
+    Read off `g_sweep` in gba/nes_audio.c — the period the channel is really
+    playing — frame by frame across a clear.
+    """
+    base, why = game_state_address(rom_path)
+    sweep, why2 = game_state_address(rom_path, "g_sweep")
+    if base is None or sweep is None:
+        print(f"FALLA: {why or why2}")
+        return 1
+    off = game_offsets(rom_path)
+    core, screen = load(rom_path)   # `screen` must stay alive; see load()
+    start_game(core)
+    from .harness import fill_rows, KEY_DOWN, PF_H
+    fill_rows(core, base + off["field"], [PF_H - 1])
+    core.set_keys(KEY_DOWN)
+    PULSE2 = 6              # sizeof(PulseSweep): the second channel's
+    periods = []
+    for _ in range(400):
+        core.run_frame()
+        periods.append(core.memory.u16[sweep + PULSE2])
+    core.set_keys()
+    want = [0x333, 0x1CE, 0x105]
+    found = any(periods[i:i + 3] == want for i in range(len(periods) - 2))
+    if not found:
+        seen = [hex(p) for p in periods if p][:8]
+        print(f"FALLA: el efecto de linea no sube como en el NES: se esperaba "
+              f"{[hex(w) for w in want]} seguidos, y el pulso 2 hace {seen}")
+        return 1
+    print("  el pulso 2 barre de $5B0 hacia arriba: $333, $1CE, $105, dos "
+          "pasos por frame como el barrido del NES")
+    print("OK: el sonido de la linea sube de tono como en el cartucho.")
+    return 0

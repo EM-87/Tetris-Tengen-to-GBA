@@ -224,12 +224,8 @@ int main(void) {
                 tengen_new_game(&g_session.game, seed, DEMO_START_LEVEL,
                                  false, false, false);
                 tengen_ai_reset(&g_ai);
-                /* THE DEMO LOOKS AT A PIECE BEFORE IT MOVES IT. Nothing else
-                 * separates the attract mode from a machine twitching the pad
-                 * the instant a piece appears; see `settle` on TengenAi. And
-                 * no soft drop here — the attract mode keeps the cartridge's
-                 * pace, which is the pace it is meant to be showing off. */
-                g_ai.settle = DEMO_SETTLE_FRAMES;
+                /* The cartridge's computer as it ships: TengenAi's knobs
+                 * all left off. */
                 g_ai_last_piece = TT_NONE;
                 g_ai_last_partner = TT_NONE;
                 g_ai_frame = 0;
@@ -473,20 +469,12 @@ int main(void) {
                 tengen_new_game(&g_session.game, seed, start_level,
                                  g_ai_active, GAME_IS_COOP(game_mode), g_xe);
                 tengen_ai_reset(&g_ai);
-                /* IT DROPS ITS OWN PIECES NOW, AND LOOKS AT THEM FIRST.
-                 * The ROM's computer never presses down, which costs nothing
-                 * when it has a board to itself and costs the human the whole
-                 * game on the shared board of WITH COMPUTER — a piece of its
-                 * own took a full level-0 descent, and that is what "va un
-                 * tanto lento" was. Holding down once it is lined up fixes
-                 * that outright, and then overshoots: it would place ten
-                 * pieces to a free-falling human's one. The settle is what
-                 * buys the pace back, and it reads as thinking rather than as
-                 * a handicap. Measured, on an idle board: 36 cells in three
-                 * thousand frames before, 136 with both of these, 189 with
-                 * the drop and no settle at all. */
-                g_ai.soft_drop = true;
-                g_ai.settle = AI_SETTLE_FRAMES;
+                /* AT THE CARTRIDGE'S PACE. The port once had it hold Down
+                 * and look at each piece first ("va un tanto lento"); that
+                 * was the port asking for the cartridge's speed, not for a
+                 * faster computer than the cartridge's. So neither knob is
+                 * set: it never presses Down and moves from the frame a
+                 * piece appears, as computerMove does. */
                 /* AND IT READS ITS PARTNER, BEHIND THE CHORD. This one is
                  * not a pace knob, it is a different player: the cartridge's
                  * computer sees the settled board and not the other falling

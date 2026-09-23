@@ -710,9 +710,11 @@ def records_check(rom):
     # all — each console had simulated the other's board all along — and the
     # half that was simply never written down.
     for name, core in (("maestro", master), ("esclavo", slave)):
-        page = "".join(rows(core))
+        # Leading zeros blanked, as the cartridge prints them: a score is a
+        # word of its own on the page.
+        page = " ".join(rows(core)).split()
         for score in final:
-            if f"{score:06d}" not in page:
+            if str(score) not in page:
                 failures.append(f"el {name} no anoto {score}: la tabla solo "
                                  "lleva a su propio jugador")
     if not failures:
@@ -753,7 +755,7 @@ def records_check(rom):
             ("maestro", master, ((final[0], "BBB"), (final[1], "DDD"))),
             ("esclavo", slave, ((final[0], "BBB"), (final[1], "DDD")))):
         for score, who in pairs:
-            row = next((r for r in rows(core) if f"{score:06d}" in r), "")
+            row = next((r for r in rows(core) if str(score) in r.split()), "")
             if who not in row:
                 failures.append(f"en el {name} la fila de {score} no lleva "
                                  f"{who}: {row!r}")
@@ -923,11 +925,11 @@ def restart_check(rom):
     both(300, [[], []])
     tap("START")
     both(40, [[], []])
-    page = "".join(run_rom.tilemap_text(slave, run_rom.LEADER_FIRST_TY + i, 0, 30)
-                    for i in range(15))
+    page = " ".join(run_rom.tilemap_text(slave, run_rom.LEADER_FIRST_TY + i, 0, 30)
+                     for i in range(15)).split()
     if "HIGH SCORES" not in run_rom.tilemap_text(slave, 2, 0, 30):
         failures.append("no se llega a la tabla tras el segundo game over")
-    elif f"{dead_score:06d}" not in page:
+    elif str(dead_score) not in page:
         failures.append(f"la partida que acabo antes del reinicio ({dead_score}) "
                          "no esta en la tabla: el reinicio se la comio")
     else:

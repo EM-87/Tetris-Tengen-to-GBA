@@ -436,9 +436,12 @@ def tilemap_text(core, row, first=0, last=30):
     # ...and the pause menu's headings, drawn with copies of their letters one
     # pixel higher (PMENU_RAISED_BASE / PMENU_RAISED_CHARS in gba/port.h).
     RAISED_BASE, RAISED = 960, "PAUSEXIT?"
+    # ...and its arrow, moved three pixels closer across two tiles
+    # (T_ARROW_TAIL / T_ARROW_HEAD): read as "->".
+    ARROW = {RAISED_BASE + len(RAISED): "-", RAISED_BASE + len(RAISED) + 1: ">"}
 
     def readable(t):
-        return (32 <= t < 127 or t == QUESTION
+        return (32 <= t < 127 or t == QUESTION or t in ARROW
                 or RAISED_BASE <= t < RAISED_BASE + len(RAISED))
 
     out = []
@@ -455,6 +458,8 @@ def tilemap_text(core, row, first=0, last=30):
             out.append("?")
         elif RAISED_BASE <= tile < RAISED_BASE + len(RAISED):
             out.append(RAISED[tile - RAISED_BASE])
+        elif tile in ARROW:
+            out.append(ARROW[tile])
         else:
             out.append(chr(tile) if 32 <= tile < 127 else " ")
     return "".join(out).strip()
@@ -657,13 +662,22 @@ PM_ASK = PMENU_TY + 1        # the question, "EXIT?"
 PM_SURE = PM_ASK
 PM_ANSWER = PMENU_TY + 2     # YES, with NO under it
 # The box's own columns, which is all a check about the box should read: the
-# rest of the row is the HUD, and the braid decodes as stray letters.
-# FOURTEEN, not thirteen: an odd width cannot be centred on the board, and the
-# box lands on the board. See PMENU_W in gba/port.h.
-PMENU_W_T = 14
+# rest of the row is the HUD, and the braid decodes as stray letters. The box
+# is as wide as its lines need (pmenu_width in gba/match.c), so these are the
+# WIDEST it gets and pmenu_span reads the one actually on screen.
+PMENU_W_T = 18                # PMENU_W_MAX in gba/port.h
 PMENU_TX = (SCREEN_TW_TILES - PMENU_W_T) // 2
 PM_L = PMENU_TX + 1
 PM_R = PMENU_TX + PMENU_W_T - 1
+
+
+def pmenu_span(core):
+    """The interior columns of the pause box on screen now, found by its top
+    corners ($29 and $2B, the game-over plaque's), or the widest if none."""
+    top = [c for c in range(SCREEN_TW_TILES)
+           if (core.memory.u16[SCREENBLOCK_ADDR + (PMENU_TY * 32 + c) * 2]
+               & 0x3FF) in (0x29, 0x2B)]
+    return (top[0] + 1, top[-1]) if len(top) >= 2 else (PM_L, PM_R)
 
 
 # ---------------------------------------------------------------------------

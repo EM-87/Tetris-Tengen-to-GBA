@@ -243,6 +243,22 @@ void upload_tiles(void) {
             out[row * 2 + 1] = from ? (uint16_t)(from[2] | (from[3] << 8)) : 0;
         }
     }
+    /* ...and the arrow moved left across two tiles; see T_ARROW_TAIL. In 4bpp
+     * the leftmost pixel of a row is its lowest nibble, so a row read as one
+     * 32-bit word moves left by n pixels with >> 4n and right with << 4n. */
+    const uint8_t *arrow = kGameTiles + T_ARROW_R * 32;
+    vu16 *tail = dst + T_ARROW_TAIL * 16;
+    vu16 *head = dst + T_ARROW_HEAD * 16;
+    const int shift = 4 * PMENU_ARROW_GAP_PX;
+    for (int row = 0; row < 8; row++) {
+        const uint8_t *r = arrow + row * 4;
+        uint32_t px = (uint32_t)r[0] | ((uint32_t)r[1] << 8) |
+                      ((uint32_t)r[2] << 16) | ((uint32_t)r[3] << 24);
+        uint32_t t = px << (32 - shift);     /* its first pixels, at the right */
+        uint32_t h = px >> shift;            /* the rest, at the left */
+        tail[row * 2] = (uint16_t)t; tail[row * 2 + 1] = (uint16_t)(t >> 16);
+        head[row * 2] = (uint16_t)h; head[row * 2 + 1] = (uint16_t)(h >> 16);
+    }
 }
 
 uint16_t raised_tile(char c) {

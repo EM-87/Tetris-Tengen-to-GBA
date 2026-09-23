@@ -1521,21 +1521,6 @@ typedef enum {
  * the cartridge's; see GAMEOVER_HOLD_FRAMES. */
 #define DEMO_GAMEOVER_FRAMES 180
 
-/* And how long it looks at a new piece before it touches it — see `settle` on
- * TengenAi. ZERO, which is the cartridge's: its computer shifts off
- * frameCounterLow alone (`and #$07`, main.asm.txt:4170-4176) and will yank a
- * piece sideways on the very frame it spawns.
- *
- * It was half a second for a while, on the argument that an instant twitch
- * reads as a machine rather than as somebody playing. What it actually reads
- * as is a SLOWER computer — thirty frames a piece, a good fifth of the demo's
- * pace at level 0 — and the attract mode is the one place where the port's
- * computer is put side by side with the cartridge's in a player's memory.
- * Fidelity wins; the twitch is the cartridge's twitch. */
-#define DEMO_SETTLE_FRAMES 0
-/* ...and the computer's own, in a game with a player in it, where it is also
- * the throttle on how fast it fills a shared board. See where it is set. */
-#define AI_SETTLE_FRAMES 0
 /* Which entry of musicSelectTable. It starts on LOGINSKA rather than on the
  * table's own first entry, which is SILENCE: a player who walks through the
  * menus pressing START should get music. */
@@ -1636,7 +1621,13 @@ typedef enum {
  *      row 2   KOROBEINIKI
  *      row 3   EXIT
  */
-#define PMENU_W 14
+/* ...AND THE WIDTH NOW FOLLOWS WHAT IS IN IT. The box is as wide as its
+ * lines need — the tune's name, with room for the arrow on its left and as
+ * much again on its right so the lines still centre on the box — and never
+ * narrower than the question's. Even, always, for the reason above. See
+ * pmenu_width in gba/match.c. */
+#define PMENU_W_MIN 10
+#define PMENU_W_MAX 18        /* KOROBEINIKI, the longest name */
 /* FIVE ROWS, AND THE WORD MUSIC IS GONE.
  *
  * The cartridge's own PAUSE is eight columns by two (`pauseColsRows1`,
@@ -1679,27 +1670,7 @@ typedef enum {
  * eleven of KOROBEINIKI is twelve of interior, and thirteen columns cannot be
  * centred on an even grid — see below. */
 #define PMENU_H 5
-#define PMENU_TX ((SCREEN_TW - PMENU_W) / 2)
 #define PMENU_TY ((SCREEN_TH - PMENU_H) / 2)
-#define PMENU_IN_TX (PMENU_TX + 1)
-#define PMENU_IN_W (PMENU_W - 2)
-
-/* THE QUESTION HAS A BOX OF ITS OWN, ten columns to the column's fourteen.
- * It is three short lines — EXIT?, YES, NO — and in the column's box the
- * arrow stood at the interior's left edge with NO centred six columns away.
- *
- * TEN AND NOT EIGHT, because all three are centred on the box itself and
- * the arrow has to stand clear of them. In eight columns EXIT? fills the
- * interior and a centred YES starts eleven pixels in, which is where the
- * arrow's tip is: welded. In ten, EXIT? starts at 11, YES at 19 and NO at
- * 24, every one within a pixel of the middle, and an arrow fixed three
- * pixels in (the offset layer's column 0) is eight clear of YES and thirteen
- * of NO. Even, so it centres on the board like the other. Same height and
- * the same rows, so only the sides move. See draw_pmenu_line. */
-#define PQUEST_W 10
-#define PQUEST_TX ((SCREEN_TW - PQUEST_W) / 2)
-#define PQUEST_IN_TX (PQUEST_TX + 1)
-#define PQUEST_IN_W (PQUEST_W - 2)
 
 /* The headings' letters, one pixel higher: see the note above PMENU_H and
  * upload_tiles. Nine tiles in the charblock's free top above the prototype
@@ -1707,6 +1678,18 @@ typedef enum {
  * the two headings use, since nothing else wants them. */
 #define PMENU_RAISED_BASE 960
 #define PMENU_RAISED_CHARS "PAUSEXIT?"
+/* THE ARROW, CLOSE UP. $3E's shaft runs the whole width of its tile and the
+ * letters start at the edge of theirs, so an arrow in the column before a
+ * word is welded to it and one two columns before is a tile away. These two
+ * tiles are the same arrow moved three pixels left across a pair of columns
+ * (made at boot, like the raised letters): TAIL goes two columns before the
+ * word and HEAD one before, on the word's own layer, and the tip stops three
+ * pixels short of the first letter — the same three for every line, whichever
+ * layer centring put it on. */
+#define PMENU_ARROW_GAP_PX 3
+#define TILE_PX 8
+#define T_ARROW_TAIL (PMENU_RAISED_BASE + 9)
+#define T_ARROW_HEAD (PMENU_RAISED_BASE + 10)
 
 /* The frame's own tiles, out of the plaque the game over is drawn with. */
 #define T_BOX_TL 0x29
