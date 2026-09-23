@@ -732,7 +732,14 @@ a stack with somebody else's preview over it is two boards on one screen, and
 the level's palette and the falling piece's are the board's own — both of
 them followed `g_view` for a while, so the rival's stack came up in your
 level's colours and their piece in the colours of the one you were holding.
-`refresh_palettes` and the left box's preview both read `field_view`. Only in a race (1P
+`refresh_palettes` and the left box's preview both read `field_view`.
+**And so do the panels**, which makes the pause the rival's console for as
+long as it lasts: the left box is their NEXT, score, lines and level, and the
+right box's "other player" — HUD VERSUS's panel, the RIVAL cell, the
+cossack — is you, in your colours. Half a swap, their stack under your
+numbers, was a screen describing two players at once. HIGH is the one thing
+that stays this console's: a rival's score passing through the left box is
+not a record being set. Only in a race (1P
 has no other board and coop's is the same board), and only behind the chord,
 because it is the port's idea and not the cartridge's. Over a cable both
 consoles have the same door and a pause stops both boards, so neither player

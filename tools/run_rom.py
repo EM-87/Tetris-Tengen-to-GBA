@@ -2565,6 +2565,25 @@ def versus_hud_check(rom_path):
         if got_next != want:
             failures.append(f"con acorde={int(cheat)} el NEXT de la pausa es "
                              f"el {got_next}, deberia ser el {want}")
+        # ...AND THE PANELS SWAP WITH IT: the left box is the board on screen
+        # and the right box (HUD VERSUS) the other player, cossack included.
+        scores = []
+        for who in range(2):
+            at = base + off["score"] + who * off["stride"]
+            scores.append(str(sum(core.memory.u8[at + k] << (8 * k)
+                                  for k in range(4))))
+        left_box, right_box = box(core, LEFT), box(core, RIGHT)
+        shown, other = (1, 0) if cheat else (0, 1)
+        if scores[shown] not in left_box or scores[other] not in right_box:
+            failures.append(f"con acorde={int(cheat)} los paneles no son del "
+                            f"tablero {want}: {left_box!r} / {right_box!r} "
+                            f"(tuyo {scores[0]}, suyo {scores[1]})")
+        bank = idle_bank(core)
+        want_bank = 0 if cheat else 2      # yours, or the rival's green
+        if bank != want_bank:
+            failures.append(f"con acorde={int(cheat)} el cosaco del cajon "
+                            f"derecho va en el banco {bank}, deberia ir en "
+                            f"el {want_bank}")
     (mine0, mine_paused), (_mine1, theirs_paused) = palettes[False], palettes[True]
     if mine_paused != mine0:
         failures.append("sin acorde la pausa cambia los colores del tablero")
@@ -2576,7 +2595,8 @@ def versus_hud_check(rom_path):
                          "de la tuya")
     if not failures:
         print("  y bajo el acorde la pausa cambia tu tablero por el del rival, "
-              "con su NEXT y sus colores")
+              "con su NEXT, sus colores, su marcador a la izquierda y tu "
+              "cosaco a la derecha")
 
     for f in failures:
         print("FALLA:", f)

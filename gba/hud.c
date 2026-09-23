@@ -315,6 +315,13 @@ static int rival_cossack_palette(void) {
     return (g_idle_palette + IDLE_PALETTE_COUNT / 2) % IDLE_PALETTE_COUNT;
 }
 
+/* ...and which of the two a slot's cossack wears: yours for the player this
+ * console is, the rival's for the other. Asked per SLOT because the panels
+ * do not always describe the same players — see draw_panel. */
+static int cossack_palette_for(int slot) {
+    return slot == g_view ? g_idle_palette : rival_cossack_palette();
+}
+
 /* The puff of smoke crossing each completed row: five sprites in a row, the
  * head at the column the sweep has reached and the rest trailing one column
  * apart behind it, each retiring as it leaves the field. */
@@ -1890,7 +1897,10 @@ static void draw_coop_stats_panel(const TengenPlayerState *me) {
  * noise; the cell goes back to being HIGH, which is what the cartridge's own
  * 1P panel has there and what a race had to give up to make room. */
 static void draw_rival_panel(void) {
-    const TengenPlayerState *them = &g_session.game.player[g_view ^ 1];
+    /* The OTHER board's player — the rival, except during a chord pause that
+     * shows the rival's board, when it is you. See draw_panel. */
+    int other = field_view() ^ 1;
+    const TengenPlayerState *them = &g_session.game.player[other];
 
     bool was = g_panel_layer;
     g_panel_layer = false;
@@ -1939,7 +1949,7 @@ static void draw_rival_panel(void) {
         hide_idle_cossack();
     } else {
         bool alive = them->game_active && !g_session.game.paused;
-        draw_idle_cossack(g_idle_frame, alive, rival_cossack_palette(),
+        draw_idle_cossack(g_idle_frame, alive, cossack_palette_for(other),
                            BOX_R_IN, BRAID_T,
                            BOX_IN, SHELF_FIRST - BRAID_T);
         if (alive) g_idle_frame++;
@@ -1988,8 +1998,20 @@ static void draw_coop_panel(void) {
 void draw_panel(void) {
     if (g_session.game.coop) { draw_coop_panel(); return; }
 
-    const TengenPlayerState *p = &g_session.game.player[g_view];
-    if (p->score > g_high_score) g_high_score = p->score;
+    /* THE PANELS DESCRIBE THE BOARD ON THE SCREEN, and under the chord a
+     * paused race puts the OTHER board there (field_view). So for the length
+     * of that pause the whole screen is the rival's console: the left box is
+     * their NEXT and their score, lines and level, and whatever the right box
+     * says about "the other player" — HUD VERSUS's panel, the RIVAL cell, the
+     * histogram's cossack — is about you, in your colours. Half a swap, their
+     * stack under your numbers, is a screen describing two players at once.
+     * Everywhere else field_view is g_view and nothing moves. */
+    int shown = field_view();
+    const TengenPlayerState *p = &g_session.game.player[shown];
+    /* HIGH follows this console's player only: the rival's score passing
+     * through the left box during a pause is not a record being set. */
+    const TengenPlayerState *own = &g_session.game.player[g_view];
+    if (own->score > g_high_score) g_high_score = own->score;
 
     /* Everything from here down is the panel's, so it goes on the panel's
      * layer — the two exceptions, the braid and the banner, say so where they
@@ -2030,7 +2052,7 @@ void draw_panel(void) {
         /* A race wants the other board's numbers where the high score would
          * be. The ROM keeps no piece histogram in 2P either, so nothing of
          * the cartridge's is being displaced. */
-        const TengenPlayerState *o = &g_session.game.player[g_view ^ 1];
+        const TengenPlayerState *o = &g_session.game.player[shown ^ 1];
         /* ...AND THE WORD OVER IT SAYS WHETHER THEY ARE STILL IN IT. The
          * notice used to be at the bottom of the right box, which is the row
          * the histogram's icon strip stands on — so the box could carry the
@@ -2110,13 +2132,12 @@ void draw_panel(void) {
          * and so does PAUSE: a cossack swaying behind the plaque while the
          * music is suspended is the one part of the screen that did not
          * notice the game had stopped. */
-        bool alive = g_session.game.player[g_view].game_active &&
-                     !g_session.game.paused;
+        bool alive = p->game_active && !g_session.game.paused;
         /* The interlude, danced solo: see g_idle_show. It runs off the show's
          * own clock so it lasts exactly as long as the show does. */
         g_idle_show = g_dancer_active;
         draw_idle_cossack(g_idle_show ? (int)g_dancer_elapsed : g_idle_frame,
-                           alive || g_idle_show, g_idle_palette,
+                           alive || g_idle_show, cossack_palette_for(shown),
                            BOX_R_IN, ROW_DANCER, BOX_IN, ROW_DANCER_H);
         g_idle_show = false;
         if (alive) g_idle_frame++;
