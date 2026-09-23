@@ -871,6 +871,16 @@ void draw_match(bool *sweeping) {
         g_repaint = false;
     }
     refresh_palettes();
+    /* THE SWEEP'S ONE TIDY-UP, BEFORE THE PANEL: the frame it finishes, the
+     * panel's sprites — the idle cossack, a show's troupe — go down after it,
+     * not under it. Done after draw_panel it wiped them, and the cossack in
+     * HUD STATS blinked out for one frame at the end of every clear. */
+    bool clearing =
+        g_session.game.player[hud_clearing_slot()].line_clear_timer > 0;
+    if (!clearing && *sweeping) {
+        oam_hide_all();
+        *sweeping = false;
+    }
     draw_field();
     draw_panel();
     /* THE CABLE WENT: said in words for as long as the frozen board stays up
@@ -879,17 +889,13 @@ void draw_match(bool *sweeping) {
      * the records page comes next as after any other ending. */
     if (g_link_lost) draw_link_lost();
 
-    /* The sweep's sprites, and the one tidy-up when it finishes. */
-    if (g_session.game.player[hud_clearing_slot()].line_clear_timer > 0) {
+    /* The sweep's sprites. */
+    if (clearing) {
         draw_line_clear_sweep();
         *sweeping = true;
-    } else if (*sweeping) {
-        oam_hide_all();
-        *sweeping = false;
     }
 
-    /* After the sweep, which hides everything below its own range when it
-     * finishes, and before the plaque. */
+    /* After the sweep, and before the plaque. */
     draw_points();
 
     /* Last, so they sit over whatever was just drawn. */

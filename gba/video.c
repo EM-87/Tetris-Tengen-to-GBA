@@ -200,6 +200,9 @@ uint8_t read_buttons(void) {
 
 /* The same read, for the serial interrupt to call at the instant of a
  * transfer (see link.h). Nothing else may go in here. */
+/* IWRAM too: -flto inlines it today, and without that it would be a ROM
+ * trampoline between two IWRAM functions. */
+IWRAM_CODE uint8_t link_read_buttons(void);
 uint8_t link_read_buttons(void) { return read_buttons(); }
 
 /* L and R have no NES equivalent, so the game proper never sees them and

@@ -1153,3 +1153,59 @@ def vblank_check(rom_path):
         return 1
     print("OK: el dibujado de cada frame termina dentro del blanco vertical.")
     return 0
+
+
+def idle_blink_check(rom_path):
+    """EL COSACO DE HUD STATS NO PARPADEA CUANDO TERMINA UNA LIMPIEZA.
+
+    El barrido de la limpieza usa el OAM de abajo, y el frame en que acaba lo
+    oculta entero. Se hacia despues de draw_panel, asi que se llevaba tambien
+    al cosaco que el panel acababa de poner (OAM 124-127), y se veia apagarse
+    un frame al final de cada limpieza. Se lee el OAM donde termina
+    draw_match, que es lo que se ve durante ese frame, a lo largo de una
+    limpieza de cuatro filas en HUD STATS (SELECT desde la de por defecto).
+    """
+    elf = os.path.splitext(rom_path)[0] + ".elf"
+    try:
+        out = subprocess.check_output(
+            [os.environ.get("NM", "arm-none-eabi-nm"), elf]).decode()
+    except (OSError, subprocess.CalledProcessError) as exc:
+        print(f"SALTADO: no pude leer {elf}: {exc}")
+        return 0
+    audio = next((int(l.split()[0], 16) for l in out.splitlines()
+                  if l.endswith(" audio_frame")), None)
+    base, why = game_state_address(rom_path)
+    if audio is None or base is None:
+        print(f"SALTADO: {why or 'el ELF no exporta audio_frame'}")
+        return 0
+    off = game_offsets(rom_path)
+    IDLE = 124                       # IDLE_OAM_BASE, gba/port.h
+
+    core, screen = load(rom_path)    # `screen` must stay alive; see load()
+    start_game(core)
+    core.set_keys(KEYS["SELECT"]); run(core, 4); core.set_keys(); run(core, 8)
+    fill_rows(core, base + off["field"], [16, 17, 18, 19])
+    core.set_keys(KEYS["DOWN"])
+    shown, swept, seen, f0 = [], [], None, core.frame_counter
+    while core.frame_counter < f0 + 120:
+        core.step()
+        fc = core.frame_counter
+        if (core.cpu.pc & ~1) in (audio, audio + 4) and seen != fc:
+            seen = fc
+            shown.append(bool(oam_visible(core, IDLE, IDLE + 4)))
+            swept.append(bool(oam_visible(core, 0, 4)))
+    core.set_keys()
+    del core, screen
+
+    if not any(swept):
+        print("FALLA: no se vio el barrido de la limpieza")
+        return 1
+    gone = [i for i, s in enumerate(shown) if not s]
+    if not shown[0] or gone:
+        print(f"FALLA: el cosaco de HUD STATS falta en {len(gone)} de "
+              f"{len(shown)} frames (frames {gone[:8]})")
+        return 1
+    print(f"  {len(shown)} frames, {sum(swept)} de barrido: el cosaco esta en "
+          "todos")
+    print("OK: el cosaco no parpadea al terminar la limpieza.")
+    return 0
