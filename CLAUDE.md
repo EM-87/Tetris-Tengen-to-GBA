@@ -216,8 +216,28 @@ panel's shelves and the rope — the wall tile `$6A` has a blank first column.
 
 ## Open
 
-- The link cable has only run between two emulated consoles; two real GBAs
-  have not been tried.
-- Nothing else is waiting. A new idea starts in the cartridge
-  (`tools/nes_console.py`, `tools/render_nes.py`), not in memory of how
-  Tetris goes.
+What has been checked only against a READING of the disassembly (host tests,
+the harness) and never against the cartridge itself, which is where the
+last timing bugs were found every time:
+
+- **The computer player's choices.** `computerMove` is transcribed and
+  tested, but no trace puts it beside the cartridge's own computer on one
+  seed. `make trace` covers 1 PLAYER and COOPERATIVE with a button script;
+  VERSUS and WITH COMPUTER have no equivalent.
+- **The race on two boards** (2 PLAYER / VERSUS), and the starting handicap
+  with it: same situation.
+- **The attract demo** against the cartridge's.
+- **Two of the prototypes' rules**, taken from a list and not measured on the
+  dumps: no cossacks or BONUS at a level-up, and PAUSE not silencing the
+  music. (The instant clear, the missing wall kick and the ten-line level
+  were measured.)
+
+And what has run only in an emulator:
+
+- **The link cable** between two real GBAs.
+- **The latest builds on hardware** — the Thumb code, `VBlankIntrWait`, the
+  interrupt handler. mGBA is accurate on all three, but it is not the
+  console.
+
+A new idea starts in the cartridge (`tools/nes_console.py`,
+`tools/render_nes.py`), not in memory of how Tetris goes.
