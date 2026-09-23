@@ -360,31 +360,13 @@ void draw_title_sprites(void) {
             if (col >= 0 && row >= 0) {
                 fw_dx = (pad + col) * 8 + (cx & 7) - cx;
                 fw_dy = row * 8 + (cy & 7) - cy;
-                /* AND IT STAYS INSIDE THE FRAME, which is where the cartridge
-                 * puts it. Its bursts go off in the black middle and the
-                 * braid contains them; this port was mapping the centre onto
-                 * the nearest kept row and column and letting the ring land
-                 * wherever that fell, which on a picture two columns narrower
-                 * than the cartridge's is sometimes over the braid.
-                 *
-                 * Clamped by the CENTRE, not per sprite: the burst grows from
-                 * 1 sprite to 45 over a ring 48 pixels across (measured on the
-                 * cartridge), and clamping a bounding box that is still
-                 * growing would walk the burst sideways as it opened. The
-                 * centre does not move, so a centre held one radius inside the
-                 * frame holds the whole ring inside it for the burst's whole
-                 * life. */
-                int want_x = cx + fw_dx, want_y = cy + fw_dy;
-                int lo_x = SCREEN_TITLE_IN_TX0 * 8 + TITLE_FIREWORK_R;
-                int hi_x = (SCREEN_TITLE_IN_TX1 + 1) * 8 - TITLE_FIREWORK_R;
-                int lo_y = SCREEN_TITLE_IN_TY0 * 8 + TITLE_FIREWORK_R;
-                int hi_y = (SCREEN_TITLE_IN_TY1 + 1) * 8 - TITLE_FIREWORK_R;
-                if (want_x < lo_x) want_x = lo_x;
-                if (want_x > hi_x) want_x = hi_x;
-                if (want_y < lo_y) want_y = lo_y;
-                if (want_y > hi_y) want_y = hi_y;
-                fw_dx = want_x - cx;
-                fw_dy = want_y - cy;
+                /* NOT CLAMPED. It was, one radius inside the frame, after a
+                 * burst was seen printed over the braid — which the cartridge
+                 * never shows. But the cartridge places them over the braid
+                 * all the time; what it does is draw them BEHIND the picture
+                 * (TITLE_FIREWORK_PRIO), so the braid covers the part that
+                 * crosses it. Moving them inward was the wrong half of that,
+                 * and it put every burst near an edge somewhere it is not. */
                 fw_placed = true;
             }
         }
@@ -412,6 +394,9 @@ void draw_title_sprites(void) {
             }
             oam_set(i, x, y, (uint16_t)(TITLE_OBJ_TILE_BASE + tile), false,
                      PAL_OBJ_TITLE + (attr & 3));
+            /* Bit 5 is the cartridge's "behind the background"; every burst
+             * sprite has it. */
+            if (attr & 0x20) MEM_OAM[i * 4 + 2] |= OBJ_ATTR2_PRIO(TITLE_FIREWORK_PRIO);
             continue;
         }
         int row = kTitleRowMap[ny / 8];

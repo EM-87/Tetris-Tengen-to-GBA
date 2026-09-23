@@ -1019,12 +1019,27 @@ def title_check(rom_path):
     # several, and the tile ids have to CHANGE — a burst that froze on one
     # frame of its animation would still be a lot of sprites.
     seen_tiles, peak, bursts, was_up = set(), 0, 0, False
+    # ...AND BEHIND THE PICTURE. Every burst sprite the cartridge writes has
+    # attribute bit 5, "behind the background": the braid, the cathedral and
+    # the logo cover the parts of a burst that cross them, which is how the
+    # frame contains it. So OBJ priority 2 on the fireworks (both backgrounds
+    # on the title are 0 or 1), and the cathedral's own sprites in front.
+    def prio(i):
+        return (core.memory.u16[OAM_ADDR + i * 8 + 4] >> 10) & 3
+
+    burst_prios, cathedral_prios = set(), set()
     for _ in range(300):
         core.run_frame()
         vis = oam_visible(core, 19, 64)
         peak = max(peak, len(vis))
         for v in vis:
             seen_tiles.add(v[2])
+        for i in range(19, 64):
+            if not core.memory.u16[OAM_ADDR + i * 8] & 0x0200:
+                burst_prios.add(prio(i))
+        for i in range(0, 19):
+            if not core.memory.u16[OAM_ADDR + i * 8] & 0x0200:
+                cathedral_prios.add(prio(i))
         up = len(vis) > 0
         if up and not was_up:
             bursts += 1
@@ -1037,6 +1052,15 @@ def title_check(rom_path):
         failures.append(f"los fuegos no se animan: solo {len(seen_tiles)} tiles distintos")
     print(f"  fuegos: {bursts} explosiones en 300 frames, hasta {peak} sprites, "
           f"{len(seen_tiles)} tiles distintos")
+    if burst_prios != {2}:
+        failures.append(f"los fuegos no van detras del dibujo: prioridades "
+                        f"{sorted(burst_prios)}, deberian ser [2]")
+    elif cathedral_prios - {0}:
+        failures.append(f"la catedral se ha ido detras del fondo: prioridades "
+                        f"{sorted(cathedral_prios)}")
+    else:
+        print("  y detras del dibujo, como el bit 5 del cartucho: la greca, la "
+              "catedral y el logo los tapan")
 
     # The show has to STOP, the way the ROM stops it.
     run(core, TITLE_SHOW_FRAMES)

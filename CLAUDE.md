@@ -859,11 +859,18 @@ fixed.
    is the lobby: exchange the skin so both boards wear the master's, with
    the release's RULES. Both consoles then agree on the cell format and the
    paint is real. See `piece_id_cells` and `skin_begin_match`.
-2. **The fireworks' distance and the dithered sky.** The bursts were moved
-   away from the frame to stop them colliding with it, and the cartridge's
-   title has a dithered sunset behind them that the port does not draw.
-3. **The ten-line rule on the prototypes.** Still on the word of the list
+2. **The ten-line rule on the prototypes.** Still on the word of the list
    it came from; what the stacking bot needs is written up above.
+
+*(The fireworks were on this list too, as "their distance and the dithered
+sky". Both halves came out different from how they were written down. The
+cartridge places its bursts anywhere from x=16 to 240, over the braid
+included, and draws them BEHIND the picture — attribute bit 5 on every
+burst sprite — so the braid, the cathedral and the logo cover whatever
+crosses them. The port drew them in front and then clamped them inward to
+keep them off the braid; it honours the bit now (`TITLE_FIREWORK_PRIO`) and
+the clamp is gone. And there is no dithered sky: rendered with its sprites,
+the cartridge's sky is plain colour 0. See reference/NOTES.md.)*
 
 *(`VBlankIntrWait` was on this list and is in. `vsync()` spun on VCOUNT,
 which on a real console is the CPU at full clock through the whole visible

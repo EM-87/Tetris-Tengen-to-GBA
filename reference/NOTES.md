@@ -1235,15 +1235,35 @@ first two, using those ledges where the 1P panel would draw a rule.
 And L+R does nothing there: coop has no boxes to swap, and the banner's column
 is the middle of the board.
 
-## The fireworks burst over the frame, and that is the cartridge's doing
+## The fireworks are placed over the frame and drawn BEHIND it
 
-Measured off the ROM's own `oamStaging` while it runs: every burst is a 48x48
-box, and across a title screen they are placed from x=16 to x=232 of the NES's
-256. The title's braid leaves an interior of roughly x=40..215, so the
-leftmost burst starts twenty-four pixels inside the border and the rightmost
-ends seventeen past it. They are sprites and nothing clips them, so they burst
-over the braid and onto the outer band of ingots. The port reproduces it
-because it RUNS `LA9CE` rather than reimplementing it.
+Measured off the ROM's own `oamStaging` over a whole title show (1100
+frames): every burst is a 7x7 grid of sprites 56 pixels square at a fixed
+height (y 81-137), and its x goes anywhere from 16 to 240 of the NES's 256
+— twelve bursts at 167, 184, 125, 128, 68, 122, 99, 184, 168, 184, 34 and 16.
+Five of the twelve cross the braid. The frame still contains them, and the
+reason is one bit: **every firework sprite has attribute `$24`-`$27`, bit 5
+set, "behind the background"**, so the PPU draws it only where the
+background is colour 0 — the black sky — and the braid, the cathedral, the
+logo, the ™ and the credits are opaque and cover it. The cathedral overlay's
+own sprites (`$00`-`$03`) have the bit clear and stay in front.
+
+This note used to say only the first half ("they burst over the braid and
+onto the outer band of ingots"), which is true of where they are PLACED and
+wrong about what you SEE. The port then drew them in front of everything,
+which does put them over the braid — reported, rightly, as not what the
+cartridge does — and answered it by clamping each burst's centre one radius
+inside the frame. That moved every burst near an edge somewhere the
+cartridge never puts one. It is the priority now (`TITLE_FIREWORK_PRIO`, OBJ
+priority 2 against backgrounds at 0 and 1) and no clamp; `--title` checks
+it. The port runs `LA9CE` itself, so the positions are the cartridge's,
+mapped through the composition by each burst's own centre.
+
+**And there is no sunset.** A melon on the list said the cartridge's title
+has "a dithered sky behind" the bursts that the port does not draw.
+Rendered with its sprites, it does not: the sky is colour 0 from the TM to
+the credits. The only dithering on that screen is the bursts themselves —
+rings and clouds of single dots, which is how their tiles are drawn.
 
 ## MUSIC MIX, and why it turns over at the level and not at the end of a tune
 

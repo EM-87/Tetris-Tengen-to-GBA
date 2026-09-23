@@ -103,6 +103,10 @@ typedef volatile uint32_t vu32;
 #define OBJ_ATTR1_X(x)      ((x) & 0x1FF)
 #define OBJ_ATTR1_HFLIP     0x1000
 #define OBJ_ATTR2_PAL(n)    ((uint16_t)((n) << 12))
+/* 0 is nearest the viewer. A sprite is drawn behind every background whose
+ * own priority is LOWER than its number, and only where that background has
+ * an opaque pixel — the GBA's version of the NES's "behind background". */
+#define OBJ_ATTR2_PRIO(n)   ((uint16_t)((n) << 10))
 
 /* BGR555. Each component is 0-31; note the byte order is the reverse of the
  * RGB most tooling hands you. */

@@ -1284,9 +1284,17 @@ typedef enum {
  * of tiles from where the cartridge puts it; a firework has no business being
  * anywhere in particular, and it stays round. */
 #define TITLE_FIREWORK_FIRST 19   /* oamStaging $4C, LA9F7 */
-/* Half a burst at its widest, plus the sprite's own eight pixels. Measured on
- * the cartridge: 45 sprites spanning x 167-215 and y 80-128, so 48 across. */
-#define TITLE_FIREWORK_R 28
+/* THE BURSTS GO BEHIND THE PICTURE, and that is how the frame contains
+ * them. Every firework sprite the cartridge writes has attribute $24-$27:
+ * bit 5 set, which on the NES is "behind the background" — drawn only where
+ * the background is colour 0, the black sky. Measured over a whole title
+ * show, the bursts are placed anywhere from x=16 to x=240 of the NES's 256,
+ * which is over the braid at both ends; the braid, the cathedral, the logo
+ * and the credits are opaque and simply cover them. On the GBA that is an
+ * OBJ priority numerically ABOVE every background's (they are 0 and 1 here),
+ * and the sky is colour 0 in the port as well. The cathedral overlay's own
+ * sprites have the bit clear and stay in front. */
+#define TITLE_FIREWORK_PRIO 2
 
 /* The level selector, inside the ROM's own menu frame. The wording matches
  * the cartridge's ("LEVEL SELECT" is one of the strings it writes into this
