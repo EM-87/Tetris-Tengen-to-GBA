@@ -336,15 +336,27 @@ running ROM; only the side panels need reflowing).
    The two CABLE modes offer one apiece on purpose: the other player is a
    person who chose to play with you, so there is nothing to hide from them
    and no reason to take their panel away. HUD VERSUS is the rival's own
-   panel in the right box — their NEXT, score, lines and LEVEL, laid out like
+   panel in the right box — their score, lines and LEVEL, laid out like
    coop's — and its fourth cell is EMPTY: it carried RIVAL for a while, which
    is a caption on a caption, since the panel is the rival's. The left box
    gives its own RIVAL cell back there and returns to the 1P panel's HIGH.
    The ledges are drawn by the panel itself rather than with the static
    screen, because it clears the column under the first shelf every frame and
-   would take them with it. **AND THE COSSACK'S COLOUR CHORD ANSWERS ONLY IN
-   HUD STATS**, which is the only HUD with a cossack in it — anywhere else it
-   changed a palette nothing on screen was using and chirped to say so.
+   would take them with it.
+   **AND THE TOP COMPARTMENT IS A COSSACK, NOT THE RIVAL'S NEXT.** It was
+   their preview for one build, and in VERSUS COMPUTER that is a piece
+   belonging to a board you never see: the one HUD that takes the rival's
+   stack away was handing out the rival's next piece. The compartment is the
+   coop panel's NEXT cell and cannot simply go empty without leaving the
+   panel headless, so what stands in it is a SECOND IDLE COSSACK, the rival's
+   own — the same sprite the stats panel has, on the same ledge height, and
+   he celebrates when THEIR board clears rather than when yours does
+   (`cossack_slot` picks the board by which panel the HUD gives the rival,
+   and `cossack_watch` is called once per board per step). Two cossacks never
+   appear at once: HUD VERSUS has the rival's and HUD STATS has your own.
+   **AND THE COSSACK'S COLOUR CHORD ANSWERS ONLY IN HUD STATS** — anywhere
+   else it changed a palette nothing on screen was using and chirped to say
+   so, and in HUD VERSUS the cossack on screen is not yours to paint.
    See `hud_set` and `make gba-check --versushud`.
 21. ~~FOUR backgrounds, each for a scroll the others cannot share~~ — done,
    and this is the shape to keep in mind before adding anything to the HUD: a
@@ -466,41 +478,60 @@ running ROM; only the side panels need reflowing).
    no title theme. It sends the RESUME itself now, FIRST in the ring so its
    own blip is not swallowed, and `make gba-check --quit-audio` walks that
    road and listens at every screen. See reference/NOTES.md.
-   **SEVEN ROWS, AND FOURTEEN COLUMNS BECAUSE THIRTEEN CANNOT BE CENTRED.**
-   It was ten rows deep, which in a twenty-row screen is half the board
-   covered by a menu with three lines in it — against the cartridge's own
-   PAUSE at eight columns by two (`pauseColsRows1`, `$B679`) and its GAME OVER
-   plaque at six by four, that is out of proportion with both. The width
-   cannot come down (KOROBEINIKI is eleven characters in a twelve-column
-   interior), so the air came out of the height: the blank row under the
-   heading went, and PAUSE is told apart from the lines below it by its
-   colour, which is what a heading is for. The box
-   lands on the board, whose middle is x=120 — the screen's own — and a box of
-   odd width on an even grid cannot be put there: thirteen columns sits four
-   and a half pixels left, which against a playfield you are looking straight
-   at is not a subtlety. What that costs is the PARITY of every line inside
-   it, and with it the vertical nudge, so every gap in the box is a whole
-   blank row.
-   **THE CURSOR IS AN ARROW AND START ALWAYS LEAVES.** Picking the line out
-   by palette read as a colour scheme rather than as a cursor, so it is the
-   cartridge's own `$3E` two columns left of the line, where the settings
-   screen puts its own; SELECT moves it as it does there, A takes a choice, B
-   backs out, and START resumes from every line including EXIT and from
-   inside the question. **AND THE BOX HAS TO BE TORN DOWN ON THREE MAPS**:
+   **FIVE ROWS — PAUSE, THE TUNE, EXIT — AND FOURTEEN COLUMNS BECAUSE
+   THIRTEEN CANNOT BE CENTRED.** It was ten rows deep, which in a twenty-row
+   screen is half the board covered by a menu with three lines in it — against
+   the cartridge's own PAUSE at eight columns by two (`pauseColsRows1`,
+   `$B679`) and its GAME OVER plaque at six by four, that is out of proportion
+   with both. Every row of it was air, and the air is what went: first the
+   blank row under the heading (PAUSE is told apart from the list by its
+   COLOUR, which is what a heading is for), then the word MUSIC — the tune's
+   NAME is the entry, so a label over a choice that is already its own label
+   says nothing — and last the blank row between the two entries. Three lines,
+   three rows, a border top and bottom.
+   **AND FOURTEEN IS THE FLOOR, not a preference.** The box lands on the
+   board, whose middle is x=120 — the screen's own — and a box of odd width on
+   an even grid cannot be put there: thirteen columns sits four and a half
+   pixels left, which against a playfield you are looking straight at is not a
+   subtlety. So the width goes 14, 12, 10 and never 13: one column of cursor
+   plus KOROBEINIKI's eleven is twelve of interior, which is fourteen with its
+   frame. Trimming the name's own trailing blank buys nothing, because the
+   blank is not in the box — the interior is measured in whole tiles and
+   eleven characters occupy eleven of them.
+   What the even width costs is the PARITY of every line inside it, and with
+   it the vertical nudge, so a gap in this box is a whole blank row or
+   nothing at all.
+   **TWO PIXELS INSTEAD OF THAT LAST BLANK ROW WAS TRIED AND OVERLAPS.** The
+   counters' layer is the port's only sub-tile vertical nudge, so a line can
+   be lifted two pixels onto it — but these glyphs fill their eight-pixel
+   tiles top to bottom, with no internal leading to borrow, and a lifted line
+   simply writes through the one above it: PAUSE came out across NO MUSIC.
+   Any lift is an overlap here, whatever its size. The row was won by dropping
+   the blank outright instead.
+   **THE CURSOR IS AN ARROW IN A COLUMN OF ITS OWN.** It used to sit two
+   columns left of the line it marked, which is where the settings screen
+   puts its own — and with MUSIC gone the line it marks is the tune's name,
+   eleven characters wide with nothing like two columns spare beside it. It
+   is a FIXED column at the interior's left edge now (`PMENU_IN_TX`), the
+   text centred in what is left; SELECT moves it, A takes a choice, B backs
+   out, and START resumes from every line including EXIT and from inside the
+   question.
+   **AND THE BOX HAS TO BE TORN DOWN ON THREE MAPS**:
    `draw_static_screen` puts the main background back, but the lines on the
    offset and counter layers are in the middle of the board where it never
    writes, so the window vanished and the words stayed — see
    `clear_pmenu_layers`, called off the same `g_repaint`.
-   **AND CENTRING IN THIS BOX NEEDS THREE OF THE FOUR BACKGROUNDS.** Its
-   interior is eleven columns, so an even-length word misses the middle by
-   half a tile and goes on the offset layer (three across) to miss it by one
-   pixel instead; the heading rides the counters' layer, two pixels down,
-   which is the only sub-tile nudge downwards this port has. A line can have
-   one or the other, never both — see `draw_pmenu_line`. The question mark in
-   EXIT / SURE? is the one glyph in the port that is not the cartridge's: the
-   tile set is ASCII-indexed but $3F is a LEFT ARROW, so `extract_assets.py`
-   draws one into a slot the cartridge left empty and refuses to if the dump
-   has art there.
+   **AND CENTRING IN THIS BOX STILL NEEDS TWO BACKGROUNDS.** The field left
+   beside the cursor is eleven columns, so a word whose length is the wrong
+   parity misses the middle by half a tile and goes on the offset layer
+   (three across) to miss it by one pixel instead — see `draw_pmenu_line`.
+   The question mark in EXIT? is the one glyph in the port that is not the
+   cartridge's: the tile set is ASCII-indexed but $3F is a LEFT ARROW, so
+   `extract_assets.py` draws one into a slot the cartridge left empty
+   (`TILES_GAME_QUESTION`) and refuses to if the dump has art there. It is
+   also the one glyph `tilemap_text` has to map back by hand, and until it
+   did, "EXIT?" read off the tilemap as "EXIT" and the harness could not tell
+   the question from the line that opens it.
 29. **WHAT THE THREE DUMPS ACTUALLY HAVE** — measured by booting each one,
    which is the correction to what stood here before. This entry used to say
    "only `proto_b` carries the title screen this port can read" and that the

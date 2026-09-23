@@ -927,18 +927,31 @@ def tilemap_text(core, row, first=0, last=30):
     drawn on the offset layer instead of the main one, and the GAME SELECT
     credit on the lifted one — reading only the main map would report an empty
     row and every menu check would quietly stop checking anything.
+
+    The one letter the cartridge does not keep at its ASCII code is the
+    question mark: it lives at TILES_GAME_QUESTION (gba/tiles_game.h), so
+    ascii_tile maps '?' there and this maps it back. Without that, "EXIT?"
+    reads as "EXIT" and the pause menu's question looks like its EXIT line.
     """
+    QUESTION = 0xF0    # TILES_GAME_QUESTION in gba/tiles_game.h
+
+    def readable(t):
+        return 32 <= t < 127 or t == QUESTION
+
     out = []
     for x in range(first, last):
         off = (row * 32 + x) * 2
         tile = core.memory.u16[SCREENBLOCK_ADDR + off] & 0x3FF
-        if not (32 <= tile < 127):
+        if not readable(tile):
             tile = core.memory.u16[SCREENBLOCK_OFFSET_ADDR + off] & 0x3FF
-        if not (32 <= tile < 127):
+        if not readable(tile):
             tile = core.memory.u16[SCREENBLOCK_LIFTED_ADDR + off] & 0x3FF
-        if not (32 <= tile < 127):
+        if not readable(tile):
             tile = core.memory.u16[SCREENBLOCK_PANEL_ADDR + off] & 0x3FF
-        out.append(chr(tile) if 32 <= tile < 127 else " ")
+        if tile == QUESTION:
+            out.append("?")
+        else:
+            out.append(chr(tile) if 32 <= tile < 127 else " ")
     return "".join(out).strip()
 
 
@@ -2779,19 +2792,23 @@ def counters_check(rom_path):
 # question's second line ride the counters' layer two pixels down, the
 # even-length ones the offset layer three across — but tilemap_text reads all
 # four, so these are just rows.
-PMENU_H = 7
+PMENU_H = 5
 PMENU_TY = (SCREEN_H // TILE - PMENU_H) // 2
 # SEVEN ROWS NOW, not ten: the cartridge's own PAUSE is eight columns by two
 # and its GAME OVER plaque six by four, and a box half the height of the
 # screen for three lines of text is out of proportion with both. The blank
 # rows came out; see PMENU_H in gba/port.h.
+# FIVE ROWS AND THREE LINES. The word MUSIC went — the tune's NAME is the
+# entry, and a label over a value that is itself the choice says nothing —
+# and with it the blank rows, so PM_MUSIC and PM_TUNE are now the same line.
+# The question is one line too, "EXIT?", with the mark doing what SURE? did.
 PM_HEAD = PMENU_TY + 1       # PAUSE
-PM_MUSIC = PMENU_TY + 2      # MUSIC
-PM_TUNE = PMENU_TY + 3       # ...and the tune's name under it
-PM_EXIT = PMENU_TY + 5       # EXIT
-PM_ASK = PMENU_TY + 1        # the question's EXIT
-PM_SURE = PMENU_TY + 2       # ...and its SURE?
-PM_ANSWER = PMENU_TY + 4     # YES, with NO under it
+PM_MUSIC = PMENU_TY + 2      # ...the tune's name, which IS the music entry
+PM_TUNE = PM_MUSIC
+PM_EXIT = PMENU_TY + 3       # EXIT
+PM_ASK = PMENU_TY + 1        # the question, "EXIT?"
+PM_SURE = PM_ASK
+PM_ANSWER = PMENU_TY + 2     # YES, with NO under it
 # The box's own columns, which is all a check about the box should read: the
 # rest of the row is the HUD, and the braid decodes as stray letters.
 # FOURTEEN, not thirteen: an odd width cannot be centred on the board, and the
@@ -2857,7 +2874,7 @@ def pausemenu_check(rom_path):
     press_start(core); run(core, 12)     # -> LEVEL SETTINGS
     press_start(core); run(core, 30)     # -> play
     tap("START")
-    if ("PAUSE" not in row(PM_HEAD) or "MUSIC" not in row(PM_MUSIC)
+    if ("PAUSE" not in row(PM_HEAD) or not row(PM_MUSIC).strip()
             or "EXIT" not in row(PM_EXIT)):
         failures.append(f"el acorde en GAME SELECT no abre el menu de pausa: "
                          f"{row(PM_HEAD)!r} / {row(PM_MUSIC)!r} / "
@@ -2997,7 +3014,7 @@ def pausemenu_check(rom_path):
     # held before driving the menu.)
     if not core.memory.u8[base + off["paused"]]:
         tap("START")
-    while "SURE" in row(PM_SURE):
+    while "EXIT?" in row(PM_SURE):
         tap("DOWN"); tap("A")    # back out of a question it may have opened
     while "EXIT" not in row(PM_EXIT):
         tap("START")
@@ -3005,7 +3022,7 @@ def pausemenu_check(rom_path):
     while ">" not in row(PM_EXIT):
         tap("DOWN")
     tap("A")
-    if "SURE" not in row(PM_SURE):
+    if "EXIT?" not in row(PM_SURE):
         failures.append(f"EXIT no pregunta antes de salir: {row(PM_SURE)!r}")
     else:
         print("  EXIT pregunta antes de nada")
@@ -3013,13 +3030,13 @@ def pausemenu_check(rom_path):
         tap("A")
         if not core.memory.u8[base + off["paused"]]:
             failures.append("decir NO al salir dejo la partida sin pausa")
-        elif "SURE" in row(PM_SURE):
+        elif "EXIT?" in row(PM_SURE):
             failures.append("decir NO no cierra la pregunta")
         else:
             print("  NO vuelve a la partida")
         # ...and YES leaves STRAIGHT to the title: a game you walked out of
         # has not ended, and its score has no business on the board.
-        while "SURE" not in row(PM_SURE):
+        while "EXIT?" not in row(PM_SURE):
             while ">" not in row(PM_EXIT):
                 tap("DOWN")
             tap("A")

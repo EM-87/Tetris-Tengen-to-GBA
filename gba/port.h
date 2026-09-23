@@ -1611,10 +1611,7 @@ typedef enum {
  *      EXIT
  *
  * PAUSE is the heading, because this box IS the pause plaque once the chord
- * has been found: see g_pause_unlocked. The line the cursor is on is picked
- * out by palette rather than by an arrow — an arrow in a centred column is a
- * character that has to come from somewhere, and it pulls the line off
- * centre. */
+ * has been found: see g_pause_unlocked. */
 /* FOURTEEN COLUMNS, AND THIRTEEN WOULD NOT CENTRE. This is the whole reason
  * for the width: the box lands on the board, the board is ten columns at 10-19
  * and its middle is therefore x=120 — the screen's own middle — and a box of
@@ -1625,27 +1622,44 @@ typedef enum {
  *
  * What it costs is the PARITY of everything inside it — see draw_pmenu_line.
  *
- * TEN ROWS, one thing to a row and a blank between every pair:
+ * FIVE ROWS, a border top and bottom and one thing to a row:
  *
- *      row 1   -
- *      row 2   PAUSE
- *      row 3   -
- *      row 4   MUSIC
- *      row 5   KOROBEINIKI
- *      row 6   -
- *      row 7   EXIT
- *      row 8   -
+ *      row 1   PAUSE
+ *      row 2   KOROBEINIKI
+ *      row 3   EXIT
  */
 #define PMENU_W 14
-/* SEVEN ROWS, NOT TEN. The cartridge's own PAUSE is eight columns by two
- * (pauseColsRows1, $B679) and its GAME OVER plaque is six by four; a box ten
- * rows deep in a twenty-row screen is half the board covered by a menu that
- * has three lines in it, which is out of proportion with both. The width
- * cannot come down — KOROBEINIKI is eleven characters in a twelve-column
- * interior, and thirteen columns cannot be centred (see below) — so the air
- * comes out of the height: a heading, the entry and its value, one blank
- * row, and EXIT. */
-#define PMENU_H 7
+/* FIVE ROWS, AND THE WORD MUSIC IS GONE.
+ *
+ * The cartridge's own PAUSE is eight columns by two (`pauseColsRows1`,
+ * `$B679`) and its GAME OVER plaque six by four; ten rows in a twenty-row
+ * screen was half the board covered by a menu with three lines in it. What
+ * came out, in order: the blank row under the heading, the word MUSIC — the
+ * tune's NAME is the entry, and a label over a value that is itself the
+ * choice is a label saying nothing — and then the blank row between the two
+ * entries, with nothing put back in its place.
+ *
+ * TWO PIXELS IN PLACE OF THAT LAST BLANK ROW WAS TRIED, AND THERE IS NO ROOM
+ * FOR IT. The idea was to lift the tune onto the counters' layer, which is
+ * the port's only sub-tile vertical nudge and goes UP (PANEL_SHIFT_PX), so
+ * the heading would close up by two pixels and the choices open out by two
+ * without spending a row. What it does instead is OVERLAP: these glyphs fill
+ * their eight-pixel tiles top to bottom — there is no internal leading to
+ * borrow — so a line moved two pixels up puts its capitals through the
+ * descenders of the line above it, and PAUSE came out written across NO
+ * MUSIC. Any lift is an overlap here, whatever its size. The row was won by
+ * dropping the blank rows outright, which is why this is five and not six.
+ *
+ * AND THE CURSOR MOVES INTO A COLUMN OF ITS OWN, which is what lets the word
+ * MUSIC go at all. The arrow used to sit two columns left of the line it
+ * marked, and with MUSIC gone the line it marks is the tune's name —
+ * KOROBEINIKI, eleven characters, with nothing like two columns spare beside
+ * it. A fixed column at the interior's left edge is the settings screen's own
+ * arrangement (MENU_CURSOR_TX) and leaves exactly eleven for the name.
+ * WHICH IS ALSO WHY THE BOX IS STILL FOURTEEN WIDE: one column of cursor plus
+ * eleven of KOROBEINIKI is twelve of interior, and thirteen columns cannot be
+ * centred on an even grid — see below. */
+#define PMENU_H 5
 #define PMENU_TX ((SCREEN_TW - PMENU_W) / 2)
 #define PMENU_TY ((SCREEN_TH - PMENU_H) / 2)
 #define PMENU_IN_TX (PMENU_TX + 1)
@@ -1660,9 +1674,6 @@ typedef enum {
 #define T_BOX_BL 0x3A
 #define T_BOX_B  0x3B
 #define T_BOX_BR 0x3C
-
-/* How far left of a line its cursor sits. See draw_pmenu_line. */
-#define PMENU_CURSOR_DX 2
 
 #define PMENU_MUSIC 0
 #define PMENU_EXIT  1

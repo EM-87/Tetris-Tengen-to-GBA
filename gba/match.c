@@ -81,6 +81,26 @@ TengenTetromino g_shown_piece2 = TT_NONE;  /* coop: the partner's */
  *    level, in which case the intro takes its place (:3207)
  *  - the level-up interlude itself, L8D6B (:2038)
  *  - topping out, silence and then the game-over tune (:608, :620) */
+/* THE COSSACK ANSWERS ONE BOARD, AND IT IS NOT ALWAYS YOURS. In HUD STATS he
+ * stands in your own panel and answers your clears; in HUD VERSUS the
+ * compartment he is standing in is the RIVAL'S panel, and a figure there
+ * celebrating what YOU just did would be reading the wrong board out loud.
+ * Counted off the mask the core reports, so a clear that took four rows gets
+ * four times the figure.
+ *
+ * Called per PLAYER rather than from announce_step, because announce_step is
+ * only ever handed one player's result: in a linked race it is the local
+ * one's, so the rival's clears never reached it at all. */
+static int cossack_slot(void) { return hud_versus() ? (g_view ^ 1) : g_view; }
+
+void cossack_watch(int slot, TengenStepResult step) {
+    if (slot != cossack_slot() || !step.lines_collapsed) return;
+    int rows = 0;
+    for (int i = 0; i < TENGEN_PF_HEIGHT; i++)
+        if (step.rows_cleared_mask & (1u << i)) rows++;
+    idle_cossack_celebrate(rows);
+}
+
 static void announce_step(TengenStepResult step) {
     if (step.piece_locked) nes_audio_play(NES_SOUND_DROP);
     /* ONE call per event, and the level-up is one event. A clear that also
@@ -91,14 +111,6 @@ static void announce_step(TengenStepResult step) {
      * That is what a doubled tune sounds like. */
     if (step.lines_collapsed && !step.leveled_up)
         nes_audio_play(NES_SOUND_LINECLEAR);
-    /* THE COSSACK ANSWERS THE BOARD. Counted off the mask the core reports, so
-     * a clear that took four rows gets four times the figure. */
-    if (step.lines_collapsed) {
-        int rows = 0;
-        for (int i = 0; i < TENGEN_PF_HEIGHT; i++)
-            if (step.rows_cleared_mask & (1u << i)) rows++;
-        idle_cossack_celebrate(rows);
-    }
     if (step.leveled_up) {
         /* The cartridge's level-up music takes over; a hand-entered tune stands
          * down and start_music() puts it back when the dancers finish. */
@@ -216,6 +228,7 @@ static void ai_play_frame(void) {
      * both of them, which is what announce_step already does. */
     TengenStepResult out = tengen_step(&g_session.game, TENGEN_PLAYER_2, buttons);
     note_award(TENGEN_PLAYER_2, out);
+    cossack_watch(TENGEN_PLAYER_2, out);
     if (out.topped_out) leader_record(TENGEN_PLAYER_2);
     announce_step(out);
 }
@@ -290,36 +303,43 @@ static void draw_box_frame(int tx, int ty, int w, int h) {
  * wrong direction; and it cannot be combined with the three across anyway, so
  * the lines that would want it are exactly the ones that cannot have it. */
 static void draw_pmenu_line(int ty, const char *text, int bank,
-                             bool cursor) {
+                             bool cursor, bool lift) {
     unsigned len = text_len(text);
-    int tx = PMENU_IN_TX + ((int)PMENU_IN_W - (int)len) / 2;
-    bool offset = (len & 1u) != 0;
-
-    /* THE CURSOR IS AN ARROW, NOT A COLOUR. Picking the line out by palette
-     * was this menu's first idea and it does not read: four words in four
-     * colours is a colour scheme, not a cursor, and nothing on screen says
-     * which colour means "here". The arrow is the cartridge's own $3E, the
-     * one its settings screen uses, and it sits immediately left of the line
-     * it marks so it moves with the words rather than standing in a column of
-     * its own.
+    /* THE CURSOR HAS A COLUMN OF ITS OWN, at the interior's left edge, and
+     * the text is centred in what is left. That is the settings screen's
+     * arrangement (MENU_CURSOR_TX) and it is what lets the word MUSIC go:
+     * an arrow two columns left of KOROBEINIKI does not fit in this box, and
+     * an arrow one column left of anything is an arrow welded to it — $3E's
+     * shaft runs the full width of its tile and the letters start at the edge
+     * of theirs.
      *
-     * It rides whichever layer the line does, or it would sit three pixels
-     * off the word it belongs to. And it is only ever asked for on the two
-     * LABEL rows: the longest thing this box prints is KOROBEINIKI, which is
-     * eleven characters in an eleven-column interior with no room beside it —
-     * but that is the second line of the MUSIC entry, and the arrow marks the
-     * entry at its label. */
-    /* TWO COLUMNS LEFT, which is where the settings screen puts its cursor
-     * (MENU_CURSOR_TX) and for the same reason: $3E's shaft runs the full
-     * width of its tile and the letters start at the edge of theirs, so an
-     * arrow one column left of a word is an arrow welded to it. */
-    int first = cursor ? tx - PMENU_CURSOR_DX : tx;
-    for (int i = first; i < tx + (int)len; i++) {
-        uint16_t entry = (i == first && cursor) ? WITH_BANK(T_ARROW_R, bank)
-                        : (i < tx) ? WITH_BANK(T_BLANK, bank)
-                        : WITH_BANK(ascii_tile(text[i - tx]), bank);
-        if (offset) set_stats_tile(i, ty, entry);
-        else        set_map_tile(i, ty, entry);
+     * THE CURSOR IS AN ARROW, NOT A COLOUR. Picking the line out by palette
+     * was this menu's first idea and it does not read: words in four colours
+     * is a colour scheme, not a cursor, and nothing on screen says which
+     * colour means "here". */
+    int field = PMENU_IN_W - 1;
+    int tx = PMENU_IN_TX + 1 + (field - (int)len) / 2;
+    /* The three pixels across go to whichever parity needs them — and never
+     * on a LIFTED line, which is already spoken for by the counters' layer:
+     * the two scrolls cannot be combined, so that line centres to the whole
+     * column. See PMENU_H. */
+    bool offset = !lift && (((int)len ^ field) & 1) != 0;
+
+    for (int i = PMENU_IN_TX; i < tx + (int)len; i++) {
+        uint16_t entry =
+            (i == PMENU_IN_TX) ? WITH_BANK(cursor ? T_ARROW_R : T_BLANK, bank)
+            : (i < tx) ? WITH_BANK(T_BLANK, bank)
+            : WITH_BANK(ascii_tile(text[i - tx]), bank);
+        if (lift) {
+            bool was = g_panel_layer;
+            g_panel_layer = true;
+            set_map_tile(i, ty, entry);
+            g_panel_layer = was;
+        } else if (offset) {
+            set_stats_tile(i, ty, entry);
+        } else {
+            set_map_tile(i, ty, entry);
+        }
     }
 }
 
@@ -359,8 +379,11 @@ static void draw_pause_menu(void) {
          * eight pixels of nothing between them. Both of them can only sit
          * where they do because EXIT is four letters and SURE? is five: see
          * draw_pmenu_line for why the parity decides which layer each gets. */
-        draw_pmenu_line(PMENU_TY + 1, "EXIT", BANK_LABEL, false);
-        draw_pmenu_line(PMENU_TY + 2, "SURE?", BANK_LABEL, false);
+        /* ONE LINE FOR THE QUESTION, not two: "EXIT / SURE?" was two rows
+         * of a box that has five, and the question mark is what makes it a
+         * question either way. It is the one glyph here that is not the
+         * cartridge's — see ascii_tile. */
+        draw_pmenu_line(PMENU_TY + 1, "EXIT?", BANK_NOTE, false, false);
         /* THE TWO ANSWERS STACK, like everything else in this box. Side by
          * side they had the arrow sitting exactly between them — as far from
          * YES as from NO, which is an arrow that answers nothing. One to a
@@ -370,8 +393,8 @@ static void draw_pause_menu(void) {
          * (No lowercase in this tile set either — $61 up are the braid and
          * the border, which is why 'yes' came out as two stray marks — so
          * capitals and an arrow are all there is to say it with.) */
-        draw_pmenu_line(PMENU_TY + 4, "YES", BANK_LABEL, g_pause_yes);
-        draw_pmenu_line(PMENU_TY + 5, "NO", BANK_LABEL, !g_pause_yes);
+        draw_pmenu_line(PMENU_TY + 2, "YES", BANK_LABEL, g_pause_yes, false);
+        draw_pmenu_line(PMENU_TY + 3, "NO", BANK_LABEL, !g_pause_yes, false);
         return;
     }
     /* PAUSE keeps its own colour because it is the heading and not a choice;
@@ -381,12 +404,14 @@ static void draw_pause_menu(void) {
      * everything below it, which is what says it is a heading, and a row of
      * nothing between three lines of text was most of what made this box
      * twice the size of the cartridge's own. */
-    draw_pmenu_line(PMENU_TY + 1, "PAUSE", BANK_NOTE, false);
-    draw_pmenu_line(PMENU_TY + 2, "MUSIC", BANK_LABEL,
-                     g_pause_row == PMENU_MUSIC);
-    draw_pmenu_line(PMENU_TY + 3, kMusicNames[g_music], BANK_LABEL, false);
-    draw_pmenu_line(PMENU_TY + 5, "EXIT", BANK_LABEL,
-                     g_pause_row == PMENU_EXIT);
+    /* THE TUNE'S NAME IS THE ENTRY. A label over a value that is itself the
+     * choice is a label saying nothing, and it cost a row of a box that only
+     * has five. See PMENU_H. */
+    draw_pmenu_line(PMENU_TY + 1, "PAUSE", BANK_NOTE, false, false);
+    draw_pmenu_line(PMENU_TY + 2, kMusicNames[g_music], BANK_LABEL,
+                     g_pause_row == PMENU_MUSIC, false);
+    draw_pmenu_line(PMENU_TY + 3, "EXIT", BANK_LABEL,
+                     g_pause_row == PMENU_EXIT, false);
 }
 
 /* One frame of it. Returns true if the menu ate the input, which is what
@@ -574,6 +599,8 @@ bool link_play_frame(void) {
             break;
         note_award(0, out[0]);
         note_award(1, out[1]);
+        cossack_watch(0, out[0]);
+        cossack_watch(1, out[1]);
         /* A GAME IS WRITTEN DOWN AS IT ENDS, not at the end of the match:
          * L81DD is called from the top-out itself (main.asm.txt:600), which
          * is what lets a player start again over A+B and keep the game they
@@ -733,6 +760,7 @@ bool solo_play_frame(uint8_t buttons, uint8_t pressed, bool *quit) {
 
     TengenStepResult local = tengen_step(&g_session.game, TENGEN_PLAYER_1, buttons);
     note_award(TENGEN_PLAYER_1, local);
+    cossack_watch(TENGEN_PLAYER_1, local);
     if (local.topped_out) leader_record(TENGEN_PLAYER_1);
     announce_step(local);
     ai_play_frame();

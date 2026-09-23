@@ -1831,11 +1831,15 @@ static void draw_rival_panel(void) {
      * the static screen, which would put them back only on a repaint. */
     for (int i = 0; i < 4; i++)
         draw_ledge(BOX_R_IN, SHELF_FIRST + i * SHELF_STEP, BOX_IN);
-    /* PAL_NEXT2_BANK, the loan coop takes for the partner's preview: two
-     * previews on one screen cannot share one palette, because each is drawn
-     * in its own piece's colours. */
-    draw_next_label_and_piece(BOX_R_IN, ROW_NEXT, BOX_IN, g_view ^ 1,
-                               PAL_NEXT2_BANK);
+    /* A COSSACK IN THE TALL COMPARTMENT, NOT THEIR NEXT PIECE. The preview
+     * was the first thing put here and it is the one thing on this panel with
+     * no use: a race shows you ONE board, so what the rival is about to drop
+     * is news about a stack you cannot see. What is worth knowing is how they
+     * are DOING, and the three counters under this say that in numbers — so
+     * the compartment gets the figure who says it without them. He is the
+     * RIVAL'S cossack: he answers their clears and not yours (cossack_slot),
+     * which is why he is not a second copy of the one in HUD STATS. There is
+     * never more than one on screen: the two are different HUDs. */
     g_panel_layer = true;
 
     draw_rival_counter(ROW_SCORE, HUD_LABEL_SCORE, them->score, 6);
@@ -1848,7 +1852,19 @@ static void draw_rival_panel(void) {
      * already what this shape looks like. */
     clear_region(BOX_R_IN, ROW_HIGH, BOX_IN, 2);
     g_panel_layer = was;
-    hide_idle_cossack();
+
+    /* ...and he stops for the same two things the other cossack stops for: a
+     * dead board and a pause. Here the board that matters is THEIRS, which is
+     * also what makes a frozen figure worth having — it is the rival topping
+     * out, seen from a screen that never shows their stack. */
+    if (g_dancer_active) {
+        hide_idle_cossack();
+    } else {
+        bool alive = them->game_active && !g_session.game.paused;
+        draw_idle_cossack(g_idle_frame, alive, BOX_R_IN, BRAID_T,
+                           BOX_IN, SHELF_FIRST - BRAID_T);
+        if (alive) g_idle_frame++;
+    }
 }
 
 static void draw_coop_panel(void) {
