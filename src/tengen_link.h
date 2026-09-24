@@ -137,9 +137,10 @@ typedef enum {
 #define TENGEN_LOBBY_TAG_SHIFT 12
 #define TENGEN_LOBBY_PAYLOAD_MASK 0x0FFF
 
-/* How many transfer attempts a lobby tolerates without a single success
- * before giving up: ten seconds at one a frame, long enough to plug a cable
- * in after starting. */
+/* How many frames of silence a lobby tolerates from a partner that HAS
+ * answered before giving up: ten seconds at one a frame. Before the first
+ * answer there is no limit — the other player may take minutes to get to
+ * the cable, and the way out is B. */
 #define TENGEN_LOBBY_TIMEOUT 600
 
 typedef struct {

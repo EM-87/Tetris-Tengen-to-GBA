@@ -1243,9 +1243,24 @@ static void test_a_skin_fingerprint_is_its_art(void) {
     CHECK(tengen_skin_fingerprint(art, sizeof(art)) != a);
 }
 
-static void test_a_lobby_with_nothing_on_the_other_end_gives_up(void) {
+static void test_a_lobby_waits_for_its_partner_as_long_as_it_takes(void) {
+    /* One player opens the cable, the other takes minutes to get there: no
+     * answer yet is not a failure. */
     TengenLobby master;
     tengen_lobby_start(&master, 1, 0, 0);
+    for (int i = 0; i < TENGEN_LOBBY_TIMEOUT * 20; i++)
+        tengen_lobby_apply(&master, true, false, 0, 0);
+    CHECK(!master.failed);
+    CHECK(!master.linked);
+}
+
+static void test_a_lobby_whose_partner_goes_quiet_gives_up(void) {
+    TengenLobby master;
+    tengen_lobby_start(&master, 1, 0, 0);
+    /* The slave echoes HELLO once: now there is somebody to lose. */
+    tengen_lobby_apply(&master, true, true, 0,
+                       (uint16_t)(TENGEN_LOBBY_HELLO << TENGEN_LOBBY_TAG_SHIFT));
+    CHECK(master.linked);
     for (int i = 0; i < TENGEN_LOBBY_TIMEOUT - 1; i++)
         tengen_lobby_apply(&master, true, false, 0, 0);
     CHECK(!master.failed);        /* ten seconds is ten seconds */
@@ -3369,7 +3384,8 @@ int main(void) {
     test_the_lobby_survives_transfers_that_do_not_arrive();
     test_the_cable_agrees_on_a_skin_by_its_art();
     test_a_skin_fingerprint_is_its_art();
-    test_a_lobby_with_nothing_on_the_other_end_gives_up();
+    test_a_lobby_waits_for_its_partner_as_long_as_it_takes();
+    test_a_lobby_whose_partner_goes_quiet_gives_up();
     test_no_lobby_word_can_look_like_an_absent_console();
     test_a_lobby_hands_straight_over_to_a_matching_pair_of_games();
     test_the_rivals_name_crosses_the_cable();

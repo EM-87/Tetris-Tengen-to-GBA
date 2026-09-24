@@ -1080,13 +1080,20 @@ def link_check(rom_path):
     if pixels(screen) != before:
         failures.append("la pantalla de espera no es estable")
 
-    # And it gives up rather than waiting forever.
+    # AND IT KEEPS WAITING. It used to give up after ten seconds, and on two
+    # real consoles that was the other player still walking through the
+    # menus: the lobby now waits for a partner who has never answered for as
+    # long as it takes, and B is the way out. (The timeout is for a partner
+    # that answered and then went quiet; run_link.py's late_check covers the
+    # meeting.)
     run(core, LINK_TIMEOUT_FRAMES + 60)
     msg = tilemap_text(core, LINK_MSG_ROW)
-    if "NO CABLE" not in msg:
-        failures.append(f"el lobby no se rinde sin cable (fila {LINK_MSG_ROW}: {msg!r})")
+    if "WAITING" not in msg:
+        failures.append(f"el lobby deja de esperar sin cable (fila "
+                        f"{LINK_MSG_ROW}: {msg!r})")
     else:
-        print(f"  sin cable: '{msg}' tras {LINK_TIMEOUT_FRAMES} frames")
+        print(f"  sin cable: sigue '{msg.strip()}' tras "
+              f"{LINK_TIMEOUT_FRAMES + 60} frames")
 
     tap("B")                          # back out of the link screen
     if "GAME SELECT" not in tilemap_text(core, 8):
@@ -1096,5 +1103,5 @@ def link_check(rom_path):
         print(f"FALLA: {f}")
     if failures:
         return 1
-    print("OK: el modo 2 jugadores llega al cable, no se cuelga sin el, y se sale.")
+    print("OK: el modo 2 jugadores llega al cable, espera sin colgarse, y se sale.")
     return 0

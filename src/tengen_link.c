@@ -176,8 +176,14 @@ void tengen_lobby_apply(TengenLobby *lobby, bool master, bool got,
                          uint16_t master_word, uint16_t slave_word) {
     if (lobby->ready || lobby->failed) return;
 
+    /* THE LOBBY WAITS FOR ITS PARTNER FOR AS LONG AS IT TAKES. Somebody
+     * opens the cable a minute before the other player has found the menu,
+     * and that is the normal case, not the failing one: until the other end
+     * has answered once there is nothing to time out, and B is the way out.
+     * The timeout is for a partner that WAS there and went quiet. */
     if (!got) {
-        if (++lobby->idle >= TENGEN_LOBBY_TIMEOUT) lobby->failed = true;
+        if (lobby->linked && ++lobby->idle >= TENGEN_LOBBY_TIMEOUT)
+            lobby->failed = true;
         return;
     }
     lobby->idle = 0;

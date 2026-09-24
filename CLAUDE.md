@@ -160,7 +160,9 @@ story behind each; the item number is in brackets.
   as gba-link-connection does); 38400 baud. Without that, the console that
   reached the lobby first wedged the port and two SPs never met.
   `run_link.py`'s cable models SD and a sticky error, and `late_check`
-  walks one console to the lobby a second before the other. The LINK
+  walks one console to the lobby twenty seconds before the other. The lobby
+  has no timeout until the partner has answered once: opening the cable a
+  minute early is the normal case (B leaves). The LINK
   CABLE screen prints SIOCNT and good/bad/reset counts while it waits.
 - **Coop's two falling pieces are solid to each other**, and the settled
   field cannot see it: `checkCoopCollision` runs on shifts, rotations and

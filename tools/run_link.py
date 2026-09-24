@@ -1323,8 +1323,14 @@ def late_check(rom):
     and then NO CABLE FOUND. With the cable model above (SD only once both
     are in multiplayer mode, a transfer into a console that is not ready
     fails and its error stays until the port is started over) this is that
-    evening, both ways round: the master a second early, then the slave.
+    evening, both ways round: the master first, then the slave.
+
+    AND THE OTHER ONE TAKES ITS TIME: twenty seconds, twice what the lobby
+    used to wait before it said NO CABLE FOUND. Somebody opening the cable a
+    minute before the other player finds the menu is the normal case; the
+    lobby waits for a partner who has never answered for as long as it takes.
     """
+    LATE = 1200
     sym, why = symbol(rom, "g_session")
     if sym is None:
         print(f"SALTADO: {why}")
@@ -1360,19 +1366,19 @@ def late_check(rom):
         both(8)
         tap("START"); tap("DOWN")             # both on GAME SELECT, 2 PLAYER
         tap("START", who=first)               # one goes to the cable...
-        both(60)
-        tap("START", who=1 - first)           # ...and the other a second later
+        both(LATE)
+        tap("START", who=1 - first)           # ...and the other much later
         both(60)
         tap("START", who=0)                   # the master releases the lobby
         both(120)
         m = read_bytes(cores[0], session_addr, game_size)
         sl = read_bytes(cores[1], session_addr, game_size)
         if m == bytes(game_size) or m != sl:
-            failures.append(f"con {name} un segundo antes en el cable no "
+            failures.append(f"con {name} {LATE // 60} s antes en el cable no "
                             f"arranco la partida ({cable.transfers} "
                             f"transferencias buenas, {cable.failed} fallidas)")
         else:
-            print(f"  {name} llega un segundo antes: se encuentran igual "
+            print(f"  {name} llega {LATE // 60} s antes: se encuentran igual "
                   f"({cable.transfers} buenas, {cable.failed} fallidas)")
         del cores, screens
     for f in failures:
