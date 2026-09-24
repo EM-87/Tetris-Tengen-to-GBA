@@ -83,9 +83,10 @@ void link_init(void);
 /* Puts it away again. */
 void link_shutdown(void);
 
-/* SIOCNT and three counters (good transfers, bad ones, port resets), for
- * the LINK CABLE screen to print while it waits. */
-void link_debug(uint16_t out[4]);
+/* SIOCNT, three counters (good transfers, bad ones, port resets) and the
+ * last transfer's two words (the master's slot, the slave's), for the LINK
+ * CABLE screen to print while it waits. */
+void link_debug(uint16_t out[6]);
 
 /* True when this console is the cable master — the one that starts each
  * transfer, and the one that plays as player 1. Which end of the cable a

@@ -44,6 +44,14 @@
  * hardware is wedged and starts the port over. A good one takes a millisecond. */
 #define LINK_BUSY_LIMIT 3
 
+/* And how many transfers in a row may come back with a console missing
+ * before the port is started over: gba-link-connection resets after three
+ * frames without a word from a player. On two real SPs the second session
+ * of the evening ran one good transfer and then nothing but an empty slot,
+ * no error bit, SD high, for as long as anyone waited — and only switching
+ * off put it right. A reset is the switching off, for the serial port. */
+#define LINK_ABSENT_LIMIT 4
+
 /* The interrupt hands transfers to the main loop through this. The two
  * consoles' clocks differ by parts per million, so the queue holds one entry
  * almost always and two on the rare frame where the drift puts two transfers
@@ -73,6 +81,9 @@ static uint8_t g_busy_frames;
 /* Counters for the LINK CABLE screen's diagnostic line: transfers that came
  * back with both consoles in them, ones that did not, and port resets. */
 static volatile uint16_t g_good, g_bad, g_resets;
+static volatile uint8_t g_absent_run;
+/* The last transfer's two words, whatever they were, for the same line. */
+static volatile uint16_t g_last_m = LINK_ABSENT, g_last_s = LINK_ABSENT;
 
 static inline void tx(uint16_t word) {
     g_tx_word = word;
@@ -120,6 +131,8 @@ void link_serial_service(void) {
     {
         uint16_t m = REG_SIOMULTI(0);
         uint16_t s = REG_SIOMULTI(1);
+        g_last_m = m;
+        g_last_s = s;
 
         /* $FFFF is the hardware's "nobody there". A transfer missing either
          * console did not happen as far as this file is concerned: it is not
@@ -140,6 +153,7 @@ void link_serial_service(void) {
             }
             g_starved = 0;
             g_good++;
+            g_absent_run = 0;
 
             /* During a match, load the next word straight away so the send
              * register is never stale when the master starts the following
@@ -151,17 +165,27 @@ void link_serial_service(void) {
             }
         } else {
             g_bad++;
+            if (++g_absent_run >= LINK_ABSENT_LIMIT) {
+                g_absent_run = 0;
+                sio_reset();
+            }
         }
     }
 }
 
 void link_init(void) {
     /* RCNT bits 14-15 pick between the serial modes and the general-purpose
-     * ones; zero leaves SIOCNT in charge. */
+     * ones; zero leaves SIOCNT in charge. THROUGH GENERAL PURPOSE FIRST, so
+     * that entering multiplayer mode is always a real change of mode — the
+     * second time in an evening too, when the port may still be sitting in
+     * multiplayer mode from the first (see link_shutdown). */
+    REG_RCNT = 0x8000;
     REG_RCNT = 0x0000;
     REG_SIOCNT = SIO_MODE_MULTI | SIO_BAUD;
     tx(0);
     g_good = g_bad = g_resets = 0;
+    g_absent_run = 0;
+    g_last_m = g_last_s = LINK_ABSENT;
     g_busy_frames = 0;
 
     g_rx_head = 0;
@@ -180,10 +204,17 @@ void link_init(void) {
     REG_IME = 1;
 }
 
+/* ...and OUT OF MULTIPLAYER MODE altogether, as gba-link-connection's
+ * deactivate does: the port does not sit in multiplayer between sessions,
+ * the other console's SD reads "not ready" while this one is on the menus,
+ * and the next link_init is a real change of mode. */
 void link_shutdown(void) {
     REG_IME = 0;
     REG_SIOCNT &= (uint16_t)~SIO_IRQ;
     REG_IE &= (uint16_t)~IRQ_SERIAL;
+    REG_SIOMLT_SEND = 0;
+    REG_SIOCNT = 0;
+    REG_RCNT = 0x8000;
     g_auto_tx = false;
     g_armed = false;
     REG_IME = 1;
@@ -225,11 +256,13 @@ void link_pump(void) {
     REG_SIOCNT = cnt | SIO_START;
 }
 
-void link_debug(uint16_t out[4]) {
+void link_debug(uint16_t out[6]) {
     out[0] = REG_SIOCNT;
     out[1] = g_good;
     out[2] = g_bad;
     out[3] = g_resets;
+    out[4] = g_last_m;
+    out[5] = g_last_s;
 }
 
 bool link_pop(LinkFrame *out) {

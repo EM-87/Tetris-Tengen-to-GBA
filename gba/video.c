@@ -290,6 +290,11 @@ void upload_palettes(void) {
     upload_palette_set(PAL_GAME_BASE, kRomPalette_bg_game, MEM_PALETTE);
     upload_palette_set(PAL_TITLE_BASE, kRomPalette_bg_title, MEM_PALETTE);
     upload_palette_set(PAL_MENU_BASE, kRomPalette_bg_menu, MEM_PALETTE);
+    /* THE CREDITS IN DARK GREY, not the cartridge's orange ($27): a line of
+     * names at the foot of GAME SELECT should not be the loudest thing on
+     * it. $00 is the NES's dark grey; bank 9 is the credits' alone (the menu
+     * frame uses 8, 10 and 11). See BANK_CREDIT. */
+    MEM_PALETTE[BANK_CREDIT * 16 + 1] = nes_colour_to_gba(0x00);
     /* The notes' own bank, filled from the menu set's bank 2 and then left
      * alone for ever — see BANK_NOTE. */
     {

@@ -531,9 +531,22 @@ static void draw_credits(void) {
     draw_text_lifted(CREDIT_TY, kCredits[g_credit][0], BANK_CREDIT);
     draw_text_lifted(CREDIT_TY + 1, kCredits[g_credit][1], BANK_CREDIT);
 }
+/* THE CHORD SHOWS ON THE MENUS. Everything it uncovers is somewhere else —
+ * the tunes a page on, the pause menu in a game — so a player had no way to
+ * tell whether it had taken. Once it has, the menus' text turns from the
+ * cartridge's blue to the cursor's white, which also reads better on an LCD.
+ * The one thing that was white already, the handicap number the pad is
+ * moving, takes the blue instead so it still stands out. */
+static int menu_bank(void) {
+    return g_pause_unlocked ? BANK_ARROW : BANK_MENU;
+}
+static int menu_lit_bank(void) {
+    return g_pause_unlocked ? BANK_MENU : BANK_ARROW;
+}
+
 void draw_game_select(uint8_t choice) {
     draw_menu_frame();
-    draw_text_centred(8, "GAME SELECT", BANK_MENU);
+    draw_text_centred(8, "GAME SELECT", menu_bank());
     /* FIVE ENTRIES ON CONSECUTIVE ROWS, which is the cartridge's own shape:
      * gameSelectArrowPpuAddrs ($A0AB) is $220A,$222A,$224A,$226A,$228A — five
      * addresses one nametable row apart. Two rows apart was fine for two of
@@ -542,7 +555,7 @@ void draw_game_select(uint8_t choice) {
      * nametable column $0C whatever their length. See GAME_SELECT_TX. */
     for (int i = 0; i < GAME_COUNT; i++)
         draw_text_left(GAME_SELECT_TY + i, GAME_SELECT_TX, kGameNames[i],
-                        BANK_MENU);
+                        menu_bank());
     /* AND THE ARROW, which this screen had been doing without. The cartridge
      * marks its choice here exactly as it does on LEVEL SELECT — a white
      * arrow in the column left of the list (gameSelectArrowPpuAddrs, $A0AB,
@@ -575,7 +588,7 @@ static unsigned append_number(char *row, unsigned n, unsigned value);
 
 static void draw_link_debug(int ty) {
     static const char kHex[] = "0123456789ABCDEF";
-    uint16_t d[4];
+    uint16_t d[6];
     link_debug(d);
     char row[32];
     unsigned n = 0;
@@ -590,25 +603,36 @@ static void draw_link_debug(int ty) {
         n = append_number(row, n, d[i + 1] > 999 ? 999 : d[i + 1]);
     }
     row[n] = 0;
-    draw_text_centred(ty, row, BANK_MENU);
+    draw_text_centred(ty, row, menu_bank());
+    /* ...and under it what the last transfer carried: the master's slot and
+     * the slave's. FFFF is a console the transfer did not hear. */
+    n = 0;
+    for (int w = 0; w < 2; w++) {
+        if (w) row[n++] = ' ';
+        row[n++] = w ? 'S' : 'M';
+        row[n++] = ' ';
+        for (int sh = 12; sh >= 0; sh -= 4) row[n++] = kHex[(d[4 + w] >> sh) & 0xF];
+    }
+    row[n] = 0;
+    draw_text_centred(ty + 1, row, menu_bank());
 }
 
 void draw_link_wait(const TengenLobby *lobby, int elapsed) {
     draw_menu_frame();
-    draw_text_centred(8, "LINK CABLE", BANK_MENU);
-    if (!link_connected()) draw_link_debug(16);
+    draw_text_centred(8, "LINK CABLE", menu_bank());
 
-    clear_both(MENU_IN_TX, 11, MENU_IN_W, 5);
+    clear_both(MENU_IN_TX, 11, MENU_IN_W, 6);
+    if (!link_connected()) draw_link_debug(15);
     if (lobby->failed) {
         oam_hide_all();
         draw_text_centred(11, "NO CABLE FOUND", BANK_NOTE);
-        draw_text_centred(14, "B TO GO BACK", BANK_MENU);
+        draw_text_centred(14, "B TO GO BACK", menu_bank());
         return;
     }
     if (!link_connected()) {
         oam_hide_all();
-        draw_text_centred(11, "WAITING FOR PLAYER 2", BANK_MENU);
-        draw_text_centred(14, "B TO GO BACK", BANK_MENU);
+        draw_text_centred(11, "WAITING FOR PLAYER 2", menu_bank());
+        draw_text_centred(13, "B TO GO BACK", menu_bank());
         return;
     }
     /* Connected. The master has gone off to choose; this console is the guest,
@@ -652,12 +676,12 @@ static void draw_field_row(int field, int chosen, const char *label,
                       WITH_BANK(ascii_tile(MENU_ARROW_R), BANK_ARROW));
     for (int i = 0; label[i]; i++)
         set_map_tile(MENU_LABEL_TX + i, ty,
-                      WITH_BANK(ascii_tile(label[i]), BANK_MENU));
+                      WITH_BANK(ascii_tile(label[i]), menu_bank()));
     int tx = MENU_VALUE_TX;
     for (int i = 0; value[i]; i++, tx++) {
         bool lit = hl_len > 0 && i >= hl && i < hl + hl_len;
         set_map_tile(tx, ty, WITH_BANK(ascii_tile(value[i]),
-                                        lit ? BANK_ARROW : BANK_MENU));
+                                        lit ? menu_lit_bank() : menu_bank()));
     }
     if (tail) {
         tx += MENU_TAIL_GAP;

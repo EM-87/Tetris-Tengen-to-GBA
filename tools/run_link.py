@@ -113,6 +113,11 @@ class CableEnd(mgba.gba.GBASIODriver):
         # the pessimistic reading of the hardware, and it is the one the first
         # real cable agreed with: two consoles that never heard each other.
         self.error = False
+        # MUTE: transfers go on, but this console's slot comes back $FFFF on
+        # both ends and nobody's error bit says so — what two real SPs did on
+        # the second session of an evening (one good transfer, then "B 999",
+        # "R 0" on both). Only this console starting its port over ends it.
+        self.mute = False
         cable.ends.append(self)
 
     def writeRegister(self, address, value):
@@ -121,6 +126,7 @@ class CableEnd(mgba.gba.GBASIODriver):
         self.ready = ((value >> SIO_MODE_SHIFT) & 3) == SIO_MODE_MULTI
         if not (value & SIO_START):
             self.error = False            # the port taken down and up again
+            self.mute = False
             value &= ~SIO_ERR
         # SI says which end of the cable this console is plugged into; SD says
         # EVERY console is in multiplayer mode, so it changes on both when
@@ -152,6 +158,8 @@ class Cable:
         self.failed = 0
         self.plugged = True
         self.ends = []
+        # Good-transfer counts at which the slave goes mute (see CableEnd.mute).
+        self.mute_slave_at = set()
 
     def all_ready(self):
         return all(end.ready for end in self.ends) or not self.plugged
@@ -198,6 +206,12 @@ class Cable:
         sio = self.slave._native.memory.io
         m = mio[IO_SIOMLT_SEND]
         s = sio[IO_SIOMLT_SEND]
+        if self.transfers in self.mute_slave_at:
+            self.mute_slave_at.discard(self.transfers)
+            self.ends[1].mute = True
+        if self.ends[1].mute:
+            s = ABSENT
+            self.failed += 1
 
         for io in (mio, sio):
             io[IO_SIOMULTI0] = m
@@ -208,8 +222,15 @@ class Cable:
 
         lib.GBARaiseIRQ(self.master._native, IRQ_SIO, 0)
         lib.GBARaiseIRQ(self.slave._native, IRQ_SIO, 0)
-        self.transfers += 1
+        if s != ABSENT:
+            self.transfers += 1
         return True
+
+
+# Every pair of cores a check makes is kept here until the process ends.
+# Freeing one — `del`, or the collector — frees a core out from under its
+# cable and segfaults (see the note at the bottom of this file).
+_KEEP = []
 
 
 def symbol(rom_path, name):
@@ -1380,12 +1401,100 @@ def late_check(rom):
         else:
             print(f"  {name} llega {LATE // 60} s antes: se encuentran igual "
                   f"({cable.transfers} buenas, {cable.failed} fallidas)")
-        del cores, screens
+        _KEEP.append((cores, screens, cable, ends))
     for f in failures:
         print(f"FALLA: {f}")
     if failures:
         return 1
     print("OK: da igual que consola llegue antes al cable.")
+    return mute_check(rom)
+
+
+def mute_check(rom):
+    """A CONSOLE THE CABLE STOPS HEARING, AND THE PORT STARTED OVER.
+
+    Two real SPs, second session of the evening: one good transfer, then
+    every one after it with the slave's slot empty — no error bit, SD high,
+    no reset — until they were switched off. gba/link.c now starts the port
+    over after LINK_ABSENT_LIMIT such transfers in a row, the way
+    gba-link-connection does after three frames without a word. The cable
+    here mutes the slave twice (see CableEnd.mute): in the lobby, and again
+    in the middle of the match; the match has to start anyway, and the two
+    consoles still have to be playing the same game at the end.
+    """
+    sym, why = symbol(rom, "g_session")
+    if sym is None:
+        print(f"SALTADO: {why}")
+        return 0
+    session_addr, session_size = sym
+    game_size = session_size - 4
+
+    mgba.log.silence()
+    cores, screens = [], []
+    for _ in range(2):
+        core = mgba.core.load_path(rom)
+        screen = mgba.image.Image(SCREEN_W, SCREEN_H)
+        core.set_video_buffer(screen)   # must stay alive; see run_rom.load()
+        core.reset()
+        cores.append(core)
+        screens.append(screen)
+    cable = Cable(*cores)
+    ends = [CableEnd(cable, True), CableEnd(cable, False)]
+    for core, end in zip(cores, ends):
+        core.attach_sio(end, lib.SIO_MULTI)
+    cable.mute_slave_at = {1, 150}
+
+    def both(frames, keys=None):
+        for _ in range(frames):
+            for i, core in enumerate(cores):
+                core.set_keys(*(keys[i] if keys else []))
+                core.run_frame()
+
+    def tap(key, who=None):
+        both(4, [[KEYS[key]] if who in (None, i) else [] for i in range(2)])
+        both(10, [[], []])
+
+    both(8)
+    tap("START"); tap("DOWN"); tap("START")   # both to the cable
+    both(60)
+    tap("START", who=0)                       # the master releases the lobby
+    both(60)
+    started = read_bytes(cores[0], session_addr, game_size) != bytes(game_size)
+    # The link's own frame counter, the byte after local_slot (see main()'s
+    # game_size): it has to keep counting after the slave's second silence.
+    def frame(core):
+        return core.memory.u8[session_addr + game_size + 1]
+    both(200, [[KEYS["DOWN"]], [KEYS["DOWN"]]])
+    mid = frame(cores[0])
+    both(100, [[KEYS["DOWN"]], [KEYS["DOWN"]]])
+    both(30, [[], []])
+    late = frame(cores[0])
+    m = read_bytes(cores[0], session_addr, game_size)
+    sl = read_bytes(cores[1], session_addr, game_size)
+    failures = []
+    if cable.mute_slave_at:
+        failures.append(f"la prueba no llego a enmudecer al esclavo en "
+                        f"{sorted(cable.mute_slave_at)}")
+    if not started:
+        failures.append(f"con el esclavo mudo en el lobby la partida no "
+                        f"arranco ({cable.transfers} buenas, {cable.failed} "
+                        f"sin esclavo)")
+    elif m != sl:
+        failures.append("tras enmudecer al esclavo en plena partida las dos "
+                        "consolas ya no juegan la misma")
+    elif (late - mid) % 256 < 60:
+        failures.append(f"tras enmudecer al esclavo la partida se paro: "
+                        f"frame {mid} -> {late} en 130 frames")
+    else:
+        print(f"  el esclavo enmudece dos veces y vuelve: {cable.transfers} "
+              f"buenas, {cable.failed} sin esclavo, misma partida en las dos")
+    _KEEP.append((cores, screens, cable, ends))
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: si el cable deja de oir a una consola, el puerto se reinicia y "
+          "siguen.")
     return 0
 
 

@@ -781,7 +781,8 @@
  * beside a cursor that is already saying the same thing. */
 #define BANK_MENU (PAL_MENU_BASE + 0)   /* the cartridge's menu blue */
 #define BANK_ARROW (PAL_MENU_BASE + 3)  /* the cursor, white like its sprite */
-/* ...and the credits, in the one colour the cartridge uses for them. */
+/* ...and the credits: the cartridge's orange at first, dark grey now so
+ * they do not outshout the menu (upload_palettes). */
 #define BANK_CREDIT (PAL_MENU_BASE + 1)
 
 /* ----------------------------------------------------------------------- *

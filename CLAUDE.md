@@ -103,7 +103,7 @@ minus those).
 | --- | --- | --- |
 | `make test` | no | always — the rules, in milliseconds |
 | `make gba` | headers | to build `build/tengen.gba` |
-| `make gba-check` | headers | before calling any change done: 48 checks on the running ROM in mGBA, seven of them on two consoles with a cable |
+| `make gba-check` | headers | before calling any change done: 49 checks on the running ROM in mGBA, eight of them on two consoles with a cable |
 | `make trace ROM=... [MODE=coop\|versus\|with\|demo]` | yes | after touching `tengen_step` or `tengen_ai.c`: the port against the cartridge, iteration by iteration. The 1P and coop scripts never complete a row; `MODE="with --pad1"` plays player 1 with the port's computer and clears plenty; add `--handicap N` to any mode |
 | `make tune-check ROM=...` | yes | after touching audio: the four tunes against the cartridge, note by note |
 | `make dance-check ROM=...` | yes | after touching the dancers: their choreography against the cartridge's driver |
@@ -162,8 +162,13 @@ story behind each; the item number is in brackets.
   `run_link.py`'s cable models SD and a sticky error, and `late_check`
   walks one console to the lobby twenty seconds before the other. The lobby
   has no timeout until the partner has answered once: opening the cable a
-  minute early is the normal case (B leaves). The LINK
-  CABLE screen prints SIOCNT and good/bad/reset counts while it waits.
+  minute early is the normal case (B leaves). Four transfers in a row with
+  a console's slot empty also restart the port (the second session on two
+  SPs ran one good transfer and then only $FFFF from the slave); and
+  `link_shutdown` leaves multiplayer mode for general purpose, so every
+  `link_init` is a real change of mode. `mute_check` silences the slave in
+  the lobby and mid-match. The LINK CABLE screen prints SIOCNT, good/bad/
+  reset counts and the last transfer's two words while it waits.
 - **Coop's two falling pieces are solid to each other**, and the settled
   field cannot see it: `checkCoopCollision` runs on shifts, rotations and
   gravity. [22]
@@ -230,7 +235,9 @@ Versus; WITH: Coop; 2 PLAYER: Versus; COOPERATIVE: Coop — and under the
 chord Stats as VERSUS's and WITH's second), remembered per mode; no HIGH in a
 race, as on the cartridge's 2P screen; one chord (L+R on GAME SELECT or
 LEVEL SETTINGS) that uncovers Korobeiniki, Katiuska, MUSIC MIX, the XE
-levels 18-19, the pause menu (as wide as the tune's name) and those Stats; the title's L+R cycling the prototype skins;
+levels 18-19, the pause menu (as wide as the tune's name) and those Stats,
+and turns the menus' text from blue to white to say so; the credits in
+dark grey rather than the cartridge's orange; the title's L+R cycling the prototype skins;
 credits rotating every four seconds; the cossacks staged on the panels'
 ledges where the cartridge uses a middle strip the port does not have; a
 second cossack for the rival in HUD VERSUS; a paused race under the chord
