@@ -1105,3 +1105,51 @@ def link_check(rom_path):
         return 1
     print("OK: el modo 2 jugadores llega al cable, espera sin colgarse, y se sale.")
     return 0
+
+
+def fireworks_check(rom_path):
+    """THE FIREWORKS STAY INSIDE THE TITLE'S FRAME.
+
+    They are drawn behind the background, as on the NES, which is what lets
+    the opaque blue frame hide a burst that spreads over it. The brick columns
+    either side are not opaque — the gaps in the bricks are the backdrop —
+    and a big burst near the edge showed sparks through them. Two cores run
+    the same title in step, one with the sprite layer switched off: wherever
+    they differ, a sprite is on screen, and over three thousand frames it
+    must never be in the columns (x < 17 or x >= 224). gba/video.c's
+    title_window clips them.
+    """
+    import numpy as np
+    from mgba import ffi
+
+    a, sa = load(rom_path)   # the screens must stay alive; see load()
+    b, sb = load(rom_path)
+    b._core.enableVideoLayer(b._core, 4, False)   # mGBA's layer 4: OBJ
+
+    def frame(screen):
+        raw = ffi.buffer(screen.buffer, screen.stride * screen.height * 4)
+        return np.frombuffer(raw, dtype=np.uint32).reshape(
+            screen.height, screen.stride)[:, :screen.width].copy()
+
+    leaks, seen = [], 0
+    for f in range(3000):
+        a.run_frame()
+        b.run_frame()
+        if f < 30:
+            continue
+        diff = frame(sa) != frame(sb)
+        seen += int(diff.any())
+        side = int(diff[:, :17].sum() + diff[:, 224:].sum())
+        if side:
+            leaks.append((f, side))
+    if not seen:
+        print("FALLA: en 3000 frames de titulo no se vio ni un sprite")
+        return 1
+    if leaks:
+        print(f"FALLA: los fuegos asoman sobre las columnas en {len(leaks)} "
+              f"frames (el primero, {leaks[0][1]} pixeles en el frame "
+              f"{leaks[0][0]})")
+        return 1
+    print(f"  {seen} frames con sprites en el titulo, ninguno fuera del marco")
+    print("OK: los fuegos artificiales no asoman por los ladrillos.")
+    return 0

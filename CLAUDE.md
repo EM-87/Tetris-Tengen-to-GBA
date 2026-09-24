@@ -103,7 +103,7 @@ minus those).
 | --- | --- | --- |
 | `make test` | no | always — the rules, in milliseconds |
 | `make gba` | headers | to build `build/tengen.gba` |
-| `make gba-check` | headers | before calling any change done: 49 checks on the running ROM in mGBA, eight of them on two consoles with a cable |
+| `make gba-check` | headers | before calling any change done: 51 checks on the running ROM in mGBA, nine of them on two consoles with a cable |
 | `make trace ROM=... [MODE=coop\|versus\|with\|demo]` | yes | after touching `tengen_step` or `tengen_ai.c`: the port against the cartridge, iteration by iteration. The 1P and coop scripts never complete a row; `MODE="with --pad1"` plays player 1 with the port's computer and clears plenty; add `--handicap N` to any mode |
 | `make tune-check ROM=...` | yes | after touching audio: the four tunes against the cartridge, note by note |
 | `make dance-check ROM=...` | yes | after touching the dancers: their choreography against the cartridge's driver |
@@ -167,7 +167,11 @@ story behind each; the item number is in brackets.
   SPs ran one good transfer and then only $FFFF from the slave); and
   `link_shutdown` leaves multiplayer mode for general purpose, so every
   `link_init` is a real change of mode. `mute_check` silences the slave in
-  the lobby and mid-match. The LINK CABLE screen prints SIOCNT, good/bad/
+  the lobby and mid-match. The pump never looks at the error bit: it is the
+  LAST transfer's verdict, only a new transfer rewrites it (a reset does
+  not), and resetting on it instead of transferring left a real SP at $6049
+  "R 999" for good — CABLE LOST, then no reconnecting. `glitch_check` fails
+  one transfer in the lobby and one mid-match. The LINK CABLE screen prints SIOCNT, good/bad/
   reset counts and the last transfer's two words while it waits.
 - **Coop's two falling pieces are solid to each other**, and the settled
   field cannot see it: `checkCoopCollision` runs on shifts, rotations and
@@ -185,7 +189,13 @@ story behind each; the item number is in brackets.
   heading letters at `PMENU_RAISED_BASE`. [28]
 - **Title sprites.** The fireworks have the NES's behind-the-background bit
   (OBJ priority 2 here), which is how the frame contains them; a burst is
-  mapped through the composition by its own centre, never per sprite. [15]
+  mapped through the composition by its own centre, never per sprite. The
+  brick columns are NOT opaque, so window 0 keeps sprites inside the
+  release's frame (`title_window`, `--fireworks`). [15]
+- **A linked pause is toggled inside the core**, so the music, the repaint
+  and the rest of a pause going up or down live in `pause_toggled`, called
+  from the solo frame and the linked one alike; the linked one used to skip
+  it and a paused coop match played on.
 - **The seed advances once per main-loop turn, not per frame**, and a slow
   turn takes two frames. A build that runs faster deals different pieces:
   a harness fixture must force what it needs (`--coopai` clears
@@ -236,8 +246,8 @@ chord Stats as VERSUS's and WITH's second), remembered per mode; no HIGH in a
 race, as on the cartridge's 2P screen; one chord (L+R on GAME SELECT or
 LEVEL SETTINGS) that uncovers Korobeiniki, Katiuska, MUSIC MIX, the XE
 levels 18-19, the pause menu (as wide as the tune's name) and those Stats,
-and turns the menus' text from blue to white to say so; the credits in
-dark grey rather than the cartridge's orange; the title's L+R cycling the prototype skins;
+and turns the menus' text from blue to white and the credits from the
+cartridge's orange to dark grey to say so; the title's L+R cycling the prototype skins;
 credits rotating every four seconds; the cossacks staged on the panels'
 ledges where the cartridge uses a middle strip the port does not have; a
 second cossack for the rival in HUD VERSUS; a paused race under the chord

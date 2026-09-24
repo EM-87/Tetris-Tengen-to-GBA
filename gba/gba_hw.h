@@ -60,6 +60,15 @@ typedef volatile uint32_t vu32;
 #define DCNT_BG3      0x0800
 #define DCNT_OBJ      0x1000
 #define DCNT_OBJ_1D   0x0040  /* sprite tiles laid out linearly, not in a grid */
+#define DCNT_WIN0     0x2000
+
+/* Window 0: a rectangle with its own list of layers, and everything outside
+ * it (and outside window 1) gets WINOUT's. Bits 0-3 the backgrounds, 4 the
+ * sprites, 5 the colour effects. */
+#define REG_WIN0H     (*(vu16 *)0x04000040)   /* left << 8 | right (exclusive) */
+#define REG_WIN0V     (*(vu16 *)0x04000044)   /* top << 8 | bottom (exclusive) */
+#define REG_WININ     (*(vu16 *)0x04000048)
+#define REG_WINOUT    (*(vu16 *)0x0400004A)
 
 /* BGxCNT */
 #define BG_4BPP       0x0000

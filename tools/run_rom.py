@@ -95,6 +95,8 @@ def main():
                      help="check the computer reads its partner under the chord")
     ap.add_argument("--vblank", action="store_true",
                      help="check each frame's drawing ends inside the vertical blank")
+    ap.add_argument("--fireworks", action="store_true",
+                     help="check no title sprite shows over the brick columns")
     ap.add_argument("--idleblink", action="store_true",
                      help="check the HUD Stats cossack stays up as a clear ends")
     ap.add_argument("--proto-pause", action="store_true",
@@ -186,6 +188,8 @@ def main():
         sys.exit(sweep_check(args.rom))
     if args.vblank:
         sys.exit(vblank_check(args.rom))
+    if args.fireworks:
+        sys.exit(fireworks_check(args.rom))
     if args.idleblink:
         sys.exit(idle_blink_check(args.rom))
     if args.proto_pause:

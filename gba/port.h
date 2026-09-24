@@ -781,8 +781,8 @@
  * beside a cursor that is already saying the same thing. */
 #define BANK_MENU (PAL_MENU_BASE + 0)   /* the cartridge's menu blue */
 #define BANK_ARROW (PAL_MENU_BASE + 3)  /* the cursor, white like its sprite */
-/* ...and the credits: the cartridge's orange at first, dark grey now so
- * they do not outshout the menu (upload_palettes). */
+/* ...and the credits: the cartridge's orange, dark grey once the chord is
+ * found (set_credit_colour). */
 #define BANK_CREDIT (PAL_MENU_BASE + 1)
 
 /* ----------------------------------------------------------------------- *
@@ -1735,6 +1735,8 @@ bool pressed_shoulder(int which);
 void upload_tiles(void);
 void upload_palette_set(int base, const uint8_t *set, vu16 *memory);
 void upload_palettes(void);
+void set_credit_colour(void);
+void title_window(bool on);
 void set_field_palette_for_level(uint8_t level);
 void set_bank_from_piece(int bank_index, TengenTetromino piece);
 void set_piece_palette(TengenTetromino piece);

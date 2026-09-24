@@ -246,12 +246,14 @@ void link_pump(void) {
         return;
     }
     g_busy_frames = 0;
-    if (cnt & SIO_ERR) {
-        REG_IME = 0;
-        sio_reset();
-        REG_IME = 1;
-        return;
-    }
+    /* NOT THE ERROR BIT. It is the verdict on the LAST transfer, and only a
+     * new transfer rewrites it — starting the port over does not. This used
+     * to reset instead of starting whenever it was set, and on two real SPs
+     * that was a master resetting every frame for ever ("R 999", SIOCNT
+     * $6049) with the error still up and not one transfer tried: a cable
+     * that could never come back, mid-match (CABLE LOST) or in the lobby.
+     * The interrupt judges each transfer as it lands; here only SD counts,
+     * as in gba-link-connection. */
     if (!(cnt & SIO_SD)) return;
     REG_SIOCNT = cnt | SIO_START;
 }

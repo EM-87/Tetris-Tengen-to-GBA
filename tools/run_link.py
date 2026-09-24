@@ -127,7 +127,12 @@ class CableEnd(mgba.gba.GBASIODriver):
         if not (value & SIO_START):
             self.error = False            # the port taken down and up again
             self.mute = False
-            value &= ~SIO_ERR
+        # ...BUT NOT THE ERROR BIT. That is the last transfer's verdict and
+        # only the next transfer rewrites it: a real SP kept SIOCNT at $6049
+        # through a thousand resets. So it carries over from what the
+        # console last read, whatever the program writes.
+        io = (self.cable.master if self.master else self.cable.slave)._native.sio
+        value = (value & ~SIO_ERR) | (io.siocnt & SIO_ERR)
         # SI says which end of the cable this console is plugged into; SD says
         # EVERY console is in multiplayer mode, so it changes on both when
         # either one switches; the id is 0 for the master and 1 for the slave.
@@ -140,7 +145,9 @@ class CableEnd(mgba.gba.GBASIODriver):
         self.cable.set_sd(sd, self)
 
         if self.master and (value & SIO_START):
-            if not self.cable.transfer():
+            if self.cable.transfer():
+                value &= ~SIO_ERR
+            else:
                 value |= SIO_ERR
             value &= ~SIO_START      # the transfer is over by the time we return
         return value
@@ -160,6 +167,9 @@ class Cable:
         self.ends = []
         # Good-transfer counts at which the slave goes mute (see CableEnd.mute).
         self.mute_slave_at = set()
+        # ...and at which ONE transfer fails with the error bit, the way a
+        # cheap cable drops a bit: nothing sticky, the next one is fine.
+        self.glitch_at = set()
 
     def all_ready(self):
         return all(end.ready for end in self.ends) or not self.plugged
@@ -195,8 +205,11 @@ class Cable:
         # STARTED INTO A CONSOLE THAT WAS NOT READY, or on a port still in
         # error: nobody's word goes anywhere, the master's slots read $FFFF,
         # its error bit goes up and stays up (see CableEnd.error).
-        if not self.all_ready() or master_end.error:
-            master_end.error = True
+        glitch = self.transfers in self.glitch_at
+        if glitch:
+            self.glitch_at.discard(self.transfers)
+        if not self.all_ready() or master_end.error or glitch:
+            master_end.error = not glitch
             for slot in (IO_SIOMULTI0, IO_SIOMULTI1, IO_SIOMULTI2, IO_SIOMULTI3):
                 mio[slot] = ABSENT
             mio[IO_SIOCNT] = (mio[IO_SIOCNT] & ~SIO_START) | SIO_ERR
@@ -1306,10 +1319,26 @@ def pause_check(rom):
     both(10, [[], []])
     tap("DOWN"); tap("START")                     # -> 2 PLAYER -> the cable
     both(50)
+    # A tune, so there is something for the pause to silence: the master's
+    # cursor down to MUSIC and one step along the list (see start_game).
+    tap("DOWN", who=0); tap("DOWN", who=0); tap("RIGHT", who=0)
     tap("START", who=0)
     both(80)
+
+    import run_rom
+
+    def loudest(frames):
+        """The most channels either console had going over `frames`."""
+        top = 0
+        for _ in range(frames):
+            both(1)
+            top = max([top] + [run_rom.sound_state(c)["activos"] for c in cores])
+        return top
+
+    playing = loudest(30)
     tap("START", who=0)                           # the master pauses
     both(20)
+    silent = loudest(60)
 
     failures = []
     paused = [c.memory.u8[sym[0] + off["paused"]] for c in cores]
@@ -1325,6 +1354,22 @@ def pause_check(rom):
     else:
         print("  con el acorde en las dos, la pausa por cable es la placa, "
               "no el menu")
+    # AND IT SILENCES THE TUNE, on both, and lets it go again. The linked
+    # frame toggled the pause inside the core and never told the sound engine,
+    # so a paused coop match over a real cable played on under the plaque.
+    tap("START", who=0)                           # ...and unpauses
+    both(10)
+    back = loudest(60)
+    if not playing:
+        failures.append("la partida por cable no sonaba antes de pausar")
+    elif silent:
+        failures.append(f"con la partida por cable en pausa siguen sonando "
+                        f"{silent} canales")
+    elif not back:
+        failures.append("al quitar la pausa por cable la musica no vuelve")
+    else:
+        print(f"  y la pausa calla la musica en las dos consolas "
+              f"({playing} canales -> 0 -> {back})")
     for f in failures:
         print(f"FALLA: {f}")
     if failures:
@@ -1410,22 +1455,12 @@ def late_check(rom):
     return mute_check(rom)
 
 
-def mute_check(rom):
-    """A CONSOLE THE CABLE STOPS HEARING, AND THE PORT STARTED OVER.
-
-    Two real SPs, second session of the evening: one good transfer, then
-    every one after it with the slave's slot empty — no error bit, SD high,
-    no reset — until they were switched off. gba/link.c now starts the port
-    over after LINK_ABSENT_LIMIT such transfers in a row, the way
-    gba-link-connection does after three frames without a word. The cable
-    here mutes the slave twice (see CableEnd.mute): in the lobby, and again
-    in the middle of the match; the match has to start anyway, and the two
-    consoles still have to be playing the same game at the end.
-    """
+def _disturbed_match(rom, name, mute_at=(), glitch_at=()):
+    """The match mute_check and glitch_check play; returns failures."""
     sym, why = symbol(rom, "g_session")
     if sym is None:
         print(f"SALTADO: {why}")
-        return 0
+        return None
     session_addr, session_size = sym
     game_size = session_size - 4
 
@@ -1442,7 +1477,8 @@ def mute_check(rom):
     ends = [CableEnd(cable, True), CableEnd(cable, False)]
     for core, end in zip(cores, ends):
         core.attach_sio(end, lib.SIO_MULTI)
-    cable.mute_slave_at = {1, 150}
+    cable.mute_slave_at = set(mute_at)
+    cable.glitch_at = set(glitch_at)
 
     def both(frames, keys=None):
         for _ in range(frames):
@@ -1472,30 +1508,68 @@ def mute_check(rom):
     m = read_bytes(cores[0], session_addr, game_size)
     sl = read_bytes(cores[1], session_addr, game_size)
     failures = []
-    if cable.mute_slave_at:
-        failures.append(f"la prueba no llego a enmudecer al esclavo en "
-                        f"{sorted(cable.mute_slave_at)}")
+    if cable.mute_slave_at or cable.glitch_at:
+        failures.append(f"la prueba no llego a {name} en "
+                        f"{sorted(cable.mute_slave_at | cable.glitch_at)}")
     if not started:
-        failures.append(f"con el esclavo mudo en el lobby la partida no "
-                        f"arranco ({cable.transfers} buenas, {cable.failed} "
-                        f"sin esclavo)")
+        failures.append(f"al {name} en el lobby la partida no arranco "
+                        f"({cable.transfers} buenas, {cable.failed} malas)")
     elif m != sl:
-        failures.append("tras enmudecer al esclavo en plena partida las dos "
-                        "consolas ya no juegan la misma")
+        failures.append(f"tras {name} en plena partida las dos consolas ya "
+                        "no juegan la misma")
     elif (late - mid) % 256 < 60:
-        failures.append(f"tras enmudecer al esclavo la partida se paro: "
-                        f"frame {mid} -> {late} en 130 frames")
+        failures.append(f"tras {name} la partida se paro: frame {mid} -> "
+                        f"{late} en 130 frames")
     else:
-        print(f"  el esclavo enmudece dos veces y vuelve: {cable.transfers} "
-              f"buenas, {cable.failed} sin esclavo, misma partida en las dos")
+        print(f"  {name}, en el lobby y en plena partida: {cable.transfers} "
+              f"buenas, {cable.failed} malas, misma partida en las dos")
     _KEEP.append((cores, screens, cable, ends))
+    return failures
+
+
+def mute_check(rom):
+    """A CONSOLE THE CABLE STOPS HEARING, AND THE PORT STARTED OVER.
+
+    Two real SPs, second session of the evening: one good transfer, then
+    every one after it with the slave's slot empty — no error bit, SD high,
+    no reset — until they were switched off. gba/link.c starts the port over
+    after LINK_ABSENT_LIMIT such transfers in a row. The cable mutes the
+    slave (CableEnd.mute) in the lobby and again in the middle of the match.
+    """
+    failures = _disturbed_match(rom, "enmudecer al esclavo", mute_at=(1, 150))
+    if failures is None:
+        return 0
     for f in failures:
         print(f"FALLA: {f}")
     if failures:
         return 1
     print("OK: si el cable deja de oir a una consola, el puerto se reinicia y "
           "siguen.")
+    return glitch_check(rom)
+
+
+def glitch_check(rom):
+    """ONE TRANSFER THAT FAILS, AND THE ERROR BIT THAT OUTLIVES IT.
+
+    The next evening on the same SPs: CABLE LOST in a coop match, and then
+    no connecting at all — the master at SIOCNT $6049, the error bit up,
+    "R 999": a port started over every frame and not one transfer tried,
+    because the pump reset on the error bit instead of transferring, and the
+    error bit is only rewritten by a transfer. The cable fails ONE transfer
+    with the error bit (Cable.glitch_at), once in the lobby and once in the
+    middle of the match, and keeps the bit through resets as the SP did.
+    """
+    failures = _disturbed_match(rom, "fallar una transferencia",
+                                glitch_at=(1, 150))
+    if failures is None:
+        return 0
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: una transferencia fallida no deja el cable muerto.")
     return 0
+
 
 
 

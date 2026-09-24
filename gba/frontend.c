@@ -48,6 +48,7 @@ bool unlock_cheats(void) {
     g_music_unlocked = true;
     g_pause_unlocked = true;
     g_xe = true;
+    set_credit_colour();
     nes_audio_play(NES_SOUND_CHIRP);
     return true;
 }
@@ -150,6 +151,7 @@ static const char *const kGameNames[GAME_COUNT] = {
 static bool g_title_dirty = true;
 
 void clear_screen(void) {
+    title_window(false);
     bool was = g_panel_layer;
     g_panel_layer = false;
     for (int ty = 0; ty < 32; ty++)
@@ -317,6 +319,10 @@ static void draw_spire_rim(void) {
 }
 
 void draw_title_sprites(void) {
+    /* The release's title only: the prototypes' frames are a thin fret at
+     * the screen's edge, with no brick columns for a spark to show through,
+     * and their sky runs right out to it. See title_window. */
+    title_window(g_title_skin == 0);
     /* THE TITLE'S CLOCK TICKS WHATEVER THE TITLE IS WEARING, and it used to
      * live three lines below this — inside the part a skin returns early
      * from. So on a prototype's screen g_title_frame never moved, and the

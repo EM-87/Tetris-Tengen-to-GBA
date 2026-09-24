@@ -273,15 +273,25 @@ static void hide_idle_cossack(void) {
  * nothing to preview: the cell is emptied first, on every layer that draws
  * in it, so the words do not land on top of a piece. Called after
  * draw_panel, every frame the frozen board is up. */
+/* IN COOP THE CELL IS COOP'S. Its right panel is seven columns from
+ * COOP_R_TX, not the race's box: laid out by the race's numbers, the words
+ * were cleared and written from column 22, which on the coop screen is the
+ * braid of the board's frame — the text sat on the frame with a bite taken
+ * out of it. */
 void draw_link_lost(void) {
     bool was = g_panel_layer;
     g_panel_layer = false;
-    clear_both(BOX_R_IN, BRAID_T, BOX_IN, SHELF_FIRST - BRAID_T);
-    clear_panel_region(BOX_R_IN, BRAID_T, BOX_IN, SHELF_FIRST - BRAID_T);
+    bool coop = g_session.game.coop;
+    int tx = coop ? COOP_R_TX : BOX_R_IN;
+    int w = coop ? COOP_PANEL_W : BOX_IN;
+    int bottom = coop ? COOP_LEDGE_FIRST : SHELF_FIRST;
+    clear_both(tx, BRAID_T, w, bottom - BRAID_T);
+    clear_panel_region(tx, BRAID_T, w, bottom - BRAID_T);
     hide_idle_cossack();
-    int mid = (BRAID_T + SHELF_FIRST) / 2;
-    draw_text(BOX_R_IN + 1, mid - 1, "CABLE", BANK_LABEL);
-    draw_text(BOX_R_IN + 1, mid, "LOST", BANK_LABEL);
+    int mid = (BRAID_T + bottom) / 2;
+    int col = tx + (w - 5) / 2;              /* CABLE, centred; LOST under it */
+    draw_text(col, mid - 1, "CABLE", BANK_LABEL);
+    draw_text(col, mid, "LOST", BANK_LABEL);
     g_panel_layer = was;
 }
 

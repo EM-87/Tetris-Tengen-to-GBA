@@ -286,15 +286,42 @@ void upload_palette_set(int base, const uint8_t *set, vu16 *memory) {
     }
 }
 
+/* THE CREDITS: the cartridge's orange ($27, bgPalette1 bank 1), and once
+ * the chord has been found the NES's dark grey ($00), so that a screen whose
+ * text has just turned white is not shouted over by a line of names. Bank 9
+ * is the credits' alone (the menu frame uses 8, 10 and 11). See menu_bank in
+ * frontend.c and BANK_CREDIT. */
+/* THE FIREWORKS STAY IN THE SKY. They carry the NES's behind-the-background
+ * bit, which is what lets the blue frame, being opaque, hide a burst that
+ * spreads over it. The brick columns either side are NOT opaque: the gaps in
+ * their bricks are the backdrop, and a big burst near the edge showed its
+ * sparks through them ("se ven por detras de los lingotes"). Window 0 over
+ * the frame, x 17-223 as drawn, lets sprites in there and nowhere else while
+ * the release's title is up; clear_screen takes it away with the title. */
+#define TITLE_WIN_L 17
+#define TITLE_WIN_R 224
+void title_window(bool on) {
+    if (on) {
+        REG_WIN0H = (uint16_t)((TITLE_WIN_L << 8) | TITLE_WIN_R);
+        REG_WIN0V = (uint16_t)((0 << 8) | 160);
+        REG_WININ = 0x003F;                 /* inside: everything */
+        REG_WINOUT = 0x002F;                /* outside: all but the sprites */
+        REG_DISPCNT |= DCNT_WIN0;
+    } else {
+        REG_DISPCNT &= (uint16_t)~DCNT_WIN0;
+    }
+}
+
+void set_credit_colour(void) {
+    MEM_PALETTE[BANK_CREDIT * 16 + 1] =
+        nes_colour_to_gba(g_pause_unlocked ? 0x00 : kRomPalette_bg_menu[1 * 4 + 1]);
+}
+
 void upload_palettes(void) {
     upload_palette_set(PAL_GAME_BASE, kRomPalette_bg_game, MEM_PALETTE);
     upload_palette_set(PAL_TITLE_BASE, kRomPalette_bg_title, MEM_PALETTE);
     upload_palette_set(PAL_MENU_BASE, kRomPalette_bg_menu, MEM_PALETTE);
-    /* THE CREDITS IN DARK GREY, not the cartridge's orange ($27): a line of
-     * names at the foot of GAME SELECT should not be the loudest thing on
-     * it. $00 is the NES's dark grey; bank 9 is the credits' alone (the menu
-     * frame uses 8, 10 and 11). See BANK_CREDIT. */
-    MEM_PALETTE[BANK_CREDIT * 16 + 1] = nes_colour_to_gba(0x00);
+    set_credit_colour();
     /* The notes' own bank, filled from the menu set's bank 2 and then left
      * alone for ever — see BANK_NOTE. */
     {

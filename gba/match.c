@@ -644,6 +644,8 @@ void swallow_held_buttons(TengenGame *game) {
     for (int i = 0; i < 2; i++) game->player[i].held_last_frame = 0xFF;
 }
 
+static void pause_toggled(bool was_paused);
+
 bool link_play_frame(void) {
     /* The master starts one transfer per frame off its own vblank; the slave
      * has nothing to start. Either way the interrupt does the collecting. */
@@ -668,8 +670,10 @@ bool link_play_frame(void) {
         }
 
         TengenStepResult out[2];
+        bool was_paused = g_session.game.paused;
         if (!tengen_link_step(&g_session, tengen_link_buttons(local), remote, out))
             break;
+        if (was_paused != g_session.game.paused) pause_toggled(was_paused);
         note_award(0, out[0]);
         note_award(1, out[1]);
         cossack_watch(0, out[0]);
@@ -742,6 +746,83 @@ void front_music(uint8_t which) {
     start_music(which);
 }
 
+/* THE PAUSE WENT UP OR CAME DOWN THIS FRAME: the music, the menu's cursor
+ * and the repaint that go with it. Solo and over the cable alike — the
+ * linked frame used to toggle the pause inside the core and do none of this,
+ * so a paused coop match over the cable played its tune on under the
+ * plaque. */
+static void pause_toggled(bool was_paused) {
+    /* EVERY PAUSE OPENS ON MUSIC. The cursor used to be left where
+     * the last one ended, so a player who had been to EXIT came back
+     * to a menu whose START — the button that means resume
+     * everywhere else on it — opened the quit question instead. */
+    g_pause_row = PMENU_MUSIC;
+    g_pause_confirm = false;
+    /* pauseOrUnpause suspends and resumes the music
+     * (main.asm.txt:7204-7211) — the same pair the front end uses to
+     * go quiet, through the same two helpers so the port never loses
+     * track of which state the engine is actually in. */
+    /* ...EXCEPT IN PROTO_A'S GAME, where the plaque goes up and the
+     * tune plays on. The list this came from said it of the
+     * prototypes as a family; measured on the dumps it is proto_a's
+     * alone — B, C and D go silent like the release (see
+     * pause_keeps_music). Only the SUSPEND is skipped, never the
+     * resume: a game that was paused before the skin was chosen, or
+     * one whose engine is already gagged for any other reason, still
+     * has to be let go of. */
+    if (!g_session.game.paused)
+        nes_audio_play(NES_MUSIC_RESUME);
+    else if (!pause_keeps_music())
+        nes_audio_play(NES_MUSIC_SUSPEND);
+    /* ...and the mix, if the pause menu left it silent, starts here:
+     * this is the frame the match comes back. See g_mix_held. */
+    if (!g_session.game.paused && g_mix_held) {
+        g_mix_held = false;
+        start_music(g_music);
+    }
+    /* MUSIC_SUSPEND only silences the cartridge's engine. The
+     * hand-entered tunes have their own channels and have to be
+     * stopped and restarted with it, or PAUSE would leave one playing
+     * on its own.
+     *
+     * THE MIX COUNTS. Asking `g_music == MUSIC_KOROBEINIKI` missed the
+     * case where the tune playing is a hand-entered one because the
+     * MIX is on its turn — and the mix OPENS on Korobeiniki, so it was
+     * every first level of every mixed game: pause, and the tune
+     * played on alone over the plaque. */
+    /* A PAUSE SUSPENDS A TUNE; IT DOES NOT REWIND IT. This used to
+     * call handtune_start on the way out, which resets both voices to
+     * the first bar — so Korobeiniki and Katiuska began again from the
+     * top after every pause, and after every visit to the pause menu's
+     * MUSIC line, while the cartridge's own tracks came back exactly
+     * where MUSIC_SUSPEND had left them. Suspend and resume are that
+     * pair for the hand-entered ones.
+     *
+     * START is still start, mind: if the tune that should be playing
+     * is not the one loaded — the menu chose another, or the mix has
+     * turned over — it begins properly, from its first bar. */
+    uint8_t tune = current_tune();
+    if (MUSIC_IS_HANDTUNE(tune)) {
+        /* ...and they follow the engine, including into a prototype's
+         * pause, where it is not silenced at all: a hand tune stopping
+         * over a plaque the cartridge's own tune plays through would
+         * be the two halves of the machine disagreeing. */
+        if (g_session.game.paused && !pause_keeps_music())
+            handtune_suspend();
+        else if (!g_session.game.paused) {
+            if (handtune_current() == MUSIC_HANDTUNE_OF(tune))
+                handtune_resume();
+            else
+                handtune_start(MUSIC_HANDTUNE_OF(tune));
+        }
+    }
+    /* The plaque has to be painted over on the way out, but this runs
+     * mid-frame; six hundred tiles written into VRAM while the screen
+     * is being scanned out is a visible tear. Flag it and let
+     * draw_match do it inside the blank with everything else. */
+    if (was_paused) g_repaint = true;
+}
+
 /* One frame of a solo game: Start pauses, the cheat codes go in while paused
  * — both are the core's job (tengen_pause_input mirrors the ROM's own
  * pauseOrUnpause, which is where checkCodeInput lives). A code that fires
@@ -757,77 +838,7 @@ bool solo_play_frame(uint8_t buttons, uint8_t pressed, bool *quit) {
         TengenCheat cheat[2];
         bool was_paused = g_session.game.paused;
         tengen_pause_input(&g_session.game, presses, cheat);
-        if (was_paused != g_session.game.paused) {
-            /* EVERY PAUSE OPENS ON MUSIC. The cursor used to be left where
-             * the last one ended, so a player who had been to EXIT came back
-             * to a menu whose START — the button that means resume
-             * everywhere else on it — opened the quit question instead. */
-            g_pause_row = PMENU_MUSIC;
-            g_pause_confirm = false;
-            /* pauseOrUnpause suspends and resumes the music
-             * (main.asm.txt:7204-7211) — the same pair the front end uses to
-             * go quiet, through the same two helpers so the port never loses
-             * track of which state the engine is actually in. */
-            /* ...EXCEPT IN PROTO_A'S GAME, where the plaque goes up and the
-             * tune plays on. The list this came from said it of the
-             * prototypes as a family; measured on the dumps it is proto_a's
-             * alone — B, C and D go silent like the release (see
-             * pause_keeps_music). Only the SUSPEND is skipped, never the
-             * resume: a game that was paused before the skin was chosen, or
-             * one whose engine is already gagged for any other reason, still
-             * has to be let go of. */
-            if (!g_session.game.paused)
-                nes_audio_play(NES_MUSIC_RESUME);
-            else if (!pause_keeps_music())
-                nes_audio_play(NES_MUSIC_SUSPEND);
-            /* ...and the mix, if the pause menu left it silent, starts here:
-             * this is the frame the match comes back. See g_mix_held. */
-            if (!g_session.game.paused && g_mix_held) {
-                g_mix_held = false;
-                start_music(g_music);
-            }
-            /* MUSIC_SUSPEND only silences the cartridge's engine. The
-             * hand-entered tunes have their own channels and have to be
-             * stopped and restarted with it, or PAUSE would leave one playing
-             * on its own.
-             *
-             * THE MIX COUNTS. Asking `g_music == MUSIC_KOROBEINIKI` missed the
-             * case where the tune playing is a hand-entered one because the
-             * MIX is on its turn — and the mix OPENS on Korobeiniki, so it was
-             * every first level of every mixed game: pause, and the tune
-             * played on alone over the plaque. */
-            /* A PAUSE SUSPENDS A TUNE; IT DOES NOT REWIND IT. This used to
-             * call handtune_start on the way out, which resets both voices to
-             * the first bar — so Korobeiniki and Katiuska began again from the
-             * top after every pause, and after every visit to the pause menu's
-             * MUSIC line, while the cartridge's own tracks came back exactly
-             * where MUSIC_SUSPEND had left them. Suspend and resume are that
-             * pair for the hand-entered ones.
-             *
-             * START is still start, mind: if the tune that should be playing
-             * is not the one loaded — the menu chose another, or the mix has
-             * turned over — it begins properly, from its first bar. */
-            uint8_t tune = current_tune();
-            if (MUSIC_IS_HANDTUNE(tune)) {
-                /* ...and they follow the engine, including into a prototype's
-                 * pause, where it is not silenced at all: a hand tune stopping
-                 * over a plaque the cartridge's own tune plays through would
-                 * be the two halves of the machine disagreeing. */
-                if (g_session.game.paused && !pause_keeps_music())
-                    handtune_suspend();
-                else if (!g_session.game.paused) {
-                    if (handtune_current() == MUSIC_HANDTUNE_OF(tune))
-                        handtune_resume();
-                    else
-                        handtune_start(MUSIC_HANDTUNE_OF(tune));
-                }
-            }
-            /* The plaque has to be painted over on the way out, but this runs
-             * mid-frame; six hundred tiles written into VRAM while the screen
-             * is being scanned out is a visible tear. Flag it and let
-             * draw_match do it inside the blank with everything else. */
-            if (was_paused) g_repaint = true;
-        }
+        if (was_paused != g_session.game.paused) pause_toggled(was_paused);
         /* Every applied code plays this (main.asm.txt:7089, 7127). */
         if (cheat[0] != TENGEN_CHEAT_NONE)
             screen_blip();
