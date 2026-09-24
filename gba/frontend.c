@@ -567,9 +567,36 @@ static void draw_guest_dancer(int elapsed) {
     for (int i = DANCER_SPRITES; i < 128; i++) MEM_OAM[i * 4] = OBJ_ATTR0_HIDDEN;
 }
 
+/* THE PORT'S OWN ACCOUNT, one line under the message, for as long as the
+ * cable is looking: SIOCNT in hex, then transfers that came back Good, Bad
+ * ones and port Resets (each capped at 999 to fit the line). The emulated cable and a real one disagreed once
+ * already, and this is what a person holding two consoles can read out. */
+static unsigned append_number(char *row, unsigned n, unsigned value);
+
+static void draw_link_debug(int ty) {
+    static const char kHex[] = "0123456789ABCDEF";
+    uint16_t d[4];
+    link_debug(d);
+    char row[32];
+    unsigned n = 0;
+    const char *head = "SIO ";
+    while (*head) row[n++] = *head++;
+    for (int sh = 12; sh >= 0; sh -= 4) row[n++] = kHex[(d[0] >> sh) & 0xF];
+    static const char kTag[3] = { 'G', 'B', 'R' };
+    for (int i = 0; i < 3; i++) {
+        row[n++] = ' ';
+        row[n++] = kTag[i];
+        row[n++] = ' ';
+        n = append_number(row, n, d[i + 1] > 999 ? 999 : d[i + 1]);
+    }
+    row[n] = 0;
+    draw_text_centred(ty, row, BANK_MENU);
+}
+
 void draw_link_wait(const TengenLobby *lobby, int elapsed) {
     draw_menu_frame();
     draw_text_centred(8, "LINK CABLE", BANK_MENU);
+    if (!link_connected()) draw_link_debug(16);
 
     clear_both(MENU_IN_TX, 11, MENU_IN_W, 5);
     if (lobby->failed) {

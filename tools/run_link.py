@@ -77,8 +77,11 @@ IO_SIOMLT_SEND = 0x12A >> 1
 REG_SIOCNT = 0x128
 SIO_SI = 0x0004
 SIO_SD = 0x0008
+SIO_ERR = 0x0040
 SIO_START = 0x0080
 SIO_ID_SHIFT = 4
+SIO_MODE_SHIFT = 12
+SIO_MODE_MULTI = 2
 
 IRQ_SIO = 7        # enum GBAIRQ
 ABSENT = 0xFFFF    # what a slot with no console in it reads
@@ -101,19 +104,38 @@ class CableEnd(mgba.gba.GBASIODriver):
         super(CableEnd, self).__init__()
         self.cable = cable
         self.master = master
+        # In multiplayer mode, as far as the other end can tell. A console
+        # that has not written SIOCNT yet — still on GAME SELECT — is not.
+        self.ready = False
+        # THE ERROR IS STICKY: a transfer that went wrong leaves the port
+        # failing every transfer after it until the program writes SIOCNT
+        # again without the start bit (takes the port down and up). That is
+        # the pessimistic reading of the hardware, and it is the one the first
+        # real cable agreed with: two consoles that never heard each other.
+        self.error = False
+        cable.ends.append(self)
 
     def writeRegister(self, address, value):
         if address != REG_SIOCNT:
             return value
+        self.ready = ((value >> SIO_MODE_SHIFT) & 3) == SIO_MODE_MULTI
+        if not (value & SIO_START):
+            self.error = False            # the port taken down and up again
+            value &= ~SIO_ERR
         # SI says which end of the cable this console is plugged into; SD says
-        # everyone is ready; the id is 0 for the master and 1 for the slave.
+        # EVERY console is in multiplayer mode, so it changes on both when
+        # either one switches; the id is 0 for the master and 1 for the slave.
         value &= ~(SIO_SI | SIO_SD | (3 << SIO_ID_SHIFT))
-        value |= SIO_SD
         if not self.master:
             value |= SIO_SI | (1 << SIO_ID_SHIFT)
+        sd = self.cable.all_ready()
+        if sd:
+            value |= SIO_SD
+        self.cable.set_sd(sd, self)
 
         if self.master and (value & SIO_START):
-            self.cable.transfer()
+            if not self.cable.transfer():
+                value |= SIO_ERR
             value &= ~SIO_START      # the transfer is over by the time we return
         return value
 
@@ -127,9 +149,27 @@ class Cable:
         self.master = master
         self.slave = slave
         self.transfers = 0
+        self.failed = 0
         self.plugged = True
+        self.ends = []
+
+    def all_ready(self):
+        return all(end.ready for end in self.ends) or not self.plugged
+
+    def set_sd(self, sd, writer):
+        """SD is one wire: when it moves, every console reads it moved."""
+        for end, core in zip(self.ends, (self.master, self.slave)):
+            if end is writer:
+                continue
+            # Both copies: mGBA answers a read of SIOCNT from its SIO
+            # state (sio.siocnt), and keeps io[] beside it.
+            io = core._native.memory.io
+            io[IO_SIOCNT] = (io[IO_SIOCNT] | SIO_SD) if sd else (io[IO_SIOCNT] & ~SIO_SD)
+            sio = core._native.sio
+            sio.siocnt = (sio.siocnt | SIO_SD) if sd else (sio.siocnt & ~SIO_SD)
 
     def transfer(self):
+        """True for a transfer that carried both words."""
         if not self.plugged:
             # An unplugged cable is not a cable that says nothing: the master
             # still starts its transfer and still gets an interrupt, and reads
@@ -141,8 +181,20 @@ class Cable:
                 mio[slot] = ABSENT
             mio[IO_SIOCNT] &= ~SIO_START
             lib.GBARaiseIRQ(self.master._native, IRQ_SIO, 0)
-            return
+            return True
         mio = self.master._native.memory.io
+        master_end = self.ends[0]
+        # STARTED INTO A CONSOLE THAT WAS NOT READY, or on a port still in
+        # error: nobody's word goes anywhere, the master's slots read $FFFF,
+        # its error bit goes up and stays up (see CableEnd.error).
+        if not self.all_ready() or master_end.error:
+            master_end.error = True
+            for slot in (IO_SIOMULTI0, IO_SIOMULTI1, IO_SIOMULTI2, IO_SIOMULTI3):
+                mio[slot] = ABSENT
+            mio[IO_SIOCNT] = (mio[IO_SIOCNT] & ~SIO_START) | SIO_ERR
+            lib.GBARaiseIRQ(self.master._native, IRQ_SIO, 0)
+            self.failed += 1
+            return False
         sio = self.slave._native.memory.io
         m = mio[IO_SIOMLT_SEND]
         s = sio[IO_SIOMLT_SEND]
@@ -157,6 +209,7 @@ class Cable:
         lib.GBARaiseIRQ(self.master._native, IRQ_SIO, 0)
         lib.GBARaiseIRQ(self.slave._native, IRQ_SIO, 0)
         self.transfers += 1
+        return True
 
 
 def symbol(rom_path, name):
@@ -1256,6 +1309,77 @@ def pause_check(rom):
     if failures:
         return 1
     print("OK: por cable la pausa no ofrece un menu que no se puede usar.")
+    return late_check(rom)
+
+
+def late_check(rom):
+    """ONE CONSOLE REACHES THE CABLE FIRST, as one always does.
+
+    Every other check here walks both consoles to the lobby on the same
+    frame, which two people with two consoles never do. The one that gets
+    there first is in multiplayer mode alone for a while, and if it is the
+    master it has been starting transfers into a partner that is not ready:
+    on the first real cable that was the end of it, both consoles waiting
+    and then NO CABLE FOUND. With the cable model above (SD only once both
+    are in multiplayer mode, a transfer into a console that is not ready
+    fails and its error stays until the port is started over) this is that
+    evening, both ways round: the master a second early, then the slave.
+    """
+    sym, why = symbol(rom, "g_session")
+    if sym is None:
+        print(f"SALTADO: {why}")
+        return 0
+    session_addr, session_size = sym
+    game_size = session_size - 4
+    failures = []
+    for first, name in ((0, "el maestro"), (1, "el esclavo")):
+        mgba.log.silence()
+        cores, screens = [], []
+        for _ in range(2):
+            core = mgba.core.load_path(rom)
+            screen = mgba.image.Image(SCREEN_W, SCREEN_H)
+            core.set_video_buffer(screen)   # must stay alive; see run_rom.load()
+            core.reset()
+            cores.append(core)
+            screens.append(screen)
+        cable = Cable(*cores)
+        ends = [CableEnd(cable, True), CableEnd(cable, False)]
+        for core, end in zip(cores, ends):
+            core.attach_sio(end, lib.SIO_MULTI)
+
+        def both(frames, keys=None):
+            for _ in range(frames):
+                for i, core in enumerate(cores):
+                    core.set_keys(*(keys[i] if keys else []))
+                    core.run_frame()
+
+        def tap(key, who=None):
+            both(4, [[KEYS[key]] if who in (None, i) else [] for i in range(2)])
+            both(10, [[], []])
+
+        both(8)
+        tap("START"); tap("DOWN")             # both on GAME SELECT, 2 PLAYER
+        tap("START", who=first)               # one goes to the cable...
+        both(60)
+        tap("START", who=1 - first)           # ...and the other a second later
+        both(60)
+        tap("START", who=0)                   # the master releases the lobby
+        both(120)
+        m = read_bytes(cores[0], session_addr, game_size)
+        sl = read_bytes(cores[1], session_addr, game_size)
+        if m == bytes(game_size) or m != sl:
+            failures.append(f"con {name} un segundo antes en el cable no "
+                            f"arranco la partida ({cable.transfers} "
+                            f"transferencias buenas, {cable.failed} fallidas)")
+        else:
+            print(f"  {name} llega un segundo antes: se encuentran igual "
+                  f"({cable.transfers} buenas, {cable.failed} fallidas)")
+        del cores, screens
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: da igual que consola llegue antes al cable.")
     return 0
 
 

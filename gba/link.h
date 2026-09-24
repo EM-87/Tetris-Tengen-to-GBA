@@ -45,6 +45,12 @@
  * came back with a real word in both consoles' slots, and that is what
  * link_connected() reports. A console alone therefore waits, and then gives
  * up, which is the truth.
+ *
+ * SD DOES GATE THE START, though. Low, it is a console on the cable that is
+ * not in multiplayer mode yet, and a transfer started into it fails and
+ * leaves the port in error until it is started over. On the first real
+ * cable the master reached the lobby first, did exactly that, and the two
+ * never heard each other. See sio_reset in link.c.
  */
 #ifndef LINK_H
 #define LINK_H
@@ -76,6 +82,10 @@ void link_init(void);
 
 /* Puts it away again. */
 void link_shutdown(void);
+
+/* SIOCNT and three counters (good transfers, bad ones, port resets), for
+ * the LINK CABLE screen to print while it waits. */
+void link_debug(uint16_t out[4]);
 
 /* True when this console is the cable master — the one that starts each
  * transfer, and the one that plays as player 1. Which end of the cable a

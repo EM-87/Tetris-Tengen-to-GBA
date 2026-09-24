@@ -103,7 +103,7 @@ minus those).
 | --- | --- | --- |
 | `make test` | no | always — the rules, in milliseconds |
 | `make gba` | headers | to build `build/tengen.gba` |
-| `make gba-check` | headers | before calling any change done: 47 checks on the running ROM in mGBA, six of them on two consoles with a cable |
+| `make gba-check` | headers | before calling any change done: 48 checks on the running ROM in mGBA, seven of them on two consoles with a cable |
 | `make trace ROM=... [MODE=coop\|versus\|with\|demo]` | yes | after touching `tengen_step` or `tengen_ai.c`: the port against the cartridge, iteration by iteration. The 1P and coop scripts never complete a row; `MODE="with --pad1"` plays player 1 with the port's computer and clears plenty; add `--handicap N` to any mode |
 | `make tune-check ROM=...` | yes | after touching audio: the four tunes against the cartridge, note by note |
 | `make dance-check ROM=...` | yes | after touching the dancers: their choreography against the cartridge's driver |
@@ -154,6 +154,14 @@ story behind each; the item number is in brackets.
   one thing lockstep cannot carry is what a person typed: names cross in
   `TengenNameSwap`. The lobby is stop-and-wait; its SKIN stage agrees on a
   skin by a fingerprint of the art. [14, 25, 31]
+- **A real cable is not the emulated one.** The master starts a transfer
+  only with SD high (everyone in multiplayer mode), and any transfer that
+  comes back with the error bit or SD low restarts the port (`sio_reset`,
+  as gba-link-connection does); 38400 baud. Without that, the console that
+  reached the lobby first wedged the port and two SPs never met.
+  `run_link.py`'s cable models SD and a sticky error, and `late_check`
+  walks one console to the lobby a second before the other. The LINK
+  CABLE screen prints SIOCNT and good/bad/reset counts while it waits.
 - **Coop's two falling pieces are solid to each other**, and the settled
   field cannot see it: `checkCoopCollision` runs on shifts, rotations and
   gravity. [22]
@@ -262,7 +270,8 @@ row itself: gone one frame after the lock, as in B, C and D).
 
 And what has run only in an emulator:
 
-- **The link cable** between two real GBAs.
+- **The link cable** between two real GBAs. The first try (two SPs, EZ-Flash
+  IV and SuperCard, build 3cdac97) never connected; see the trap above.
 - **The latest builds on hardware** — the Thumb code, `VBlankIntrWait`, the
   interrupt handler. mGBA is accurate on all three, but it is not the
   console.
