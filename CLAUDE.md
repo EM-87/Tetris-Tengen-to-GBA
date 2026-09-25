@@ -159,11 +159,10 @@ story behind each; the item number is in brackets.
   check that the build before it fails:
   - The interrupt judges a transfer by its WORDS: two slots that are not
     $FFFF (every slot is emptied when a transfer starts). SD and the error
-    bit are counted, never acted on: judging by them threw away every
+    bit are never acted on: judging by them threw away every
     transfer on two SPs ("G 0 B 999 R 999") while SIOCNT at leisure showed
     neither flag. SD still down when the interrupt reads it is the INFERRED
-    cause, not a measured one (`jitter_check`, `Cable.sd_lags`);
-    `link_debug` still keeps the IRQ's SIOCNT to settle it.
+    cause, not a measured one (`jitter_check`, `Cable.sd_lags`).
   - Thirty transfers in a row with a slot empty restart the port
     (`sio_reset`, `mute_check`), at most once every two seconds, and
     WITHOUT going through general purpose: a port in general purpose lets go of its lines and the other
@@ -217,10 +216,11 @@ story behind each; the item number is in brackets.
     in the middle of the screen, and START to the title without the records
     swap or the high scores (`link_wait`, `link_give_up`, `lost_check`).
   While the cable was being made to work, the LINK CABLE screen printed the
-  build and `link_debug`'s account (SIOCNT now and at the last interrupt,
-  good/error/absent/reset counts, the last two words). It prints neither
-  now; `link_debug` is still there to put back on the screen if a console
-  ever needs reading again, and the ROM file's name carries the commit.
+  build and the cable's own account (SIOCNT now and at the last interrupt,
+  good/error/absent/reset counts, the last two words: `draw_link_debug` and
+  `link_debug`, in the history before PR #26). Both are gone; bring them
+  back from there if a console ever needs reading again. The ROM file's
+  name carries the commit.
 - **Coop's two falling pieces are solid to each other**, and the settled
   field cannot see it: `checkCoopCollision` runs on shifts, rotations and
   gravity. [22]
@@ -268,7 +268,8 @@ story behind each; the item number is in brackets.
   6502 core records writes (`apu_written`), not just values.
 - **Against the computer there is ONE handicap**, and it buries both
   boards (`bcs @computerIsPlaying`, main.asm.txt:3539). Only 2 PLAYER has
-  two.
+  two — and VERSUS COMPUTER behind the chord, the second for the
+  computer's board (the port's; `handicap_cpu_check`).
 - **Drawing must end inside the vertical blank.** `--vblank` reads the
   scanline where `draw_match` finishes: a full repaint is the heaviest frame
   (line ~220 of 227). Anything that repaints often — the pause box changing
@@ -301,7 +302,8 @@ credits rotating every four seconds; the cossacks staged on the panels'
 ledges where the cartridge uses a middle strip the port does not have; a
 second cossack for the rival in HUD VERSUS; a paused race under the chord
 showing the rival's board (not over the cable), with their NEXT, colours and numbers; the
-computer reading its coop partner under the chord; the pause menu over the
+computer reading its coop partner under the chord; a handicap of its own
+for the computer in VERSUS COMPUTER under the chord; the pause menu over the
 cable, there if the MASTER found the chord and driven by both players'
 presses through lockstep (`link_match_begin`); a linked match that waits
 ten seconds for a quiet cable (LINK ISSUES) before giving it up (the CABLE
@@ -346,16 +348,6 @@ And what has run only in an emulator:
 - **The latest builds on hardware** — the Thumb code, `VBlankIntrWait`, the
   interrupt handler. mGBA is accurate on all three, but it is not the
   console.
-
-Queued for the next build that has another reason to be made (not worth a
-ROM of its own):
-
-- **The lobby's "WAITING FOR PLAYER 2"** reads wrong on the console that
-  turns out to be player 1, which is half the time: neither console knows
-  which it is until the other answers. Something like "WAITING FOR OTHER
-  PLAYER" (24 of the frame's 26 columns; "...THE OTHER PLAYER" is 28 and
-  does not fit), in `draw_link_wait` (gba/frontend.c); no check reads
-  the words.
 
 A new idea starts in the cartridge (`tools/nes_console.py`,
 `tools/render_nes.py`), not in memory of how Tetris goes.

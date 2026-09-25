@@ -87,15 +87,6 @@ void link_shutdown(void);
  * the first good transfer. Called once a frame by link_tick. */
 void link_sample_role(void);
 
-/* The cable's own account, for a debugger: the LINK CABLE screen printed it
- * (with the build) while the cable was being made to work on two SPs, and
- * stopped once it did. SIOCNT now and as the last interrupt found it,
- * four counters (good transfers, error bits seen, transfers with a slot
- * empty, port resets) and the last transfer's two words (the master's slot,
- * the slave's). */
-#define LINK_DEBUG_WORDS 8
-void link_debug(uint16_t out[LINK_DEBUG_WORDS]);
-
 /* True when this console is the cable master — the one that starts each
  * transfer, and the one that plays as player 1. Which end of the cable a
  * console is plugged into decides this, not the software. A console with no

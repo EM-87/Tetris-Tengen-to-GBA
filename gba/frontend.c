@@ -596,7 +596,9 @@ void draw_link_wait(const TengenLobby *lobby, int elapsed) {
     clear_both(MENU_IN_TX, 10, MENU_IN_W, 7);
     if (!lobby->linked) {
         oam_hide_all();
-        draw_text_centred(10, "WAITING FOR PLAYER 2", menu_bank());
+        /* Not "PLAYER 2": neither console knows which it is until the other
+         * answers, and half the time the one reading this is player 2. */
+        draw_text_centred(10, "WAITING FOR OTHER PLAYER", menu_bank());
         draw_text_centred(12, "B TO GO BACK", menu_bank());
         return;
     }

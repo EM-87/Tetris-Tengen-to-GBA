@@ -476,6 +476,64 @@ def handicap_two_check(rom_path):
     else:
         print("  y entierra los dos tableros, el tuyo y el de la maquina, "
               "3 filas cada uno")
+    if not failures:
+        failures += handicap_cpu_check(rom_path)
+    return failures
+
+
+def handicap_cpu_check(rom_path):
+    """BAJO EL ACORDE, VERSUS COMPUTER TIENE UN SEGUNDO NUMERO: EL DE LA MAQUINA.
+
+    Es del port, no del cartucho, y por eso va detras del acorde: sin el, el
+    numero unico de arriba. Con el, la fila trae dos, SELECT pasa al segundo,
+    y cada tablero se entierra bajo el suyo: 3 filas el tuyo, 6 el de la
+    maquina.
+    """
+    failures = []
+    base, why = game_state_address(rom_path)
+    if base is None:
+        return failures
+    off = game_offsets(rom_path)
+    core, screen = load(rom_path)    # `screen` must stay alive; see load()
+    _ = screen
+
+    def tap(*names, hold=4, settle=10):
+        core.set_keys(*[KEYS[n] for n in names]); run(core, hold)
+        core.set_keys(); run(core, settle)
+
+    run(core, 20)
+    press_start(core); run(core, 10)      # title -> GAME SELECT
+    for _ in range(3):                     # VERSUS COMPUTER
+        tap("DOWN")
+    press_start(core); run(core, 12)       # -> LEVEL SETTINGS
+    tap("L", "R")                          # el acorde: el cursor va a MUSIC
+    tap("UP")                              # MUSIC -> HANDICAP
+    row = tilemap_text(core, HANDICAP_ROW)
+    if "HANDICAP 0 0" not in row:
+        failures.append(f"con el acorde, VERSUS deberia traer dos numeros: "
+                        f"{row!r}")
+        return failures
+    tap("RIGHT")                           # el tuyo: 3
+    tap("SELECT")                          # al de la maquina
+    tap("RIGHT"); tap("RIGHT")             # 6
+    row = tilemap_text(core, HANDICAP_ROW)
+    if "HANDICAP 3 6" not in row:
+        failures.append(f"SELECT y DERECHA no llevan a '3 6': {row!r}")
+        return failures
+    press_start(core); run(core, 30)       # -> play
+    PF_W, PF_H = 12, 20
+    buried = []
+    for board in (0, 1):
+        at = base + off["field"] + board * PF_W * PF_H
+        buried.append(sum(1 for r in range(PF_H)
+                          if any(core.memory.u8[at + r * PF_W + c] == 15
+                                 for c in range(1, 11))))
+    if buried != [3, 6]:
+        failures.append(f"con el acorde, cada tablero bajo su numero: "
+                        f"esperaba [3, 6], hay {buried}")
+    else:
+        print("  con el acorde, dos numeros: 3 filas el tuyo, 6 el de la "
+              "maquina")
     return failures
 
 

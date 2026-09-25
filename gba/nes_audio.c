@@ -80,10 +80,6 @@ static const uint8_t kNoiseShift[16] = {0, 1, 2, 0, 1, 1, 2, 3, 2, 3, 3, 4, 4, 5
 /* 2097152 / 1789773 in 16.16 fixed point. */
 #define NES_TO_GBA_PERIOD 76795u
 
-/* `used` AND `retain`: tools/run_rom.py reads the interpreter's state out of
- * the ELF by name, and link-time optimisation would otherwise be free to give
- * it internal linkage and no symbol at all -- which does not break the ROM,
- * it silently SKIPS the check that reads it. */
 /* NOT static, and that is deliberate: tools/run_rom.py reads the
  * interpreter's state out of the ELF BY NAME, and link-time optimisation is
  * free to drop the symbol of a file-local object however much it is `used` --
@@ -108,11 +104,12 @@ static bool g_ready;
  * about WRITES and not just values. An offset copied into a Python constant
  * goes quietly wrong at that point and the checks start reading a
  * neighbouring byte. This makes the ELF the single place that knows. */
-/* `used` AND `retain`, or link-time optimisation throws it away: nothing in
+/* `used`, or link-time optimisation throws it away: nothing in
  * the program reads it -- the whole point is that something OUTSIDE the
  * program does -- and LTO can see that across the whole image where a single
- * translation unit could not. */
-__attribute__((used, retain))
+ * translation unit could not. (`retain` too, once; this toolchain ignores it
+ * with a warning, and the image is byte for byte the same without it.) */
+__attribute__((used))
 const uint16_t kNes6502Probe[3] = {
     (uint16_t)offsetof(Nes6502, bus.apu),
     (uint16_t)offsetof(Nes6502, faulted),

@@ -1084,7 +1084,7 @@ static int g_leader_undo_n;
  * carts' own patchers scan for it that way: a signature straddling a word,
  * or with whatever the linker put next to it as its tail, is the usual
  * reason a cart "does not save". */
-__attribute__((used, retain, section(".rodata"), aligned(4)))
+__attribute__((used, section(".rodata"), aligned(4)))
 static const char kSaveSignature[16] = "SRAM_V113";
 static const char kSaveMagic[SAVE_MAGIC_LEN] = { 'L', 'O', 'G', 'G' };
 

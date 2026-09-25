@@ -23,7 +23,7 @@
  *   bit 3  SD   "every console is ready" — read at leisure by the pump.
  *               NOT at the instant of the interrupt: see link_serial_service.
  *   bits 4-5 ID 0 the master, 1 the slave, as the last transfer assigned it.
- *   bit 6  ERR  counted for the diagnostic line, never acted on.
+ *   bit 6  ERR  never acted on: see link_serial_service.
  *   bit 7  START/BUSY — the master writes 1 to begin a transfer; on every
  *               console it reads 1 while one is in progress.
  */
@@ -86,15 +86,9 @@ static bool g_armed;
 /* What the send register is supposed to hold, so a reset can put it back. */
 static volatile uint16_t g_tx_word;
 static uint8_t g_busy_frames;
-/* Counters for the LINK CABLE screen's diagnostic lines: transfers that
- * came back with both consoles in them, ones that raised the error bit (on
- * their own words, good or not), ones with a slot empty, and port resets. */
-static volatile uint16_t g_good, g_errs, g_absent, g_resets;
 static volatile uint8_t g_reset_cool;     /* frames until a restart is allowed */
+/* Transfers running with a slot empty; see LINK_ABSENT_LIMIT. */
 static volatile uint8_t g_absent_run;
-/* The last transfer's two words and SIOCNT as the interrupt found it. */
-static volatile uint16_t g_last_m = LINK_ABSENT, g_last_s = LINK_ABSENT;
-static volatile uint16_t g_irq_cnt;
 /* WHO THIS CONSOLE IS, as the hardware said on the last good transfer. */
 static volatile bool g_id_known;
 static volatile uint8_t g_id;
@@ -146,7 +140,6 @@ static void sio_reset(void) {
     REG_SIOCNT = SIO_NORMAL_SO_HIGH;
     REG_SIOCNT = SIO_MODE_MULTI | SIO_BAUD | SIO_IRQ;
     load_send();
-    g_resets++;
 }
 
 /* ARM, and in internal WRAM (IWRAM_CODE), for the same reason the 6502
@@ -168,17 +161,15 @@ static void sio_reset(void) {
  * transfer itself, and a reset on every transfer is its own failure. The
  * hardware empties every slot to $FFFF when a transfer STARTS, so two real
  * words in the two slots are two consoles heard in this one; that is the
- * test. The flags are counted for the screen and nothing else. */
+ * test. The flags are not looked at. (While the cable was being made to
+ * work on two SPs they were counted, with the words, for a line on the LINK
+ * CABLE screen; that line is in the history, and the counters went with it.) */
 IWRAM_CODE void link_serial_service(void);
 void link_serial_service(void) {
     uint16_t cnt = REG_SIOCNT;
-    g_irq_cnt = cnt;
-    if (cnt & SIO_ERR) g_errs++;
     {
         uint16_t m = REG_SIOMULTI(0);
         uint16_t s = REG_SIOMULTI(1);
-        g_last_m = m;
-        g_last_s = s;
 
         /* $FFFF is the hardware's "nobody there". A transfer missing either
          * console did not happen as far as this file is concerned: it is not
@@ -195,16 +186,19 @@ void link_serial_service(void) {
         bool heard = m != LINK_ABSENT && s != LINK_ABSENT;
         bool lobby_word = heard && g_auto_tx &&
             !(tengen_link_is_match_word(m) && tengen_link_is_match_word(s));
+        /* Any transfer that heard both consoles ends a run of empty ones —
+         * the lobby's last GO in the match included, or a partner halfway
+         * out of the lobby could add its empty transfers to the ones
+         * before and restart the port under it. */
+        if (heard) g_absent_run = 0;
         if (lobby_word) {
             g_starved = 0;                    /* the partner is there */
         } else if (!heard) {
-            g_absent++;
             if (++g_absent_run >= LINK_ABSENT_LIMIT) {
                 g_absent_run = 0;
                 sio_reset();
             }
         } else {
-            g_absent_run = 0;
             uint8_t head = g_rx_head;
             uint8_t next = (uint8_t)((head + 1u) % RX_QUEUE);
             /* A full queue means the main loop has stopped taking transfers.
@@ -216,7 +210,6 @@ void link_serial_service(void) {
                 g_rx_head = next;
             }
             g_starved = 0;
-            g_good++;
             /* ...and who this console is, but only where the words agree:
              * ID 0 with this console's own word in the master's slot, ID 1
              * with it in the slave's. Read in the interrupt, like SD, the ID
@@ -260,11 +253,8 @@ void link_init(void) {
     REG_SIOCNT = SIO_NORMAL_SO_HIGH;
     REG_SIOCNT = SIO_MODE_MULTI | SIO_BAUD;
     tx(0);
-    g_good = g_errs = g_absent = g_resets = 0;
     g_reset_cool = 0;
     g_absent_run = 0;
-    g_last_m = g_last_s = LINK_ABSENT;
-    g_irq_cnt = 0;
     g_id_known = false;
     /* The first reading counts at once; later ones have to hold. */
     g_si_master = (REG_SIOCNT & SIO_SI) == 0;
@@ -371,17 +361,6 @@ void link_pump(void) {
      * as in gba-link-connection. */
     if (!(cnt & SIO_SD)) return;
     REG_SIOCNT = cnt | SIO_START;
-}
-
-void link_debug(uint16_t out[LINK_DEBUG_WORDS]) {
-    out[0] = REG_SIOCNT;
-    out[1] = g_irq_cnt;
-    out[2] = g_good;
-    out[3] = g_errs;
-    out[4] = g_absent;
-    out[5] = g_resets;
-    out[6] = g_last_m;
-    out[7] = g_last_s;
 }
 
 bool link_pop(LinkFrame *out) {
