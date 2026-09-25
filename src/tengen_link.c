@@ -172,6 +172,24 @@ uint16_t tengen_lobby_word(const TengenLobby *lobby, bool master) {
     }
 }
 
+/* THIS CONSOLE TURNED OUT TO BE THE OTHER ONE. Its role comes off the cable
+ * (the SI pin, then the ID bits of a good transfer), and a console can find
+ * out a few frames into a lobby that it is not what it took itself for. What
+ * it had built up in the wrong role means nothing in the right one — a slave
+ * that had "linked" as a master would take its own echo for the partner's —
+ * so the conversation starts again, keeping the seed, the settings and the
+ * skins: holding at HELLO for a master, having heard nothing for a slave. */
+void tengen_lobby_forget(TengenLobby *lobby, bool master) {
+    lobby->ready = false;
+    lobby->linked = false;
+    lobby->idle = 0;
+    lobby->saw_go = false;
+    lobby->echo = TENGEN_LOBBY_NONE;
+    lobby->echo_payload = 0;
+    lobby->hold = true;
+    lobby->stage = master ? TENGEN_LOBBY_HELLO : TENGEN_LOBBY_NONE;
+}
+
 /* ...and back: which stage's echo is still legitimately in flight. */
 static uint8_t prev_stage(uint8_t stage) {
     switch (stage) {
@@ -219,6 +237,13 @@ void tengen_lobby_apply(TengenLobby *lobby, bool master, bool got,
          * sent. That echo is always one transfer behind — which is what makes
          * this a handshake rather than a hope — so every stage costs two
          * transfers and a console that missed one cannot be skipped past. */
+        /* THE SLAVE MAY BE IN THE MATCH ALREADY: at GO, a match word in its
+         * slot is the last echo, arrived as the first move. */
+        if (lobby->stage == TENGEN_LOBBY_GO &&
+            tengen_link_is_match_word(slave_word)) {
+            lobby->ready = true;
+            return;
+        }
         if (echo == (TengenLobbyTag)lobby->stage) {
             lobby->idle = 0;
             lobby->linked = true;
@@ -262,6 +287,12 @@ void tengen_lobby_apply(TengenLobby *lobby, bool master, bool got,
      * match a turn before the master); after it, only the stage it is on or
      * the next one is taken. Anything else is answered with NONE, which
      * sends the master back to HELLO. */
+    /* ...and the master may be: having seen one GO, a match word from it
+     * means it took this console's echo and went. */
+    if (lobby->saw_go && tengen_link_is_match_word(master_word)) {
+        lobby->ready = true;
+        return;
+    }
     TengenLobbyTag tag = tag_of(master_word);
     uint16_t payload = master_word & TENGEN_LOBBY_PAYLOAD_MASK;
     bool in_order =

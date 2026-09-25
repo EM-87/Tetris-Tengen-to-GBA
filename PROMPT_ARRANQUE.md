@@ -41,7 +41,7 @@ cualquier duda sobre comportamiento exacto.
 Estado: el port está completo. Los cinco modos del cartucho (dos por cable
 link, dos contra la máquina), la música y los efectos del propio motor del
 cartucho, los cosacos con su coreografía, la tabla de récords en SRAM, y los
-prototipos como skins. `make test` (host) y `make gba-check` (56
+prototipos como skins. `make test` (host) y `make gba-check` (57
 comprobaciones sobre la ROM en mGBA, dos de ellas con dos consolas y cable)
 tienen que pasar antes de dar por terminado cualquier cambio; tras tocar
 `tengen_step`, además `make trace ROM=...` contra el cartucho.

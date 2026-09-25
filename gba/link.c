@@ -46,21 +46,19 @@
  * hardware is wedged and starts the port over. A good one takes a millisecond. */
 #define LINK_BUSY_LIMIT 3
 
-/* And how many transfers in a row may come back with a console missing
- * before the port is started over: gba-link-connection resets after three
- * frames without a word from a player. On two real SPs the second session
- * of the evening ran one good transfer and then nothing but an empty slot,
- * no error bit, SD high, for as long as anyone waited — and only switching
- * off put it right. A reset is the switching off, for the serial port. */
-#define LINK_ABSENT_LIMIT 4
+/* ...and never more than one restart every two seconds. Restarts that moved
+ * the lines the other console is listening on, four empty transfers apart,
+ * fed each other on two real SPs: every interrupt on both an empty transfer
+ * ("A 999 R 999", both consoles reading themselves a slave at the
+ * interrupt, the master's own slot empty). */
+#define LINK_RESET_COOLDOWN 120
 
-/* ...and never more than one restart a second. A restart moves the lines the
- * other console is listening on, and on two real SPs restarts on both sides
- * fed each other: every interrupt on both an empty transfer ("A 999 R 999",
- * both consoles reading themselves a slave at the interrupt, the master's
- * own slot empty). A second between restarts leaves the master's real
- * transfers the time to get through. */
-#define LINK_RESET_COOLDOWN 60
+/* A port that has heard nobody for LINK_ABSENT_LIMIT transfers running — half
+ * a second — is started over, gently (sio_reset): a console that is really
+ * there and stuck is worth getting back, and one that is not loses nothing.
+ * It used to be four transfers, and restarts that moved the lines; together
+ * those fed on each other. */
+#define LINK_ABSENT_LIMIT 30
 
 /* The interrupt hands transfers to the main loop through this. The two
  * consoles' clocks differ by parts per million, so the queue holds one entry
@@ -92,18 +90,38 @@ static uint8_t g_busy_frames;
  * came back with both consoles in them, ones that raised the error bit (on
  * their own words, good or not), ones with a slot empty, and port resets. */
 static volatile uint16_t g_good, g_errs, g_absent, g_resets;
-static volatile uint8_t g_absent_run;
 static volatile uint8_t g_reset_cool;     /* frames until a restart is allowed */
+static volatile uint8_t g_absent_run;
 /* The last transfer's two words and SIOCNT as the interrupt found it. */
 static volatile uint16_t g_last_m = LINK_ABSENT, g_last_s = LINK_ABSENT;
 static volatile uint16_t g_irq_cnt;
 /* WHO THIS CONSOLE IS, as the hardware said on the last good transfer. */
 static volatile bool g_id_known;
 static volatile uint8_t g_id;
+/* ...and before there has been one, as the SI pin says — read only with the
+ * port idle, and only believed once it has said the same ROLE_DEBOUNCE
+ * frames running. See link_sample_role. */
+#define ROLE_DEBOUNCE 8
+static bool g_si_master;
+static uint8_t g_si_disagree;
+
+/* THE WORD FOR THE NEXT TRANSFER, and the word the last one carried. The
+ * main loop decides the first whenever it likes; it reaches the send
+ * register straight away if the port is idle, and otherwise from the
+ * interrupt the moment the transfer in flight ends — which is the one
+ * moment the register is sure to be free. On hardware whose frames run in
+ * step with the master's, a slave's lobby found the port busy EVERY frame
+ * and never answered: it wrote only when idle. */
+static volatile uint16_t g_sent_word;
+
+static inline void load_send(void) {
+    g_sent_word = g_tx_word;
+    REG_SIOMLT_SEND = g_tx_word;
+}
 
 static inline void tx(uint16_t word) {
     g_tx_word = word;
-    REG_SIOMLT_SEND = word;
+    if (!(REG_SIOCNT & SIO_START)) load_send();
 }
 
 /* THROUGH NORMAL MODE AND BACK: a real change of mode for the serial
@@ -127,7 +145,7 @@ static void sio_reset(void) {
     g_reset_cool = LINK_RESET_COOLDOWN;
     REG_SIOCNT = SIO_NORMAL_SO_HIGH;
     REG_SIOCNT = SIO_MODE_MULTI | SIO_BAUD | SIO_IRQ;
-    REG_SIOMLT_SEND = g_tx_word;
+    load_send();
     g_resets++;
 }
 
@@ -168,7 +186,25 @@ void link_serial_service(void) {
          * advance the frame that the next word will claim. That is what makes
          * a console with no cable — which starts transfers quite happily and
          * gets $FFFF back out of the empty slot — report itself as alone. */
-        if (m != LINK_ABSENT && s != LINK_ABSENT) {
+        /* IN THE MATCH, BOTH WORDS HAVE TO BE THE MATCH'S. The two consoles
+         * leave the lobby a transfer apart when the transfers fall
+         * differently in their frames, and the one that went first hears the
+         * other's GO once more: that is not a move, so it is not queued and
+         * the frame is not advanced, and the same word goes out again until
+         * the partner's first move arrives (see TENGEN_LINK_MATCH_MARK). */
+        bool heard = m != LINK_ABSENT && s != LINK_ABSENT;
+        bool lobby_word = heard && g_auto_tx &&
+            !(tengen_link_is_match_word(m) && tengen_link_is_match_word(s));
+        if (lobby_word) {
+            g_starved = 0;                    /* the partner is there */
+        } else if (!heard) {
+            g_absent++;
+            if (++g_absent_run >= LINK_ABSENT_LIMIT) {
+                g_absent_run = 0;
+                sio_reset();
+            }
+        } else {
+            g_absent_run = 0;
             uint8_t head = g_rx_head;
             uint8_t next = (uint8_t)((head + 1u) % RX_QUEUE);
             /* A full queue means the main loop has stopped taking transfers.
@@ -181,14 +217,13 @@ void link_serial_service(void) {
             }
             g_starved = 0;
             g_good++;
-            g_absent_run = 0;
             /* ...and who this console is, but only where the words agree:
              * ID 0 with this console's own word in the master's slot, ID 1
              * with it in the slave's. Read in the interrupt, like SD, the ID
              * bits are one register read away from a timing surprise; the
              * slot this console's word landed in is not. */
             uint8_t id = (uint8_t)((cnt >> SIO_ID_SHIFT) & 3);
-            if ((id == 0 && m == g_tx_word) || (id == 1 && s == g_tx_word)) {
+            if ((id == 0 && m == g_sent_word) || (id == 1 && s == g_sent_word)) {
                 g_id = id;
                 g_id_known = true;
             }
@@ -199,16 +234,13 @@ void link_serial_service(void) {
              * interrupt. */
             if (g_auto_tx) {
                 g_tx_frame++;
-                tx(tengen_link_pack(link_read_buttons(), g_tx_frame));
-            }
-        } else {
-            g_absent++;
-            if (++g_absent_run >= LINK_ABSENT_LIMIT) {
-                g_absent_run = 0;
-                sio_reset();
+                g_tx_word = tengen_link_pack(link_read_buttons(), g_tx_frame);
             }
         }
     }
+    /* The port is free until the master's next start: the word the main
+     * loop wants goes in now (see load_send). */
+    load_send();
 }
 
 void link_init(void) {
@@ -229,11 +261,14 @@ void link_init(void) {
     REG_SIOCNT = SIO_MODE_MULTI | SIO_BAUD;
     tx(0);
     g_good = g_errs = g_absent = g_resets = 0;
-    g_absent_run = 0;
     g_reset_cool = 0;
+    g_absent_run = 0;
     g_last_m = g_last_s = LINK_ABSENT;
     g_irq_cnt = 0;
     g_id_known = false;
+    /* The first reading counts at once; later ones have to hold. */
+    g_si_master = (REG_SIOCNT & SIO_SI) == 0;
+    g_si_disagree = 0;
     g_busy_frames = 0;
 
     g_rx_head = 0;
@@ -270,11 +305,38 @@ void link_shutdown(void) {
     REG_IME = 1;
 }
 
-/* The ID bits of the last good transfer once there has been one — they are
- * the hardware's own answer and cannot float — and the SI pin before that. */
+/* THE SI PIN IS NOT THE CABLE'S ANSWER WHILE A TRANSFER IS PASSING. The
+ * slave's SI is wired to the master's SO, and the master drives it LOW for
+ * the length of every transfer to hand the slave its turn (GBATEK, "Transfer
+ * Protocol"); at rest it is HIGH. A slave that looked at SI at a random
+ * moment — which this did, whenever the lobby asked — saw LOW about one read
+ * in fifteen while a master was pumping, took itself for the master, "linked"
+ * on its own echo and went off to LEVEL SETTINGS: on two real SPs, every
+ * time the master had reached the cable first. So SI is read here, once a
+ * frame, only with the port idle (the busy bit, which a slave gets for the
+ * length of a transfer, clear in the same read), and a change of mind has to
+ * hold for ROLE_DEBOUNCE frames. It still reads LOW on a slave whose master
+ * is not in multiplayer mode at all — its SO is not driven high then — which
+ * is harmless: SD is low too, nobody transfers, and the slave becomes one
+ * when the master arrives. */
+void link_sample_role(void) {
+    uint16_t cnt = REG_SIOCNT;
+    if (cnt & SIO_START) return;
+    bool master = (cnt & SIO_SI) == 0;
+    if (master == g_si_master) {
+        g_si_disagree = 0;
+    } else if (++g_si_disagree >= ROLE_DEBOUNCE) {
+        g_si_master = master;
+        g_si_disagree = 0;
+    }
+}
+
+/* The ID bits of the last good transfer once there has been one — the
+ * hardware's own answer, checked against the slot this console's word
+ * landed in — and the settled SI pin before that. */
 bool link_is_master(void) {
     if (g_id_known) return g_id == 0;
-    return (REG_SIOCNT & SIO_SI) == 0;
+    return g_si_master;
 }
 
 bool link_connected(void) {
@@ -338,6 +400,7 @@ uint16_t link_starved(void) {
 void link_tick(void) {
     if (g_starved < 0xFFFF) g_starved++;
     if (g_reset_cool) g_reset_cool--;
+    link_sample_role();
 }
 
 /* ----------------------------------------------------------------------- *
@@ -352,19 +415,23 @@ void link_tick(void) {
  * its transfer can do is make the master repeat a stage.
  * ----------------------------------------------------------------------- */
 
+/* The role the lobby is being run in, to notice it changing. */
+static bool g_lobby_master;
+
 static void lobby_send(const TengenLobby *lobby) {
-    if (REG_SIOCNT & SIO_START) return;   /* never while one is in flight */
     tx(tengen_lobby_word(lobby, link_is_master()));
 }
 
 void link_lobby_start(TengenLobby *lobby, uint16_t seed, uint8_t start_level,
                        uint8_t music) {
     tengen_lobby_start(lobby, seed, start_level, music);
+    g_lobby_master = link_is_master();
     lobby_send(lobby);
 }
 
 void link_lobby_start_held(TengenLobby *lobby, uint16_t seed) {
     tengen_lobby_start_held(lobby, seed);
+    g_lobby_master = link_is_master();
     lobby_send(lobby);
 }
 
@@ -377,8 +444,15 @@ void link_lobby_release(TengenLobby *lobby, uint16_t seed,
 void link_lobby_step(TengenLobby *lobby) {
     if (lobby->ready) return;
 
-    bool master = link_is_master();
     link_tick();
+    bool master = link_is_master();
+    /* A CONSOLE THAT FINDS IT IS THE OTHER ONE starts the conversation again
+     * in the right role (tengen_lobby_forget): what it built up in the wrong
+     * one would have it taking its own echo for its partner's. */
+    if (master != g_lobby_master) {
+        g_lobby_master = master;
+        tengen_lobby_forget(lobby, master);
+    }
 
     /* TAKE, ANSWER, AND ONLY THEN START THE NEXT TRANSFER. This used to pump
      * first, and on the emulated cable that was fine, because the transfer
@@ -434,7 +508,6 @@ void link_play_end(void) {
  * ----------------------------------------------------------------------- */
 
 static void name_send(const TengenNameSwap *swap) {
-    if (REG_SIOCNT & SIO_START) return;   /* never while one is in flight */
     tx(tengen_name_word(swap));
 }
 

@@ -1311,6 +1311,68 @@ static void test_a_slave_that_arrives_mid_handshake_hears_it_all(void) {
     CHECK(fresh.music == 2);
 }
 
+static void test_a_console_that_took_itself_for_the_master_starts_again(void) {
+    /* Both consoles read themselves the master for a moment (the slave's SI
+     * pin is the master's SO, low while a transfer passes the turn on), and
+     * the slave "links" on its own echo: its master-side apply sees HELLO in
+     * the slave's slot, which is its own word. Learning its real role, it
+     * forgets that and starts again as a slave, and the two still end on
+     * the real master's game. */
+    TengenLobby master, slave;
+    tengen_lobby_start_held(&master, 0);
+    tengen_lobby_start_held(&slave, 0x7777);
+    uint16_t own = tengen_lobby_word(&slave, true);
+    tengen_lobby_apply(&slave, true, true, tengen_lobby_word(&master, true), own);
+    CHECK(slave.linked);                       /* the mistake, reproduced */
+    tengen_lobby_forget(&slave, false);
+    CHECK(!slave.linked && slave.hold);
+    for (int i = 0; i < 6; i++) lobby_transfer(&master, &slave, true);
+    CHECK(master.linked && slave.linked);
+    const uint8_t handicap[2] = { 0, 0 };
+    tengen_lobby_release(&master, 0xFACE, 3, 1, handicap, true, false);
+    int left_apart = 0;
+    for (int i = 0; i < 100 && !master.ready; i++) {
+        lobby_transfer(&master, &slave, true);
+        if (master.ready != slave.ready) left_apart++;
+    }
+    CHECK(master.ready && slave.ready);
+    CHECK(left_apart == 0);
+    CHECK(slave.seed == 0xFACE && slave.coop);
+}
+
+/* THE TWO LEAVE THE LOBBY A TRANSFER APART, and it does not matter. On
+ * hardware a console's answer goes out on the next transfer or the one
+ * after, depending on where in its frame the transfer falls; the one that
+ * leaves first sends match words at once, and the other must take those as
+ * the end of the handshake, not as noise (which restarted it). Here the
+ * slave answers one transfer late throughout, and once the master is in the
+ * match its words are match words. */
+static void test_the_lobby_ends_even_when_one_side_leaves_first(void) {
+    for (int late_side = 0; late_side < 2; late_side++) {
+        TengenLobby master, slave;
+        tengen_lobby_start(&master, 0xBEEF, 7, 2);
+        tengen_lobby_start(&slave, 0, 0, 0);
+        uint16_t prev_m = 0, prev_s = 0;
+        for (int i = 0; i < 200 && !(master.ready && slave.ready); i++) {
+            uint16_t mw = master.ready ? tengen_link_pack(0, 0)
+                                       : tengen_lobby_word(&master, true);
+            uint16_t sw = slave.ready ? tengen_link_pack(0, 0)
+                                      : tengen_lobby_word(&slave, false);
+            /* One side's word is the one it had a transfer ago. */
+            uint16_t send_m = late_side == 0 ? prev_m : mw;
+            uint16_t send_s = late_side == 1 ? prev_s : sw;
+            if (late_side == 0 && master.ready) send_m = mw;
+            if (late_side == 1 && slave.ready) send_s = sw;
+            prev_m = mw;
+            prev_s = sw;
+            tengen_lobby_apply(&master, true, true, send_m, send_s);
+            tengen_lobby_apply(&slave, false, true, send_m, send_s);
+        }
+        CHECK(master.ready && slave.ready);
+        CHECK(slave.seed == 0xBEEF && slave.start_level == 7);
+    }
+}
+
 static void test_a_slave_that_saw_one_go_does_not_carry_it_over(void) {
     /* A GO seen in a conversation that never finished (the master went
      * away between its two GOs) is forgotten when the next one opens with
@@ -3453,6 +3515,8 @@ int main(void) {
     test_a_lobby_whose_partner_goes_away_waits_again();
     test_a_slave_that_arrives_mid_handshake_hears_it_all();
     test_a_slave_that_saw_one_go_does_not_carry_it_over();
+    test_the_lobby_ends_even_when_one_side_leaves_first();
+    test_a_console_that_took_itself_for_the_master_starts_again();
     test_no_lobby_word_can_look_like_an_absent_console();
     test_a_lobby_hands_straight_over_to_a_matching_pair_of_games();
     test_the_rivals_name_crosses_the_cable();

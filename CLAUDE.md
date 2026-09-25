@@ -103,7 +103,7 @@ minus those).
 | --- | --- | --- |
 | `make test` | no | always — the rules, in milliseconds |
 | `make gba` | headers | to build `build/tengen.gba` |
-| `make gba-check` | headers | before calling any change done: 56 checks on the running ROM in mGBA, fourteen of them on two consoles with a cable |
+| `make gba-check` | headers | before calling any change done: 57 checks on the running ROM in mGBA, fifteen of them on two consoles with a cable |
 | `make trace ROM=... [MODE=coop\|versus\|with\|demo]` | yes | after touching `tengen_step` or `tengen_ai.c`: the port against the cartridge, iteration by iteration. The 1P and coop scripts never complete a row; `MODE="with --pad1"` plays player 1 with the port's computer and clears plenty; add `--handicap N` to any mode |
 | `make tune-check ROM=...` | yes | after touching audio: the four tunes against the cartridge, note by note |
 | `make dance-check ROM=...` | yes | after touching the dancers: their choreography against the cartridge's driver |
@@ -164,9 +164,9 @@ story behind each; the item number is in brackets.
     neither flag. SD still down when the interrupt reads it is the INFERRED
     cause, not a measured one (`jitter_check`, `Cable.sd_lags`); the
     diagnostic line's IRQ word is there to settle it.
-  - Four transfers in a row with a slot empty restart the port (`sio_reset`,
-    `mute_check`), at most once a second, and WITHOUT going through general
-    purpose: a port in general purpose lets go of its lines and the other
+  - Thirty transfers in a row with a slot empty restart the port
+    (`sio_reset`, `mute_check`), at most once every two seconds, and
+    WITHOUT going through general purpose: a port in general purpose lets go of its lines and the other
     console hears the flutter as empty transfers, so restarts on both sides
     fed each other until two SPs did nothing else ("A 999 R 999", both
     reading themselves a slave at the interrupt, the master's own slot
@@ -177,10 +177,28 @@ story behind each; the item number is in brackets.
     master reached the lobby first and never the other way round. The pump never resets on the error bit, which only
     a transfer rewrites (`glitch_check`). 38400 baud.
   - The master starts a transfer only with SD high, read at leisure.
-  - Who is master is the ID bits of the last good transfer, not the SI pin:
-    a slave's SI is the master's SO and floats when the master's port is not
-    in multiplayer mode (`role_check`). So `link_shutdown` leaves the port IN
-    multiplayer mode, answering 0.
+  - Who is master: the ID bits of the last good transfer (checked against
+    the slot this console's word landed in), and before that the SI pin
+    read ONLY IDLE and held for ROLE_DEBOUNCE frames (`link_sample_role`).
+    A slave's SI is the master's SO, which the master drives LOW for every
+    transfer to pass the turn on (GBATEK, Transfer Protocol) and which is
+    not driven high when the master's port is out of multiplayer mode; read
+    at a random moment, a slave took itself for the master whenever the
+    master was already pumping — on two SPs, every time the master reached
+    the cable first (`race_check`, `role_check`). A lobby whose role changes
+    starts again in the new one (`tengen_lobby_forget`). `link_shutdown`
+    leaves the port IN multiplayer mode, answering 0.
+  - The send register is written from the main loop only when the port is
+    idle, and otherwise by the interrupt as the transfer ends (`tx`,
+    `load_send`): with the two consoles' frames in step, a slave found the
+    port busy every frame and never answered.
+  - Match words carry the mark 110 in their top bits ($C000-$DFFF; the
+    frame counter is five bits): the two consoles leave the lobby a
+    transfer apart when the transfers fall differently in their frames. A
+    lobby at GO takes a match word as the end of the handshake; a console in
+    the match takes a lobby word as "not yet" and resends its first move.
+    `Cable.slow` makes transfers last to the end of the frame, with the busy
+    bit and the slave's SI low meanwhile.
   - The lobby never fails. It waits for a partner as long as it takes (B
     leaves), forgets one that goes quiet for TENGEN_LOBBY_LOST turns and goes
     back to waiting (the master off LEVEL SETTINGS); the slave takes the

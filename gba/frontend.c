@@ -642,6 +642,9 @@ static void draw_build_id(int ty) {
     for (const char *p = BUILD_ID; *p && n < sizeof(row) - 1; p++)
         if (*p != '+')                       /* no glyph; a local build only */
             row[n++] = (*p >= 'a' && *p <= 'z') ? (char)(*p - 32) : *p;
+    /* ...and which end of the cable this console believes it is on. */
+    row[n++] = ' ';
+    row[n++] = link_is_master() ? 'M' : 'S';
     row[n] = 0;
     draw_text_centred(ty, row, BANK_NOTE);
 }

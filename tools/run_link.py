@@ -88,6 +88,7 @@ IRQ_SIO = 7        # enum GBAIRQ
 ABSENT = 0xFFFF    # what a slot with no console in it reads
 LINK_LOST_FRAMES_PY = 120   # LINK_LOST_FRAMES in gba/port.h
 LINK_GIVEUP_FRAMES_PY = 600  # LINK_GIVEUP_FRAMES in gba/port.h
+IRQ_STEPS = 1500            # instructions for a serial interrupt to run
 
 KEYS = {"A": 0, "B": 1, "SELECT": 2, "START": 3,
         "RIGHT": 4, "LEFT": 5, "UP": 6, "DOWN": 7,
@@ -110,6 +111,11 @@ class CableEnd(mgba.gba.GBASIODriver):
         # In multiplayer mode, as far as the other end can tell. A console
         # that has not written SIOCNT yet — still on GAME SELECT — is not.
         self.ready = False
+        # This console's SO pin is HIGH: in multiplayer mode at rest, or in
+        # normal mode with SIOCNT bit 3 ("SO during inactivity") set. At
+        # power-on (SIOCNT 0) it is LOW, so a slave whose master has not come
+        # to the cable yet reads SI low.
+        self.so_high = False
         # THE ERROR IS STICKY: a transfer that went wrong leaves the port
         # failing every transfer after it until the program writes SIOCNT
         # again without the start bit (takes the port down and up). That is
@@ -144,6 +150,8 @@ class CableEnd(mgba.gba.GBASIODriver):
         if address != REG_SIOCNT:
             return value
         self.ready = ((value >> SIO_MODE_SHIFT) & 3) == SIO_MODE_MULTI
+        self.so_high = self.ready or (
+            ((value >> SIO_MODE_SHIFT) & 3) == 0 and bool(value & 0x0008))
         if not (value & SIO_START):
             self.error = False            # the port taken down and up again
             self.mute = False
@@ -171,6 +179,19 @@ class CableEnd(mgba.gba.GBASIODriver):
             value |= SIO_SD
         self.cable.set_sd(sd, self)
 
+        if self.master and (value & SIO_START) and self.cable.slow:
+            # A TRANSFER TAKES TIME: busy on both, and the slave's SI low —
+            # the master's SO passing it the turn — until the end of the
+            # frame (Cable.settle). A slave that reads SI meanwhile sees the
+            # master's token, not the cable.
+            self.cable.pending = True
+            # The words go at the START, as the hardware shifts them out.
+            self.cable.latched = (
+                self.cable.master._native.memory.io[IO_SIOMLT_SEND],
+                self.cable.slave._native.memory.io[IO_SIOMLT_SEND])
+            self.cable._set_bit(self.cable.slave, SIO_START, True)
+            self.cable._set_bit(self.cable.slave, SIO_SI, False)
+            return value
         if self.master and (value & SIO_START):
             if self.cable.transfer():
                 value &= ~SIO_ERR
@@ -203,12 +224,17 @@ class Cable:
         # away ("G 0 B 999 R 999") while SIOCNT at leisure showed SD high.
         self.sd_lags = False
         self.lagging = False
+        # SLOW TRANSFERS: see the note in CableEnd.writeRegister.
+        self.slow = False
+        self.pending = False
+        self.latched = None
 
     def all_ready(self):
         return all(end.ready for end in self.ends) or not self.plugged
 
     def parent_drives_so(self):
-        return self.plugged and bool(self.ends) and self.ends[0].ready
+        return (self.plugged and bool(self.ends) and self.ends[0].so_high
+                and not self.pending)
 
     @staticmethod
     def _set_bit(core, bit, on):
@@ -230,8 +256,23 @@ class Cable:
             self._set_bit(core, SIO_SD, sd)
 
     def settle(self):
-        """The end of a frame: SD, if a transfer left it down (sd_lags), is
-        back where the consoles' modes put it."""
+        """The end of a frame: a slow transfer in flight lands, and SD, if a
+        transfer left it down (sd_lags), is back where the consoles' modes
+        put it."""
+        if self.pending:
+            self.pending = False
+            ok = self.transfer()
+            for core in (self.master, self.slave):
+                self._set_bit(core, SIO_START, False)
+            self._set_bit(self.master, SIO_ERR, not ok)
+            self._set_bit(self.slave, SIO_SI, self.parent_drives_so())
+            # ...AND THE INTERRUPT IS TAKEN AT ONCE, as on hardware, where it
+            # is microseconds after the transfer and long before the next.
+            # Left to the next run_frame, the master would start its next
+            # transfer before the slave had loaded its answer.
+            for core in (self.master, self.slave):
+                for _ in range(IRQ_STEPS):
+                    core.step()
         if self.lagging:
             self.lagging = False
             for core in (self.master, self.slave):
@@ -270,6 +311,9 @@ class Cable:
         sio = self.slave._native.memory.io
         m = mio[IO_SIOMLT_SEND]
         s = sio[IO_SIOMLT_SEND]
+        if self.latched is not None:
+            m, s = self.latched
+            self.latched = None
         if self.transfers in self.mute_slave_at:
             self.mute_slave_at.discard(self.transfers)
             self.ends[1].mute = True
@@ -1655,7 +1699,7 @@ def glitch_check(rom):
 # ---------------------------------------------------------------------------
 # The evening of the second real test, one check per thing it found.
 # ---------------------------------------------------------------------------
-def _pair(rom, sd_lags=False):
+def _pair(rom, sd_lags=False, slow=False):
     """Two consoles on a cable, and the helpers every check below uses."""
     mgba.log.silence()
     cores, screens = [], []
@@ -1671,6 +1715,7 @@ def _pair(rom, sd_lags=False):
     for core, end in zip(cores, ends):
         core.attach_sio(end, lib.SIO_MULTI)
     cable.sd_lags = sd_lags
+    cable.slow = slow
     _KEEP.append((cores, screens, cable, ends))
 
     def both(frames, keys=None):
@@ -1957,6 +2002,68 @@ def storm_check(rom):
     print(f"  entran y salen tres veces y juegan: {cable.transfers} buenas, "
           f"{cable.failed} malas")
     print("OK: entrar y salir del cable no deja a las consolas sordas.")
+    return race_check(rom)
+
+
+def race_check(rom):
+    """THE MASTER FIRST, AND THE SLAVE STAYS A SLAVE.
+
+    On two real SPs the cable failed every time the master reached the lobby
+    first, and never the other way round; once, both consoles went on to
+    LEVEL SETTINGS. A slave's SI is the master's SO, which the master drives
+    LOW for the length of each transfer to pass the slave its turn; a slave
+    that read SI while the master was pumping took itself for the master.
+    Transfers here take time (Cable.slow: busy, and the slave's SI low, until
+    the end of the frame). The master goes to the cable first; the slave a
+    second later; it must never reach LEVEL SETTINGS, and they must play.
+    Then the same the other way round.
+    """
+    if symbol(rom, "g_session")[0] is None:
+        print("SALTADO: el ELF no exporta g_session")
+        return 0
+    failures = []
+    for first, name in ((0, "el maestro"), (1, "el esclavo")):
+        cores, cable, both, tap = _pair(rom, slow=True)
+        both(8)
+        tap("START"); tap("DOWN")
+        tap("START", who=first)
+        both(60)
+        tap("START", who=1 - first)
+        wrong = 0
+        for _ in range(12):
+            both(10)
+            if _screen_of(cores[1]) == "ajustes":
+                wrong += 1
+        if wrong:
+            failures.append(f"con {name} primero, el esclavo llego a LEVEL "
+                            f"SETTINGS")
+            continue
+        if _screen_of(cores[0]) != "ajustes":
+            failures.append(f"con {name} primero, el maestro no llega a "
+                            f"LEVEL SETTINGS (esta en {_screen_of(cores[0])}; "
+                            f"{cable.transfers} buenas, {cable.failed} malas)")
+            continue
+        tap("START", who=0)
+        both(90)
+        sym = symbol(rom, "g_session")[0]
+        size = sym[1] - 4
+        frame0 = cores[0].memory.u8[sym[0] + size + 1]
+        both(60, [[KEYS["DOWN"]], [KEYS["DOWN"]]])
+        moved = (cores[0].memory.u8[sym[0] + size + 1] - frame0) % 256
+        if not _same_match(rom, cores):
+            failures.append(f"con {name} primero no juegan la misma partida")
+        elif moved < 30:
+            failures.append(f"con {name} primero la partida no avanza "
+                            f"({moved} frames en 60)")
+        else:
+            print(f"  {name} primero, con transferencias lentas: cada uno en "
+                  f"su sitio, y juegan")
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: la consola esclava no se cree maestra mientras el maestro "
+          "transfiere.")
     return 0
 
 

@@ -83,6 +83,10 @@ void link_init(void);
 /* Puts it away again. */
 void link_shutdown(void);
 
+/* Reads the SI pin, idle only, into the role link_is_master reports before
+ * the first good transfer. Called once a frame by link_tick. */
+void link_sample_role(void);
+
 /* For the LINK CABLE screen: SIOCNT now and as the last interrupt found it,
  * four counters (good transfers, error bits seen, transfers with a slot
  * empty, port resets) and the last transfer's two words (the master's slot,

@@ -30,18 +30,30 @@
  * it believes it is on so the other side can notice a dropped transfer. Both
  * fit in the 16 bits a GBA multiplayer transfer carries.
  *
- * The frame counter is SEVEN bits, not eight, and the top bit of the word is
- * therefore always zero. That is not tidiness: a GBA reads $FFFF from the
- * slot of a console that is not there, so $FFFF has to stay impossible as a
- * real word or an unplugged cable would look like a player holding every
- * button. Seven bits still wrap far slower than a transfer can be late. */
+ * THE TOP THREE BITS SAY "THIS IS A MATCH WORD": 110, which puts every
+ * match word in $C000-$DFFF. No lobby or records word gets there (their tag
+ * is the top nibble, and the largest is SKIN's 9), and neither does $FFFF —
+ * a GBA reads that from the slot of a console that is not there, and an
+ * unplugged cable must not look like a player holding every button. The mark
+ * is how a console still in the lobby knows its partner has already gone
+ * into the match (tengen_lobby_apply), and how one already in the match
+ * knows a word is still the lobby's GO: the two consoles do not leave the
+ * lobby on the same transfer when their frames and the transfers fall
+ * differently, which on hardware they do. So the frame counter is FIVE
+ * bits, which still wrap far slower than a transfer can be late. */
 #define TENGEN_LINK_BUTTON_MASK 0x00FF
 #define TENGEN_LINK_FRAME_SHIFT 8
-#define TENGEN_LINK_FRAME_MASK  0x7F
+#define TENGEN_LINK_FRAME_MASK  0x1F
+#define TENGEN_LINK_MATCH_MARK  0xC000
+#define TENGEN_LINK_MARK_MASK   0xE000
 
 static inline uint16_t tengen_link_pack(uint8_t buttons, uint8_t frame) {
-    return (uint16_t)(buttons | ((uint16_t)(frame & TENGEN_LINK_FRAME_MASK)
-                                  << TENGEN_LINK_FRAME_SHIFT));
+    return (uint16_t)(TENGEN_LINK_MATCH_MARK | buttons |
+                      ((uint16_t)(frame & TENGEN_LINK_FRAME_MASK)
+                       << TENGEN_LINK_FRAME_SHIFT));
+}
+static inline bool tengen_link_is_match_word(uint16_t word) {
+    return (word & TENGEN_LINK_MARK_MASK) == TENGEN_LINK_MATCH_MARK;
 }
 static inline uint8_t tengen_link_buttons(uint16_t word) {
     return (uint8_t)(word & TENGEN_LINK_BUTTON_MASK);
@@ -53,7 +65,7 @@ static inline uint8_t tengen_link_frame(uint16_t word) {
 typedef struct {
     TengenGame game;
     uint8_t local_slot;  /* TENGEN_PLAYER_1 on the machine that is cable master */
-    uint8_t frame;       /* wraps at 128 on the wire; spots a lost transfer */
+    uint8_t frame;       /* wraps at 32 on the wire; spots a lost transfer */
     bool desynced;       /* a word arrived for the wrong frame; game is over */
 } TengenLink;
 
@@ -176,6 +188,11 @@ typedef struct {
  * the slave they are overwritten by what arrives. */
 void tengen_lobby_start(TengenLobby *lobby, uint16_t seed, uint8_t start_level,
                          uint8_t music);
+
+/* Starts the conversation again in the given role, keeping the seed, the
+ * settings and the skins: for a console that has just learnt from the cable
+ * that it is not the master it took itself for, or the other way round. */
+void tengen_lobby_forget(TengenLobby *lobby, bool master);
 
 /* Starts a lobby that CONNECTS AND THEN WAITS. The master keeps saying HELLO
  * until tengen_lobby_release, so the two consoles find each other before
