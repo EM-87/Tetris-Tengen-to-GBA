@@ -1566,6 +1566,10 @@ typedef enum {
  * left staring at a frozen board wondering. */
 #define LINK_LOST_FRAMES 120
 
+/* ...and ten seconds without one, from the last transfer, is a cable that is
+ * gone: the match ends under the CABLE LOST window (link_give_up). */
+#define LINK_GIVEUP_FRAMES 600
+
 /* Never spend a frame doing nothing but catching up. Two is all the drift
  * between two crystals can ever put in the queue at once. */
 #define LINK_MAX_CATCHUP 2
@@ -1784,7 +1788,7 @@ void clear_panel_region(int tx, int ty, int w, int h);
 void set_stats_tile(int tx, int ty, uint16_t entry);
 void set_histogram_tile(int tx, int ty, uint16_t entry);
 void clear_both(int tx, int ty, int w, int h);
-void draw_link_lost(bool waiting); /* the cable went: said in the right box */
+void draw_link_issues(void);     /* the cable is quiet: said in the right box */
 /* WHAT THE HUD IS, AND TWO PER MODE.
  *
  * Four of them, and each game mode offers exactly two — the one it opens on

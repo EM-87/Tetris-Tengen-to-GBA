@@ -452,6 +452,26 @@ static void clear_pmenu_layers(int w) {
         }
 }
 
+/* CABLE LOST, in the pause menu's own window and by its own machinery (what
+ * the box covers is kept and put back): the one thing on the screen when the
+ * cable is gone for good, on both consoles, where a player looks. */
+static void draw_cable_lost_box(void) {
+    const char *lines[] = { "CABLE LOST", "PRESS START", "TO LEAVE" };
+    int w = pmenu_width(lines, 3);
+    if (!g_pmenu_drawn_w) pmenu_save_under();
+    else if (w < g_pmenu_drawn_w) pmenu_restore_strips(g_pmenu_drawn_w, w);
+    clear_pmenu_layers(w);
+    g_pmenu_drawn_w = w;
+    int tx = (SCREEN_TW - w) / 2;
+    draw_box_frame(tx, PMENU_TY, w, PMENU_H);
+    draw_pmenu_line(tx + 1, w - 2, PMENU_TY + 1, lines[0], BANK_NOTE,
+                     PL_HEADING, false);
+    draw_pmenu_line(tx + 1, w - 2, PMENU_TY + 2, lines[1], BANK_LABEL,
+                     PL_CHOICE, false);
+    draw_pmenu_line(tx + 1, w - 2, PMENU_TY + 3, lines[2], BANK_LABEL,
+                     PL_CHOICE, false);
+}
+
 static void draw_pause_menu(void) {
     /* THE QUESTION MARK IS WHAT MAKES IT A QUESTION. It is the one glyph here
      * that is not the cartridge's — see ascii_tile. The answers stack, one to
@@ -678,10 +698,10 @@ static bool pause_menu_on(void) {
  * wait for as long as it likes — neither console steps without the other's
  * word, and every word carries the frame it is for, so a gap is only ever a
  * gap and a mismatch is still caught (g_session.desynced, which does end
- * it). So the board freezes under CABLE LOST, the tune stops on both
- * consoles and the screen-change chime sounds, the one START makes; the
- * match picks up where it was when the transfers do, and SELECT gives up on
- * it. MUSIC_SILENCE rather than SUSPEND, which would gag the chime as well;
+ * it). So the board freezes with LINK ISSUES in the rival's cell, the tune
+ * stops on both consoles and the screen-change chime sounds, the one START
+ * makes; the match picks up where it was when the transfers do. Quiet for
+ * LINK_GIVEUP_FRAMES and it is over: see link_give_up. MUSIC_SILENCE rather than SUSPEND, which would gag the chime as well;
  * and one frame apart, because the engine's ring takes one request a frame.
  * A paused match is already quiet and stays so. */
 static void link_wait(bool starving) {
@@ -703,6 +723,23 @@ static void link_wait(bool starving) {
             else start_music(g_music);
         }
     }
+}
+
+/* THE CABLE IS GONE FOR GOOD: the window goes up in the middle of the
+ * screen (draw_cable_lost_box) and START leaves for the title, not the high
+ * scores — a match nobody finished has no business on them, and the records
+ * swap would only wait on a cable that is not there. Quiet already after a
+ * wait, so the chime again to say this is different; a desync comes with
+ * the tune still going, so that is stopped instead. */
+static void link_give_up(void) {
+    if (!g_link_waiting && !g_session.game.paused) {
+        nes_audio_play(NES_MUSIC_SILENCE);
+        if (MUSIC_IS_HANDTUNE(current_tune())) handtune_suspend();
+    } else {
+        nes_audio_play(NES_SOUND_SCREEN_SWITCH);
+    }
+    g_link_lost = true;
+    g_link_waiting = false;
 }
 
 bool link_play_frame(uint8_t pressed, bool *quit) {
@@ -770,15 +807,16 @@ bool link_play_frame(uint8_t pressed, bool *quit) {
         stepped++;
     }
 
+    (void)pressed;
+    /* A DESYNC IS FINAL at once — the two consoles are no longer playing the
+     * same game — and a cable quiet for LINK_GIVEUP_FRAMES is taken for gone. */
     if (g_session.desynced) {
-        g_link_lost = true;
-        g_link_waiting = false;
+        link_give_up();
         return false;
     }
     link_wait(stepped == 0 && link_starved() > LINK_LOST_FRAMES);
-    if (g_link_waiting && (pressed & TENGEN_BTN_SELECT)) {
-        g_link_lost = true;
-        g_link_waiting = false;
+    if (g_link_waiting && link_starved() > LINK_GIVEUP_FRAMES) {
+        link_give_up();
         return false;
     }
     return !match_over();
@@ -980,11 +1018,9 @@ void draw_match(bool *sweeping) {
     }
     draw_field();
     draw_panel();
-    /* THE CABLE WENT: said in words for as long as the frozen board stays up
-     * — the lobby says NO CABLE FOUND for one that never answered — and not
-     * on top of the rival's preview. See draw_link_lost. The match is over;
-     * the records page comes next as after any other ending. */
-    if (g_link_lost || g_link_waiting) draw_link_lost(g_link_waiting);
+    /* THE CABLE IS QUIET: said in the rival's cell for as long as the
+     * frozen board stays up. See draw_link_issues and link_wait. */
+    if (g_link_lost || g_link_waiting) draw_link_issues();
 
     /* The sweep's sprites. */
     if (clearing) {
@@ -997,10 +1033,12 @@ void draw_match(bool *sweeping) {
 
     /* Last, so they sit over whatever was just drawn. */
     if (!g_session.game.player[g_view].game_active) draw_game_over();
-    if (g_session.game.paused) {
-        /* Not over the cable: pause_menu_input is the solo frame's, the pad
-         * goes down the wire raw, and a tune or an EXIT picked on one console
-         * alone would split the match. There the plaque, as on the cartridge. */
+    /* The cable gone for good covers everything else, pause included. Over
+     * the cable the menu is there when the MASTER found the chord; see
+     * link_match_begin. */
+    if (g_link_lost) {
+        draw_cable_lost_box();
+    } else if (g_session.game.paused) {
         if (pause_menu_on()) draw_pause_menu();
         else draw_pause_box();
     }

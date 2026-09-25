@@ -268,17 +268,17 @@ static void hide_idle_cossack(void) {
         MEM_OAM[(IDLE_OAM_BASE + i) * 4] = OBJ_ATTR0_HIDDEN;
 }
 
-/* THE CABLE WENT, said in the right box's big cell. The rival's preview and
- * cossack stood there, and a board that is no longer being played has
- * nothing to preview: the cell is emptied first, on every layer that draws
- * in it, so the words do not land on top of a piece. Called after
- * draw_panel, every frame the frozen board is up. */
-/* IN COOP THE CELL IS COOP'S. Its right panel is seven columns from
+/* LINK ISSUES, said in the rival's big cell while a linked match waits for
+ * its cable (link_wait, gba/match.c). The rival's preview and cossack stood
+ * there, and a board that is not moving has nothing to preview: the cell is
+ * emptied first, on every layer that draws in it.
+ *
+ * IN COOP THE CELL IS COOP'S. Its right panel is seven columns from
  * COOP_R_TX, not the race's box: laid out by the race's numbers, the words
  * were cleared and written from column 22, which on the coop screen is the
- * braid of the board's frame — the text sat on the frame with a bite taken
- * out of it. */
-void draw_link_lost(bool waiting) {
+ * braid of the board's frame. The words sit in one column, the one that
+ * centres five letters; six centred in coop's seven would touch the braid. */
+void draw_link_issues(void) {
     bool was = g_panel_layer;
     g_panel_layer = false;
     bool coop = g_session.game.coop;
@@ -289,17 +289,9 @@ void draw_link_lost(bool waiting) {
     clear_panel_region(tx, BRAID_T, w, bottom - BRAID_T);
     hide_idle_cossack();
     int mid = (BRAID_T + bottom) / 2;
-    int col = tx + (w - 5) / 2;              /* CABLE, centred; LOST under it */
-    /* ...and while the match is still waiting for it, how to stop waiting. */
-    int top = waiting ? mid - 2 : mid - 1;
-    draw_text(col, top, "CABLE", BANK_LABEL);
-    draw_text(col, top + 1, "LOST", BANK_LABEL);
-    if (waiting) {
-        /* In CABLE's column, not centred on their own: six letters centred
-         * in coop's seven-column cell sit on the braid. */
-        draw_text(col, top + 3, "SELECT", BANK_NOTE);
-        draw_text(col, top + 4, "QUITS", BANK_NOTE);
-    }
+    int col = tx + (w - 5) / 2;
+    draw_text(col, mid - 1, "LINK", BANK_LABEL);
+    draw_text(col, mid, "ISSUES", BANK_LABEL);
     g_panel_layer = was;
 }
 

@@ -54,6 +54,14 @@
  * off put it right. A reset is the switching off, for the serial port. */
 #define LINK_ABSENT_LIMIT 4
 
+/* ...and never more than one restart a second. A restart moves the lines the
+ * other console is listening on, and on two real SPs restarts on both sides
+ * fed each other: every interrupt on both an empty transfer ("A 999 R 999",
+ * both consoles reading themselves a slave at the interrupt, the master's
+ * own slot empty). A second between restarts leaves the master's real
+ * transfers the time to get through. */
+#define LINK_RESET_COOLDOWN 60
+
 /* The interrupt hands transfers to the main loop through this. The two
  * consoles' clocks differ by parts per million, so the queue holds one entry
  * almost always and two on the rare frame where the drift puts two transfers
@@ -85,6 +93,7 @@ static uint8_t g_busy_frames;
  * their own words, good or not), ones with a slot empty, and port resets. */
 static volatile uint16_t g_good, g_errs, g_absent, g_resets;
 static volatile uint8_t g_absent_run;
+static volatile uint8_t g_reset_cool;     /* frames until a restart is allowed */
 /* The last transfer's two words and SIOCNT as the interrupt found it. */
 static volatile uint16_t g_last_m = LINK_ABSENT, g_last_s = LINK_ABSENT;
 static volatile uint16_t g_irq_cnt;
@@ -97,19 +106,17 @@ static inline void tx(uint16_t word) {
     REG_SIOMLT_SEND = word;
 }
 
-/* THE PORT, STARTED OVER. A real cable is not the emulated one: a transfer the
- * master starts while the other console is not in multiplayer mode yet (it is
- * still on GAME SELECT, or it has just been switched on) comes back with the
- * error bit set, and the error bit set is a port that has to be taken out of
- * multiplayer mode and put back before it will carry anything again. That is
- * what gba-link-connection does on every bad transfer, and what this did not
- * do at all: whichever console reached the lobby first started transferring
- * into a partner that was not ready, and from then on neither ever heard the
- * other. RCNT to general purpose and back is the way out and in. */
+/* THE PORT, STARTED OVER — gently, and not often. This used to take RCNT to
+ * general purpose and back, as gba-link-connection's reset does. In general
+ * purpose the port lets go of its lines, and the other console, listening on
+ * them, took the flutter for transfers: empty ones, which made IT restart,
+ * which fluttered the lines back. Two real SPs ended up doing nothing else.
+ * Rewriting SIOCNT in place restarts this console's side without touching
+ * the pins, and LINK_RESET_COOLDOWN keeps it rare. */
 IWRAM_CODE static void sio_reset(void);
 static void sio_reset(void) {
-    REG_RCNT = 0x8000;                  /* general purpose: out of the SIO modes */
-    REG_RCNT = 0x0000;
+    if (g_reset_cool) return;
+    g_reset_cool = LINK_RESET_COOLDOWN;
     REG_SIOCNT = SIO_MODE_MULTI | SIO_BAUD | SIO_IRQ;
     REG_SIOMLT_SEND = g_tx_word;
     g_resets++;
@@ -197,16 +204,17 @@ void link_serial_service(void) {
 
 void link_init(void) {
     /* RCNT bits 14-15 pick between the serial modes and the general-purpose
-     * ones; zero leaves SIOCNT in charge. THROUGH GENERAL PURPOSE FIRST, so
-     * that entering multiplayer mode is always a real change of mode — the
-     * second time in an evening too, when the port may still be sitting in
-     * multiplayer mode from the first (see link_shutdown). */
-    REG_RCNT = 0x8000;
-    REG_RCNT = 0x0000;
+     * ones; zero leaves SIOCNT in charge. NOT through general purpose on the
+     * way: see sio_reset for what that does to the other console. And only
+     * when it is not there already: after the first session the port stays
+     * in multiplayer mode (link_shutdown), and a write here would be a touch
+     * on the pins for nothing. */
+    if (REG_RCNT & 0xC000) REG_RCNT = 0x0000;
     REG_SIOCNT = SIO_MODE_MULTI | SIO_BAUD;
     tx(0);
     g_good = g_errs = g_absent = g_resets = 0;
     g_absent_run = 0;
+    g_reset_cool = 0;
     g_last_m = g_last_s = LINK_ABSENT;
     g_irq_cnt = 0;
     g_id_known = false;
@@ -235,8 +243,7 @@ void link_init(void) {
  * master — on two real SPs a slave came up on LEVEL SETTINGS. Left in
  * multiplayer mode with its interrupt off, this console answers transfers
  * with 0, which the lobby reads as "not in the lobby" (tag NONE), and its SO
- * stays where the other console expects it. link_init still goes through
- * general purpose on the way in. */
+ * stays where the other console expects it. */
 void link_shutdown(void) {
     REG_IME = 0;
     REG_SIOCNT &= (uint16_t)~SIO_IRQ;
@@ -314,6 +321,7 @@ uint16_t link_starved(void) {
 
 void link_tick(void) {
     if (g_starved < 0xFFFF) g_starved++;
+    if (g_reset_cool) g_reset_cool--;
 }
 
 /* ----------------------------------------------------------------------- *

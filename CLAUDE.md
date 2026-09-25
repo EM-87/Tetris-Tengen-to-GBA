@@ -103,7 +103,7 @@ minus those).
 | --- | --- | --- |
 | `make test` | no | always — the rules, in milliseconds |
 | `make gba` | headers | to build `build/tengen.gba` |
-| `make gba-check` | headers | before calling any change done: 55 checks on the running ROM in mGBA, thirteen of them on two consoles with a cable |
+| `make gba-check` | headers | before calling any change done: 56 checks on the running ROM in mGBA, fourteen of them on two consoles with a cable |
 | `make trace ROM=... [MODE=coop\|versus\|with\|demo]` | yes | after touching `tengen_step` or `tengen_ai.c`: the port against the cartridge, iteration by iteration. The 1P and coop scripts never complete a row; `MODE="with --pad1"` plays player 1 with the port's computer and clears plenty; add `--handicap N` to any mode |
 | `make tune-check ROM=...` | yes | after touching audio: the four tunes against the cartridge, note by note |
 | `make dance-check ROM=...` | yes | after touching the dancers: their choreography against the cartridge's driver |
@@ -165,22 +165,31 @@ story behind each; the item number is in brackets.
     cause, not a measured one (`jitter_check`, `Cable.sd_lags`); the
     diagnostic line's IRQ word is there to settle it.
   - Four transfers in a row with a slot empty restart the port (`sio_reset`,
-    `mute_check`); the pump never resets on the error bit, which only a
-    transfer rewrites (`glitch_check`). 38400 baud.
+    `mute_check`), at most once a second, and WITHOUT going through general
+    purpose: a port in general purpose lets go of its lines and the other
+    console hears the flutter as empty transfers, so restarts on both sides
+    fed each other until two SPs did nothing else ("A 999 R 999", both
+    reading themselves a slave at the interrupt, the master's own slot
+    empty; inferred, `storm_check`). Nothing touches RCNT once the port is
+    in multiplayer mode. The pump never resets on the error bit, which only
+    a transfer rewrites (`glitch_check`). 38400 baud.
   - The master starts a transfer only with SD high, read at leisure.
   - Who is master is the ID bits of the last good transfer, not the SI pin:
     a slave's SI is the master's SO and floats when the master's port is not
     in multiplayer mode (`role_check`). So `link_shutdown` leaves the port IN
-    multiplayer mode, answering 0; `link_init` goes through general purpose.
+    multiplayer mode, answering 0.
   - The lobby never fails. It waits for a partner as long as it takes (B
     leaves), forgets one that goes quiet for TENGEN_LOBBY_LOST turns and goes
     back to waiting (the master off LEVEL SETTINGS); the slave takes the
     handshake only in order from HELLO and answers anything else with NONE,
     which sends the master back to HELLO (`churn_check`, `late_check`, and
     the host tests).
-  - A match whose cable goes quiet waits under CABLE LOST — tune silenced
-    (MUSIC_SILENCE, not SUSPEND, so the chime a frame later is heard), then
-    picks up where it was, or SELECT gives up (`link_wait`, `lost_check`).
+  - A match whose cable goes quiet for LINK_LOST_FRAMES waits with LINK
+    ISSUES in the rival's cell — tune silenced (MUSIC_SILENCE, not SUSPEND,
+    so the chime a frame later is heard) — and picks up where it was. Quiet
+    for LINK_GIVEUP_FRAMES, or desynced, it is over: the CABLE LOST window
+    in the middle of the screen, and START to the title without the records
+    swap or the high scores (`link_wait`, `link_give_up`, `lost_check`).
   The LINK CABLE screen prints SIOCNT now and at the last interrupt, good/
   error/absent/reset counts and the last two words while it waits.
 - **Coop's two falling pieces are solid to each other**, and the settled
@@ -265,7 +274,8 @@ showing the rival's board, with their NEXT, colours and numbers; the
 computer reading its coop partner under the chord; the pause menu over the
 cable, there if the MASTER found the chord and driven by both players'
 presses through lockstep (`link_match_begin`); a linked match that waits
-for a lost cable instead of ending; the XE mod's two
+ten seconds for a quiet cable (LINK ISSUES) before giving it up (the CABLE
+LOST window, and out to the title); the XE mod's two
 off-by-one bugs mended (XE only). [8, 11, 17, 19, 20, 23, 28, 30]
 
 **Knowingly not shown**: proto_c's title animation (its rows are the ones

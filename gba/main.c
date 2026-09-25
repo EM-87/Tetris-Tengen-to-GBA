@@ -925,7 +925,9 @@ int main(void) {
                 /* EXIT on a linked pause menu: both consoles took it on the
                  * same transfer, so both put the cable away here and go the
                  * way a solo EXIT goes. */
-                if (g_linked && quit_match) {
+                if (g_linked && (quit_match || g_link_lost)) {
+                    /* ...and a cable gone for good takes nobody's name
+                     * across: there is no cable to take it (link_give_up). */
                     link_play_end();
                     link_shutdown();
                 } else if (g_linked) {
@@ -1001,7 +1003,7 @@ int main(void) {
          * reaching zero (main.asm.txt:599-607), so in VERSUS the winner plays
          * on and nothing is counting. */
         bool over_expired = false;
-        if (!g_demo && !match_running && !quit_match)
+        if (!g_demo && !match_running && !quit_match && !g_link_lost)
             over_expired = ++over_frames >= GAMEOVER_HOLD_FRAMES;
         /* ...and EXIT on the pause menu takes the same road, so a game you
          * quit still puts its score on the board. */
@@ -1039,7 +1041,9 @@ int main(void) {
             if (g_session.game.paused && !quit_match)
                 nes_audio_play(NES_MUSIC_RESUME);
             g_session.game.paused = false;
-            if (quit_match) {
+            /* A cable gone for good leaves the way EXIT does: to the title,
+             * with nothing on the high scores for a match nobody finished. */
+            if (quit_match || g_link_lost) {
                 screen = SCREEN_TITLE;
                 restart_title_sprites();
             } else {
