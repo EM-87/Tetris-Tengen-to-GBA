@@ -347,5 +347,15 @@ And what has run only in an emulator:
   interrupt handler. mGBA is accurate on all three, but it is not the
   console.
 
+Queued for the next build that has another reason to be made (not worth a
+ROM of its own):
+
+- **The lobby's "WAITING FOR PLAYER 2"** reads wrong on the console that
+  turns out to be player 1, which is half the time: neither console knows
+  which it is until the other answers. Something like "WAITING FOR OTHER
+  PLAYER" (24 of the frame's 26 columns; "...THE OTHER PLAYER" is 28 and
+  does not fit), in `draw_link_wait` (gba/frontend.c); no check reads
+  the words.
+
 A new idea starts in the cartridge (`tools/nes_console.py`,
 `tools/render_nes.py`), not in memory of how Tetris goes.
