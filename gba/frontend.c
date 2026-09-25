@@ -594,55 +594,65 @@ static unsigned append_number(char *row, unsigned n, unsigned value);
 
 static void draw_link_debug(int ty) {
     static const char kHex[] = "0123456789ABCDEF";
-    uint16_t d[6];
+    uint16_t d[LINK_DEBUG_WORDS];
     link_debug(d);
     char row[32];
-    unsigned n = 0;
-    const char *head = "SIO ";
-    while (*head) row[n++] = *head++;
-    for (int sh = 12; sh >= 0; sh -= 4) row[n++] = kHex[(d[0] >> sh) & 0xF];
-    static const char kTag[3] = { 'G', 'B', 'R' };
-    for (int i = 0; i < 3; i++) {
-        row[n++] = ' ';
-        row[n++] = kTag[i];
-        row[n++] = ' ';
-        n = append_number(row, n, d[i + 1] > 999 ? 999 : d[i + 1]);
-    }
+    unsigned n;
+#define HEX4(v) for (int sh = 12; sh >= 0; sh -= 4) row[n++] = kHex[((v) >> sh) & 0xF]
+    /* SIOCNT now, and as the last interrupt found it. */
+    n = 0;
+    row[n++] = 'S'; row[n++] = 'I'; row[n++] = 'O'; row[n++] = ' ';
+    HEX4(d[0]);
+    row[n++] = ' '; row[n++] = 'I'; row[n++] = 'R'; row[n++] = 'Q'; row[n++] = ' ';
+    HEX4(d[1]);
     row[n] = 0;
     draw_text_centred(ty, row, menu_bank());
-    /* ...and under it what the last transfer carried: the master's slot and
-     * the slave's. FFFF is a console the transfer did not hear. */
+    /* Good transfers, Error bits seen, transfers with a slot Absent, port
+     * Resets. */
+    static const char kTag[4] = { 'G', 'E', 'A', 'R' };
     n = 0;
-    for (int w = 0; w < 2; w++) {
-        if (w) row[n++] = ' ';
-        row[n++] = w ? 'S' : 'M';
+    for (int i = 0; i < 4; i++) {
+        if (i) row[n++] = ' ';
+        row[n++] = kTag[i];
         row[n++] = ' ';
-        for (int sh = 12; sh >= 0; sh -= 4) row[n++] = kHex[(d[4 + w] >> sh) & 0xF];
+        n = append_number(row, n, d[2 + i] > 999 ? 999 : d[2 + i]);
     }
     row[n] = 0;
     draw_text_centred(ty + 1, row, menu_bank());
+    /* ...and what the last transfer carried: the master's slot and the
+     * slave's. FFFF is a console the transfer did not hear. */
+    n = 0;
+    row[n++] = 'M'; row[n++] = ' ';
+    HEX4(d[6]);
+    row[n++] = ' '; row[n++] = 'S'; row[n++] = ' ';
+    HEX4(d[7]);
+    row[n] = 0;
+    draw_text_centred(ty + 2, row, menu_bank());
+#undef HEX4
 }
 
+/* THE LOBBY SAYS WHERE IT IS, not the cable: a transfer answered by a
+ * console that is on its menus is still a transfer, and "connected" by that
+ * measure put YOU ARE PLAYER 2 on a master whose partner had left. */
 void draw_link_wait(const TengenLobby *lobby, int elapsed) {
     draw_menu_frame();
     draw_text_centred(8, "LINK CABLE", menu_bank());
 
-    clear_both(MENU_IN_TX, 11, MENU_IN_W, 6);
-    if (!link_connected()) draw_link_debug(15);
-    if (lobby->failed) {
+    clear_both(MENU_IN_TX, 10, MENU_IN_W, 7);
+    if (!lobby->linked) {
         oam_hide_all();
-        draw_text_centred(11, "NO CABLE FOUND", BANK_NOTE);
-        draw_text_centred(14, "B TO GO BACK", menu_bank());
+        draw_text_centred(10, "WAITING FOR PLAYER 2", menu_bank());
+        draw_text_centred(12, "B TO GO BACK", menu_bank());
+        draw_link_debug(14);
         return;
     }
-    if (!link_connected()) {
+    if (link_is_master()) {
+        /* Chosen, and the handshake is carrying it across. */
         oam_hide_all();
-        draw_text_centred(11, "WAITING FOR PLAYER 2", menu_bank());
-        draw_text_centred(13, "B TO GO BACK", menu_bank());
+        draw_text_centred(11, "STARTING", BANK_NOTE);
         return;
     }
-    /* Connected. The master has gone off to choose; this console is the guest,
-     * so it says who it is and lets the cossack do the waiting. */
+    /* The guest: the master is choosing, and the cossack does the waiting. */
     draw_text_centred(11, "YOU ARE PLAYER 2", BANK_NOTE);
     draw_guest_dancer(elapsed);
 }

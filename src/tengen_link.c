@@ -83,7 +83,7 @@ void tengen_lobby_start(TengenLobby *lobby, uint16_t seed, uint8_t start_level,
     lobby->seed = seed;
     lobby->start_level = start_level;
     lobby->music = music;
-    lobby->stage = TENGEN_LOBBY_HELLO;
+    lobby->stage = TENGEN_LOBBY_HELLO;   /* the master's; see tengen_lobby_apply */
     lobby->echo = TENGEN_LOBBY_NONE;
     lobby->skin_offer = -1;
     lobby->skin = -1;
@@ -172,32 +172,59 @@ uint16_t tengen_lobby_word(const TengenLobby *lobby, bool master) {
     }
 }
 
+/* ...and back: which stage's echo is still legitimately in flight. */
+static uint8_t prev_stage(uint8_t stage) {
+    switch (stage) {
+        case TENGEN_LOBBY_SKIN:  return TENGEN_LOBBY_HANDICAP;
+        case TENGEN_LOBBY_GO:    return TENGEN_LOBBY_SKIN;
+        case TENGEN_LOBBY_HELLO: return TENGEN_LOBBY_NONE;
+        default:                 return (uint8_t)(stage - 1);
+    }
+}
+
+/* THE PARTNER WENT AWAY: back to waiting, never to failing. A lobby that has
+ * heard its partner and then goes TENGEN_LOBBY_LOST turns without a proper
+ * answer — no transfer at all, or a word from a console that is not in a
+ * lobby — forgets it. The master goes back to holding at HELLO (its player
+ * chooses again when a partner turns up), the slave to having seen nothing.
+ * Before the first answer nothing counts: a lobby waits as long as it
+ * takes, and B is the way out. */
+static void lobby_quiet_turn(TengenLobby *lobby, bool master) {
+    if (!lobby->linked) return;
+    if (++lobby->idle < TENGEN_LOBBY_LOST) return;
+    lobby->linked = false;
+    lobby->idle = 0;
+    lobby->saw_go = false;
+    lobby->echo = TENGEN_LOBBY_NONE;
+    lobby->echo_payload = 0;
+    if (master) {
+        lobby->stage = TENGEN_LOBBY_HELLO;
+        lobby->hold = true;
+    } else {
+        lobby->stage = TENGEN_LOBBY_NONE;
+    }
+}
+
 void tengen_lobby_apply(TengenLobby *lobby, bool master, bool got,
                          uint16_t master_word, uint16_t slave_word) {
-    if (lobby->ready || lobby->failed) return;
-
-    /* THE LOBBY WAITS FOR ITS PARTNER FOR AS LONG AS IT TAKES. Somebody
-     * opens the cable a minute before the other player has found the menu,
-     * and that is the normal case, not the failing one: until the other end
-     * has answered once there is nothing to time out, and B is the way out.
-     * The timeout is for a partner that WAS there and went quiet. */
+    if (lobby->ready) return;
     if (!got) {
-        if (lobby->linked && ++lobby->idle >= TENGEN_LOBBY_TIMEOUT)
-            lobby->failed = true;
+        lobby_quiet_turn(lobby, master);
         return;
     }
-    lobby->idle = 0;
 
     if (master) {
+        TengenLobbyTag echo = tag_of(slave_word);
         /* Stop-and-wait: advance only when the slave echoes the tag it was
          * sent. That echo is always one transfer behind — which is what makes
          * this a handshake rather than a hope — so every stage costs two
          * transfers and a console that missed one cannot be skipped past. */
-        if (tag_of(slave_word) == (TengenLobbyTag)lobby->stage) {
+        if (echo == (TengenLobbyTag)lobby->stage) {
+            lobby->idle = 0;
             lobby->linked = true;
             /* Held at HELLO until the player has chosen. The echo still comes
-             * back every transfer, so neither end is anywhere near its
-             * timeout; the handshake is simply parked. */
+             * back every transfer, so the partner is never taken for gone;
+             * the handshake is simply parked. */
             if (lobby->hold && lobby->stage == TENGEN_LOBBY_HELLO) return;
             /* The slave's answer about the skin rides in its echo. A build
              * that predates the SKIN stage echoes the tag with nothing in
@@ -210,14 +237,54 @@ void tengen_lobby_apply(TengenLobby *lobby, bool master, bool got,
                                   ? lobby->skin_offer : -1;
             if (lobby->stage == TENGEN_LOBBY_GO) lobby->ready = true;
             else lobby->stage = next_stage(lobby->stage);
+            return;
         }
+        /* NONE is a console that is not in a lobby, or one that has just come
+         * into it: not an answer. */
+        if (echo == TENGEN_LOBBY_NONE) lobby_quiet_turn(lobby, master);
+        else lobby->idle = 0;
+        /* The last stage's echo is the one still in flight: wait for this
+         * one's. ANYTHING ELSE is a slave in another conversation — one that
+         * came into the lobby halfway through this one, or left and came
+         * back — and walking on from here would leave it with half of this
+         * game's settings and half of its own (a seed of its own, a board
+         * that is not the master's). So start again from HELLO; the settings
+         * are kept, and the slave hears all of them, in order. */
+        if (echo != (TengenLobbyTag)prev_stage(lobby->stage) &&
+            lobby->stage != TENGEN_LOBBY_HELLO)
+            lobby->stage = TENGEN_LOBBY_HELLO;
         return;
     }
 
-    /* The slave takes whatever the master says and echoes the tag back. */
+    /* THE SLAVE HEARS THE HANDSHAKE IN ORDER OR NOT AT ALL. HELLO opens a
+     * conversation (and forgets anything from an older one — a GO seen in a
+     * session that never finished would otherwise let this console into the
+     * match a turn before the master); after it, only the stage it is on or
+     * the next one is taken. Anything else is answered with NONE, which
+     * sends the master back to HELLO. */
     TengenLobbyTag tag = tag_of(master_word);
     uint16_t payload = master_word & TENGEN_LOBBY_PAYLOAD_MASK;
+    bool in_order =
+        tag == TENGEN_LOBBY_HELLO ||
+        (lobby->linked && lobby->stage != TENGEN_LOBBY_NONE &&
+         (tag == (TengenLobbyTag)lobby->stage ||
+          tag == (TengenLobbyTag)next_stage(lobby->stage)));
+    if (!in_order) {
+        if (tag == TENGEN_LOBBY_NONE) lobby_quiet_turn(lobby, false);
+        else lobby->idle = 0;
+        lobby->stage = TENGEN_LOBBY_NONE;
+        lobby->echo = TENGEN_LOBBY_NONE;
+        lobby->saw_go = false;
+        return;
+    }
+    lobby->idle = 0;
     switch (tag) {
+        case TENGEN_LOBBY_HELLO:
+            if (lobby->stage != TENGEN_LOBBY_HELLO) {
+                lobby->saw_go = false;
+                lobby->echo_payload = 0;
+            }
+            break;
         case TENGEN_LOBBY_SEED_HI:
             lobby->seed = (uint16_t)((lobby->seed & 0x00FF) | ((payload & 0xFF) << 8));
             break;
@@ -259,10 +326,8 @@ void tengen_lobby_apply(TengenLobby *lobby, bool master, bool got,
         default:
             break;
     }
-    if (tag != TENGEN_LOBBY_NONE) {
-        lobby->echo = (uint8_t)tag;
-        lobby->linked = true;
-    }
+    lobby->echo = (uint8_t)tag;
+    lobby->linked = true;
     lobby->stage = (uint8_t)tag;
 }
 

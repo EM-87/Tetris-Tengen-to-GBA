@@ -85,6 +85,7 @@ SIO_MODE_MULTI = 2
 
 IRQ_SIO = 7        # enum GBAIRQ
 ABSENT = 0xFFFF    # what a slot with no console in it reads
+LINK_LOST_FRAMES_PY = 120   # LINK_LOST_FRAMES in gba/port.h
 
 KEYS = {"A": 0, "B": 1, "SELECT": 2, "START": 3,
         "RIGHT": 4, "LEFT": 5, "UP": 6, "DOWN": 7,
@@ -136,9 +137,16 @@ class CableEnd(mgba.gba.GBASIODriver):
         # SI says which end of the cable this console is plugged into; SD says
         # EVERY console is in multiplayer mode, so it changes on both when
         # either one switches; the id is 0 for the master and 1 for the slave.
+        # THE SLAVE'S SI IS THE MASTER'S SO: high only while the master's
+        # port is in multiplayer mode and driving it. Otherwise it floats low
+        # and the slave reads itself as a master — which is how a real slave
+        # came up on LEVEL SETTINGS once its master had left the cable.
         value &= ~(SIO_SI | SIO_SD | (3 << SIO_ID_SHIFT))
         if not self.master:
-            value |= SIO_SI | (1 << SIO_ID_SHIFT)
+            value |= 1 << SIO_ID_SHIFT
+            if self.cable.parent_drives_so():
+                value |= SIO_SI
+            value &= ~SIO_START          # read-only on a slave
         sd = self.cable.all_ready()
         if sd:
             value |= SIO_SD
@@ -170,21 +178,45 @@ class Cable:
         # ...and at which ONE transfer fails with the error bit, the way a
         # cheap cable drops a bit: nothing sticky, the next one is fine.
         self.glitch_at = set()
+        # SD STILL DOWN WHEN THE INTERRUPT LOOKS: every transfer leaves SD low
+        # on both consoles until the end of the frame (settle). The reading
+        # of two real SPs entering the cable together — every transfer thrown
+        # away ("G 0 B 999 R 999") while SIOCNT at leisure showed SD high.
+        self.sd_lags = False
+        self.lagging = False
 
     def all_ready(self):
         return all(end.ready for end in self.ends) or not self.plugged
 
+    def parent_drives_so(self):
+        return self.plugged and bool(self.ends) and self.ends[0].ready
+
+    @staticmethod
+    def _set_bit(core, bit, on):
+        # Both copies: mGBA answers a read of SIOCNT from its SIO state
+        # (sio.siocnt), and keeps io[] beside it.
+        io = core._native.memory.io
+        io[IO_SIOCNT] = (io[IO_SIOCNT] | bit) if on else (io[IO_SIOCNT] & ~bit)
+        sio = core._native.sio
+        sio.siocnt = (sio.siocnt | bit) if on else (sio.siocnt & ~bit)
+
     def set_sd(self, sd, writer):
-        """SD is one wire: when it moves, every console reads it moved."""
+        """SD is one wire: when it moves, every console reads it moved. And
+        the slave's SI follows the master's port (parent_drives_so)."""
         for end, core in zip(self.ends, (self.master, self.slave)):
+            if not end.master:
+                self._set_bit(core, SIO_SI, self.parent_drives_so())
             if end is writer:
                 continue
-            # Both copies: mGBA answers a read of SIOCNT from its SIO
-            # state (sio.siocnt), and keeps io[] beside it.
-            io = core._native.memory.io
-            io[IO_SIOCNT] = (io[IO_SIOCNT] | SIO_SD) if sd else (io[IO_SIOCNT] & ~SIO_SD)
-            sio = core._native.sio
-            sio.siocnt = (sio.siocnt | SIO_SD) if sd else (sio.siocnt & ~SIO_SD)
+            self._set_bit(core, SIO_SD, sd)
+
+    def settle(self):
+        """The end of a frame: SD, if a transfer left it down (sd_lags), is
+        back where the consoles' modes put it."""
+        if self.lagging:
+            self.lagging = False
+            for core in (self.master, self.slave):
+                self._set_bit(core, SIO_SD, self.all_ready())
 
     def transfer(self):
         """True for a transfer that carried both words."""
@@ -233,6 +265,10 @@ class Cable:
             io[IO_SIOMULTI3] = ABSENT
             io[IO_SIOCNT] &= ~SIO_START
 
+        if self.sd_lags:
+            self.lagging = True
+            for core in (self.master, self.slave):
+                self._set_bit(core, SIO_SD, False)
         lib.GBARaiseIRQ(self.master._native, IRQ_SIO, 0)
         lib.GBARaiseIRQ(self.slave._native, IRQ_SIO, 0)
         if s != ABSENT:
@@ -491,30 +527,51 @@ def main():
     print(f"  {frame} frames jugados, {cable.transfers} transferencias, "
            f"estado identico en las dos consolas byte a byte")
 
-    # Finally: pull the cable out mid-match. Neither console may freeze, and
-    # both must notice and stop rather than sit forever waiting for a word
-    # that is not coming.
-    lost, why = symbol(rom, "g_link_lost")
-    if lost is None:
-        print(f"  (sin comprobar el tiron del cable: {why})")
+    # Finally: pull the cable out mid-match. Neither console may freeze, both
+    # must notice — and both must WAIT: a knocked plug is not the end of a
+    # match any more (link_wait in gba/match.c). Plugged back in, the match
+    # goes on from where it stopped, still the same game on both.
+    waiting, why = symbol(rom, "g_link_waiting")
+    lost, why2 = symbol(rom, "g_link_lost")
+    if waiting is None or lost is None:
+        print(f"  (sin comprobar el tiron del cable: {why or why2})")
     else:
+        def link_frame(core):
+            return core.memory.u8[session_addr + game_size + 1]
         cable.plugged = False
         before = cable.transfers
         both(200, [[], []])
         if cable.transfers != before:
             failures.append("siguio habiendo transferencias con el cable fuera")
         for name, core in (("maestro", master), ("esclavo", slave)):
-            if not core.memory.u8[lost[0]]:
+            if not core.memory.u8[waiting[0]]:
                 failures.append(f"el {name} no se entero de que el cable se fue")
+            if core.memory.u8[lost[0]]:
+                failures.append(f"el {name} dio la partida por perdida en vez "
+                                f"de esperar al cable")
         # ...and the ROM is still running, not wedged in a serial wait: its
         # own frame counter has to have moved.
         if master.frame_counter == 0:
             failures.append("el maestro dejo de correr frames")
+        frozen = link_frame(master)
+        cable.plugged = True
+        both(120, [[KEYS["DOWN"]], [KEYS["DOWN"]]])
+        m = read_bytes(master, session_addr, game_size)
+        sl = read_bytes(slave, session_addr, game_size)
+        if any(core.memory.u8[waiting[0]] for core in (master, slave)):
+            failures.append("con el cable de vuelta la partida sigue esperando")
+        elif (link_frame(master) - frozen) % 256 < 60:
+            failures.append(f"con el cable de vuelta la partida no avanza "
+                            f"(frame {frozen} -> {link_frame(master)})")
+        elif m != sl:
+            failures.append("tras volver el cable las dos consolas ya no "
+                            "juegan la misma partida")
         for f in failures:
             print(f"FALLA: {f}")
         if failures:
             return 1
-        print("  cable fuera: las dos consolas lo detectan y siguen corriendo")
+        print("  cable fuera: las dos consolas esperan; de vuelta, la partida "
+              "sigue igual en las dos")
 
     print("OK: dos GBA por cable link juegan la misma partida sin desviarse.")
     return coop_check(rom)
@@ -1270,65 +1327,49 @@ def skin_check(rom):
 
 
 def pause_check(rom):
-    """OVER THE CABLE A PAUSE IS THE PLAQUE, even with the chord found.
+    """THE PAUSE MENU OVER THE CABLE, THE SAME ON BOTH CONSOLES.
 
-    The pause menu (tunes, EXIT?) is answered by pause_menu_input, which only
-    the solo frame calls: over the cable the pad goes down the wire raw. So a
-    player who had found the chord paused a linked match into a menu whose
-    cursor did nothing — and a tune or an EXIT chosen on one console alone
-    would be the two consoles playing different matches anyway. Both find
-    the chord on GAME SELECT, the master pauses, and neither may draw the
-    menu (g_pmenu_drawn_w stays 0) while both are paused.
+    It is the MASTER's chord that decides whether a linked match has one (it
+    crosses in the lobby), and it is driven by both players' presses as the
+    transfers carry them, so both consoles show the same menu and do the
+    same thing with it (link_match_begin, gba/match.c). Here: both found the
+    chord; the master pauses and the tune stops on both; the menu is up on
+    both, the same width; the SLAVE changes the tune and it changes on both;
+    START resumes with the tune on both; paused again, EXIT and YES take
+    both consoles out of the match together. And a match whose master never
+    found the chord has the plaque, on both, whatever the slave found.
     """
     sym, why = symbol(rom, "g_session")
-    drawn, why2 = symbol(rom, "g_pmenu_drawn_w")
-    unlocked, why3 = symbol(rom, "g_pause_unlocked")
-    if sym is None or drawn is None or unlocked is None:
-        print(f"SALTADO: {why or why2 or why3}")
+    names = ["g_pmenu_drawn_w", "g_music", "g_linked"]
+    syms = {n: symbol(rom, n)[0] for n in names}
+    if sym is None or None in syms.values():
+        print(f"SALTADO: {why or 'faltan simbolos del menu de pausa'}")
         return 0
     import run_rom
     off = run_rom.game_offsets(rom)
+    failures = []
 
-    mgba.log.silence()
-    cores, screens = [], []
-    for _ in range(2):
-        core = mgba.core.load_path(rom)
-        screen = mgba.image.Image(SCREEN_W, SCREEN_H)
-        core.set_video_buffer(screen)   # must stay alive; see run_rom.load()
-        core.reset()
-        cores.append(core)
-        screens.append(screen)
-    cable = Cable(*cores)
-    ends = [CableEnd(cable, True), CableEnd(cable, False)]
-    for core, end in zip(cores, ends):
-        core.attach_sio(end, lib.SIO_MULTI)
-
-    def both(frames, keys=None):
-        for _ in range(frames):
-            for i, core in enumerate(cores):
-                core.set_keys(*(keys[i] if keys else []))
-                core.run_frame()
-
-    def tap(name, who=None):
-        both(4, [[KEYS[name]] if who in (None, i) else [] for i in range(2)])
+    def start(chord):
+        cores, cable, both, tap = _pair(rom)
+        both(8)
+        tap("START")                                   # title -> game select
+        both(4, [[KEYS["L"], KEYS["R"]] if c else [] for c in chord])
         both(10, [[], []])
+        tap("DOWN"); tap("START")                      # 2 PLAYER -> the cable
+        both(50)
+        # A tune, so there is something for the pause to silence.
+        tap("DOWN", who=0); tap("DOWN", who=0); tap("RIGHT", who=0)
+        tap("START", who=0)
+        both(80)
+        return cores, both, tap
 
-    both(8)
-    tap("START")                                  # title -> game select
-    both(4, [[KEYS["L"], KEYS["R"]]] * 2)         # the chord, on both
-    both(10, [[], []])
-    tap("DOWN"); tap("START")                     # -> 2 PLAYER -> the cable
-    both(50)
-    # A tune, so there is something for the pause to silence: the master's
-    # cursor down to MUSIC and one step along the list (see start_game).
-    tap("DOWN", who=0); tap("DOWN", who=0); tap("RIGHT", who=0)
-    tap("START", who=0)
-    both(80)
+    def read(cores, name, size=1):
+        a = syms[name][0]
+        return [c.memory.u8[a] if size == 1 else c.memory.u16[a] for c in cores]
 
-    import run_rom
+    cores, both, tap = start([True, True])
 
     def loudest(frames):
-        """The most channels either console had going over `frames`."""
         top = 0
         for _ in range(frames):
             both(1)
@@ -1336,45 +1377,63 @@ def pause_check(rom):
         return top
 
     playing = loudest(30)
-    tap("START", who=0)                           # the master pauses
+    tap("START", who=0)                                # the master pauses
     both(20)
-    silent = loudest(60)
-
-    failures = []
     paused = [c.memory.u8[sym[0] + off["paused"]] for c in cores]
-    found = [c.memory.u8[unlocked[0]] for c in cores]
-    widths = [c.memory.u8[drawn[0]] for c in cores]
-    if found != [1, 1]:
-        failures.append(f"el acorde no quedo encontrado en las dos: {found}")
-    elif paused != [1, 1]:
-        failures.append(f"la pausa no llego a las dos consolas: {paused}")
-    elif widths != [0, 0]:
-        failures.append(f"por cable se dibujo el menu de pausa, que no "
-                        f"responde: anchos {widths}")
-    else:
-        print("  con el acorde en las dos, la pausa por cable es la placa, "
-              "no el menu")
-    # AND IT SILENCES THE TUNE, on both, and lets it go again. The linked
-    # frame toggled the pause inside the core and never told the sound engine,
-    # so a paused coop match over a real cable played on under the plaque.
-    tap("START", who=0)                           # ...and unpauses
+    silent = loudest(40)
+    widths = read(cores, "g_pmenu_drawn_w")
+    tune = read(cores, "g_music")
+    tap("RIGHT", who=1)                                # the SLAVE picks a tune
+    both(10)
+    tune2 = read(cores, "g_music")
+    tap("START", who=0)                                # ...and resume
     both(10)
     back = loudest(60)
-    if not playing:
-        failures.append("la partida por cable no sonaba antes de pausar")
-    elif silent:
-        failures.append(f"con la partida por cable en pausa siguen sonando "
-                        f"{silent} canales")
+    if paused != [1, 1]:
+        failures.append(f"la pausa no llego a las dos consolas: {paused}")
+    elif not playing or silent:
+        failures.append(f"la pausa no calla la musica (antes {playing}, en "
+                        f"pausa {silent} canales)")
+    elif widths[0] == 0 or widths[0] != widths[1]:
+        failures.append(f"el menu de pausa no esta igual en las dos: anchos "
+                        f"{widths}")
+    elif tune2[0] != tune2[1] or tune2 == tune:
+        failures.append(f"la cancion elegida por el esclavo no cambio en las "
+                        f"dos: {tune} -> {tune2}")
     elif not back:
-        failures.append("al quitar la pausa por cable la musica no vuelve")
+        failures.append("al quitar la pausa la musica no vuelve")
     else:
-        print(f"  y la pausa calla la musica en las dos consolas "
-              f"({playing} canales -> 0 -> {back})")
+        print(f"  menu en las dos (ancho {widths[0]}), el esclavo cambia la "
+              f"cancion en las dos ({tune[0]} -> {tune2[0]}), y vuelve")
+
+    # EXIT, YES: both out, on the same transfer.
+    tap("START", who=0)
+    both(10)
+    tap("DOWN", who=0)                                 # MUSIC -> EXIT
+    tap("A", who=0)                                    # EXIT? ...
+    tap("DOWN", who=1)                                 # NO -> YES, from the slave
+    tap("A", who=0)
+    both(30)
+    if read(cores, "g_linked") != [0, 0]:
+        failures.append(f"EXIT no saca a las dos consolas de la partida: "
+                        f"g_linked {read(cores, 'g_linked')}")
+    else:
+        print("  y EXIT las saca a las dos a la vez")
+
+    # Only the slave found the chord: the plaque, on both.
+    cores, both, tap = start([False, True])
+    tap("START", who=0)
+    both(20)
+    widths = read(cores, "g_pmenu_drawn_w")
+    if widths != [0, 0]:
+        failures.append(f"sin el acorde del maestro hubo menu: anchos {widths}")
+    else:
+        print("  sin el acorde del maestro, la placa en las dos")
     for f in failures:
         print(f"FALLA: {f}")
     if failures:
         return 1
-    print("OK: por cable la pausa no ofrece un menu que no se puede usar.")
+    print("OK: el menu de pausa va por cable y hace lo mismo en las dos consolas.")
     return late_check(rom)
 
 
@@ -1568,6 +1627,255 @@ def glitch_check(rom):
     if failures:
         return 1
     print("OK: una transferencia fallida no deja el cable muerto.")
+    return jitter_check(rom)
+
+
+# ---------------------------------------------------------------------------
+# The evening of the second real test, one check per thing it found.
+# ---------------------------------------------------------------------------
+def _pair(rom, sd_lags=False):
+    """Two consoles on a cable, and the helpers every check below uses."""
+    mgba.log.silence()
+    cores, screens = [], []
+    for _ in range(2):
+        core = mgba.core.load_path(rom)
+        screen = mgba.image.Image(SCREEN_W, SCREEN_H)
+        core.set_video_buffer(screen)   # must stay alive; see run_rom.load()
+        core.reset()
+        cores.append(core)
+        screens.append(screen)
+    cable = Cable(*cores)
+    ends = [CableEnd(cable, True), CableEnd(cable, False)]
+    for core, end in zip(cores, ends):
+        core.attach_sio(end, lib.SIO_MULTI)
+    cable.sd_lags = sd_lags
+    _KEEP.append((cores, screens, cable, ends))
+
+    def both(frames, keys=None):
+        for _ in range(frames):
+            for i, core in enumerate(cores):
+                core.set_keys(*(keys[i] if keys else []))
+                core.run_frame()
+            cable.settle()
+
+    def tap(key, who=None):
+        both(4, [[KEYS[key]] if who in (None, i) else [] for i in range(2)])
+        both(10, [[], []])
+
+    return cores, cable, both, tap
+
+
+def _screen_of(core):
+    """Which front-end page a console is on, read off its map."""
+    import run_rom
+    rows = [run_rom.tilemap_text(core, r) for r in range(8, 17)]
+    text = " ".join(rows)
+    if "LINK CABLE" in rows[0]:
+        return "cable"
+    if "HANDICAP" in text:
+        return "ajustes"
+    if "GAME SELECT" in rows[0]:
+        return "menu"
+    return "otra"
+
+
+def _same_match(rom, cores):
+    sym, _ = symbol(rom, "g_session")
+    size = sym[1] - 4
+    m = read_bytes(cores[0], sym[0], size)
+    s = read_bytes(cores[1], sym[0], size)
+    return m != bytes(size) and m == s
+
+
+def jitter_check(rom):
+    """BOTH CONSOLES INTO THE CABLE AT ONCE, WITH SD LATE.
+
+    Two real SPs entering the cable together never met: "G 0 B 999 R 999" on
+    both, every transfer thrown away and the port restarted, while SIOCNT at
+    leisure showed neither the error bit nor SD low. The cable here leaves SD
+    down until the end of the frame after every transfer (Cable.sd_lags), so
+    an interrupt that judges by SD judges every transfer bad. gba/link.c
+    judges by the two words instead.
+    """
+    if symbol(rom, "g_session")[0] is None:
+        print("SALTADO: el ELF no exporta g_session")
+        return 0
+    cores, cable, both, tap = _pair(rom, sd_lags=True)
+    both(8)
+    tap("START"); tap("DOWN"); tap("START")    # both to the cable, together
+    both(60)
+    tap("START", who=0)
+    both(80)
+    if not _same_match(rom, cores):
+        print(f"FALLA: con SD rezagado y las dos a la vez no arranco la "
+              f"partida ({cable.transfers} buenas, {cable.failed} malas)")
+        return 1
+    print(f"  a la vez y con SD rezagado: {cable.transfers} transferencias "
+          f"buenas, la misma partida en las dos")
+    print("OK: las dos consolas se encuentran aunque SD llegue tarde.")
+    return role_check(rom)
+
+
+def role_check(rom):
+    """THE MASTER LEAVES AND THE SLAVE STAYS A SLAVE.
+
+    On two real SPs a slave came up on LEVEL SETTINGS: its master had left
+    the cable, the port that left went to general purpose, the slave's SI —
+    wired to the master's SO — floated low, and the slave read itself as the
+    master of a lobby it had already linked in. The cable here floats the
+    slave's SI whenever the master's port is out of multiplayer mode
+    (Cable.parent_drives_so). The master reaches LEVEL SETTINGS, backs out
+    to GAME SELECT; a second later the slave must be WAITING, not choosing.
+    Then the master comes back and they play.
+    """
+    if symbol(rom, "g_session")[0] is None:
+        print("SALTADO: el ELF no exporta g_session")
+        return 0
+    cores, cable, both, tap = _pair(rom)
+    failures = []
+    both(8)
+    tap("START"); tap("DOWN"); tap("START")
+    both(60)
+    where = [_screen_of(c) for c in cores]
+    if where != ["ajustes", "cable"]:
+        failures.append(f"al encontrarse: maestro en {where[0]}, esclavo en "
+                        f"{where[1]}")
+    tap("B", who=0)                     # LEVEL SETTINGS -> GAME SELECT
+    both(120)
+    where = [_screen_of(c) for c in cores]
+    if where[1] != "cable":
+        failures.append(f"con el maestro fuera, el esclavo esta en {where[1]}")
+    import run_rom
+    if "WAITING" not in run_rom.tilemap_text(cores[1], 10):
+        failures.append("con el maestro fuera, el esclavo no vuelve a esperar")
+    tap("START", who=0)                 # the master comes back
+    both(60)
+    tap("START", who=0)
+    both(80)
+    if not _same_match(rom, cores):
+        failures.append("de vuelta el maestro, no arranca la misma partida")
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("  el maestro se va: el esclavo vuelve a esperar; vuelve: juegan")
+    print("OK: la consola esclava no se cree maestra cuando la otra se va.")
+    return churn_check(rom)
+
+
+def churn_check(rom):
+    """THE SLAVE COMES AND GOES, AND THE MATCH IS STILL ONE GAME.
+
+    What two players testing the cable do: in, out, in again. The slave
+    walks off while the master is on LEVEL SETTINGS (the master goes back to
+    waiting, and to choosing when the slave returns), and again after the
+    master has chosen, halfway through the handshake (it starts again from
+    HELLO). An empty board and then the points was the real version of this
+    — a slave that walked in halfway took the rest of the settings and kept
+    its own seed.
+    """
+    if symbol(rom, "g_session")[0] is None:
+        print("SALTADO: el ELF no exporta g_session")
+        return 0
+    cores, cable, both, tap = _pair(rom)
+    failures = []
+    both(8)
+    tap("START"); tap("DOWN"); tap("START")
+    both(60)
+    tap("B", who=1)                     # the slave leaves the cable
+    both(120)
+    if _screen_of(cores[0]) != "cable":
+        failures.append(f"sin esclavo el maestro sigue en "
+                        f"{_screen_of(cores[0])}")
+    tap("START", who=1)                 # ...and comes back
+    both(60)
+    if _screen_of(cores[0]) != "ajustes":
+        failures.append(f"con el esclavo de vuelta el maestro esta en "
+                        f"{_screen_of(cores[0])}")
+    # The master chooses; the slave walks off on the very next frame, in the
+    # middle of the handshake, and comes back.
+    both(4, [[KEYS["START"]], [KEYS["B"]]])
+    both(10, [[], []])
+    both(90)
+    tap("START", who=1)
+    both(60)
+    if _screen_of(cores[0]) == "ajustes":
+        tap("START", who=0)
+        both(80)
+    if not _same_match(rom, cores):
+        failures.append(f"tras las idas y venidas no juegan la misma partida "
+                        f"(maestro en {_screen_of(cores[0])}, esclavo en "
+                        f"{_screen_of(cores[1])})")
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("  el esclavo se va y vuelve, antes y en pleno saludo: la misma "
+          "partida en las dos")
+    print("OK: las consolas entran y salen del cable sin enredarse.")
+    return lost_check(rom)
+
+
+def lost_check(rom):
+    """CABLE LOST: SILENCE AND A CHIME ON BOTH, AND THE TUNE BACK AFTER.
+
+    On a real cable the slave went quiet and the master played on. The
+    cable comes out of a match with a tune: after its chime, neither console
+    has a channel going; back in, the tune comes back on both. Then out
+    again, and SELECT gives up on the match.
+    """
+    waiting, why = symbol(rom, "g_link_waiting")
+    lost, why2 = symbol(rom, "g_link_lost")
+    if waiting is None or lost is None or symbol(rom, "g_session")[0] is None:
+        print(f"SALTADO: {why or why2}")
+        return 0
+    import run_rom
+    cores, cable, both, tap = _pair(rom)
+    both(8)
+    tap("START"); tap("DOWN"); tap("START")
+    both(60)
+    tap("DOWN", who=0); tap("DOWN", who=0); tap("RIGHT", who=0)   # a tune
+    tap("START", who=0)
+    both(80)
+
+    def loudest(frames):
+        top = 0
+        for _ in range(frames):
+            both(1)
+            top = max([top] + [run_rom.sound_state(c)["activos"] for c in cores])
+        return top
+
+    failures = []
+    playing = loudest(30)
+    cable.plugged = False
+    both(LINK_LOST_FRAMES_PY + 5)
+    chime = loudest(20)
+    silent = loudest(60)
+    cable.plugged = True
+    both(20)
+    back = loudest(60)
+    if not playing:
+        failures.append("la partida por cable no sonaba")
+    elif not chime:
+        failures.append("al perder el cable no suena ningun aviso")
+    elif silent:
+        failures.append(f"con el cable perdido siguen sonando {silent} canales")
+    elif not back:
+        failures.append("con el cable de vuelta la musica no vuelve")
+    else:
+        print(f"  cable fuera: aviso y silencio en las dos; de vuelta, la "
+              f"musica ({playing} -> 0 -> {back} canales)")
+    cable.plugged = False
+    both(LINK_LOST_FRAMES_PY + 5)
+    tap("SELECT", who=0)
+    if not cores[0].memory.u8[lost[0]]:
+        failures.append("SELECT no abandona la partida con el cable perdido")
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: perder el cable calla la musica en las dos, avisa, y se puede "
+          "recuperar o abandonar.")
     return 0
 
 

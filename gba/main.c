@@ -218,6 +218,7 @@ int main(void) {
                 g_demo = true;
                 g_linked = false;
                 g_link_lost = false;
+                g_link_waiting = false;
                 g_view = 0;
                 g_ai_active = true;
                 g_ai_slot = TENGEN_PLAYER_1;   /* the demo's computer is P1 */
@@ -335,7 +336,21 @@ int main(void) {
              * a lobby that stops transferring looks exactly like a lobby whose
              * cable fell out, and the guest would give up after ten seconds of
              * the master thinking. */
-            if (GAME_IS_LINKED(game_mode)) link_lobby_step(&lobby);
+            if (GAME_IS_LINKED(game_mode)) {
+                link_lobby_step(&lobby);
+                /* THE PARTNER WENT, OR THIS IS NOT THE MASTER AFTER ALL: back
+                 * to the cable screen. A lobby that loses its partner goes
+                 * back to holding (TENGEN_LOBBY_LOST), and one transfer's ID
+                 * bits can tell a console that read its SI pin wrong that it
+                 * is the slave — on two real SPs a slave had come up here. */
+                if (!lobby.linked || !link_is_master()) {
+                    screen = SCREEN_LINK_WAIT;
+                    vsync();
+                    audio_frame();
+                    clear_screen();
+                    continue;
+                }
+            }
 
             /* ONE CALL EACH, and the results kept: these are edge detectors
              * with their own held state, so asking twice in a frame answers
@@ -453,6 +468,7 @@ int main(void) {
 
                 g_linked = false;
                 g_link_lost = false;
+                g_link_waiting = false;
                 g_view = 0;
                 /* VERSUS and WITH are the two-player modes that need no second
                  * console: the board is a race's or a coop's, and the computer
@@ -586,6 +602,7 @@ int main(void) {
                  * end of the cable each is plugged into. */
                 g_linked = true;
                 g_link_lost = false;
+                g_link_waiting = false;
                 g_ai_active = false;
                 g_view = link_is_master() ? 0 : 1;
                 /* The master's choice wins, the egg included: both consoles run
@@ -614,6 +631,7 @@ int main(void) {
                 hud_reset();
                 set_piece_palette(g_session.game.player[g_view].piece.current);
                 link_play_begin();
+                link_match_begin(lobby.xe);
                 screen = SCREEN_PLAYING;
                 match_running = true;
                 over_frames = 0;
@@ -837,7 +855,7 @@ int main(void) {
         int hud_count = 1;
         (void)hud_set(&hud_count);
         bool hud_swappable = screen == SCREEN_PLAYING && match_running &&
-                              !g_session.game.paused &&
+                              !g_session.game.paused && !g_link_waiting &&
                               g_session.game.player[g_view].game_active &&
                               hud_count > 1;
         if (hud_swappable && (pressed & TENGEN_BTN_SELECT)) {
@@ -899,12 +917,18 @@ int main(void) {
 
         bool quit_match = false;
         if (match_running) {
-            bool keep_going = g_linked ? link_play_frame()
+            bool keep_going = g_linked ? link_play_frame(pressed, &quit_match)
                                         : solo_play_frame(buttons, pressed,
                                                            &quit_match);
             if (!keep_going) {
                 match_running = false;
-                if (g_linked) {
+                /* EXIT on a linked pause menu: both consoles took it on the
+                 * same transfer, so both put the cable away here and go the
+                 * way a solo EXIT goes. */
+                if (g_linked && quit_match) {
+                    link_play_end();
+                    link_shutdown();
+                } else if (g_linked) {
                     /* THE HARDWARE DOES NOT GO AWAY HERE ANY MORE. It used
                      * to, and that is why the rival's name could not cross:
                      * by the time there was a name to send, the cable was
@@ -1025,6 +1049,7 @@ int main(void) {
             leader_frames = 0;
             g_linked = false;
             g_link_lost = false;
+            g_link_waiting = false;
             g_view = 0;
             oam_hide_all();
             sweeping = false;

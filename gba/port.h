@@ -1784,7 +1784,7 @@ void clear_panel_region(int tx, int ty, int w, int h);
 void set_stats_tile(int tx, int ty, uint16_t entry);
 void set_histogram_tile(int tx, int ty, uint16_t entry);
 void clear_both(int tx, int ty, int w, int h);
-void draw_link_lost(void);        /* the cable went: said in the right box */
+void draw_link_lost(bool waiting); /* the cable went: said in the right box */
 /* WHAT THE HUD IS, AND TWO PER MODE.
  *
  * Four of them, and each game mode offers exactly two — the one it opens on
@@ -1902,6 +1902,7 @@ extern bool g_demo;
 extern int g_demo_over_frames;
 extern bool g_linked;
 extern bool g_link_lost;
+extern bool g_link_waiting;
 extern bool g_repaint;
 extern uint8_t g_front_tune;
 extern uint8_t g_music;
@@ -1914,7 +1915,8 @@ extern TengenTetromino g_shown_piece2;
 uint8_t ai_input(void);
 extern bool g_pause_confirm;
 void swallow_held_buttons(TengenGame *game);
-bool link_play_frame(void);
+bool link_play_frame(uint8_t pressed, bool *quit);
+void link_match_begin(bool menu);
 void front_music(uint8_t which);
 bool solo_play_frame(uint8_t buttons, uint8_t pressed, bool *quit);
 void draw_match(bool *sweeping);

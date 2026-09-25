@@ -278,7 +278,7 @@ static void hide_idle_cossack(void) {
  * were cleared and written from column 22, which on the coop screen is the
  * braid of the board's frame — the text sat on the frame with a bite taken
  * out of it. */
-void draw_link_lost(void) {
+void draw_link_lost(bool waiting) {
     bool was = g_panel_layer;
     g_panel_layer = false;
     bool coop = g_session.game.coop;
@@ -290,8 +290,16 @@ void draw_link_lost(void) {
     hide_idle_cossack();
     int mid = (BRAID_T + bottom) / 2;
     int col = tx + (w - 5) / 2;              /* CABLE, centred; LOST under it */
-    draw_text(col, mid - 1, "CABLE", BANK_LABEL);
-    draw_text(col, mid, "LOST", BANK_LABEL);
+    /* ...and while the match is still waiting for it, how to stop waiting. */
+    int top = waiting ? mid - 2 : mid - 1;
+    draw_text(col, top, "CABLE", BANK_LABEL);
+    draw_text(col, top + 1, "LOST", BANK_LABEL);
+    if (waiting) {
+        /* In CABLE's column, not centred on their own: six letters centred
+         * in coop's seven-column cell sit on the braid. */
+        draw_text(col, top + 3, "SELECT", BANK_NOTE);
+        draw_text(col, top + 4, "QUITS", BANK_NOTE);
+    }
     g_panel_layer = was;
 }
 

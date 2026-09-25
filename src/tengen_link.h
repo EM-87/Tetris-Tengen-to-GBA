@@ -137,11 +137,12 @@ typedef enum {
 #define TENGEN_LOBBY_TAG_SHIFT 12
 #define TENGEN_LOBBY_PAYLOAD_MASK 0x0FFF
 
-/* How many frames of silence a lobby tolerates from a partner that HAS
- * answered before giving up: ten seconds at one a frame. Before the first
- * answer there is no limit — the other player may take minutes to get to
- * the cable, and the way out is B. */
-#define TENGEN_LOBBY_TIMEOUT 600
+/* How many turns without a proper answer — no transfer, or a word from a
+ * console that is not in a lobby — before a lobby forgets a partner it had
+ * and goes back to waiting: a second at one a frame. Before the first answer
+ * nothing counts; the other player may take minutes to get to the cable,
+ * and the way out is B. A lobby never gives up. */
+#define TENGEN_LOBBY_LOST 60
 
 typedef struct {
     uint16_t seed;
@@ -151,12 +152,11 @@ typedef struct {
     bool coop;           /* one twelve-wide board between them, not two */
     bool xe;             /* the Tetris Tengen XE level range; see tengen_core.h */
     bool ready;          /* the handshake finished; the match may start */
-    bool failed;         /* nothing answered for long enough to give up */
-    uint8_t stage;       /* master: the tag in flight. slave: the last seen */
+    uint8_t stage;       /* master: the tag in flight. slave: the last taken */
     uint8_t echo;        /* slave: the tag it owes back */
     bool saw_go;         /* slave: GO has arrived once already */
-    uint16_t idle;       /* consecutive failed transfers */
-    bool linked;         /* the other end has answered at least once */
+    uint16_t idle;       /* turns without a proper answer, once linked */
+    bool linked;         /* the other end is answering; see TENGEN_LOBBY_LOST */
     bool hold;           /* master: stay at HELLO until the player has chosen */
     /* THE SKIN. Each console lists the fingerprints of the skins IT has
      * (skins/skin_count); the master also says which of its own it is

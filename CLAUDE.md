@@ -103,7 +103,7 @@ minus those).
 | --- | --- | --- |
 | `make test` | no | always — the rules, in milliseconds |
 | `make gba` | headers | to build `build/tengen.gba` |
-| `make gba-check` | headers | before calling any change done: 51 checks on the running ROM in mGBA, nine of them on two consoles with a cable |
+| `make gba-check` | headers | before calling any change done: 55 checks on the running ROM in mGBA, thirteen of them on two consoles with a cable |
 | `make trace ROM=... [MODE=coop\|versus\|with\|demo]` | yes | after touching `tengen_step` or `tengen_ai.c`: the port against the cartridge, iteration by iteration. The 1P and coop scripts never complete a row; `MODE="with --pad1"` plays player 1 with the port's computer and clears plenty; add `--handicap N` to any mode |
 | `make tune-check ROM=...` | yes | after touching audio: the four tunes against the cartridge, note by note |
 | `make dance-check ROM=...` | yes | after touching the dancers: their choreography against the cartridge's driver |
@@ -154,25 +154,35 @@ story behind each; the item number is in brackets.
   one thing lockstep cannot carry is what a person typed: names cross in
   `TengenNameSwap`. The lobby is stop-and-wait; its SKIN stage agrees on a
   skin by a fingerprint of the art. [14, 25, 31]
-- **A real cable is not the emulated one.** The master starts a transfer
-  only with SD high (everyone in multiplayer mode), and any transfer that
-  comes back with the error bit or SD low restarts the port (`sio_reset`,
-  as gba-link-connection does); 38400 baud. Without that, the console that
-  reached the lobby first wedged the port and two SPs never met.
-  `run_link.py`'s cable models SD and a sticky error, and `late_check`
-  walks one console to the lobby twenty seconds before the other. The lobby
-  has no timeout until the partner has answered once: opening the cable a
-  minute early is the normal case (B leaves). Four transfers in a row with
-  a console's slot empty also restart the port (the second session on two
-  SPs ran one good transfer and then only $FFFF from the slave); and
-  `link_shutdown` leaves multiplayer mode for general purpose, so every
-  `link_init` is a real change of mode. `mute_check` silences the slave in
-  the lobby and mid-match. The pump never looks at the error bit: it is the
-  LAST transfer's verdict, only a new transfer rewrites it (a reset does
-  not), and resetting on it instead of transferring left a real SP at $6049
-  "R 999" for good — CABLE LOST, then no reconnecting. `glitch_check` fails
-  one transfer in the lobby and one mid-match. The LINK CABLE screen prints SIOCNT, good/bad/
-  reset counts and the last transfer's two words while it waits.
+- **A real cable is not the emulated one.** What two SPs taught us, one
+  rule each; `run_link.py`'s cable models every one of them, and each has a
+  check that the build before it fails:
+  - The interrupt judges a transfer by its WORDS: two slots that are not
+    $FFFF (every slot is emptied when a transfer starts). SD and the error
+    bit are counted, never acted on: judging by them threw away every
+    transfer on two SPs ("G 0 B 999 R 999") while SIOCNT at leisure showed
+    neither flag. SD still down when the interrupt reads it is the INFERRED
+    cause, not a measured one (`jitter_check`, `Cable.sd_lags`); the
+    diagnostic line's IRQ word is there to settle it.
+  - Four transfers in a row with a slot empty restart the port (`sio_reset`,
+    `mute_check`); the pump never resets on the error bit, which only a
+    transfer rewrites (`glitch_check`). 38400 baud.
+  - The master starts a transfer only with SD high, read at leisure.
+  - Who is master is the ID bits of the last good transfer, not the SI pin:
+    a slave's SI is the master's SO and floats when the master's port is not
+    in multiplayer mode (`role_check`). So `link_shutdown` leaves the port IN
+    multiplayer mode, answering 0; `link_init` goes through general purpose.
+  - The lobby never fails. It waits for a partner as long as it takes (B
+    leaves), forgets one that goes quiet for TENGEN_LOBBY_LOST turns and goes
+    back to waiting (the master off LEVEL SETTINGS); the slave takes the
+    handshake only in order from HELLO and answers anything else with NONE,
+    which sends the master back to HELLO (`churn_check`, `late_check`, and
+    the host tests).
+  - A match whose cable goes quiet waits under CABLE LOST — tune silenced
+    (MUSIC_SILENCE, not SUSPEND, so the chime a frame later is heard), then
+    picks up where it was, or SELECT gives up (`link_wait`, `lost_check`).
+  The LINK CABLE screen prints SIOCNT now and at the last interrupt, good/
+  error/absent/reset counts and the last two words while it waits.
 - **Coop's two falling pieces are solid to each other**, and the settled
   field cannot see it: `checkCoopCollision` runs on shifts, rotations and
   gravity. [22]
@@ -252,7 +262,10 @@ credits rotating every four seconds; the cossacks staged on the panels'
 ledges where the cartridge uses a middle strip the port does not have; a
 second cossack for the rival in HUD VERSUS; a paused race under the chord
 showing the rival's board, with their NEXT, colours and numbers; the
-computer reading its coop partner under the chord; the XE mod's two
+computer reading its coop partner under the chord; the pause menu over the
+cable, there if the MASTER found the chord and driven by both players'
+presses through lockstep (`link_match_begin`); a linked match that waits
+for a lost cable instead of ending; the XE mod's two
 off-by-one bugs mended (XE only). [8, 11, 17, 19, 20, 23, 28, 30]
 
 **Knowingly not shown**: proto_c's title animation (its rows are the ones
@@ -261,9 +274,7 @@ none); the "STATS" heading and the "SCORE" of "HIGH SCORE" (no room);
 proto_d as a fourth skin (its title is pixel-identical to proto_c's); a
 prototype's rules over the cable; A+B restarting the whole game in 1P and
 coop (there A and B are the way out); the line counter's clamp at 10000;
-the pause menu over the cable (its input is the solo frame's, and a tune or
-EXIT picked on one console would split the match: a linked pause is the
-plaque); the prototypes' own front-end shape (two modes, their level select, no
+the prototypes' own front-end shape (two modes, their level select, no
 handicap or music); the computer sliding a piece under an overhang (tried
 twice, measured worse); the demo's own game over and HIGH SCORES page (the
 cartridge's demo plays about 25 minutes, tops out, and shows both; the
@@ -289,8 +300,9 @@ row itself: gone one frame after the lock, as in B, C and D).
 
 And what has run only in an emulator:
 
-- **The link cable** between two real GBAs. The first try (two SPs, EZ-Flash
-  IV and SuperCard, build 3cdac97) never connected; see the trap above.
+- **The link cable** between two real GBAs. Tried on two SPs (EZ-Flash IV
+  and SuperCard) since build 3cdac97, a round of fixes each time; see the
+  trap above for what each taught.
 - **The latest builds on hardware** — the Thumb code, `VBlankIntrWait`, the
   interrupt handler. mGBA is accurate on all three, but it is not the
   console.

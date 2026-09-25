@@ -400,7 +400,7 @@ def sound_state(core):
 # The handshake's own logic is tested on the host, two lobbies against each
 # other (tests/test_tengen.c); this is the wiring around it.
 # ---------------------------------------------------------------------------
-LINK_MSG_ROW = 11
+LINK_MSG_ROW = 10
 LINK_TIMEOUT_FRAMES = 600   # TENGEN_LOBBY_TIMEOUT in src/tengen_link.h
 
 

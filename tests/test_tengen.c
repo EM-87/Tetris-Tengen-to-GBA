@@ -1104,10 +1104,11 @@ static void test_the_lobby_connects_first_and_the_master_chooses_after(void) {
     CHECK(!master.ready);   /* but nobody starts until the master has chosen */
     CHECK(!slave.ready);   /* the slave least of all */
 
-    /* Held for twice the give-up window, and neither end gives up. */
-    for (int i = 0; i < TENGEN_LOBBY_TIMEOUT * 2; i++)
+    /* Held for far longer than it takes to lose a partner, and neither end
+     * loses the other. */
+    for (int i = 0; i < TENGEN_LOBBY_LOST * 20; i++)
         lobby_transfer(&master, &slave, true);
-    CHECK(!master.failed && !slave.failed);   /* parking must not look like silence */
+    CHECK(master.linked && slave.linked);   /* parking must not look like silence */
     CHECK(!master.ready && !slave.ready);   /* and must not start the match either */
 
     const uint8_t handicap[2] = { 1, 4 };
@@ -1134,7 +1135,7 @@ static void test_the_lobby_agrees_on_a_game_and_both_leave_together(void) {
 
     int transfers = 0;
     int left_apart = 0;
-    while (!master.ready && !master.failed && transfers < 100) {
+    while (!master.ready && transfers < 100) {
         lobby_transfer(&master, &slave, true);
         transfers++;
         /* NEITHER may enter the match a transfer before the other: one
@@ -1245,28 +1246,92 @@ static void test_a_skin_fingerprint_is_its_art(void) {
 
 static void test_a_lobby_waits_for_its_partner_as_long_as_it_takes(void) {
     /* One player opens the cable, the other takes minutes to get there: no
-     * answer yet is not a failure. */
-    TengenLobby master;
+     * answer yet is not a failure, and neither is a partner on the menus
+     * whose port answers every transfer with 0. */
+    TengenLobby master, slave;
     tengen_lobby_start(&master, 1, 0, 0);
-    for (int i = 0; i < TENGEN_LOBBY_TIMEOUT * 20; i++)
-        tengen_lobby_apply(&master, true, false, 0, 0);
-    CHECK(!master.failed);
-    CHECK(!master.linked);
+    tengen_lobby_start(&slave, 0, 0, 0);
+    for (int i = 0; i < TENGEN_LOBBY_LOST * 60; i++) {
+        tengen_lobby_apply(&master, true, (i & 1) != 0, 0, 0);
+        tengen_lobby_apply(&slave, false, (i & 1) != 0, 0, 0);
+    }
+    CHECK(!master.linked && !master.ready);
+    CHECK(!slave.linked && !slave.ready);
+    /* ...and the partner that does turn up is met. */
+    for (int i = 0; i < 64 && !master.ready; i++)
+        lobby_transfer(&master, &slave, true);
+    CHECK(master.ready && slave.ready);
 }
 
-static void test_a_lobby_whose_partner_goes_quiet_gives_up(void) {
-    TengenLobby master;
-    tengen_lobby_start(&master, 1, 0, 0);
-    /* The slave echoes HELLO once: now there is somebody to lose. */
-    tengen_lobby_apply(&master, true, true, 0,
-                       (uint16_t)(TENGEN_LOBBY_HELLO << TENGEN_LOBBY_TAG_SHIFT));
-    CHECK(master.linked);
-    for (int i = 0; i < TENGEN_LOBBY_TIMEOUT - 1; i++)
-        tengen_lobby_apply(&master, true, false, 0, 0);
-    CHECK(!master.failed);        /* ten seconds is ten seconds */
-    tengen_lobby_apply(&master, true, false, 0, 0);
-    CHECK(master.failed);
-    CHECK(!master.ready);
+static void test_a_lobby_whose_partner_goes_away_waits_again(void) {
+    /* THE PARTNER LEFT: back to waiting, never to failing. The master is on
+     * LEVEL SETTINGS (held at HELLO) when the slave walks off; a second
+     * later it has forgotten it and is holding again, so its screen can go
+     * back to waiting and its player choose again when somebody turns up. */
+    TengenLobby master, slave;
+    tengen_lobby_start_held(&master, 0x1234);
+    tengen_lobby_start(&slave, 0, 0, 0);
+    for (int i = 0; i < 4; i++) lobby_transfer(&master, &slave, true);
+    CHECK(master.linked && slave.linked);
+    /* The slave's console is back on the menus: its port answers 0. */
+    for (int i = 0; i < TENGEN_LOBBY_LOST - 1; i++)
+        tengen_lobby_apply(&master, true, true, tengen_lobby_word(&master, true), 0);
+    CHECK(master.linked);           /* a second is a second */
+    tengen_lobby_apply(&master, true, true, tengen_lobby_word(&master, true), 0);
+    CHECK(!master.linked);
+    CHECK(master.hold && master.stage == TENGEN_LOBBY_HELLO);
+    /* ...and the same on the slave's side, for a master that went quiet. */
+    for (int i = 0; i < TENGEN_LOBBY_LOST; i++)
+        tengen_lobby_apply(&slave, false, false, 0, 0);
+    CHECK(!slave.linked);
+    CHECK(!master.ready && !slave.ready);
+}
+
+static void test_a_slave_that_arrives_mid_handshake_hears_it_all(void) {
+    /* A SLAVE WALKING IN HALFWAY must not take the rest and keep its own
+     * start: on two real SPs that was a board of one game on one console and
+     * another on the other, an empty field and then the points. The master
+     * gets as far as CONFIG with somebody (whose words are dropped here), a
+     * fresh slave appears, and the two still end on the master's seed. */
+    TengenLobby master, first, fresh;
+    tengen_lobby_start(&master, 0xBEEF, 7, 2);
+    tengen_lobby_start(&first, 0, 0, 0);
+    while (master.stage != TENGEN_LOBBY_CONFIG)
+        lobby_transfer(&master, &first, true);
+    tengen_lobby_start(&fresh, 0x1111, 1, 0);
+    int left_apart = 0;
+    for (int i = 0; i < 100 && !master.ready; i++) {
+        lobby_transfer(&master, &fresh, true);
+        if (master.ready != fresh.ready) left_apart++;
+    }
+    CHECK(master.ready && fresh.ready);
+    CHECK(left_apart == 0);
+    CHECK(fresh.seed == 0xBEEF);
+    CHECK(fresh.start_level == 7);
+    CHECK(fresh.music == 2);
+}
+
+static void test_a_slave_that_saw_one_go_does_not_carry_it_over(void) {
+    /* A GO seen in a conversation that never finished (the master went
+     * away between its two GOs) is forgotten when the next one opens with
+     * HELLO. Otherwise the next session's FIRST GO would let the slave into
+     * the match a turn before the master — and the master's last GO would
+     * be read there as a frame of buttons. */
+    TengenLobby master, slave;
+    tengen_lobby_start(&master, 0xC0DE, 3, 1);
+    tengen_lobby_start(&slave, 0, 0, 0);
+    while (!slave.saw_go) lobby_transfer(&master, &slave, true);
+    CHECK(!slave.ready);
+    /* The master leaves and comes back: a new lobby, from HELLO. */
+    tengen_lobby_start(&master, 0xD00D, 5, 2);
+    int left_apart = 0;
+    for (int i = 0; i < 100 && !master.ready; i++) {
+        lobby_transfer(&master, &slave, true);
+        if (master.ready != slave.ready) left_apart++;
+    }
+    CHECK(master.ready && slave.ready);
+    CHECK(left_apart == 0);
+    CHECK(slave.seed == 0xD00D);
 }
 
 static void test_no_lobby_word_can_look_like_an_absent_console(void) {
@@ -3385,7 +3450,9 @@ int main(void) {
     test_the_cable_agrees_on_a_skin_by_its_art();
     test_a_skin_fingerprint_is_its_art();
     test_a_lobby_waits_for_its_partner_as_long_as_it_takes();
-    test_a_lobby_whose_partner_goes_quiet_gives_up();
+    test_a_lobby_whose_partner_goes_away_waits_again();
+    test_a_slave_that_arrives_mid_handshake_hears_it_all();
+    test_a_slave_that_saw_one_go_does_not_carry_it_over();
     test_no_lobby_word_can_look_like_an_absent_console();
     test_a_lobby_hands_straight_over_to_a_matching_pair_of_games();
     test_the_rivals_name_crosses_the_cable();

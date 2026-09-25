@@ -14,15 +14,16 @@
  *
  * Bits 0-1 are the baud rate, 12-13 the mode and 14 the interrupt enable;
  * the rest are the hardware's to write, not ours:
- *   bit 2  SI   0 on the master, 1 on a slave — set by which end of the
- *               cable this console is plugged into. A console with nothing
- *               attached reads 1, i.e. it looks like a slave whose parent
- *               has not spoken yet, which is exactly how this file treats
- *               it.
- *   bit 3  SD   nominally "every console is ready", but it reads SET on a
- *               console with no cable at all, so it is not used here at all.
- *               See link_connected().
- *   bit 6  ERR  the last transfer failed.
+ *   bit 2  SI   0 on the master, 1 on a slave — the level on the SI pin,
+ *               which the cable grounds for the master and wires to the
+ *               master's SO for the slave. So a slave whose master is not in
+ *               multiplayer mode (SO not driven) can read 0 and look like a
+ *               master: see link_is_master, which trusts the ID bits once a
+ *               transfer has set them.
+ *   bit 3  SD   "every console is ready" — read at leisure by the pump.
+ *               NOT at the instant of the interrupt: see link_serial_service.
+ *   bits 4-5 ID 0 the master, 1 the slave, as the last transfer assigned it.
+ *   bit 6  ERR  counted for the diagnostic line, never acted on.
  *   bit 7  START/BUSY — the master writes 1 to begin a transfer; on every
  *               console it reads 1 while one is in progress.
  */
@@ -30,6 +31,7 @@
 #define SIO_BAUD_38400  0x0001
 #define SIO_SI          0x0004
 #define SIO_SD          0x0008
+#define SIO_ID_SHIFT    4
 #define SIO_ERR         0x0040
 #define SIO_START       0x0080
 #define SIO_IRQ         0x4000
@@ -78,12 +80,17 @@ static bool g_armed;
 /* What the send register is supposed to hold, so a reset can put it back. */
 static volatile uint16_t g_tx_word;
 static uint8_t g_busy_frames;
-/* Counters for the LINK CABLE screen's diagnostic line: transfers that came
- * back with both consoles in them, ones that did not, and port resets. */
-static volatile uint16_t g_good, g_bad, g_resets;
+/* Counters for the LINK CABLE screen's diagnostic lines: transfers that
+ * came back with both consoles in them, ones that raised the error bit (on
+ * their own words, good or not), ones with a slot empty, and port resets. */
+static volatile uint16_t g_good, g_errs, g_absent, g_resets;
 static volatile uint8_t g_absent_run;
-/* The last transfer's two words, whatever they were, for the same line. */
+/* The last transfer's two words and SIOCNT as the interrupt found it. */
 static volatile uint16_t g_last_m = LINK_ABSENT, g_last_s = LINK_ABSENT;
+static volatile uint16_t g_irq_cnt;
+/* WHO THIS CONSOLE IS, as the hardware said on the last good transfer. */
+static volatile bool g_id_known;
+static volatile uint8_t g_id;
 
 static inline void tx(uint16_t word) {
     g_tx_word = word;
@@ -118,16 +125,21 @@ static void sio_reset(void) {
  * (irq_handler, video.c), because the vertical blank takes an interrupt too
  * now that vsync() sleeps on it; that handler acknowledges both and calls
  * this for a serial one. */
+/* THE WORDS DECIDE, NOT THE FLAGS. This used to throw away and restart the
+ * port on any transfer that came back with the error bit or with SD low, as
+ * gba-link-connection does. On two real SPs entering the cable together that
+ * was every transfer on both — "G 0 B 999 R 999", while SIOCNT read at
+ * leisure showed neither flag ($6009, $601D): read in the first
+ * microseconds of the interrupt, SD is plausibly still down from the
+ * transfer itself, and a reset on every transfer is its own failure. The
+ * hardware empties every slot to $FFFF when a transfer STARTS, so two real
+ * words in the two slots are two consoles heard in this one; that is the
+ * test. The flags are counted for the screen and nothing else. */
 IWRAM_CODE void link_serial_service(void);
 void link_serial_service(void) {
-    /* A transfer that failed, or that ran while somebody was not ready, says
-     * nothing, and leaves the port needing a reset before the next one. */
     uint16_t cnt = REG_SIOCNT;
-    if ((cnt & SIO_ERR) || !(cnt & SIO_SD)) {
-        g_bad++;
-        sio_reset();
-        return;
-    }
+    g_irq_cnt = cnt;
+    if (cnt & SIO_ERR) g_errs++;
     {
         uint16_t m = REG_SIOMULTI(0);
         uint16_t s = REG_SIOMULTI(1);
@@ -154,6 +166,16 @@ void link_serial_service(void) {
             g_starved = 0;
             g_good++;
             g_absent_run = 0;
+            /* ...and who this console is, but only where the words agree:
+             * ID 0 with this console's own word in the master's slot, ID 1
+             * with it in the slave's. Read in the interrupt, like SD, the ID
+             * bits are one register read away from a timing surprise; the
+             * slot this console's word landed in is not. */
+            uint8_t id = (uint8_t)((cnt >> SIO_ID_SHIFT) & 3);
+            if ((id == 0 && m == g_tx_word) || (id == 1 && s == g_tx_word)) {
+                g_id = id;
+                g_id_known = true;
+            }
 
             /* During a match, load the next word straight away so the send
              * register is never stale when the master starts the following
@@ -164,7 +186,7 @@ void link_serial_service(void) {
                 tx(tengen_link_pack(link_read_buttons(), g_tx_frame));
             }
         } else {
-            g_bad++;
+            g_absent++;
             if (++g_absent_run >= LINK_ABSENT_LIMIT) {
                 g_absent_run = 0;
                 sio_reset();
@@ -183,9 +205,11 @@ void link_init(void) {
     REG_RCNT = 0x0000;
     REG_SIOCNT = SIO_MODE_MULTI | SIO_BAUD;
     tx(0);
-    g_good = g_bad = g_resets = 0;
+    g_good = g_errs = g_absent = g_resets = 0;
     g_absent_run = 0;
     g_last_m = g_last_s = LINK_ABSENT;
+    g_irq_cnt = 0;
+    g_id_known = false;
     g_busy_frames = 0;
 
     g_rx_head = 0;
@@ -204,23 +228,29 @@ void link_init(void) {
     REG_IME = 1;
 }
 
-/* ...and OUT OF MULTIPLAYER MODE altogether, as gba-link-connection's
- * deactivate does: the port does not sit in multiplayer between sessions,
- * the other console's SD reads "not ready" while this one is on the menus,
- * and the next link_init is a real change of mode. */
+/* ...BUT NOT OUT OF MULTIPLAYER MODE. This took the port to general purpose
+ * for a while, as gba-link-connection's deactivate does, and in general
+ * purpose the SO pin is not driven: the slave's SI is wired to it, so a
+ * slave left waiting on the cable read SI low and took itself for the
+ * master — on two real SPs a slave came up on LEVEL SETTINGS. Left in
+ * multiplayer mode with its interrupt off, this console answers transfers
+ * with 0, which the lobby reads as "not in the lobby" (tag NONE), and its SO
+ * stays where the other console expects it. link_init still goes through
+ * general purpose on the way in. */
 void link_shutdown(void) {
     REG_IME = 0;
     REG_SIOCNT &= (uint16_t)~SIO_IRQ;
     REG_IE &= (uint16_t)~IRQ_SERIAL;
     REG_SIOMLT_SEND = 0;
-    REG_SIOCNT = 0;
-    REG_RCNT = 0x8000;
     g_auto_tx = false;
     g_armed = false;
     REG_IME = 1;
 }
 
+/* The ID bits of the last good transfer once there has been one — they are
+ * the hardware's own answer and cannot float — and the SI pin before that. */
 bool link_is_master(void) {
+    if (g_id_known) return g_id == 0;
     return (REG_SIOCNT & SIO_SI) == 0;
 }
 
@@ -258,13 +288,15 @@ void link_pump(void) {
     REG_SIOCNT = cnt | SIO_START;
 }
 
-void link_debug(uint16_t out[6]) {
+void link_debug(uint16_t out[LINK_DEBUG_WORDS]) {
     out[0] = REG_SIOCNT;
-    out[1] = g_good;
-    out[2] = g_bad;
-    out[3] = g_resets;
-    out[4] = g_last_m;
-    out[5] = g_last_s;
+    out[1] = g_irq_cnt;
+    out[2] = g_good;
+    out[3] = g_errs;
+    out[4] = g_absent;
+    out[5] = g_resets;
+    out[6] = g_last_m;
+    out[7] = g_last_s;
 }
 
 bool link_pop(LinkFrame *out) {
@@ -319,7 +351,7 @@ void link_lobby_release(TengenLobby *lobby, uint16_t seed,
 }
 
 void link_lobby_step(TengenLobby *lobby) {
-    if (lobby->ready || lobby->failed) return;
+    if (lobby->ready) return;
 
     bool master = link_is_master();
     link_tick();
@@ -344,7 +376,7 @@ void link_lobby_step(TengenLobby *lobby) {
     }
     /* ...unless that word was the last: a transfer started after the
      * handshake is done would land its GO in the match's queue. */
-    if (!lobby->ready && !lobby->failed) link_pump();
+    if (!lobby->ready) link_pump();
 }
 
 /* ----------------------------------------------------------------------- *

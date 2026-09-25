@@ -49,6 +49,9 @@ static void ai_play_frame(void);
 
 bool g_linked;            /* this match is running over the cable */
 bool g_link_lost;         /* ...and the cable stopped answering */
+/* ...or it has gone quiet and the match is waiting for it to come back. */
+bool g_link_waiting;
+static uint8_t g_link_wait_frames;   /* for the two sounds; see link_wait */
 bool g_repaint;           /* the static screen needs putting back */
 uint8_t g_front_tune = FRONT_NOTHING;
 
@@ -488,8 +491,10 @@ static void draw_pause_menu(void) {
 /* One frame of it. Returns true if the menu ate the input, which is what
  * keeps the cheat codes out of it — they are entered on the pad while paused
  * too, and a Down meant for this menu is the first byte of one of them. */
+static bool pause_menu_on(void);
+
 static bool pause_menu_input(uint8_t pressed, bool *leaving) {
-    if (!g_pause_unlocked || !g_session.game.paused) return false;
+    if (!pause_menu_on() || !g_session.game.paused) return false;
 
     /* START IS ALWAYS RESUME, EVERYWHERE IN THIS MENU — on the EXIT line and
      * inside the question as well. It is the button that put the plaque up,
@@ -646,7 +651,61 @@ void swallow_held_buttons(TengenGame *game) {
 
 static void pause_toggled(bool was_paused);
 
-bool link_play_frame(void) {
+/* THE PAUSE MENU OVER THE CABLE. Both consoles have to show the same menu
+ * and do the same thing with it, or a tune picked on one plays on one and an
+ * EXIT leaves one console in the match alone. So it is not this console's
+ * chord that decides whether there is a menu but the MASTER's, which crossed
+ * in the lobby (lobby.xe — the chord is what sets XE); and it is not this
+ * console's pad that drives it but both players' presses as the transfer
+ * carried them, which both consoles have, in the same order. Everything the
+ * menu then does — the cursor, the tune, the question, the way out —
+ * happens on both on the same transfer. */
+static bool g_link_menu;
+static uint8_t g_link_prev[2];
+
+void link_match_begin(bool menu) {
+    g_link_menu = menu;
+    g_link_prev[0] = g_link_prev[1] = 0xFF;   /* see swallow_held_buttons */
+    g_link_waiting = false;
+}
+
+static bool pause_menu_on(void) {
+    return g_linked ? g_link_menu : g_pause_unlocked;
+}
+
+/* THE CABLE WENT QUIET: THE MATCH WAITS FOR IT. It used to end two seconds
+ * in, which on a real cable is a match lost to a knocked plug. Lockstep can
+ * wait for as long as it likes — neither console steps without the other's
+ * word, and every word carries the frame it is for, so a gap is only ever a
+ * gap and a mismatch is still caught (g_session.desynced, which does end
+ * it). So the board freezes under CABLE LOST, the tune stops on both
+ * consoles and the screen-change chime sounds, the one START makes; the
+ * match picks up where it was when the transfers do, and SELECT gives up on
+ * it. MUSIC_SILENCE rather than SUSPEND, which would gag the chime as well;
+ * and one frame apart, because the engine's ring takes one request a frame.
+ * A paused match is already quiet and stays so. */
+static void link_wait(bool starving) {
+    if (starving && !g_link_waiting) {
+        g_link_waiting = true;
+        g_link_wait_frames = 0;
+        if (!g_session.game.paused) {
+            nes_audio_play(NES_MUSIC_SILENCE);
+            if (MUSIC_IS_HANDTUNE(current_tune())) handtune_suspend();
+        }
+    } else if (g_link_waiting && starving) {
+        if (g_link_wait_frames < 255 && ++g_link_wait_frames == 1)
+            nes_audio_play(NES_SOUND_SCREEN_SWITCH);
+    } else if (g_link_waiting && !starving) {
+        g_link_waiting = false;
+        g_repaint = true;               /* the words come off the panel */
+        if (!g_session.game.paused) {
+            if (MUSIC_IS_HANDTUNE(current_tune())) handtune_resume();
+            else start_music(g_music);
+        }
+    }
+}
+
+bool link_play_frame(uint8_t pressed, bool *quit) {
     /* The master starts one transfer per frame off its own vblank; the slave
      * has nothing to start. Either way the interrupt does the collecting. */
     link_pump();
@@ -669,9 +728,29 @@ bool link_play_frame(void) {
             break;
         }
 
+        /* The menu first, as in the solo frame, and on both players'
+         * presses; if it takes them, neither board sees them. */
+        uint8_t local_buttons = tengen_link_buttons(local);
+        uint8_t b0 = tengen_link_buttons(f.master), b1 = tengen_link_buttons(f.slave);
+        uint8_t menu_pressed = (uint8_t)((b0 & ~g_link_prev[0]) |
+                                         (b1 & ~g_link_prev[1]));
+        g_link_prev[0] = b0;
+        g_link_prev[1] = b1;
+        if (g_session.game.paused && pause_menu_on()) {
+            bool leaving = false;
+            if (pause_menu_input(menu_pressed, &leaving)) {
+                local_buttons = 0;
+                remote = (uint16_t)(remote & ~TENGEN_LINK_BUTTON_MASK);
+            }
+            if (leaving) {
+                *quit = true;
+                return false;
+            }
+        }
+
         TengenStepResult out[2];
         bool was_paused = g_session.game.paused;
-        if (!tengen_link_step(&g_session, tengen_link_buttons(local), remote, out))
+        if (!tengen_link_step(&g_session, local_buttons, remote, out))
             break;
         if (was_paused != g_session.game.paused) pause_toggled(was_paused);
         note_award(0, out[0]);
@@ -691,8 +770,15 @@ bool link_play_frame(void) {
         stepped++;
     }
 
-    if (g_session.desynced || link_starved() > LINK_LOST_FRAMES) {
+    if (g_session.desynced) {
         g_link_lost = true;
+        g_link_waiting = false;
+        return false;
+    }
+    link_wait(stepped == 0 && link_starved() > LINK_LOST_FRAMES);
+    if (g_link_waiting && (pressed & TENGEN_BTN_SELECT)) {
+        g_link_lost = true;
+        g_link_waiting = false;
         return false;
     }
     return !match_over();
@@ -898,7 +984,7 @@ void draw_match(bool *sweeping) {
      * — the lobby says NO CABLE FOUND for one that never answered — and not
      * on top of the rival's preview. See draw_link_lost. The match is over;
      * the records page comes next as after any other ending. */
-    if (g_link_lost) draw_link_lost();
+    if (g_link_lost || g_link_waiting) draw_link_lost(g_link_waiting);
 
     /* The sweep's sprites. */
     if (clearing) {
@@ -915,7 +1001,7 @@ void draw_match(bool *sweeping) {
         /* Not over the cable: pause_menu_input is the solo frame's, the pad
          * goes down the wire raw, and a tune or an EXIT picked on one console
          * alone would split the match. There the plaque, as on the cartridge. */
-        if (g_pause_unlocked && !g_linked) draw_pause_menu();
+        if (pause_menu_on()) draw_pause_menu();
         else draw_pause_box();
     }
 
