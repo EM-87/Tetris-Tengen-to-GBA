@@ -171,7 +171,10 @@ story behind each; the item number is in brackets.
     fed each other until two SPs did nothing else ("A 999 R 999", both
     reading themselves a slave at the interrupt, the master's own slot
     empty; inferred, `storm_check`). Nothing touches RCNT once the port is
-    in multiplayer mode. The pump never resets on the error bit, which only
+    in multiplayer mode: a restart, and every `link_init`, goes through
+    NORMAL mode on an external clock with SO held high (SIOCNT $0008), a
+    real change of mode that lets go of no line. The cable failed when the
+    master reached the lobby first and never the other way round. The pump never resets on the error bit, which only
     a transfer rewrites (`glitch_check`). 38400 baud.
   - The master starts a transfer only with SD high, read at leisure.
   - Who is master is the ID bits of the last good transfer, not the SI pin:
@@ -190,8 +193,10 @@ story behind each; the item number is in brackets.
     for LINK_GIVEUP_FRAMES, or desynced, it is over: the CABLE LOST window
     in the middle of the screen, and START to the title without the records
     swap or the high scores (`link_wait`, `link_give_up`, `lost_check`).
-  The LINK CABLE screen prints SIOCNT now and at the last interrupt, good/
-  error/absent/reset counts and the last two words while it waits.
+  The LINK CABLE screen prints the BUILD (the commit, `BUILD_ID` in the
+  Makefile — a hardware report is only as good as knowing which ROM), SIOCNT
+  now and at the last interrupt, good/error/absent/reset counts and the last
+  two words while it waits.
 - **Coop's two falling pieces are solid to each other**, and the settled
   field cannot see it: `checkCoopCollision` runs on shifts, rotations and
   gravity. [22]

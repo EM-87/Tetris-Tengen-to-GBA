@@ -85,9 +85,13 @@ ARMOBJCOPY := $(ARMPREFIX)objcopy
 # the time they are written. The pause menu's heading vanished exactly that
 # way. Link-time optimisation gives the inlining back across the five files,
 # and the image comes out smaller than the single file's was.
+# WHICH BUILD IS ON THE CONSOLE, printed on the LINK CABLE screen: a report
+# from real hardware is only as good as knowing which ROM it came from. The
+# commit the ROM was built from; `+` when the tree had changes on top.
+BUILD_ID ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo dev)$(shell git diff --quiet HEAD -- gba src 2>/dev/null || echo +)
 ARMFLAGS := -mcpu=arm7tdmi -mtune=arm7tdmi -mthumb -mthumb-interwork \
             -std=c99 -Wall -Wextra -O2 -flto -ffreestanding -fno-builtin \
-            -fomit-frame-pointer
+            -fomit-frame-pointer -DBUILD_ID=\"$(BUILD_ID)\"
 # -nostartfiles (not -nostdlib): crt0.s replaces the toolchain's startup, but
 # libc and libgcc are still wanted — the core calls memcpy/memset, and the
 # 32-bit division in the score wrap needs libgcc's helper. Nothing here pulls

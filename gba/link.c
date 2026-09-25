@@ -106,17 +106,26 @@ static inline void tx(uint16_t word) {
     REG_SIOMLT_SEND = word;
 }
 
+/* THROUGH NORMAL MODE AND BACK: a real change of mode for the serial
+ * hardware — whatever a transfer left half done is dropped — that lets go of
+ * no line. SIOCNT $0008 is normal mode on an EXTERNAL clock (SC stays an
+ * input) with SO held high while idle (bit 3), which is where multiplayer
+ * mode keeps it too; SI and SD are inputs in every mode. General purpose,
+ * which gba-link-connection uses for this, releases the pins instead. */
+#define SIO_NORMAL_SO_HIGH 0x0008
+
 /* THE PORT, STARTED OVER — gently, and not often. This used to take RCNT to
  * general purpose and back, as gba-link-connection's reset does. In general
  * purpose the port lets go of its lines, and the other console, listening on
  * them, took the flutter for transfers: empty ones, which made IT restart,
  * which fluttered the lines back. Two real SPs ended up doing nothing else.
- * Rewriting SIOCNT in place restarts this console's side without touching
- * the pins, and LINK_RESET_COOLDOWN keeps it rare. */
+ * Through normal mode instead (SIO_NORMAL_SO_HIGH), and LINK_RESET_COOLDOWN
+ * keeps it rare. */
 IWRAM_CODE static void sio_reset(void);
 static void sio_reset(void) {
     if (g_reset_cool) return;
     g_reset_cool = LINK_RESET_COOLDOWN;
+    REG_SIOCNT = SIO_NORMAL_SO_HIGH;
     REG_SIOCNT = SIO_MODE_MULTI | SIO_BAUD | SIO_IRQ;
     REG_SIOMLT_SEND = g_tx_word;
     g_resets++;
@@ -210,6 +219,13 @@ void link_init(void) {
      * in multiplayer mode (link_shutdown), and a write here would be a touch
      * on the pins for nothing. */
     if (REG_RCNT & 0xC000) REG_RCNT = 0x0000;
+    /* ...and every session starts from a real change of mode, as a restart
+     * does: after the first one the port is still in multiplayer mode, with
+     * whatever the last session, or the other console's transfers since,
+     * left in it. On two SPs the cable failed only when the master reached
+     * the lobby first — its transfers running while the other console came
+     * in — and never the other way round. */
+    REG_SIOCNT = SIO_NORMAL_SO_HIGH;
     REG_SIOCNT = SIO_MODE_MULTI | SIO_BAUD;
     tx(0);
     g_good = g_errs = g_absent = g_resets = 0;

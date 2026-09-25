@@ -631,6 +631,21 @@ static void draw_link_debug(int ty) {
 #undef HEX4
 }
 
+/* Which ROM this is — see BUILD_ID in the Makefile — in capitals, the only
+ * letters the font has. */
+static void draw_build_id(int ty) {
+#ifndef BUILD_ID
+#define BUILD_ID "DEV"
+#endif
+    char row[24] = "BUILD ";
+    unsigned n = 6;
+    for (const char *p = BUILD_ID; *p && n < sizeof(row) - 1; p++)
+        if (*p != '+')                       /* no glyph; a local build only */
+            row[n++] = (*p >= 'a' && *p <= 'z') ? (char)(*p - 32) : *p;
+    row[n] = 0;
+    draw_text_centred(ty, row, BANK_NOTE);
+}
+
 /* THE LOBBY SAYS WHERE IT IS, not the cable: a transfer answered by a
  * console that is on its menus is still a transfer, and "connected" by that
  * measure put YOU ARE PLAYER 2 on a master whose partner had left. */
@@ -643,6 +658,7 @@ void draw_link_wait(const TengenLobby *lobby, int elapsed) {
         oam_hide_all();
         draw_text_centred(10, "WAITING FOR PLAYER 2", menu_bank());
         draw_text_centred(12, "B TO GO BACK", menu_bank());
+        draw_build_id(13);
         draw_link_debug(14);
         return;
     }
