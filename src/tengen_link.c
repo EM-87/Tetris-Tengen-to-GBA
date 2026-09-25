@@ -139,10 +139,12 @@ void tengen_lobby_release(TengenLobby *lobby, uint16_t seed,
 uint16_t tengen_lobby_word(const TengenLobby *lobby, bool master) {
     if (!master)
         return tagged((TengenLobbyTag)lobby->echo,
-                       lobby->echo == TENGEN_LOBBY_SKIN ? lobby->echo_payload : 0);
+                       lobby->echo == TENGEN_LOBBY_SKIN  ? lobby->echo_payload
+                     : lobby->echo == TENGEN_LOBBY_HELLO ? (uint16_t)lobby->mode_coop
+                     : 0);
     switch ((TengenLobbyTag)lobby->stage) {
         case TENGEN_LOBBY_HELLO:
-            return tagged(TENGEN_LOBBY_HELLO, 0);
+            return tagged(TENGEN_LOBBY_HELLO, (uint16_t)lobby->mode_coop);
         case TENGEN_LOBBY_SEED_HI:
             return tagged(TENGEN_LOBBY_SEED_HI, (uint16_t)(lobby->seed >> 8));
         case TENGEN_LOBBY_SEED_LO:
@@ -170,6 +172,10 @@ uint16_t tengen_lobby_word(const TengenLobby *lobby, bool master) {
         default:
             return tagged(TENGEN_LOBBY_GO, 0);
     }
+}
+
+void tengen_lobby_mode(TengenLobby *lobby, bool coop) {
+    lobby->mode_coop = coop;
 }
 
 /* THIS CONSOLE TURNED OUT TO BE THE OTHER ONE. Its role comes off the cable
@@ -244,6 +250,14 @@ void tengen_lobby_apply(TengenLobby *lobby, bool master, bool got,
             lobby->ready = true;
             return;
         }
+        /* An echo of HELLO from a console that came for the other mode is
+         * not an answer (tengen_lobby_mode). */
+        if (echo == TENGEN_LOBBY_HELLO &&
+            (bool)(slave_word & 1u) != lobby->mode_coop) {
+            lobby_quiet_turn(lobby, master);
+            if (lobby->stage != TENGEN_LOBBY_HELLO) lobby->stage = TENGEN_LOBBY_HELLO;
+            return;
+        }
         if (echo == (TengenLobbyTag)lobby->stage) {
             lobby->idle = 0;
             lobby->linked = true;
@@ -295,6 +309,14 @@ void tengen_lobby_apply(TengenLobby *lobby, bool master, bool got,
     }
     TengenLobbyTag tag = tag_of(master_word);
     uint16_t payload = master_word & TENGEN_LOBBY_PAYLOAD_MASK;
+    /* A master that came for the other mode is not a master to follow. */
+    if (tag == TENGEN_LOBBY_HELLO && (bool)(payload & 1u) != lobby->mode_coop) {
+        lobby_quiet_turn(lobby, false);
+        lobby->stage = TENGEN_LOBBY_NONE;
+        lobby->echo = TENGEN_LOBBY_NONE;
+        lobby->saw_go = false;
+        return;
+    }
     bool in_order =
         tag == TENGEN_LOBBY_HELLO ||
         (lobby->linked && lobby->stage != TENGEN_LOBBY_NONE &&

@@ -103,7 +103,7 @@ minus those).
 | --- | --- | --- |
 | `make test` | no | always — the rules, in milliseconds |
 | `make gba` | headers | to build `build/tengen.gba` |
-| `make gba-check` | headers | before calling any change done: 57 checks on the running ROM in mGBA, fifteen of them on two consoles with a cable |
+| `make gba-check` | headers | before calling any change done: 58 checks on the running ROM in mGBA, sixteen of them on two consoles with a cable |
 | `make trace ROM=... [MODE=coop\|versus\|with\|demo]` | yes | after touching `tengen_step` or `tengen_ai.c`: the port against the cartridge, iteration by iteration. The 1P and coop scripts never complete a row; `MODE="with --pad1"` plays player 1 with the port's computer and clears plenty; add `--handicap N` to any mode |
 | `make tune-check ROM=...` | yes | after touching audio: the four tunes against the cartridge, note by note |
 | `make dance-check ROM=...` | yes | after touching the dancers: their choreography against the cartridge's driver |
@@ -205,6 +205,11 @@ story behind each; the item number is in brackets.
     handshake only in order from HELLO and answers anything else with NONE,
     which sends the master back to HELLO (`churn_check`, `late_check`, and
     the host tests).
+  - The lobby is per mode: HELLO carries the mode (bit 0, 1 = COOPERATIVE)
+    both ways, and a HELLO for the other mode is not an answer, on either
+    side. A console on 2 PLAYER and one on COOPERATIVE both wait; the
+    master's choice no longer drags the slave into its mode (`mode_check`,
+    `test_two_consoles_that_chose_different_modes_never_link`).
   - A match whose cable goes quiet for LINK_LOST_FRAMES waits with LINK
     ISSUES in the rival's cell — tune silenced (MUSIC_SILENCE, not SUSPEND,
     so the chime a frame later is heard) — and picks up where it was. Quiet

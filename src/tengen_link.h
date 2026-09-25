@@ -182,12 +182,25 @@ typedef struct {
     int8_t skin_offer;   /* master: which of its own it is offering */
     int8_t skin;         /* the agreed skin, as this console's own index */
     uint8_t echo_payload;   /* slave: what its SKIN echo says */
+    /* WHICH GAME THIS CONSOLE CAME TO THE CABLE FOR: 2 PLAYER (false) or
+     * COOPERATIVE (true). It rides in HELLO both ways, and two consoles that
+     * chose differently never link; see tengen_lobby_mode. */
+    bool mode_coop;
 } TengenLobby;
 
 /* Starts a lobby. The master's seed/level/music are the ones that count; on
  * the slave they are overwritten by what arrives. */
 void tengen_lobby_start(TengenLobby *lobby, uint16_t seed, uint8_t start_level,
                          uint8_t music);
+
+/* THE MODE THIS CONSOLE CHOSE ON GAME SELECT. The lobby was one for both
+ * linked modes, and the master's choice won: a player who had picked 2
+ * PLAYER was taken into a COOPERATIVE game because the other had. Now each
+ * says its mode in HELLO (bit 0 of the payload, master and echo alike), and
+ * a HELLO or an echo of the other mode is not an answer: the two consoles
+ * wait, as if the other were not there, until one of them picks the same.
+ * Call after tengen_lobby_start_held; tengen_lobby_forget keeps it. */
+void tengen_lobby_mode(TengenLobby *lobby, bool coop);
 
 /* Starts the conversation again in the given role, keeping the seed, the
  * settings and the skins: for a console that has just learnt from the cable

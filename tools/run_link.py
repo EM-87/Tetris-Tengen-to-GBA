@@ -2064,6 +2064,63 @@ def race_check(rom):
         return 1
     print("OK: la consola esclava no se cree maestra mientras el maestro "
           "transfiere.")
+    return mode_check(rom)
+
+
+def mode_check(rom):
+    """2 PLAYER ON ONE CONSOLE, COOPERATIVE ON THE OTHER: NO MATCH.
+
+    The lobby was one for both linked modes and the master's choice won, so
+    a player who had picked 2 PLAYER was taken into a coop game. Each
+    console now says its mode in HELLO (tengen_lobby_mode) and a partner of
+    the other mode is no partner. Here the master picks 2 PLAYER and the
+    slave COOPERATIVE: after two seconds both are still waiting and neither
+    is on LEVEL SETTINGS. The slave goes back and picks 2 PLAYER: they link,
+    and the match is a race, not a shared board.
+    """
+    sym = symbol(rom, "g_session")[0]
+    if sym is None:
+        print("SALTADO: el ELF no exporta g_session")
+        return 0
+    import run_rom
+    off = run_rom.game_offsets(rom)
+    failures = []
+    cores, cable, both, tap = _pair(rom, slow=True)
+    both(8)
+    tap("START")
+    tap("DOWN")                                  # both on 2 PLAYER...
+    tap("DOWN", who=1)                           # ...the slave on COOPERATIVE
+    tap("START")
+    both(120)
+    where = [_screen_of(c) for c in cores]
+    if where != ["cable", "cable"]:
+        failures.append(f"con modos distintos no deberian enlazarse: maestro "
+                        f"en {where[0]}, esclavo en {where[1]}")
+    tap("B", who=1)                              # back to GAME SELECT
+    tap("UP", who=1)                             # COOPERATIVE -> 2 PLAYER
+    tap("START", who=1)
+    both(90)
+    if _screen_of(cores[0]) != "ajustes":
+        failures.append(f"con el mismo modo el maestro no llega a LEVEL "
+                        f"SETTINGS (esta en {_screen_of(cores[0])})")
+    else:
+        tap("START", who=0)
+        both(90)
+        coop = [c.memory.u8[sym[0] + off["coop"]] for c in cores] \
+            if "coop" in off else [0, 0]
+        if not _same_match(rom, cores):
+            failures.append("con el mismo modo no juegan la misma partida")
+        elif coop != [0, 0]:
+            failures.append(f"eligieron 2 PLAYER y la partida es cooperativa "
+                            f"({coop})")
+        else:
+            print("  2 PLAYER contra COOPERATIVE: las dos esperan; con el "
+                  "mismo modo, juegan una carrera")
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: solo se enlazan dos consolas que eligieron el mismo modo.")
     return 0
 
 

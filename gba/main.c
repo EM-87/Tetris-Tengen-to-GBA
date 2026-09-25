@@ -313,6 +313,9 @@ int main(void) {
                     uint16_t prints[TENGEN_SKIN_MAX];
                     int count = skin_prints(prints, TENGEN_SKIN_MAX);
                     tengen_lobby_skins(&lobby, prints, count, front_skin());
+                    /* ...and which of the two linked games this console came
+                     * for: a partner who chose the other is not one. */
+                    tengen_lobby_mode(&lobby, game_mode == GAME_COOP);
                     screen = SCREEN_LINK_WAIT;
                 } else {
                     screen = SCREEN_LEVEL_SELECT;
