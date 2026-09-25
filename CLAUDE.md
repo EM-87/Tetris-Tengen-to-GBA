@@ -162,8 +162,8 @@ story behind each; the item number is in brackets.
     bit are counted, never acted on: judging by them threw away every
     transfer on two SPs ("G 0 B 999 R 999") while SIOCNT at leisure showed
     neither flag. SD still down when the interrupt reads it is the INFERRED
-    cause, not a measured one (`jitter_check`, `Cable.sd_lags`); the
-    diagnostic line's IRQ word is there to settle it.
+    cause, not a measured one (`jitter_check`, `Cable.sd_lags`);
+    `link_debug` still keeps the IRQ's SIOCNT to settle it.
   - Thirty transfers in a row with a slot empty restart the port
     (`sio_reset`, `mute_check`), at most once every two seconds, and
     WITHOUT going through general purpose: a port in general purpose lets go of its lines and the other
@@ -216,10 +216,11 @@ story behind each; the item number is in brackets.
     for LINK_GIVEUP_FRAMES, or desynced, it is over: the CABLE LOST window
     in the middle of the screen, and START to the title without the records
     swap or the high scores (`link_wait`, `link_give_up`, `lost_check`).
-  The LINK CABLE screen prints the BUILD (the commit, `BUILD_ID` in the
-  Makefile — a hardware report is only as good as knowing which ROM), SIOCNT
-  now and at the last interrupt, good/error/absent/reset counts and the last
-  two words while it waits.
+  While the cable was being made to work, the LINK CABLE screen printed the
+  build and `link_debug`'s account (SIOCNT now and at the last interrupt,
+  good/error/absent/reset counts, the last two words). It prints neither
+  now; `link_debug` is still there to put back on the screen if a console
+  ever needs reading again, and the ROM file's name carries the commit.
 - **Coop's two falling pieces are solid to each other**, and the settled
   field cannot see it: `checkCoopCollision` runs on shifts, rotations and
   gravity. [22]
@@ -248,7 +249,8 @@ story behind each; the item number is in brackets.
   a harness fixture must force what it needs (`--coopai` clears
   `g_ai_last_piece`) rather than rely on what was dealt.
 - **What is on the screen is `field_view`'s board.** A chord pause in a race
-  shows the other board, and its NEXT, colours and panels go with it.
+  shows the other board, and its NEXT, colours and panels go with it — but
+  not over the cable, where the other board is on the other console.
 - **A game is written to the table as it ENDS** (L81DD at the top-out), so an
   A+B restart keeps it. Each build has its own table; a linked match uses the
   release's. [25]
@@ -298,7 +300,7 @@ cartridge's orange to dark grey to say so; the title's L+R cycling the prototype
 credits rotating every four seconds; the cossacks staged on the panels'
 ledges where the cartridge uses a middle strip the port does not have; a
 second cossack for the rival in HUD VERSUS; a paused race under the chord
-showing the rival's board, with their NEXT, colours and numbers; the
+showing the rival's board (not over the cable), with their NEXT, colours and numbers; the
 computer reading its coop partner under the chord; the pause menu over the
 cable, there if the MASTER found the chord and driven by both players'
 presses through lockstep (`link_match_begin`); a linked match that waits

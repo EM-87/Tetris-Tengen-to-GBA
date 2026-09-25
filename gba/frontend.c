@@ -586,69 +586,6 @@ static void draw_guest_dancer(int elapsed) {
     for (int i = DANCER_SPRITES; i < 128; i++) MEM_OAM[i * 4] = OBJ_ATTR0_HIDDEN;
 }
 
-/* THE PORT'S OWN ACCOUNT, one line under the message, for as long as the
- * cable is looking: SIOCNT in hex, then transfers that came back Good, Bad
- * ones and port Resets (each capped at 999 to fit the line). The emulated cable and a real one disagreed once
- * already, and this is what a person holding two consoles can read out. */
-static unsigned append_number(char *row, unsigned n, unsigned value);
-
-static void draw_link_debug(int ty) {
-    static const char kHex[] = "0123456789ABCDEF";
-    uint16_t d[LINK_DEBUG_WORDS];
-    link_debug(d);
-    char row[32];
-    unsigned n;
-#define HEX4(v) for (int sh = 12; sh >= 0; sh -= 4) row[n++] = kHex[((v) >> sh) & 0xF]
-    /* SIOCNT now, and as the last interrupt found it. */
-    n = 0;
-    row[n++] = 'S'; row[n++] = 'I'; row[n++] = 'O'; row[n++] = ' ';
-    HEX4(d[0]);
-    row[n++] = ' '; row[n++] = 'I'; row[n++] = 'R'; row[n++] = 'Q'; row[n++] = ' ';
-    HEX4(d[1]);
-    row[n] = 0;
-    draw_text_centred(ty, row, menu_bank());
-    /* Good transfers, Error bits seen, transfers with a slot Absent, port
-     * Resets. */
-    static const char kTag[4] = { 'G', 'E', 'A', 'R' };
-    n = 0;
-    for (int i = 0; i < 4; i++) {
-        if (i) row[n++] = ' ';
-        row[n++] = kTag[i];
-        row[n++] = ' ';
-        n = append_number(row, n, d[2 + i] > 999 ? 999 : d[2 + i]);
-    }
-    row[n] = 0;
-    draw_text_centred(ty + 1, row, menu_bank());
-    /* ...and what the last transfer carried: the master's slot and the
-     * slave's. FFFF is a console the transfer did not hear. */
-    n = 0;
-    row[n++] = 'M'; row[n++] = ' ';
-    HEX4(d[6]);
-    row[n++] = ' '; row[n++] = 'S'; row[n++] = ' ';
-    HEX4(d[7]);
-    row[n] = 0;
-    draw_text_centred(ty + 2, row, menu_bank());
-#undef HEX4
-}
-
-/* Which ROM this is — see BUILD_ID in the Makefile — in capitals, the only
- * letters the font has. */
-static void draw_build_id(int ty) {
-#ifndef BUILD_ID
-#define BUILD_ID "DEV"
-#endif
-    char row[24] = "BUILD ";
-    unsigned n = 6;
-    for (const char *p = BUILD_ID; *p && n < sizeof(row) - 1; p++)
-        if (*p != '+')                       /* no glyph; a local build only */
-            row[n++] = (*p >= 'a' && *p <= 'z') ? (char)(*p - 32) : *p;
-    /* ...and which end of the cable this console believes it is on. */
-    row[n++] = ' ';
-    row[n++] = link_is_master() ? 'M' : 'S';
-    row[n] = 0;
-    draw_text_centred(ty, row, BANK_NOTE);
-}
-
 /* THE LOBBY SAYS WHERE IT IS, not the cable: a transfer answered by a
  * console that is on its menus is still a transfer, and "connected" by that
  * measure put YOU ARE PLAYER 2 on a master whose partner had left. */
@@ -661,8 +598,6 @@ void draw_link_wait(const TengenLobby *lobby, int elapsed) {
         oam_hide_all();
         draw_text_centred(10, "WAITING FOR PLAYER 2", menu_bank());
         draw_text_centred(12, "B TO GO BACK", menu_bank());
-        draw_build_id(13);
-        draw_link_debug(14);
         return;
     }
     if (link_is_master()) {

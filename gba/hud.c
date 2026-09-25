@@ -380,10 +380,11 @@ int hud_clearing_slot(void) {
  *
  * Only in a race, because there is no other board in 1P and coop's is the
  * same board; and only behind the chord, because it is the port's idea and
- * not the cartridge's. Over a cable both consoles have the same door and a
- * pause stops both boards, so neither player gets it for nothing. */
+ * not the cartridge's. NOT OVER A CABLE: there each board already has a
+ * screen of its own, the rival's is on the console beside you, and swapping
+ * it in only hid your own stack from you while the pause was up. */
 int field_view(void) {
-    if (g_session.game.paused && g_pause_unlocked &&
+    if (g_session.game.paused && g_pause_unlocked && !g_linked &&
         g_session.game.two_player && !g_session.game.coop)
         return g_view ^ 1;
     return g_view;
