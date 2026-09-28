@@ -30,6 +30,24 @@ _start:
     .byte   0x00        @ 0x0BD complement check (gbafix computes this)
     .space  2           @ 0x0BE reserved
 
+.ifdef MULTIBOOT
+    @ THE SINGLE-PAK IMAGE'S OWN ENTRIES (GBATEK, "Multiboot Header"): the
+    @ BIOS of the console that received it over the cable jumps to 0x0C0,
+    @ and writes the boot mode and this console's slave number just after.
+    @ 0x0E0 is the JOY BUS entry, which nothing here uses but which points
+    @ at the same start so that nothing lands in the middle of the header.
+    b       rom_header_end  @ 0x0C0 RAM entry point
+    .byte   0x00            @ 0x0C4 boot mode (the BIOS writes it)
+    .byte   0x00            @ 0x0C5 slave number (the BIOS writes it)
+    .space  26              @ 0x0C6 unused
+    b       rom_header_end  @ 0x0E0 JOY BUS entry point
+    @ One word of nothing before the code, so the branch at 0x0C0 is not 28
+    @ bytes long: mGBA takes an image whose 0x0C0 branch is exactly that for
+    @ one of an old toolchain's that only looks like multiboot, and would
+    @ run this one as a cartridge. The BIOS does not mind either way.
+    .word   0
+.endif
+
 rom_header_end:
     @ IRQ stack. Nothing here enables interrupts, but leaving the IRQ stack
     @ pointer unset is the kind of thing that only bites once something does.

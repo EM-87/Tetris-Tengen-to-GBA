@@ -176,6 +176,11 @@ uint16_t tengen_lobby_word(const TengenLobby *lobby, bool master) {
 
 void tengen_lobby_mode(TengenLobby *lobby, bool coop) {
     lobby->mode_coop = coop;
+    lobby->mode_any = false;
+}
+
+void tengen_lobby_mode_any(TengenLobby *lobby) {
+    lobby->mode_any = true;
 }
 
 /* THIS CONSOLE TURNED OUT TO BE THE OTHER ONE. Its role comes off the cable
@@ -309,7 +314,11 @@ void tengen_lobby_apply(TengenLobby *lobby, bool master, bool got,
     }
     TengenLobbyTag tag = tag_of(master_word);
     uint16_t payload = master_word & TENGEN_LOBBY_PAYLOAD_MASK;
-    /* A master that came for the other mode is not a master to follow. */
+    /* A slave that follows takes the master's mode as its own (and says so
+     * in its echo); one that chose does not follow a master that chose the
+     * other. */
+    if (tag == TENGEN_LOBBY_HELLO && lobby->mode_any)
+        lobby->mode_coop = (payload & 1u) != 0;
     if (tag == TENGEN_LOBBY_HELLO && (bool)(payload & 1u) != lobby->mode_coop) {
         lobby_quiet_turn(lobby, false);
         lobby->stage = TENGEN_LOBBY_NONE;

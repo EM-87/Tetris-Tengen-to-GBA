@@ -106,6 +106,14 @@ GBA_SRC  := gba/main.c gba/video.c gba/hud.c gba/frontend.c gba/match.c \
             gba/nes_audio.c gba/nes6502.c gba/handtunes.c gba/link.c $(CORE_SRC)
 GBA_ELF  := $(BUILD)/tengen.elf
 GBA_ROM  := $(BUILD)/tengen.gba
+# THE SINGLE-PAK SLAVE: the same program, linked to run from external WRAM
+# where the BIOS of a console with no cartridge puts what the cable sends it
+# (gba/mb.ld), with the multiboot entries in its header (crt0.s under
+# MULTIBOOT) and no save memory (TENGEN_MULTIBOOT). It is built first
+# because the cartridge's ROM carries it (gba/mb_image.s).
+GBA_MB_ELF := $(BUILD)/tengen_mb.elf
+GBA_MB     := $(BUILD)/tengen_mb.mb
+GBAFIX     := $(BUILD)/gbafix
 
 gba: $(GBA_ROM)
 
@@ -113,7 +121,7 @@ gba: $(GBA_ROM)
 # directly: that way regenerating assets rebuilds the ROM, while a missing one
 # still reaches the helpful message below instead of "no rule to make target".
 $(GBA_ELF): $(GBA_SRC) $(CORE_HDR) gba/port.h gba/gba_hw.h gba/link.h \
-             gba/crt0.s gba/gba.ld \
+             gba/crt0.s gba/gba.ld gba/mb_image.s $(GBA_MB) \
              $(wildcard $(GBA_ASSETS)) | $(BUILD)
 	@command -v $(ARMCC) >/dev/null 2>&1 || { \
 	    echo "error: $(ARMCC) not found."; \
@@ -126,9 +134,21 @@ $(GBA_ELF): $(GBA_SRC) $(CORE_HDR) gba/port.h gba/gba_hw.h gba/link.h \
 	    echo "not committed here. Generate them once with:"; \
 	    echo "    make assets ROM=/path/to/tetris.nes"; \
 	    exit 1; }; done
-	$(ARMCC) $(ARMFLAGS) $(ARMLDFLAGS) gba/crt0.s $(GBA_SRC) -o $@
+	$(ARMCC) $(ARMFLAGS) $(ARMLDFLAGS) gba/crt0.s gba/mb_image.s $(GBA_SRC) -o $@
 
-GBAFIX := $(BUILD)/gbafix
+$(GBA_MB_ELF): $(GBA_SRC) $(CORE_HDR) gba/port.h gba/gba_hw.h gba/link.h \
+                gba/crt0.s gba/mb.ld $(wildcard $(GBA_ASSETS)) | $(BUILD)
+	@for h in $(GBA_ASSETS); do test -f $$h || { \
+	    echo "error: $$h is missing (make assets ROM=...)"; exit 1; }; done
+	$(ARMCC) $(ARMFLAGS) -DTENGEN_MULTIBOOT -Wa,--defsym,MULTIBOOT=1 \
+	    -T gba/mb.ld -nostartfiles -Wl,--gc-sections \
+	    gba/crt0.s $(GBA_SRC) -o $@
+
+$(GBA_MB): $(GBA_MB_ELF) $(GBAFIX)
+	$(ARMOBJCOPY) -O binary $< $@
+	truncate -s %16 $@
+	$(GBAFIX) $@ -tTENGENTETRIS -cCTTE -m00
+	@echo "Built $@ ($$(wc -c < $@) bytes) - the Single-Pak slave"
 
 $(GBAFIX): tools/gbafix/gbafix.c | $(BUILD)
 	$(CC) -O2 -w -o $@ $<
@@ -221,6 +241,7 @@ gba-check: $(GBA_ROM)
 	python3 tools/run_rom.py $(GBA_ROM) --leave-title
 	python3 tools/run_rom.py $(GBA_ROM) --braid
 	python3 tools/run_rom.py $(GBA_ROM) --handicap
+	python3 tools/run_rom.py $(GBA_ROM) --system
 	python3 tools/run_rom.py $(GBA_ROM) --panel
 	python3 tools/run_rom.py $(GBA_ROM) --next-palette
 	python3 tools/run_rom.py $(GBA_ROM) --menu

@@ -1405,6 +1405,27 @@ static void test_two_consoles_that_chose_different_modes_never_link(void) {
     CHECK(master.ready && slave.ready && slave.coop);
 }
 
+static void test_a_single_pak_slave_takes_the_masters_mode(void) {
+    /* The console booted over the cable chose nothing: it follows whichever
+     * mode the master's HELLO carries, and plays that game. */
+    for (int coop = 0; coop < 2; coop++) {
+        TengenLobby master, slave;
+        tengen_lobby_start_held(&master, 0x1234);
+        tengen_lobby_mode(&master, coop != 0);
+        tengen_lobby_start_held(&slave, 0);
+        tengen_lobby_mode_any(&slave);
+        for (int i = 0; i < 8; i++) lobby_transfer(&master, &slave, true);
+        CHECK(master.linked && slave.linked);
+        CHECK(slave.mode_coop == (coop != 0));
+        const uint8_t handicap[2] = { 0, 0 };
+        tengen_lobby_release(&master, 0xC0DE, 2, 1, handicap, coop != 0, false);
+        for (int i = 0; i < 100 && !master.ready; i++)
+            lobby_transfer(&master, &slave, true);
+        CHECK(master.ready && slave.ready);
+        CHECK(slave.coop == (coop != 0) && slave.seed == 0xC0DE);
+    }
+}
+
 static void test_a_slave_that_saw_one_go_does_not_carry_it_over(void) {
     /* A GO seen in a conversation that never finished (the master went
      * away between its two GOs) is forgotten when the next one opens with
@@ -3548,6 +3569,7 @@ int main(void) {
     test_a_slave_that_arrives_mid_handshake_hears_it_all();
     test_a_slave_that_saw_one_go_does_not_carry_it_over();
     test_two_consoles_that_chose_different_modes_never_link();
+    test_a_single_pak_slave_takes_the_masters_mode();
     test_the_lobby_ends_even_when_one_side_leaves_first();
     test_a_console_that_took_itself_for_the_master_starts_again();
     test_no_lobby_word_can_look_like_an_absent_console();

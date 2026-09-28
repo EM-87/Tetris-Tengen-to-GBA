@@ -186,6 +186,10 @@ typedef struct {
      * COOPERATIVE (true). It rides in HELLO both ways, and two consoles that
      * chose differently never link; see tengen_lobby_mode. */
     bool mode_coop;
+    /* ...unless this console came for EITHER: a Single-Pak slave, which has
+     * no GAME SELECT of its own to have chosen on. It takes the mode of the
+     * master's HELLO as its own; see tengen_lobby_mode_any. */
+    bool mode_any;
 } TengenLobby;
 
 /* Starts a lobby. The master's seed/level/music are the ones that count; on
@@ -201,6 +205,13 @@ void tengen_lobby_start(TengenLobby *lobby, uint16_t seed, uint8_t start_level,
  * wait, as if the other were not there, until one of them picks the same.
  * Call after tengen_lobby_start_held; tengen_lobby_forget keeps it. */
 void tengen_lobby_mode(TengenLobby *lobby, bool coop);
+
+/* A SLAVE THAT FOLLOWS: the console booted over the cable by Single-Pak,
+ * which comes to the lobby before anybody has asked it which game. It
+ * answers a HELLO of either mode with that mode, so the master's choice is
+ * the game. Only ever the slave's; a master with it would have nothing to
+ * say in its own HELLO. Call after tengen_lobby_start_held. */
+void tengen_lobby_mode_any(TengenLobby *lobby);
 
 /* Starts the conversation again in the given role, keeping the seed, the
  * settings and the skins: for a console that has just learnt from the cable

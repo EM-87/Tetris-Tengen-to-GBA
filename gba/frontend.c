@@ -600,6 +600,12 @@ void draw_link_wait(const TengenLobby *lobby, int elapsed) {
          * answers, and half the time the one reading this is player 2. */
         draw_text_centred(10, "WAITING FOR OTHER PLAYER", menu_bank());
         draw_text_centred(12, "B TO GO BACK", menu_bank());
+#ifndef TENGEN_MULTIBOOT
+        /* SINGLE-PAK: the other console needs no cartridge. Only the
+         * cartridge's build says so; the one that came over the cable has
+         * nothing to send. */
+        draw_text_centred(14, "SELECT SENDS THE GAME", BANK_NOTE);
+#endif
         return;
     }
     if (link_is_master()) {
@@ -730,3 +736,23 @@ void draw_level_settings(int chosen, uint8_t start_level, uint8_t music,
 
     draw_text_centred(MENU_FOOT_TY, "PRESS START TO PLAY", BANK_NOTE);
 }
+
+#ifndef TENGEN_MULTIBOOT
+/* SINGLE-PAK, WHILE IT SENDS: what to do at the other end, and how to stop.
+ * `wrong_end` is a cable plugged in the other way round: only the console
+ * on the master's end can send, and one with no cartridge can only be on
+ * the other. */
+void draw_link_sending(bool wrong_end) {
+    draw_menu_frame();
+    draw_text_centred(8, "SINGLE-PAK", menu_bank());
+    clear_both(MENU_IN_TX, 10, MENU_IN_W, 7);
+    if (wrong_end) {
+        draw_text_centred(10, "SWAP THE CABLE ENDS", menu_bank());
+    } else {
+        draw_text_centred(10, "SENDING THE GAME", menu_bank());
+        draw_text_centred(12, "SWITCH THE OTHER GBA ON", BANK_NOTE);
+        draw_text_centred(13, "WITH NO CARTRIDGE IN", BANK_NOTE);
+    }
+    draw_text_centred(15, "B TO STOP", menu_bank());
+}
+#endif

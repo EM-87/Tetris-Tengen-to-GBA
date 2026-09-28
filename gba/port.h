@@ -1735,6 +1735,9 @@ extern uint8_t g_view;
 void vsync(void);
 uint8_t read_buttons(void);
 bool shoulder_chord(void);
+/* L+R+SELECT: see system_sleep (video.c). */
+bool sleep_keys_held(void);
+void system_sleep(void);
 bool pressed_shoulder(int which);
 void upload_tiles(void);
 void upload_palette_set(int base, const uint8_t *set, vu16 *memory);
@@ -1892,6 +1895,10 @@ void restart_title_sprites(void);
 void draw_title_sprites(void);
 void draw_game_select(uint8_t choice);
 void draw_link_wait(const TengenLobby *lobby, int elapsed);
+void draw_link_sending(bool wrong_end);   /* Single-Pak; see frontend.c */
+/* The Single-Pak slave's image, inside the cartridge (gba/mb_image.s). */
+extern const uint8_t kSlaveImage[];
+extern const uint8_t kSlaveImageEnd[];
 void draw_level_settings(int chosen, uint8_t start_level, uint8_t music,
                                  const uint8_t handicap[2], bool two_player,
                                  int handicap_who);

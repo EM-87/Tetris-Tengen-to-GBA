@@ -519,3 +519,149 @@ void link_name_step(TengenNameSwap *swap) {
     }
     if (!swap->complete && !swap->failed) link_pump();
 }
+
+/* ----------------------------------------------------------------------- *
+ * Single-Pak: sending the game to a console with no cartridge
+ *
+ * A GBA switched on with no cartridge in (or with START and SELECT held)
+ * sits in its BIOS waiting for a program on the cable. This is the other
+ * end of that: the handshake the BIOS expects, a halfword at a time in
+ * multiplayer mode, and then the BIOS's own MultiBoot (SWI $25) sends the
+ * rest and starts it. The steps and every word in them are GBATEK's
+ * ("BIOS Multi Boot (Single Game Pak)") as gba-link-connection's
+ * LinkCableMultiboot runs them on hardware: that library's synchronous
+ * sender, for one slave, in C.
+ *
+ * Only the cartridge's build sends; the image it sends is that build's
+ * other half (see mb.ld and kSlaveImage).
+ * ----------------------------------------------------------------------- */
+#ifndef TENGEN_MULTIBOOT
+
+#define SIO_BAUD_115200   0x0003    /* what the BIOS's MultiPlay expects */
+#define MB_CLIENT_BIT     0x02      /* the one slave, in slot 1 */
+#define MB_TRIES          16
+#define MB_PALETTE        0x93      /* the logo's colour and its movement */
+#define MB_SPIN_LIMIT     100000u   /* a transfer is ~150us; this is ~50ms */
+
+/* GBATEK's MultiBootParam, byte for byte: the BIOS reads it by offset. */
+typedef struct {
+    uint32_t reserved1[5];
+    uint8_t handshake_data;         /* $14 */
+    uint8_t padding;
+    uint16_t handshake_timeout;
+    uint8_t probe_count;
+    uint8_t client_data[3];         /* $19 */
+    uint8_t palette_data;           /* $1C */
+    uint8_t response_bit;
+    uint8_t client_bit;             /* $1E */
+    uint8_t reserved2;
+    const uint8_t *boot_srcp;       /* $20: the image after its header */
+    const uint8_t *boot_endp;       /* $24: its end */
+    const uint8_t *masterp;
+    const uint8_t *reserved3[3];
+    uint32_t system_work2[4];
+    uint8_t sendflag;
+    uint8_t probe_target_bit;
+    uint8_t check_wait;
+    uint8_t server_type;
+} MultiBootParam;
+/* ...which C99 cannot assert directly, so an array that would have a
+ * negative size if a field moved. */
+typedef char mb_param_client_data_at_19[
+    (__builtin_offsetof(MultiBootParam, client_data) == 0x19) ? 1 : -1];
+typedef char mb_param_boot_srcp_at_20[
+    (__builtin_offsetof(MultiBootParam, boot_srcp) == 0x20) ? 1 : -1];
+
+/* One halfword each way, waited for: the slave's answer, or LINK_ABSENT
+ * for a transfer that did not happen. A port stuck busy is started over
+ * the gentle way (through normal mode; see sio_reset). */
+static uint16_t mb_transfer(uint16_t word) {
+    REG_SIOMLT_SEND = word;
+    REG_SIOCNT = (uint16_t)(REG_SIOCNT | SIO_START);
+    for (uint32_t spin = 0; REG_SIOCNT & SIO_START; spin++) {
+        if (spin > MB_SPIN_LIMIT) {
+            REG_SIOCNT = SIO_NORMAL_SO_HIGH;
+            REG_SIOCNT = SIO_MODE_MULTI | SIO_BAUD_115200;
+            return LINK_ABSENT;
+        }
+    }
+    uint16_t cnt = REG_SIOCNT;
+    if (!(cnt & SIO_SD) || (cnt & SIO_ERR)) return LINK_ABSENT;
+    return REG_SIOMULTI(1);
+}
+
+static int bios_multiboot(const MultiBootParam *param, uint32_t mode) {
+    register uint32_t r0 __asm__("r0") = (uint32_t)param;
+    register uint32_t r1 __asm__("r1") = mode;
+#if defined(__thumb__)
+    __asm__ volatile ("swi 0x25" : "+r"(r0), "+r"(r1) :: "r2", "r3", "memory");
+#else
+    __asm__ volatile ("swi 0x250000" : "+r"(r0), "+r"(r1) :: "r2", "r3", "memory");
+#endif
+    return (int)r0;
+}
+
+LinkSendResult link_multiboot_send(const uint8_t *image, uint32_t len) {
+    /* The lobby's interrupt-driven cable steps aside: every transfer here
+     * is started and waited for by hand. link_init puts it back. */
+    REG_IME = 0;
+    REG_SIOCNT = (uint16_t)(REG_SIOCNT & ~SIO_IRQ);
+    REG_IE = (uint16_t)(REG_IE & ~IRQ_SERIAL);
+    g_armed = false;
+    g_auto_tx = false;
+    REG_IME = 1;
+    if (REG_RCNT & 0xC000) REG_RCNT = 0x0000;
+    REG_SIOCNT = SIO_NORMAL_SO_HIGH;
+    REG_SIOCNT = SIO_MODE_MULTI | SIO_BAUD_115200;
+
+    /* Only the master starts transfers, and a console with no cartridge
+     * can only ever be the slave: this one has to be on the master's end. */
+    if (REG_SIOCNT & SIO_SI) return LINK_SEND_WRONG_END;
+
+    MultiBootParam p;
+    uint8_t *raw = (uint8_t *)&p;
+    for (unsigned i = 0; i < sizeof(p); i++) raw[i] = 0;
+    p.client_data[0] = p.client_data[1] = p.client_data[2] = 0xFF;
+    p.palette_data = MB_PALETTE;
+    p.boot_srcp = image + 0xC0;
+    p.boot_endp = image + len;
+
+    /* 3. $6200 until the slave answers $7202. */
+    bool found = false;
+    for (int t = 0; t < MB_TRIES && !found; t++)
+        found = mb_transfer(0x6200) == (0x7200 | MB_CLIENT_BIT);
+    if (!found) return LINK_SEND_NOBODY;
+    /* 4. Which slaves there are, $610Y; each answers $720Y. */
+    p.client_bit = MB_CLIENT_BIT;
+    if (mb_transfer(0x6100 | MB_CLIENT_BIT) != (0x7200 | MB_CLIENT_BIT))
+        return LINK_SEND_RETRY;
+    /* 5. The header, a halfword at a time; the slave counts them down. */
+    const uint16_t *half = (const uint16_t *)image;
+    for (uint16_t left = 0xC0 / 2; left > 0; left--)
+        if (mb_transfer(*half++) != (uint16_t)((left << 8) | MB_CLIENT_BIT))
+            return LINK_SEND_RETRY;
+    /* 6. $6200 ($000Y back), then $620Y ($720Y). */
+    if (mb_transfer(0x6200) != MB_CLIENT_BIT) return LINK_SEND_RETRY;
+    if (mb_transfer(0x6200 | MB_CLIENT_BIT) != (0x7200 | MB_CLIENT_BIT))
+        return LINK_SEND_RETRY;
+    /* 7. The palette, $63PP, until the slave answers $73CC. */
+    found = false;
+    for (int t = 0; t < MB_TRIES && !found; t++) {
+        uint16_t v = mb_transfer(0x6300 | MB_PALETTE);
+        if ((v & 0xFF00) == 0x7300) {
+            p.client_data[0] = (uint8_t)v;
+            found = true;
+        }
+    }
+    if (!found) return LINK_SEND_RETRY;
+    /* 8. $11 plus the three slaves' bytes ($FF for the two not there). */
+    p.handshake_data = (uint8_t)(0x11 + p.client_data[0] + p.client_data[1] +
+                                 p.client_data[2]);
+    if ((mb_transfer(0x6400 | p.handshake_data) & 0xFF00) != 0x7300)
+        return LINK_SEND_RETRY;
+    /* 9. The rest is the BIOS's: MultiPlay (1), and 0 back is a slave that
+     * has the whole image and is already running it. */
+    return bios_multiboot(&p, 1) == 0 ? LINK_SEND_DONE : LINK_SEND_RETRY;
+}
+
+#endif /* !TENGEN_MULTIBOOT */

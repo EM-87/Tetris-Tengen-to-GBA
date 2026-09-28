@@ -982,6 +982,13 @@ bool solo_play_frame(uint8_t buttons, uint8_t pressed, bool *quit) {
     /* THE MENU EATS THE PAD WHILE IT IS OPEN, and it has to: the cheat codes
      * are typed on the pad while paused too, so a Down meant for this menu is
      * the first byte of one of them. */
+    /* A PAUSED SOLO MATCH CAN SLEEP (system_sleep). Paused, because a game
+     * that is running would have to be paused first anyway; solo, because
+     * a linked one would leave the other console talking to nobody. */
+    if (g_session.game.paused && sleep_keys_held()) {
+        system_sleep();
+        return !match_over();
+    }
     if (pause_menu_input(pressed, quit)) { buttons = 0; pressed = 0; }
     if (g_session.game.player[0].game_active) {
         uint8_t presses[2] = { pressed, 0 };

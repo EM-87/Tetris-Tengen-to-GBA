@@ -80,7 +80,7 @@ Hay una ROM de GBA que arranca, se juega y corre las reglas reales de Tengen.
   realmente dibuje y se juegue (`make gba-check`), no solo que linkee:
   incluye ver la animación de línea completa sprite por sprite, comprobar
   que deja escrita la palabra correcta, y pausar y teclear los códigos de
-  trucos. Las 58 comprobaciones viven en `tools/romcheck/`, un módulo por
+  trucos. Las 61 comprobaciones viven en `tools/romcheck/`, un módulo por
   familia (partida, audio, menú de pausa, pantallas previas, HUD, la
   máquina, récords) más `harness.py` con lo que comparten.
 - `tools/run_link.py` — arranca **dos** mGBA y les pone un cable link
@@ -131,6 +131,9 @@ Lo que el GBA tiene de más:
 | GAME SELECT o LEVEL SETTINGS | L+R | destapa las canciones ocultas (Korobeiniki, Katiuska, MUSIC MIX), los niveles 18-19 y el menú de pausa |
 | Título | L+R | recorre los títulos de los prototipos (su skin llega al juego) |
 | Carrera, tablero muerto | A+B | se levanta y sigue, como en el cartucho |
+| Partida en solitario, en pausa | L+R+SELECT | reposo: pantalla y sonido apagados, casi sin gastar pila; lo mismo otra vez despierta |
+| En cualquier momento | A+B+START+SELECT | reinicia el juego |
+| Pantalla LINK CABLE | SELECT | Single-Pak: envía el juego a una GBA sin cartucho |
 
 Con el juego en pausa entran los tres códigos originales, un botón por
 frame:
@@ -155,6 +158,14 @@ simulan la misma partida desde la misma semilla y solo se mandan botones, y
 `tools/run_link.py` comprueba que acaben idénticas byte a byte. Si el cable
 se va, las dos lo detectan. Las dos necesitan esta misma versión del ROM
 (con otra más vieja se conectan igual, pero sin skin).
+
+**Single-Pak**: la otra consola no necesita cartucho. En la pantalla LINK
+CABLE, **SELECT** le envía el juego por el cable (la consola con cartucho
+tiene que estar en el extremo maestro; si no, lo dice). La otra se enciende
+sin cartucho y su BIOS lo recibe; arranca directamente en el lobby, juega el
+modo que eligió la del cartucho y no guarda récords. El envío en sí lo hace
+la BIOS, que el emulador no tiene: está comprobado todo hasta esa llamada, y
+el resto (y cuánto tarda) queda por ver en consola; ver `CLAUDE.md`.
 
 ## Compilar
 

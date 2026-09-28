@@ -92,6 +92,26 @@ int main(void) {
     TengenRng seed_source;
     tengen_rng_seed(&seed_source, 0xACE1);
 
+#ifdef TENGEN_MULTIBOOT
+    /* THE SINGLE-PAK SLAVE WAKES UP ON THE CABLE. It came over it, from a
+     * console that is sitting in its own lobby waiting for it, so it goes
+     * straight there and plays whichever of the two linked games that
+     * console chose (tengen_lobby_mode_any). B still leaves for GAME
+     * SELECT: the whole game came across, and it can be played alone. */
+    {
+        link_init();
+        link_lobby_start_held(&lobby, 0);
+        uint16_t prints[TENGEN_SKIN_MAX];
+        int count = skin_prints(prints, TENGEN_SKIN_MAX);
+        tengen_lobby_skins(&lobby, prints, count, -1);
+        tengen_lobby_mode_any(&lobby);
+        game_mode = GAME_2P;
+        screen = SCREEN_LINK_WAIT;
+        oam_hide_all();
+        clear_screen();
+    }
+#endif
+
     for (;;) {
         uint8_t buttons = read_buttons();
         uint8_t pressed = (uint8_t)(buttons & ~held_last);
@@ -596,6 +616,40 @@ int main(void) {
                 continue;
             }
 
+#ifndef TENGEN_MULTIBOOT
+            /* SINGLE-PAK: SELECT, while nobody has answered, sends the game
+             * to a console with no cartridge (link_multiboot_send). It
+             * keeps trying — the other console may not be switched on yet —
+             * until the game is across or B stops it, and then the cable is
+             * this lobby's again, which is where the other console's copy
+             * comes looking for it. */
+            if (!lobby.linked && (pressed & TENGEN_BTN_SELECT)) {
+                screen_blip();
+                bool wrong_end = false;
+                for (int frame = 0;; frame++) {
+                    vsync();
+                    draw_link_sending(wrong_end);
+                    audio_frame();
+                    if (read_buttons() & TENGEN_BTN_B) break;
+                    /* A few frames between tries, as gba-link-connection
+                     * waits: a BIOS that has just been switched on needs
+                     * them to be listening. */
+                    if (frame % 8) continue;
+                    LinkSendResult r = link_multiboot_send(
+                        kSlaveImage, (uint32_t)(kSlaveImageEnd - kSlaveImage));
+                    if (r == LINK_SEND_DONE) break;
+                    wrong_end = r == LINK_SEND_WRONG_END;
+                }
+                held_last = read_buttons();   /* B is not the lobby's */
+                link_init();
+                tengen_lobby_forget(&lobby, link_is_master());
+                screen_blip();
+                vsync();
+                audio_frame();
+                clear_screen();
+                continue;
+            }
+#endif
             if (pressed & TENGEN_BTN_B) {
                 screen = SCREEN_GAME_SELECT;
                 link_shutdown();
@@ -608,6 +662,10 @@ int main(void) {
             }
 
             if (lobby.ready) {
+                /* The game the lobby agreed on, which on a Single-Pak slave
+                 * is the one the master chose (and on any other console the
+                 * one this one chose too). */
+                game_mode = lobby.coop ? GAME_COOP : GAME_2P;
                 /* The cable master is player 1. That is not a convention this
                  * port invented; it is the one fact both consoles can agree
                  * on without asking, because the hardware sets it from which

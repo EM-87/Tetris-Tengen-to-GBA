@@ -314,6 +314,11 @@ class Cable:
         if self.latched is not None:
             m, s = self.latched
             self.latched = None
+        # A CONSOLE WITH NO CARTRIDGE, in its BIOS: its answers are the
+        # handshake's, not whatever the slave core has in its register (see
+        # FakeMultibootBios).
+        if getattr(self, "fake_bios", None) is not None:
+            s = self.fake_bios.answer(m)
         if self.transfers in self.mute_slave_at:
             self.mute_slave_at.discard(self.transfers)
             self.ends[1].mute = True
@@ -1801,12 +1806,13 @@ def glitch_check(rom):
 # ---------------------------------------------------------------------------
 # The evening of the second real test, one check per thing it found.
 # ---------------------------------------------------------------------------
-def _pair(rom, sd_lags=False, slow=False):
-    """Two consoles on a cable, and the helpers every check below uses."""
+def _pair(rom, sd_lags=False, slow=False, slave_rom=None):
+    """Two consoles on a cable, and the helpers every check below uses.
+    `slave_rom` puts a different image on the slave's end (Single-Pak)."""
     mgba.log.silence()
     cores, screens = [], []
-    for _ in range(2):
-        core = mgba.core.load_path(rom)
+    for path in (rom, slave_rom or rom):
+        core = mgba.core.load_path(path)
         screen = mgba.image.Image(SCREEN_W, SCREEN_H)
         core.set_video_buffer(screen)   # must stay alive; see run_rom.load()
         core.reset()
@@ -2223,9 +2229,194 @@ def mode_check(rom):
     if failures:
         return 1
     print("OK: solo se enlazan dos consolas que eligieron el mismo modo.")
+    return singlepak_check(rom)
+
+
+def singlepak_check(rom):
+    """SINGLE-PAK: THE CARTRIDGE AGAINST THE IMAGE IT SENDS.
+
+    The image a console with no cartridge receives (build/tengen_mb.mb, the
+    same program linked for external WRAM) boots straight into the lobby,
+    follows whichever game the cartridge's player chose, and plays it in
+    lockstep with the cartridge. Here the image is loaded as if the BIOS
+    had just received it, for 2 PLAYER and for COOPERATIVE: the master
+    reaches LEVEL SETTINGS, starts, and both consoles hold the same game
+    byte for byte, before and after a few seconds of play. The sending
+    itself is the BIOS's and is not in this emulator; see mb_send_check.
+    """
+    mb = os.path.splitext(rom)[0] + "_mb.mb"
+    if not os.path.exists(mb):
+        print(f"SALTADO: no encuentro {mb}")
+        return 0
+    msym, why = symbol(rom, "g_session")
+    ssym, why2 = symbol(mb, "g_session")
+    if msym is None or ssym is None:
+        print(f"SALTADO: {why or why2}")
+        return 0
+    import run_rom
+    off = run_rom.game_offsets(rom)
+    size = msym[1] - 4
+    failures = []
+    for coop in (False, True):
+        name = "COOPERATIVE" if coop else "2 PLAYER"
+        cores, cable, both, tap = _pair(rom, slow=True, slave_rom=mb)
+        both(40)                    # the sound engine's start takes a while
+        if _screen_of(cores[1]) != "cable":
+            failures.append(f"{name}: la imagen no arranca en el lobby "
+                            f"({_screen_of(cores[1])})")
+            continue
+        tap("START", who=0)
+        tap("DOWN", who=0)
+        if coop:
+            tap("DOWN", who=0)
+        tap("START", who=0)
+        both(90)
+        if _screen_of(cores[0]) != "ajustes":
+            failures.append(f"{name}: el cartucho no llega a LEVEL SETTINGS "
+                            f"({_screen_of(cores[0])})")
+            continue
+        tap("START", who=0)
+        both(90)
+
+        def same():
+            m = read_bytes(cores[0], msym[0], size)
+            s_ = read_bytes(cores[1], ssym[0], size)
+            return m != bytes(size) and m == s_
+        if not same():
+            failures.append(f"{name}: las dos no juegan la misma partida")
+            continue
+        got = cores[1].memory.u8[ssym[0] + off["coop"]] if "coop" in off \
+            else int(coop)
+        if bool(got) != coop:
+            failures.append(f"{name}: la imagen juega otro modo ({got})")
+            continue
+        for k in range(6):
+            both(20, [[KEYS["LEFT" if k % 2 else "RIGHT"]], [KEYS["DOWN"]]])
+            both(20, [[], []])
+        if not same():
+            failures.append(f"{name}: jugando, las dos partidas se separan")
+        else:
+            print(f"  {name}: la imagen sigue al cartucho y juegan la misma "
+                  "partida")
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: la imagen de Single-Pak juega contra el cartucho.")
+    return mb_send_check(rom)
+
+
+class FakeMultibootBios:
+    """THE BIOS OF A CONSOLE SWITCHED ON WITH NO CARTRIDGE, as far as the
+    handshake before SWI $25 goes: each of the cartridge's words answered
+    the way gba-link-connection's LinkCableMultiboot checks for, the words
+    that matter written down. It says nothing for its first few transfers,
+    like a console that is still being switched on."""
+
+    def __init__(self):
+        self.state = "asleep"
+        self.naps = 5
+        self.header = []
+        self.palette = None
+        self.handshake = None
+        self.done = 0          # handshakes that reached the end
+        self.client_data = 0x5A
+
+    def answer(self, m):
+        if self.naps:
+            self.naps -= 1
+            return ABSENT
+        if m == 0x6200 and self.state in ("asleep", "found", "done"):
+            self.state, self.header = "found", []
+            return 0x7202
+        if m == 0x6102 and self.state == "found":
+            self.state = "header"
+            return 0x7202
+        if self.state == "header":
+            left = 0x60 - len(self.header)
+            self.header.append(m)
+            if len(self.header) == 0x60:
+                self.state = "header_done"
+            return (left << 8) | 2
+        if m == 0x6200 and self.state == "header_done":
+            self.state = "again"
+            return 0x0002
+        if m == 0x6202 and self.state == "again":
+            self.state = "palette"
+            return 0x7202
+        if (m & 0xFF00) == 0x6300 and self.state == "palette":
+            self.palette = m & 0xFF
+            self.state = "handshake"
+            return 0x7300 | self.client_data
+        if (m & 0xFF00) == 0x6400 and self.state == "handshake":
+            self.handshake = m & 0xFF
+            self.state = "done"
+            self.done += 1
+            return 0x7300
+        return 0x0000
+
+
+def mb_send_check(rom):
+    """SINGLE-PAK: THE CARTRIDGE'S SIDE OF THE HANDSHAKE, UP TO THE BIOS.
+
+    On the LINK CABLE screen, SELECT sends the game to a console with no
+    cartridge (link_multiboot_send). Everything before the BIOS's own
+    MultiBoot call is the program's, and that is what runs here against a
+    stand-in for the other console's BIOS: the cartridge finds it, sends
+    the image's 0xC0-byte header a halfword at a time, the palette byte,
+    and the handshake byte worked out from the other console's answer —
+    each as GBATEK and gba-link-connection have them. SWI $25 itself, and
+    the image arriving, are the BIOS's and only hardware can show them.
+    B stops trying and puts the lobby back.
+    """
+    mb = os.path.splitext(rom)[0] + "_mb.mb"
+    if not os.path.exists(mb):
+        print(f"SALTADO: no encuentro {mb}")
+        return 0
+    image = open(mb, "rb").read()
+    failures = []
+    cores, cable, both, tap = _pair(rom, slave_rom=mb)
+    bios = FakeMultibootBios()
+    cable.fake_bios = bios
+    both(40)
+    tap("START", who=0)
+    tap("DOWN", who=0)
+    tap("START", who=0)
+    both(30)
+    import run_rom
+    rows = " ".join(run_rom.tilemap_text(cores[0], r) for r in range(8, 16))
+    if "SELECT SENDS THE GAME" not in rows:
+        failures.append(f"la pantalla del cable no ofrece enviar: {rows!r}")
+    tap("SELECT", who=0)
+    both(60)
+    rows = " ".join(run_rom.tilemap_text(cores[0], r) for r in range(8, 16))
+    want_header = [image[i] | (image[i + 1] << 8) for i in range(0, 0xC0, 2)]
+    want_hs = (0x11 + bios.client_data + 0xFF + 0xFF) & 0xFF
+    if "SENDING THE GAME" not in rows:
+        failures.append(f"SELECT no pone la pantalla de envio: {rows!r}")
+    elif not bios.done:
+        failures.append(f"el saludo no llega al final (se quedo en "
+                        f"{bios.state})")
+    elif bios.header != want_header:
+        failures.append("la cabecera enviada no es la de la imagen")
+    elif bios.palette != 0x93:
+        failures.append(f"paleta {bios.palette:#x}, no 0x93")
+    elif bios.handshake != want_hs:
+        failures.append(f"handshake {bios.handshake:#x}, no {want_hs:#x}")
+    else:
+        print(f"  el cartucho encuentra a la otra consola, le manda la "
+              f"cabecera de la imagen, la paleta y el handshake "
+              f"({want_hs:#04x}): {bios.done} veces hasta la llamada a la BIOS")
+    tap("B", who=0)
+    both(30)
+    if _screen_of(cores[0]) != "cable":
+        failures.append(f"B no vuelve al lobby ({_screen_of(cores[0])})")
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: el cartucho hace su parte del envio de Single-Pak.")
     return 0
-
-
 
 
 if __name__ == "__main__":

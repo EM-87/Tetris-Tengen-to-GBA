@@ -38,6 +38,12 @@ typedef volatile uint32_t vu32;
 #define REG_IME       (*(vu16 *)0x04000208)
 #define IRQ_VBLANK    0x0001
 #define IRQ_SERIAL    0x0080
+#define IRQ_KEYPAD    0x1000
+/* KEYCNT: which keys raise IRQ_KEYPAD, bit 14 the enable and bit 15 "all of
+ * them at once" rather than "any of them". Only the sleep uses it. */
+#define REG_KEYCNT    (*(vu16 *)0x04000132)
+#define KEYCNT_IRQ    0x4000
+#define KEYCNT_AND    0x8000
 #define DSTAT_VBL_IRQ 0x0008   /* DISPSTAT: raise IRQ_VBLANK at line 160 */
 
 /* The BIOS jumps through this pointer on every interrupt, and its IntrWait
@@ -54,6 +60,7 @@ typedef volatile uint32_t vu32;
 
 /* DISPCNT */
 #define DCNT_MODE0    0x0000
+#define DCNT_FORCED_BLANK 0x0080
 #define DCNT_BG0      0x0100
 #define DCNT_BG1      0x0200
 #define DCNT_BG2      0x0400
@@ -143,11 +150,26 @@ static inline uint16_t rgb15(unsigned r, unsigned g, unsigned b) {
 #define MEM_SRAM ((volatile unsigned char *)0x0E000000)
 #define SRAM_SIZE 0x8000
 
+/* THE SINGLE-PAK SLAVE HAS NO SAVE OF ITS OWN. It came over the cable, and
+ * whatever cartridge might be in its slot — a console can be booted into
+ * the BIOS's multiboot with one in, holding START and SELECT — is some
+ * other game, whose save this must never read as a table or write one
+ * into. So on that build the save memory reads as nothing (no table: the
+ * cartridge's fifteen) and every write goes nowhere. */
 static inline unsigned char sram_read(unsigned offset) {
+#ifdef TENGEN_MULTIBOOT
+    (void)offset;
+    return 0;
+#else
     return MEM_SRAM[offset];
+#endif
 }
 static inline void sram_write(unsigned offset, unsigned char value) {
+#ifdef TENGEN_MULTIBOOT
+    (void)offset; (void)value;
+#else
     MEM_SRAM[offset] = value;
+#endif
 }
 
 #endif /* GBA_HW_H */

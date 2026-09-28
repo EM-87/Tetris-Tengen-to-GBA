@@ -1267,3 +1267,76 @@ def idle_blink_check(rom_path):
           "todos")
     print("OK: el cosaco no parpadea al terminar la limpieza.")
     return 0
+
+
+def system_check(rom_path):
+    """A+B+START+SELECT STARTS OVER; L+R+SELECT, PAUSED, SLEEPS AND WAKES.
+
+    The restart is the port's own (soft_reset_check, gba/video.c): from the
+    middle of a match, holding the four and letting go lands on the title,
+    and START from there opens GAME SELECT with nothing of the match left.
+
+    The sleep is the BIOS's Stop, which this emulator's stand-in BIOS does
+    not implement — it returns at once — so what can be checked here is
+    that the way in and out of it does not hang, leaves the match paused
+    where it was, and puts the screen, the sound and the interrupts back as
+    it found them. Whether the console really sleeps is for the hardware.
+    """
+    base, why = game_state_address(rom_path)
+    if base is None:
+        print(f"SALTADO: {why}")
+        return 0
+    off = game_offsets(rom_path)
+    core, screen = load(rom_path)    # `screen` must stay alive; see load()
+    _ = screen
+    io = core._native.memory.io
+    failures = []
+
+    def hold(keys, frames):
+        core.set_keys(*[KEYS[k] for k in keys]); run(core, frames)
+
+    def regs():
+        return {"DISPCNT": io[0], "SOUNDCNT_L": io[0x80 >> 1],
+                "IE": io[0x200 >> 1], "KEYCNT": io[0x132 >> 1]}
+
+    run(core, 20)
+    press_start(core); run(core, 10)
+    press_start(core); run(core, 12)
+    press_start(core); run(core, 60)          # 1 PLAYER, playing
+    hold(["START"], 4); hold([], 20)
+    if not core.memory.u8[base + off["paused"]]:
+        failures.append("START no pauso la partida")
+    before = regs()
+    y = core.memory.u8[base + off["y"]]
+    hold(["L", "R", "SELECT"], 6); hold([], 40)
+    after = regs()
+    if not core.memory.u8[base + off["paused"]]:
+        failures.append("tras dormir y despertar la partida ya no esta en pausa")
+    elif after != before:
+        failures.append(f"dormir no deja los registros como estaban: "
+                        f"{before} -> {after}")
+    elif core.memory.u8[base + off["y"]] != y:
+        failures.append("la pieza se movio mientras la partida dormia")
+    else:
+        print("  L+R+SELECT en pausa: entra y sale del reposo, la partida "
+              "sigue en pausa donde estaba y la pantalla, el sonido y las "
+              "interrupciones vuelven como estaban")
+
+    hold(["A", "B", "START", "SELECT"], 6); hold([], 120)
+    active = core.memory.u8[base + off["active"]]
+    press_start(core); run(core, 20)
+    rows = " ".join(tilemap_text(core, r) for r in range(20))
+    if active:
+        failures.append("A+B+START+SELECT no reinicio: la partida sigue viva")
+    elif "GAME" not in rows or "SELECT" not in rows:
+        failures.append(f"tras reiniciar, START no lleva a GAME SELECT: {rows[:120]!r}")
+    else:
+        print("  A+B+START+SELECT en plena partida: vuelve al titulo, y START "
+              "lleva a GAME SELECT")
+
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: el reinicio por software y el reposo hacen lo que deben.")
+    return 0

@@ -103,7 +103,7 @@ minus those).
 | --- | --- | --- |
 | `make test` | no | always — the rules, in milliseconds |
 | `make gba` | headers | to build `build/tengen.gba` |
-| `make gba-check` | headers | before calling any change done: 58 checks on the running ROM in mGBA, sixteen of them on two consoles with a cable |
+| `make gba-check` | headers | before calling any change done: 61 checks on the running ROM in mGBA, eighteen of them on two consoles with a cable |
 | `make trace ROM=... [MODE=coop\|versus\|with\|demo]` | yes | after touching `tengen_step` or `tengen_ai.c`: the port against the cartridge, iteration by iteration. The 1P and coop scripts never complete a row; `MODE="with --pad1"` plays player 1 with the port's computer and clears plenty; add `--handicap N` to any mode |
 | `make tune-check ROM=...` | yes | after touching audio: the four tunes against the cartridge, note by note |
 | `make dance-check ROM=...` | yes | after touching the dancers: their choreography against the cartridge's driver |
@@ -154,6 +154,20 @@ story behind each; the item number is in brackets.
   one thing lockstep cannot carry is what a person typed: names cross in
   `TengenNameSwap`. The lobby is stop-and-wait; its SKIN stage agrees on a
   skin by a fingerprint of the art. [14, 25, 31]
+- **The Single-Pak slave is the same program, linked for EWRAM**
+  (`gba/mb.ld`, `-DTENGEN_MULTIBOOT`, crt0's multiboot entries under
+  MULTIBOOT) and carried inside the cartridge's ROM (`gba/mb_image.s`),
+  which is why the ROM is 512 KB. Image plus the 6502's 64 KB must fit in
+  256 KB and the link asserts it (about 11 KB spare). The slave boots into
+  the lobby following the master's mode (`tengen_lobby_mode_any`) and
+  never touches save memory: a console booted into multiboot can have
+  another game's cartridge in. mGBA takes a multiboot image whose $C0
+  branch is exactly 28 bytes for a cartridge, hence the spare word after
+  the $E0 entry.
+- **The soft reset is done by hand** (`soft_reset_check`, video.c), not
+  by the BIOS's SoftReset, which mGBA's stand-in BIOS does not have: a
+  restart the checks cannot run is one nobody knows works. It leaves the
+  serial port alone for the same reason sio_reset does.
 - **A real cable is not the emulated one.** What two SPs taught us, one
   rule each; `run_link.py`'s cable models every one of them, and each has a
   check that the build before it fails:
@@ -328,7 +342,10 @@ cable, there if the MASTER found the chord and driven by both players'
 presses through lockstep (`link_match_begin`); a linked match that waits
 ten seconds for a quiet cable (LINK ISSUES) before giving it up (the CABLE
 LOST window, and out to the title); the XE mod's two
-off-by-one bugs mended (XE only). [8, 11, 17, 19, 20, 23, 28, 30]
+off-by-one bugs mended (XE only); Single-Pak (SELECT on the LINK CABLE
+screen sends the game to a console with no cartridge); sleep (L+R+SELECT
+in a paused solo match) and soft reset (A+B+START+SELECT), as commercial
+games had. [8, 11, 17, 19, 20, 23, 28, 30]
 
 **Knowingly not shown**: proto_c's title animation (its rows are the ones
 the composition drops); a screen-change noise under proto_a (its dump has
@@ -369,17 +386,17 @@ And what has run only in an emulator:
   interrupt handler. mGBA is accurate on all three, but it is not the
   console.
 
-Ideas for a later round, none started (the user's list):
+- **Single-Pak, the sleep and the soft reset** have run only in mGBA,
+  and mGBA's stand-in BIOS has neither Stop nor MultiBoot: the emulator
+  checks everything up to the BIOS call (`system_check`, `mb_send_check`,
+  and the image playing the cartridge in `singlepak_check`), the console
+  the rest.
 
-- **Single-Pak link**: the slave boots over the cable with no cartridge.
-  The BIOS loads it into EWRAM, 256 KB: about 185 KB of image today plus
-  the 64 KB the 6502 needs at run time (`g_code`), less without the
-  prototypes' skins. Needs an EWRAM-linked build, the master's send
-  (SWI $25), and a slave that follows the master's settings and keeps no
-  records. Only real hardware can test the send.
-- **Sleep** (L+R+SELECT, SWI Stop, woken by the keypad interrupt) and
-  **soft reset** (A+B+START+SELECT), as commercial games had.
-- **Game Boy Player rumble.**
+Ideas not started:
+
+- **Game Boy Player rumble.** The Player only turns it on for a game that
+  shows the Player's own logo at boot, and that logo is Nintendo's art,
+  which the port does not have: it would come from a dump, like the rest.
 - **Wireless adapter** — only with one to test on.
 
 A new idea starts in the cartridge (`tools/nes_console.py`,

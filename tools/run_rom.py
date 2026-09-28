@@ -81,6 +81,8 @@ def main():
                      help="check the title leaves no sprites or music behind")
     ap.add_argument("--braid", action="store_true",
                      help="check the braid keeps its weave in both HUD modes")
+    ap.add_argument("--system", action="store_true",
+                     help="check the soft reset and the sleep")
     ap.add_argument("--handicap", action="store_true",
                      help="check the starting handicap reaches the playfield")
     ap.add_argument("--panel", action="store_true",
@@ -166,6 +168,8 @@ def main():
         sys.exit(leaving_title_check(args.rom))
     if args.braid:
         sys.exit(braid_check(args.rom))
+    if args.system:
+        sys.exit(system_check(args.rom))
     if args.handicap:
         sys.exit(handicap_check(args.rom))
     if args.panel:

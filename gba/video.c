@@ -171,12 +171,106 @@ void irq_init(void) {
  * compiled Thumb; noinline keeps link-time optimisation from folding it into
  * one of the ARM functions in IWRAM, where the Thumb encoding would be
  * wrong. */
+static void soft_reset_check(void);
+
 __attribute__((noinline)) void vsync(void) {
 #if defined(__thumb__)
     __asm__ volatile ("swi 0x05" ::: "r0", "r1", "r2", "r3", "memory");
 #else
     __asm__ volatile ("swi 0x050000" ::: "r0", "r1", "r2", "r3", "memory");
 #endif
+    soft_reset_check();
+}
+
+/* A+B+START+SELECT, HELD TOGETHER, STARTS THE CARTRIDGE OVER, from anywhere.
+ * Nintendo asked it of every GBA game it published, and a console on a
+ * flash cart otherwise has only its power switch.
+ *
+ * Checked once a frame, here, because every screen goes through vsync.
+ * The four are waited out before the restart, or the title would take the
+ * START still held as a press and go straight into GAME SELECT.
+ *
+ * BY HAND, NOT THROUGH THE BIOS's SoftReset. That would do the same — stop
+ * everything and jump to the cartridge's first instruction — but the
+ * emulator the checks run in has no BIOS of its own to do it with, and a
+ * restart that cannot be checked is a restart nobody knows works. So: the
+ * interrupts, the four DMA channels, the timers and the sound off, the
+ * screen blanked and video, sprite and palette memory emptied, and then
+ * crt0 from the top, which lays the rest out again (the stacks, .data,
+ * .bss, and IWRAM's code). NOT the serial port: a port taken out of
+ * multiplayer mode lets go of its lines, and the console on the other end of
+ * a cable hears that as a storm of empty transfers (see sio_reset in
+ * link.c); link_init starts it over properly when the cable is next used.
+ * The cartridge's save RAM is not touched at all. */
+#define RESET_KEYS (KEY_A | KEY_B | KEY_START | KEY_SELECT)
+#ifdef TENGEN_MULTIBOOT
+#define RESET_ENTRY 0x02000000u   /* the Single-Pak image: still in EWRAM */
+#else
+#define RESET_ENTRY 0x08000000u   /* crt0's _start, in ARM */
+#endif
+
+static void soft_reset_check(void) {
+    if ((uint16_t)(~REG_KEYINPUT & RESET_KEYS) != RESET_KEYS) return;
+    while ((uint16_t)(~REG_KEYINPUT & KEY_MASK)) { }
+    REG_IME = 0;
+    REG_IE = 0;
+    REG_IF = 0xFFFF;
+    for (int ch = 0; ch < 4; ch++) {
+        *(vu16 *)(0x040000BA + ch * 12) = 0;     /* DMAxCNT_H */
+        *(vu16 *)(0x04000102 + ch * 4) = 0;      /* TMxCNT_H */
+    }
+    *(vu16 *)0x04000084 = 0;                     /* SOUNDCNT_X: sound off */
+    REG_DISPCNT = DCNT_FORCED_BLANK;
+    for (vu32 *p = (vu32 *)0x06000000; p < (vu32 *)0x06018000; p++) *p = 0;
+    for (vu32 *p = (vu32 *)0x07000000; p < (vu32 *)0x07000400; p++) *p = 0;
+    for (vu32 *p = (vu32 *)0x05000000; p < (vu32 *)0x05000400; p++) *p = 0;
+    __asm__ volatile ("bx %0" :: "r"(RESET_ENTRY) : "memory");
+    for (;;) { }
+}
+
+/* SLEEP: L+R+SELECT, the combination commercial games used, and the same
+ * again to wake. The screen goes to forced blank, the PSG's volume to
+ * nought, and the CPU into the BIOS's Stop (SWI 3), which only an interrupt
+ * from the keypad, the cartridge or the serial port ends — and only the
+ * keypad's is switched on, for exactly those three keys held together. A
+ * console left paused in a bag then draws next to nothing instead of
+ * running its screen and its sound for hours.
+ *
+ * Each combination is waited out before the next step, or the keys still
+ * held from going to sleep would wake it on the spot, and the ones held
+ * from waking would be read by the game. The caller decides when it is
+ * allowed (a paused solo match): over a cable the other console would be
+ * left talking to nobody. */
+#define SLEEP_KEYS (KEY_L | KEY_R | KEY_SELECT)
+#define REG_SOUNDCNT_L_HW (*(vu16 *)0x04000080)
+
+bool sleep_keys_held(void) {
+    return (uint16_t)(~REG_KEYINPUT & SLEEP_KEYS) == SLEEP_KEYS;
+}
+
+void system_sleep(void) {
+    while ((uint16_t)(~REG_KEYINPUT & SLEEP_KEYS)) { }
+    uint16_t ie = REG_IE, dispcnt = REG_DISPCNT, psg = REG_SOUNDCNT_L_HW;
+    REG_IME = 0;
+    REG_DISPCNT = (uint16_t)(dispcnt | DCNT_FORCED_BLANK);
+    REG_SOUNDCNT_L_HW = 0;
+    REG_KEYCNT = (uint16_t)(KEYCNT_IRQ | KEYCNT_AND | SLEEP_KEYS);
+    REG_IE = IRQ_KEYPAD;
+    REG_IF = IRQ_KEYPAD;
+    REG_IME = 1;
+#if defined(__thumb__)
+    __asm__ volatile ("swi 0x03" ::: "r0", "r1", "r2", "r3", "memory");
+#else
+    __asm__ volatile ("swi 0x030000" ::: "r0", "r1", "r2", "r3", "memory");
+#endif
+    REG_IME = 0;
+    REG_KEYCNT = 0;
+    REG_IE = ie;
+    REG_IF = (uint16_t)(IRQ_KEYPAD | IRQ_VBLANK);
+    REG_IME = 1;
+    while ((uint16_t)(~REG_KEYINPUT & SLEEP_KEYS)) { }
+    REG_SOUNDCNT_L_HW = psg;
+    REG_DISPCNT = dispcnt;
 }
 
 /* The GBA has every button the NES did, so this is a straight 1:1 remap with
