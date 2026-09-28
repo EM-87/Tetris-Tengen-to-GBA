@@ -48,6 +48,16 @@ int g_demo_over_frames;
 static void ai_play_frame(void);
 
 bool g_linked;            /* this match is running over the cable */
+/* FRAMES UNTIL THE TUNE COMES BACK after a linked level-up. Alone, the
+ * dancers' show is what brings it back when it ends; over the cable there is
+ * no show. A cartridge tune does not need one — its engine picks the tune
+ * back up by itself once the intro lets go — but a hand-entered one is
+ * STOPPED for the intro, and nothing started it again: Korobeiniki or
+ * Katiuska went quiet on the console whose player had gone up a level, for
+ * the rest of the match. So those, and MUSIC MIX's next turn, are asked for
+ * again when the intro has run its course (LEVELUP_INTRO_FRAMES), counted
+ * in frames of play. */
+static uint8_t g_levelup_resume;
 bool g_link_lost;         /* ...and the cable stopped answering */
 /* ...or it has gone quiet and the match is waiting for it to come back. */
 bool g_link_waiting;
@@ -143,14 +153,13 @@ static void announce_step(TengenStepResult step) {
          * above.) */
         nes_audio_play(NES_MUSIC_LEVELUP_INTRO);
         /* MUSIC MIX turns over here, and here only. See MUSIC_MIX. */
-        if (g_music == MUSIC_MIX) {
+        if (g_music == MUSIC_MIX)
             g_mix_step = (uint8_t)((g_mix_step + 1) % MIX_COUNT);
-            /* A linked match has no interlude to restart the tune afterwards,
-             * so the mix's next one is asked for on the spot. The level-up
-             * jingle was queued a moment ago and the ring is read one request
-             * per frame, so it is heard first and this follows it. */
-            if (g_linked) start_music(g_music);
-        }
+        /* A linked match has no interlude to bring the tune back: a
+         * hand-entered one, or the mix's next, comes back when the intro
+         * ends (g_levelup_resume). */
+        if (g_linked && (g_music == MUSIC_MIX || MUSIC_IS_HANDTUNE(g_music)))
+            g_levelup_resume = LEVELUP_INTRO_FRAMES;
         /* NO COSSACKS IN A PROTOTYPE'S GAME. Those builds go up a level and
          * carry straight on — no dancers, no BONUS tally. Measured on B, C
          * and D: gameState never leaves 0 and the dancers' programs
@@ -185,6 +194,7 @@ static void announce_step(TengenStepResult step) {
         }
     }
     if (step.topped_out) {
+        g_levelup_resume = 0;        /* the game-over tune, not the match's */
         handtune_stop();
         /* The game-over tune is class 8 like the title's, so the in-game
          * tune's own class has to be freed for it — which MUSIC_SILENCE does. */
@@ -583,8 +593,15 @@ static bool pause_menu_input(uint8_t pressed, bool *leaving) {
         g_pause_row = (uint8_t)((g_pause_row + 1) % PMENU_ROWS);
     if (g_pause_row == PMENU_MUSIC &&
         (pressed & (TENGEN_BTN_LEFT | TENGEN_BTN_RIGHT))) {
-        int count = music_choices();
+        /* THE SAME LIST ON BOTH CONSOLES. Over the cable the menu is the
+         * MASTER's (there because it found the chord), so its list is the
+         * one with the uncovered tunes whatever this console found. Counted
+         * from this console's own chord, a slave that had not rung it
+         * stepped through five tunes while the master stepped through
+         * eight, and the two ended up playing different ones. */
+        int count = g_linked ? MUSIC_UNLOCKED_COUNT : music_choices();
         int step = (pressed & TENGEN_BTN_RIGHT) ? 1 : count - 1;
+        g_levelup_resume = 0;        /* the new tune is already on */
         g_music = (uint8_t)((g_music + step) % count);
         /* Heard at once, which is the whole point of putting it here. The mix
          * restarts on its current turn rather than from the top. */
@@ -685,6 +702,7 @@ static uint8_t g_link_prev[2];
 
 void link_match_begin(bool menu) {
     g_link_menu = menu;
+    g_levelup_resume = 0;
     g_link_prev[0] = g_link_prev[1] = 0xFF;   /* see swallow_held_buttons */
     g_link_waiting = false;
 }
@@ -808,6 +826,14 @@ bool link_play_frame(uint8_t pressed, bool *quit) {
     }
 
     (void)pressed;
+    /* The intro has run out: the tune again (g_levelup_resume). Counted
+     * only while the match moves, so a pause or a quiet cable holds it. */
+    if (g_levelup_resume && stepped && !g_session.game.paused &&
+        !g_link_waiting) {
+        g_levelup_resume = (uint8_t)(g_levelup_resume > stepped
+                                         ? g_levelup_resume - stepped : 0);
+        if (!g_levelup_resume) start_music(g_music);
+    }
     /* A DESYNC IS FINAL at once — the two consoles are no longer playing the
      * same game — and a cable quiet for LINK_GIVEUP_FRAMES is taken for gone. */
     if (g_session.desynced) {

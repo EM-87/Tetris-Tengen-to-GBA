@@ -1500,7 +1500,104 @@ def pause_check(rom):
     if failures:
         return 1
     print("OK: el menu de pausa va por cable y hace lo mismo en las dos consolas.")
+    if menu_list_check(rom) or levelup_music_check(rom):
+        return 1
     return late_check(rom)
+
+
+def menu_list_check(rom):
+    """LA LISTA DE CANCIONES DEL MENU ES LA DEL MAESTRO, EN LAS DOS.
+
+    El menu existe porque el MAESTRO hizo el acorde; si la lista salia del
+    acorde de cada consola, un esclavo sin el pasaba por cinco canciones y
+    el maestro por ocho, y cada una acababa tocando una distinta ("en una
+    Korobeiniki y en la otra Troika"). Aqui el esclavo no hizo el acorde, y
+    cambia la cancion dos veces desde el menu.
+    """
+    sym, _ = symbol(rom, "g_music")
+    if sym is None:
+        print("SALTADO: falta g_music")
+        return 0
+    cores, cable, both, tap = _pair(rom)
+    both(8)
+    tap("START")
+    both(4, [[KEYS["L"], KEYS["R"]], []])          # solo el maestro
+    both(10, [[], []])
+    tap("DOWN"); tap("START")
+    both(50)
+    # KOROBEINIKI, the first of the uncovered tunes: past the slave's list.
+    tap("DOWN", who=0); tap("DOWN", who=0)
+    for _ in range(5):
+        tap("RIGHT", who=0)
+    tap("START", who=0)
+    both(80)
+    tap("START", who=0)                            # pausa
+    both(20)
+    seen = []
+    for _ in range(2):
+        tap("RIGHT", who=1)                        # el ESCLAVO cambia
+        both(10)
+        seen.append([c.memory.u8[sym[0]] for c in cores])
+    if any(a != b for a, b in seen):
+        print(f"FALLA: cada consola en una cancion distinta: {seen}")
+        return 1
+    print(f"  sin el acorde en el esclavo, las dos van a la par: {seen}")
+    return 0
+
+
+def levelup_music_check(rom):
+    """TRAS SUBIR DE NIVEL POR CABLE, LA MUSICA VUELVE.
+
+    Solo, la devuelve el baile de los cosacos al terminar; por cable no hay
+    baile, y la consola del que subia de nivel se quedaba en silencio el
+    resto de la partida si la cancion era de las anadidas (Korobeiniki,
+    Katiuska): las del cartucho las retoma su propio motor, esas no. Aqui el
+    maestro sube de nivel con Korobeiniki, y cuando la fanfarria termina
+    tiene que volver a sonar.
+    """
+    sym, why = symbol(rom, "g_session")
+    if sym is None:
+        print(f"SALTADO: {why}")
+        return 0
+    import run_rom
+    from romcheck.harness import fill_rows
+    off = run_rom.game_offsets(rom)
+    base = sym[0]
+    cores, cable, both, tap = _pair(rom)
+    both(8)
+    tap("START")
+    both(4, [[KEYS["L"], KEYS["R"]], []])
+    both(10, [[], []])
+    tap("DOWN"); tap("START")
+    both(50)
+    tap("DOWN", who=0); tap("DOWN", who=0)
+    for _ in range(5):
+        tap("RIGHT", who=0)                         # KOROBEINIKI
+    tap("START", who=0)
+    both(80)
+    for core in cores:                              # lo mismo en las dos
+        core.memory.u8[base + off["lines"]] = 28
+        core.memory.u8[base + off["lines"] + 1] = 0
+        fill_rows(core, base + off["field"], (19, 18))
+    level = cores[0].memory.u8[base + off["level"]]
+    for _ in range(80):
+        both(8, [[KEYS["DOWN"]], []])
+        both(2, [[], []])
+        if cores[0].memory.u8[base + off["level"]] != level:
+            break
+    else:
+        print("FALLA: el maestro no llego a subir de nivel")
+        return 1
+    both(144 + 60)                                  # la fanfarria, y algo mas
+    top = 0
+    for _ in range(40):
+        both(1)
+        top = max(top, run_rom.sound_state(cores[0])["activos"])
+    if not top:
+        print("FALLA: tras subir de nivel por cable la musica no vuelve")
+        return 1
+    print(f"  tras la fanfarria la cancion vuelve ({top} canales)")
+    return 0
 
 
 def late_check(rom):

@@ -240,6 +240,16 @@ story behind each; the item number is in brackets.
   mapped through the composition by its own centre, never per sprite. The
   brick columns are NOT opaque, so window 0 keeps sprites inside the
   release's frame (`title_window`, `--fireworks`). [15]
+- **A linked match has no level-up show**, and the show is what brings a
+  hand-entered tune back after the intro; the cartridge's own engine picks
+  its tunes back up by itself. So a linked level-up asks for Korobeiniki,
+  Katiuska or MUSIC MIX's next turn again when the intro ends
+  (`g_levelup_resume`, `levelup_music_check`).
+- **Over the cable the pause menu's tune list is the master's**, the full
+  one (it is there because the master found the chord), never this
+  console's own: counted from each console's chord, the two stepped through
+  lists of different lengths and played different tunes
+  (`menu_list_check`).
 - **A linked pause is toggled inside the core**, so the music, the repaint
   and the rest of a pause going up or down live in `pause_toggled`, called
   from the solo frame and the linked one alike; the linked one used to skip
@@ -348,6 +358,30 @@ And what has run only in an emulator:
 - **The latest builds on hardware** — the Thumb code, `VBlankIntrWait`, the
   interrupt handler. mGBA is accurate on all three, but it is not the
   console.
+
+Reported from a long session on two SPs and not yet understood — ask what
+the screen said before touching anything:
+
+- **Scores that never reached the table** in a 2 PLAYER match where the
+  master played two games (A+B) to the slave's one. CABLE LOST and EXIT
+  skip the table on purpose; a match that ended on its own GAME OVER must
+  not.
+- **Players mistaking whose falling piece is whose**, often enough to be
+  more than human error. Probably COOPERATIVE; check first whether the
+  cartridge tells the two pieces apart at all.
+
+Ideas for a later round, none started (the user's list):
+
+- **Single-Pak link**: the slave boots over the cable with no cartridge.
+  The BIOS loads it into EWRAM, 256 KB: about 185 KB of image today plus
+  the 64 KB the 6502 needs at run time (`g_code`), less without the
+  prototypes' skins. Needs an EWRAM-linked build, the master's send
+  (SWI $25), and a slave that follows the master's settings and keeps no
+  records. Only real hardware can test the send.
+- **Sleep** (L+R+SELECT, SWI Stop, woken by the keypad interrupt) and
+  **soft reset** (A+B+START+SELECT), as commercial games had.
+- **Game Boy Player rumble.**
+- **Wireless adapter** — only with one to test on.
 
 A new idea starts in the cartridge (`tools/nes_console.py`,
 `tools/render_nes.py`), not in memory of how Tetris goes.
