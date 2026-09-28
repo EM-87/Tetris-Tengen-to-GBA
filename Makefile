@@ -114,6 +114,10 @@ GBA_ROM  := $(BUILD)/tengen.gba
 GBA_MB_ELF := $(BUILD)/tengen_mb.elf
 GBA_MB     := $(BUILD)/tengen_mb.mb
 GBAFIX     := $(BUILD)/gbafix
+# ...and two probes the cartridge can send instead (gba/mb_probe.s): the
+# smallest image there is, and the same padded to the game's size.
+GBA_PROBE     := $(BUILD)/mb_probe.mb
+GBA_PROBE_BIG := $(BUILD)/mb_probe_big.mb
 
 gba: $(GBA_ROM)
 
@@ -122,6 +126,7 @@ gba: $(GBA_ROM)
 # still reaches the helpful message below instead of "no rule to make target".
 $(GBA_ELF): $(GBA_SRC) $(CORE_HDR) gba/port.h gba/gba_hw.h gba/link.h \
              gba/crt0.s gba/gba.ld gba/mb_image.s $(GBA_MB) \
+             $(GBA_PROBE) $(GBA_PROBE_BIG) \
              $(wildcard $(GBA_ASSETS)) | $(BUILD)
 	@command -v $(ARMCC) >/dev/null 2>&1 || { \
 	    echo "error: $(ARMCC) not found."; \
@@ -143,6 +148,19 @@ $(GBA_MB_ELF): $(GBA_SRC) $(CORE_HDR) gba/port.h gba/gba_hw.h gba/link.h \
 	$(ARMCC) $(ARMFLAGS) -DTENGEN_MULTIBOOT -Wa,--defsym,MULTIBOOT=1 \
 	    -T gba/mb.ld -nostartfiles -Wl,--gc-sections \
 	    gba/crt0.s $(GBA_SRC) -o $@
+
+$(BUILD)/mb_probe.elf: gba/mb_probe.s | $(BUILD)
+	$(ARMCC) -nostdlib -Wl,-Ttext=0x02000000 -Wl,-e,_start $< -o $@
+$(BUILD)/mb_probe_big.elf: gba/mb_probe.s | $(BUILD)
+	$(ARMCC) -nostdlib -Wa,--defsym,BIG=1 -Wl,-Ttext=0x02000000 -Wl,-e,_start $< -o $@
+$(GBA_PROBE): $(BUILD)/mb_probe.elf $(GBAFIX)
+	$(ARMOBJCOPY) -O binary $< $@
+	truncate -s %16 $@
+	$(GBAFIX) $@ -tMBPROBE -cCTTE -m00
+$(GBA_PROBE_BIG): $(BUILD)/mb_probe_big.elf $(GBAFIX)
+	$(ARMOBJCOPY) -O binary $< $@
+	truncate -s %16 $@
+	$(GBAFIX) $@ -tMBPROBE -cCTTE -m00
 
 $(GBA_MB): $(GBA_MB_ELF) $(GBAFIX)
 	$(ARMOBJCOPY) -O binary $< $@

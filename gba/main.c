@@ -645,6 +645,20 @@ int main(void) {
              * this lobby's again, which is where the other console's copy
              * comes looking for it. */
             if (!lobby.linked && (pressed & TENGEN_BTN_SELECT)) {
+                /* WHICH IMAGE: the game, or — with a shoulder held — one of
+                 * the probes that only turn the other screen green, for
+                 * telling a broken send from a broken image on a real
+                 * console (gba/mb_probe.s). */
+                uint16_t shoulders = (uint16_t)~REG_KEYINPUT;
+                const uint8_t *img = kSlaveImage;
+                uint32_t img_len = (uint32_t)(kSlaveImageEnd - kSlaveImage);
+                if (shoulders & KEY_L) {
+                    img = kProbeImage;
+                    img_len = (uint32_t)(kProbeImageEnd - kProbeImage);
+                } else if (shoulders & KEY_R) {
+                    img = kProbeBigImage;
+                    img_len = (uint32_t)(kProbeBigImageEnd - kProbeBigImage);
+                }
                 screen_blip();
                 bool wrong_end = false;
                 for (int frame = 0;; frame++) {
@@ -662,8 +676,7 @@ int main(void) {
                      * on held for the whole of it: a long beep, as if the
                      * console had broken. */
                     psg_mute(true);
-                    LinkSendResult r = link_multiboot_send(
-                        kSlaveImage, (uint32_t)(kSlaveImageEnd - kSlaveImage));
+                    LinkSendResult r = link_multiboot_send(img, img_len);
                     psg_mute(false);
                     if (r == LINK_SEND_DONE) {
                         /* A SECOND OF QUIET before the lobby starts talking:

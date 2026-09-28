@@ -11,3 +11,19 @@ kSlaveImage:
     .incbin "build/tengen_mb.mb"
     .balign 16
 kSlaveImageEnd:
+
+@ The two probes (gba/mb_probe.s), sent on L+SELECT and R+SELECT.
+    .balign 4
+    .global kProbeImage
+    .global kProbeImageEnd
+kProbeImage:
+    .incbin "build/mb_probe.mb"
+    .balign 16
+kProbeImageEnd:
+    .balign 4
+    .global kProbeBigImage
+    .global kProbeBigImageEnd
+kProbeBigImage:
+    .incbin "build/mb_probe_big.mb"
+    .balign 16
+kProbeBigImageEnd:

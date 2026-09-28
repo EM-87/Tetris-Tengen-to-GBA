@@ -1900,6 +1900,9 @@ void draw_link_sending(bool wrong_end);   /* Single-Pak; see frontend.c */
 /* The Single-Pak slave's image, inside the cartridge (gba/mb_image.s). */
 extern const uint8_t kSlaveImage[];
 extern const uint8_t kSlaveImageEnd[];
+/* ...and the two probes (gba/mb_probe.s): green screen, small and big. */
+extern const uint8_t kProbeImage[], kProbeImageEnd[];
+extern const uint8_t kProbeBigImage[], kProbeBigImageEnd[];
 void draw_level_settings(int chosen, uint8_t start_level, uint8_t music,
                                  const uint8_t handicap[2], bool two_player,
                                  int handicap_who);

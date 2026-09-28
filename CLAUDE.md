@@ -176,7 +176,13 @@ story behind each; the item number is in brackets.
   hardware, its start paints the backdrop a colour per step (MB_STAGE,
   main.c): red crt0, yellow interrupts on, green the first vsync, cyan the
   art, blue the sound engine, magenta the title sprites. The colour it
-  stops on is where. The cartridge mutes the PSG while the BIOS sends: the
+  stops on is where. That build stayed WHITE, not red: the image never ran
+  a single instruction (the white is the BIOS's, and so was the previous
+  one), though the master's MultiBoot returned good. So the cartridge also
+  carries two probes (gba/mb_probe.s: a header and a green screen, small
+  and padded to the game's size) sent on L+SELECT and R+SELECT, to tell a
+  broken send from an image the BIOS will not start, and size from
+  content. The ROM is 1 MB while they are in. The cartridge mutes the PSG while the BIOS sends: the
   last note held for the whole transfer, a long beep.
 - **The soft reset is done by hand** (`soft_reset_check`, video.c), not
   by the BIOS's SoftReset, which mGBA's stand-in BIOS does not have: a
