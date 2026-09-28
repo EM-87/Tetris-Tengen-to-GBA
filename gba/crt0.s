@@ -77,6 +77,18 @@ rom_header_end:
     mov     r0, #0x05000000
     mov     r1, #0x1F
     strh    r1, [r0]                @ backdrop: red
+    @ ...held for two seconds (120 frames counted on VCOUNT), so it can be
+    @ seen before the next step replaces it or goes wrong.
+    ldr     r2, =0x04000006
+    mov     r3, #120
+8:  ldrh    r1, [r2]
+    cmp     r1, #160
+    bcs     8b                      @ out of any blank under way
+9:  ldrh    r1, [r2]
+    cmp     r1, #160
+    bcc     9b                      @ ...to the start of the next
+    subs    r3, r3, #1
+    bne     8b
 .endif
 
     @ THE SUPERVISOR'S STACK, which every BIOS call (SWI) runs on. A

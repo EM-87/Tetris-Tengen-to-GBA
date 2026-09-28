@@ -188,7 +188,12 @@ story behind each; the item number is in brackets.
   own start is identical to the probe's, so it runs and something later
   turns the screen white. The only thing in the slave that does is the
   soft reset (forced blank); on that build it paints ORANGE and stops
-  instead, and each breadcrumb is held half a second so it can be seen. The cartridge mutes the PSG while the BIOS sends: the
+  instead, and each breadcrumb is held half a second so it can be seen.
+  That build stayed white with no colour at all, orange included. Unlike
+  the probe, the game switches interrupts on at once (irq_init): the next
+  build holds every colour two seconds, crt0's red included, and adds
+  GREY on entering main, so "dies on the first interrupt" (grey, then a
+  flash of yellow) reads apart from "never started" (white). The cartridge mutes the PSG while the BIOS sends: the
   last note held for the whole transfer, a long beep.
 - **The soft reset is done by hand** (`soft_reset_check`, video.c), not
   by the BIOS's SoftReset, which mGBA's stand-in BIOS does not have: a

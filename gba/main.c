@@ -14,12 +14,13 @@
  * start that has been got through, so a slave that stops on real hardware
  * says where. crt0 starts it red. Gone when main switches the screen on. */
 #ifdef TENGEN_MULTIBOOT
-/* Each colour held for half a second, long enough to see on a console. The
- * wait counts scanlines rather than calling vsync(), which is itself one of
- * the steps being watched. */
+/* Each colour held for two seconds, long enough to see on a console and to
+ * tell apart from a step that goes wrong the moment it starts. The wait
+ * counts scanlines rather than calling vsync(), which is itself one of the
+ * steps being watched. */
 static void mb_stage(uint16_t bgr555) {
     MEM_PALETTE[0] = bgr555;
-    for (int frame = 0; frame < 30; frame++) {
+    for (int frame = 0; frame < 120; frame++) {
         while (REG_VCOUNT >= 160) { }
         while (REG_VCOUNT < 160) { }
     }
@@ -32,6 +33,7 @@ static void mb_stage(uint16_t bgr555) {
 int main(void) {
     /* First: every screen from here on waits for its frame in vsync(), and
      * vsync() sleeps until an interrupt that this is what switches on. */
+    MB_STAGE(0x4210);                      /* grey: in main, nothing on */
     irq_init();
     MB_STAGE(0x03FF);                      /* yellow: interrupts on */
 #ifdef TENGEN_MULTIBOOT

@@ -2260,7 +2260,7 @@ def singlepak_check(rom):
     for coop in (False, True):
         name = "COOPERATIVE" if coop else "2 PLAYER"
         cores, cable, both, tap = _pair(rom, slow=True, slave_rom=mb)
-        both(200)                   # the start, and its breadcrumbs (MB_STAGE)
+        both(1000)                  # the start, and its breadcrumbs (MB_STAGE)
         if _screen_of(cores[1]) != "cable":
             failures.append(f"{name}: la imagen no arranca en el lobby "
                             f"({_screen_of(cores[1])})")
@@ -2308,7 +2308,7 @@ def singlepak_check(rom):
     # BIOS's logo; here, before crt0 switched interrupts off first thing,
     # the two never linked.
     cores, cable, both, tap = _pair(rom, slow=True, slave_rom=mb)
-    both(200)
+    both(1000)
     tap("START", who=0); tap("DOWN", who=0); tap("START", who=0)
     both(30)
     slave = cores[1]
@@ -2318,7 +2318,7 @@ def singlepak_check(rom):
     io[0x200 >> 1] = 0x0080                # IE: serial
     io[0x128 >> 1] = 0x6003 | 0x4000       # multiplayer, interrupt on
     slave.memory.u32[0x03007FFC] = 0x03001000
-    both(420)
+    both(1200)
     if _screen_of(cores[0]) != "ajustes":
         failures.append(f"arrancada como la deja la BIOS, la imagen no enlaza "
                         f"(el cartucho esta en {_screen_of(cores[0])})")
@@ -2405,7 +2405,7 @@ def mb_send_check(rom):
     cores, cable, both, tap = _pair(rom, slave_rom=mb)
     bios = FakeMultibootBios()
     cable.fake_bios = bios
-    both(200)
+    both(1000)
     tap("START", who=0)
     tap("DOWN", who=0)
     tap("START", who=0)
