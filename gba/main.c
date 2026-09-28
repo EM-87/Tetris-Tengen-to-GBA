@@ -14,7 +14,17 @@
  * start that has been got through, so a slave that stops on real hardware
  * says where. crt0 starts it red. Gone when main switches the screen on. */
 #ifdef TENGEN_MULTIBOOT
-#define MB_STAGE(bgr555) (MEM_PALETTE[0] = (uint16_t)(bgr555))
+/* Each colour held for half a second, long enough to see on a console. The
+ * wait counts scanlines rather than calling vsync(), which is itself one of
+ * the steps being watched. */
+static void mb_stage(uint16_t bgr555) {
+    MEM_PALETTE[0] = bgr555;
+    for (int frame = 0; frame < 30; frame++) {
+        while (REG_VCOUNT >= 160) { }
+        while (REG_VCOUNT < 160) { }
+    }
+}
+#define MB_STAGE(bgr555) mb_stage((uint16_t)(bgr555))
 #else
 #define MB_STAGE(bgr555) ((void)0)
 #endif
@@ -50,7 +60,7 @@ int main(void) {
     init_title_sprites();
     restart_title_sprites();
     MB_STAGE(0x7C1F);                      /* magenta: title sprites */
-    MB_STAGE(backdrop);                    /* ...and the backdrop back */
+    MEM_PALETTE[0] = backdrop;             /* ...and the backdrop back */
 
     REG_BG0CNT = BG_4BPP | BG_SIZE_32x32 | BG_CHARBLOCK(CHARBLOCK) |
                   BG_SCREENBLOCK(SCREENBLOCK) | BG_PRIORITY(1);

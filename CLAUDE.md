@@ -182,7 +182,13 @@ story behind each; the item number is in brackets.
   carries two probes (gba/mb_probe.s: a header and a green screen, small
   and padded to the game's size) sent on L+SELECT and R+SELECT, to tell a
   broken send from an image the BIOS will not start, and size from
-  content. The ROM is 1 MB while they are in. The cartridge mutes the PSG while the BIOS sends: the
+  content. The ROM is 1 MB while they are in. On the SPs the big probe
+  went green and the game went white again (the small one never started;
+  not followed up): the sending works at the game's size, and the game's
+  own start is identical to the probe's, so it runs and something later
+  turns the screen white. The only thing in the slave that does is the
+  soft reset (forced blank); on that build it paints ORANGE and stops
+  instead, and each breadcrumb is held half a second so it can be seen. The cartridge mutes the PSG while the BIOS sends: the
   last note held for the whole transfer, a long beep.
 - **The soft reset is done by hand** (`soft_reset_check`, video.c), not
   by the BIOS's SoftReset, which mGBA's stand-in BIOS does not have: a

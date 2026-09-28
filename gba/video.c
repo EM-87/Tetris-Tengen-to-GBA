@@ -213,6 +213,15 @@ __attribute__((noinline)) void vsync(void) {
 
 static void soft_reset_check(void) {
     if ((uint16_t)(~REG_KEYINPUT & RESET_KEYS) != RESET_KEYS) return;
+#ifdef TENGEN_MULTIBOOT
+    /* ON THE SINGLE-PAK SLAVE, WHILE ITS START IS BEING FOUND ON HARDWARE:
+     * the restart is the one thing in this program that turns the screen
+     * white, and white is what a slave stopped on. So here it paints the
+     * backdrop ORANGE and stops instead, which says so. See MB_STAGE. */
+    REG_DISPCNT = 0;
+    MEM_PALETTE[0] = 0x021F;
+    for (;;) { }
+#endif
     while ((uint16_t)(~REG_KEYINPUT & KEY_MASK)) { }
     REG_IME = 0;
     REG_IE = 0;
