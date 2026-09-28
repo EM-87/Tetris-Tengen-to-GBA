@@ -9,10 +9,25 @@
 #include "port.h"
 
 
+/* SINGLE-PAK BREADCRUMBS: on the slave's build only, the backdrop (all a
+ * screen with nothing on it shows) turns a colour for each step of the
+ * start that has been got through, so a slave that stops on real hardware
+ * says where. crt0 starts it red. Gone when main switches the screen on. */
+#ifdef TENGEN_MULTIBOOT
+#define MB_STAGE(bgr555) (MEM_PALETTE[0] = (uint16_t)(bgr555))
+#else
+#define MB_STAGE(bgr555) ((void)0)
+#endif
+
 int main(void) {
     /* First: every screen from here on waits for its frame in vsync(), and
      * vsync() sleeps until an interrupt that this is what switches on. */
     irq_init();
+    MB_STAGE(0x03FF);                      /* yellow: interrupts on */
+#ifdef TENGEN_MULTIBOOT
+    vsync();                               /* the first BIOS call */
+#endif
+    MB_STAGE(0x03E0);                      /* green: a frame went by */
     upload_tiles();
     upload_palettes();
     /* What the battery kept, or the cartridge's cold-boot table if there is
@@ -21,15 +36,21 @@ int main(void) {
     leader_load();
     set_field_palette_for_level(0);
     clear_screen();
+    uint16_t backdrop = MEM_PALETTE[0];    /* the breadcrumbs borrow it */
+    (void)backdrop;
+    MB_STAGE(0x7FE0);                      /* cyan: art and table in */
 
     upload_title_tiles();
     upload_sprite_tiles();
     oam_hide_all();
     nes_audio_init();
+    MB_STAGE(0x7C00);                      /* blue: the sound engine runs */
     /* After nes_audio_init: this runs the cartridge's code, and the machine it
      * runs on is the sound engine's. */
     init_title_sprites();
     restart_title_sprites();
+    MB_STAGE(0x7C1F);                      /* magenta: title sprites */
+    MB_STAGE(backdrop);                    /* ...and the backdrop back */
 
     REG_BG0CNT = BG_4BPP | BG_SIZE_32x32 | BG_CHARBLOCK(CHARBLOCK) |
                   BG_SCREENBLOCK(SCREENBLOCK) | BG_PRIORITY(1);
@@ -635,8 +656,15 @@ int main(void) {
                      * waits: a BIOS that has just been switched on needs
                      * them to be listening. */
                     if (frame % 8) continue;
+                    /* NOTHING SOUNDS WHILE THE BIOS SENDS. It keeps the
+                     * CPU for as long as the transfer takes, the sound
+                     * engine does not run meanwhile, and whatever note was
+                     * on held for the whole of it: a long beep, as if the
+                     * console had broken. */
+                    psg_mute(true);
                     LinkSendResult r = link_multiboot_send(
                         kSlaveImage, (uint32_t)(kSlaveImageEnd - kSlaveImage));
+                    psg_mute(false);
                     if (r == LINK_SEND_DONE) {
                         /* A SECOND OF QUIET before the lobby starts talking:
                          * the other console is starting the image now, and

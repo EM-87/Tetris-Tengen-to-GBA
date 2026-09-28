@@ -1737,6 +1737,7 @@ uint8_t read_buttons(void);
 bool shoulder_chord(void);
 /* L+R+SELECT: see system_sleep (video.c). */
 bool sleep_keys_held(void);
+void psg_mute(bool mute);
 void system_sleep(void);
 bool pressed_shoulder(int which);
 void upload_tiles(void);

@@ -67,13 +67,27 @@ rom_header_end:
 
 .ifdef MULTIBOOT
     @ ...and a sign that this program has started, for whoever is watching
-    @ a real console: the BIOS's logo goes, the screen goes white (forced
-    @ blank) until main draws the lobby. A slave left on the logo was never
-    @ started; one left white started and stopped.
+    @ a real console: the BIOS's logo goes and the screen shows nothing but
+    @ the backdrop, RED, which main then turns to other colours as it gets
+    @ through its start (MB_STAGE, main.c) until it draws the lobby. The
+    @ colour a slave stops on is the step it stopped in.
     mov     r0, #0x04000000
-    mov     r1, #0x80
-    strh    r1, [r0]                @ DISPCNT: forced blank
+    mov     r1, #0
+    strh    r1, [r0]                @ DISPCNT: mode 0, nothing on
+    mov     r0, #0x05000000
+    mov     r1, #0x1F
+    strh    r1, [r0]                @ backdrop: red
 .endif
+
+    @ THE SUPERVISOR'S STACK, which every BIOS call (SWI) runs on. A
+    @ cartridge boot leaves it at $03007FE0, where the BIOS keeps it; after
+    @ a Single-Pak transfer nothing says it is still there, and a BIOS call
+    @ pushing into this program's own internal WRAM would be the first
+    @ vsync() overwriting code. So it is put where the BIOS puts it, as
+    @ devkitARM's startup does.
+    mov     r0, #0x13               @ supervisor mode
+    msr     cpsr_c, r0
+    ldr     sp, =0x03007FE0
 
     @ IRQ stack. Nothing here enables interrupts, but leaving the IRQ stack
     @ pointer unset is the kind of thing that only bites once something does.

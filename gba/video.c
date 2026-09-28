@@ -246,6 +246,18 @@ static void soft_reset_check(void) {
 #define SLEEP_KEYS (KEY_L | KEY_R | KEY_SELECT)
 #define REG_SOUNDCNT_L_HW (*(vu16 *)0x04000080)
 
+/* The PSG's master volume to nothing and back, leaving every channel as it
+ * was: for the Single-Pak send, when the sound engine cannot run. */
+void psg_mute(bool mute) {
+    static uint16_t kept;
+    if (mute) {
+        kept = REG_SOUNDCNT_L_HW;
+        REG_SOUNDCNT_L_HW = 0;
+    } else {
+        REG_SOUNDCNT_L_HW = kept;
+    }
+}
+
 bool sleep_keys_held(void) {
     return (uint16_t)(~REG_KEYINPUT & SLEEP_KEYS) == SLEEP_KEYS;
 }

@@ -168,9 +168,16 @@ story behind each; the item number is in brackets.
   logo after a transfer the master's BIOS called good — INFERRED to be the
   receiving BIOS's serial interrupt still on while the cartridge, back in
   its lobby, talked over crt0 (in mGBA, a slave started that way never
-  linked). The cartridge also waits a second after sending, and the slave
-  blanks its screen white first thing, so a hardware report says whether
-  the image started at all (white) or not (logo).
+  linked). The cartridge also waits a second after sending. The next
+  build started (the slave went white) and stopped before drawing
+  anything: crt0 now also sets the supervisor's stack, which every BIOS
+  call runs on and which only a cartridge boot is sure to leave at
+  $03007FE0 (INFERRED cause). Until a slave is seen reaching the lobby on
+  hardware, its start paints the backdrop a colour per step (MB_STAGE,
+  main.c): red crt0, yellow interrupts on, green the first vsync, cyan the
+  art, blue the sound engine, magenta the title sprites. The colour it
+  stops on is where. The cartridge mutes the PSG while the BIOS sends: the
+  last note held for the whole transfer, a long beep.
 - **The soft reset is done by hand** (`soft_reset_check`, video.c), not
   by the BIOS's SoftReset, which mGBA's stand-in BIOS does not have: a
   restart the checks cannot run is one nobody knows works. It leaves the
