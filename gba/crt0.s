@@ -49,6 +49,32 @@ _start:
 .endif
 
 rom_header_end:
+    @ INTERRUPTS OFF BEFORE ANYTHING ELSE. From a cartridge they are off
+    @ already; from the cable they may not be: the BIOS that received the
+    @ Single-Pak image did it on the serial interrupt, and the cartridge
+    @ goes back to its lobby and starts talking the moment the image is
+    @ across. An interrupt taken while the lines below are still laying out
+    @ internal WRAM goes through a vector that is not this program's. IME
+    @ off, IE emptied and IF acknowledged; irq_init switches on only what
+    @ this program uses.
+    mov     r0, #0x04000000
+    add     r0, r0, #0x200          @ IE
+    mov     r1, #0
+    strh    r1, [r0, #8]            @ IME = 0
+    strh    r1, [r0]                @ IE = 0
+    ldr     r1, =0xFFFF
+    strh    r1, [r0, #2]            @ IF: acknowledge whatever is pending
+
+.ifdef MULTIBOOT
+    @ ...and a sign that this program has started, for whoever is watching
+    @ a real console: the BIOS's logo goes, the screen goes white (forced
+    @ blank) until main draws the lobby. A slave left on the logo was never
+    @ started; one left white started and stopped.
+    mov     r0, #0x04000000
+    mov     r1, #0x80
+    strh    r1, [r0]                @ DISPCNT: forced blank
+.endif
+
     @ IRQ stack. Nothing here enables interrupts, but leaving the IRQ stack
     @ pointer unset is the kind of thing that only bites once something does.
     mov     r0, #0x12               @ IRQ mode, IRQ+FIQ disabled

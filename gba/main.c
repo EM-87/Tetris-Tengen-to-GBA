@@ -637,7 +637,17 @@ int main(void) {
                     if (frame % 8) continue;
                     LinkSendResult r = link_multiboot_send(
                         kSlaveImage, (uint32_t)(kSlaveImageEnd - kSlaveImage));
-                    if (r == LINK_SEND_DONE) break;
+                    if (r == LINK_SEND_DONE) {
+                        /* A SECOND OF QUIET before the lobby starts talking:
+                         * the other console is starting the image now, and
+                         * words on the cable while it lays itself out are
+                         * words it has no way to take yet (crt0). */
+                        for (int wait = 0; wait < 60; wait++) {
+                            vsync();
+                            audio_frame();
+                        }
+                        break;
+                    }
                     wrong_end = r == LINK_SEND_WRONG_END;
                 }
                 held_last = read_buttons();   /* B is not the lobby's */

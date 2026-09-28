@@ -163,7 +163,14 @@ story behind each; the item number is in brackets.
   never touches save memory: a console booted into multiboot can have
   another game's cartridge in. mGBA takes a multiboot image whose $C0
   branch is exactly 28 bytes for a cartridge, hence the spare word after
-  the $E0 entry.
+  the $E0 entry. crt0 switches interrupts off before anything else and
+  irq_init sets IE outright: on two SPs the first slave froze on the BIOS's
+  logo after a transfer the master's BIOS called good — INFERRED to be the
+  receiving BIOS's serial interrupt still on while the cartridge, back in
+  its lobby, talked over crt0 (in mGBA, a slave started that way never
+  linked). The cartridge also waits a second after sending, and the slave
+  blanks its screen white first thing, so a hardware report says whether
+  the image started at all (white) or not (logo).
 - **The soft reset is done by hand** (`soft_reset_check`, video.c), not
   by the BIOS's SoftReset, which mGBA's stand-in BIOS does not have: a
   restart the checks cannot run is one nobody knows works. It leaves the

@@ -2302,6 +2302,33 @@ def singlepak_check(rom):
         print(f"FALLA: {f}")
     if failures:
         return 1
+    # ...AND STARTED THE WAY A REAL BIOS LEAVES IT: the serial interrupt
+    # still on, its vector not this program's, and the cartridge already
+    # back in its lobby and talking. On two real SPs the slave froze on the
+    # BIOS's logo; here, before crt0 switched interrupts off first thing,
+    # the two never linked.
+    cores, cable, both, tap = _pair(rom, slow=True, slave_rom=mb)
+    both(40)
+    tap("START", who=0); tap("DOWN", who=0); tap("START", who=0)
+    both(30)
+    slave = cores[1]
+    slave.reset()
+    io = slave._native.memory.io
+    io[0x208 >> 1] = 1                     # IME
+    io[0x200 >> 1] = 0x0080                # IE: serial
+    io[0x128 >> 1] = 0x6003 | 0x4000       # multiplayer, interrupt on
+    slave.memory.u32[0x03007FFC] = 0x03001000
+    both(260)
+    if _screen_of(cores[0]) != "ajustes":
+        failures.append(f"arrancada como la deja la BIOS, la imagen no enlaza "
+                        f"(el cartucho esta en {_screen_of(cores[0])})")
+    else:
+        print("  y arrancada como la deja la BIOS, con la interrupcion del "
+              "cable encendida y el cartucho hablando, enlaza igual")
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
     print("OK: la imagen de Single-Pak juega contra el cartucho.")
     return mb_send_check(rom)
 

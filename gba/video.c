@@ -152,7 +152,9 @@ void irq_init(void) {
     REG_IME = 0;
     BIOS_IRQ_VECTOR = irq_handler;
     REG_DISPSTAT |= DSTAT_VBL_IRQ;
-    REG_IE |= IRQ_VBLANK;
+    /* ONLY the vertical blank: a Single-Pak slave's BIOS can leave others
+     * switched on (see crt0), and the cable adds its own when it starts. */
+    REG_IE = IRQ_VBLANK;
     REG_IF = 0xFFFF;         /* discard anything already pending */
     REG_IME = 1;
 }
