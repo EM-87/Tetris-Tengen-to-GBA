@@ -1830,13 +1830,14 @@ static uint32_t coop_total_lines(void) {
  * one board, one score between the two of you. This port's does not work
  * that way — the core keeps a score, a line count and a preview PER PLAYER
  * on the shared board, and every one of those was being thrown away. The
- * left panel is yours and the right one is theirs, laid into the four cells
- * the cartridge's own ledges make on each side:
+ * left panel is player 1's and the right one player 2's, the sides their
+ * pieces come in on (see draw_coop_panel), laid into the four cells the
+ * cartridge's own ledges make on each side:
  *
  *      left                    right
- *      NEXT   (yours)          NEXT   (theirs)
- *      SCORE  (yours)          SCORE  (theirs)
- *      LINES  (yours)          LINES  (theirs)
+ *      NEXT   (player 1)       NEXT   (player 2)
+ *      SCORE  (player 1)       SCORE  (player 2)
+ *      LINES  (player 1)       LINES  (player 2)
  *      LEVEL  (shared)         HIGH   (this build's table)
  *      -- free --              -- free --
  *
@@ -2009,16 +2010,27 @@ static void draw_coop_panel(void) {
 
     if (hud_stats()) { draw_coop_stats_panel(me); return; }
 
-    draw_coop_next(COOP_L_TX, g_view, PAL_NEXT_BANK);
-    draw_coop_next(COOP_R_TX, g_view ^ 1, PAL_NEXT2_BANK);
+    /* THE PANELS STAND ON THE SIDES THE PIECES FALL ON: player 1's on the
+     * left, where player 1's pieces come in (TENGEN_SPAWN_X), and player 2's
+     * on the right — on both consoles. They were "yours on the left" instead,
+     * which on one console is the same thing; on the cable's second console
+     * it put player 2's NEXT over the LEFT half of the board while player 2's
+     * pieces came in on the right, and player 1's NEXT over the right, so
+     * every piece arrived on the side opposite its preview. Two players
+     * swapping consoles between games both ended up unsure which piece was
+     * theirs. */
+    const TengenPlayerState *left = &g_session.game.player[TENGEN_PLAYER_1];
+    const TengenPlayerState *right = &g_session.game.player[TENGEN_PLAYER_2];
+    draw_coop_next(COOP_L_TX, TENGEN_PLAYER_1, PAL_NEXT_BANK);
+    draw_coop_next(COOP_R_TX, TENGEN_PLAYER_2, PAL_NEXT2_BANK);
 
     g_panel_layer = true;
-    draw_coop_counter(COOP_L_TX, COOP_COUNTER_TY, HUD_LABEL_SCORE, me->score, 6);
-    draw_coop_counter(COOP_L_TX, COOP_LOWER_TY, HUD_LABEL_LINES, me->lines, 4);
-    draw_coop_counter(COOP_L_TX, COOP_THIRD_TY, HUD_LABEL_LEVEL, me->level, 2);
+    draw_coop_counter(COOP_L_TX, COOP_COUNTER_TY, HUD_LABEL_SCORE, left->score, 6);
+    draw_coop_counter(COOP_L_TX, COOP_LOWER_TY, HUD_LABEL_LINES, left->lines, 4);
+    draw_coop_counter(COOP_L_TX, COOP_THIRD_TY, HUD_LABEL_LEVEL, left->level, 2);
 
-    draw_coop_counter(COOP_R_TX, COOP_COUNTER_TY, HUD_LABEL_SCORE, them->score, 6);
-    draw_coop_counter(COOP_R_TX, COOP_LOWER_TY, HUD_LABEL_LINES, them->lines, 4);
+    draw_coop_counter(COOP_R_TX, COOP_COUNTER_TY, HUD_LABEL_SCORE, right->score, 6);
+    draw_coop_counter(COOP_R_TX, COOP_LOWER_TY, HUD_LABEL_LINES, right->lines, 4);
     draw_coop_text_counter(COOP_R_TX, COOP_THIRD_TY, "HIGH", g_high_score, 6);
 
     if (g_pause_unlocked) {

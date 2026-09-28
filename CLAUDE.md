@@ -221,6 +221,16 @@ story behind each; the item number is in brackets.
   `link_debug`, in the history before PR #26). Both are gone; bring them
   back from there if a console ever needs reading again. The ROM file's
   name carries the commit.
+- **A coop panel stands on its player's side of the board**: player 1's
+  (NEXT, score, lines) on the left, where player 1's pieces come in, on
+  both consoles. "Yours on the left" put every preview over the other half
+  of the board on the cable's second console, and two players kept losing
+  track of whose piece was whose (`coop_check`).
+- **The cold table runs 17000 down to 3000, and Tengen pays little**: a
+  piece is worth (level+1) x (level+1 + rows above the floor), so a game
+  that reaches level 2 is a few hundred to a couple of thousand points and
+  does not make it. A report of "scores missing from the table" is this
+  first; read the score before reading the code.
 - **Coop's two falling pieces are solid to each other**, and the settled
   field cannot see it: `checkCoopCollision` runs on shifts, rotations and
   gravity. [22]
@@ -358,17 +368,6 @@ And what has run only in an emulator:
 - **The latest builds on hardware** — the Thumb code, `VBlankIntrWait`, the
   interrupt handler. mGBA is accurate on all three, but it is not the
   console.
-
-Reported from a long session on two SPs and not yet understood — ask what
-the screen said before touching anything:
-
-- **Scores that never reached the table** in a 2 PLAYER match where the
-  master played two games (A+B) to the slave's one. CABLE LOST and EXIT
-  skip the table on purpose; a match that ended on its own GAME OVER must
-  not.
-- **Players mistaking whose falling piece is whose**, often enough to be
-  more than human error. Probably COOPERATIVE; check first whether the
-  cartridge tells the two pieces apart at all.
 
 Ideas for a later round, none started (the user's list):
 
