@@ -200,7 +200,13 @@ story behind each; the item number is in brackets.
   count of vertical blanks (g_vblank_count) and makes no BIOS call, and
   the start paints BLACK and stops if no vertical blank has arrived at all
   in the two seconds yellow is held (then the interrupt itself is what is
-  broken). The cartridge mutes the PSG while the BIOS sends: the
+  broken). It stayed YELLOW, not black: the check after yellow never ran,
+  so the slave died inside yellow's two seconds, on its first interrupt.
+  Next: crt0 stops all four DMA channels and timers first thing (a BIOS
+  that animated its logo may leave a vertical-blank DMA writing into
+  internal WRAM, where the handler is: INFERRED), and after grey the
+  slave compares internal WRAM's code with what crt0 copied, PURPLE and
+  stop if anything has written over it. The cartridge mutes the PSG while the BIOS sends: the
   last note held for the whole transfer, a long beep.
 - **The soft reset is done by hand** (`soft_reset_check`, video.c), not
   by the BIOS's SoftReset, which mGBA's stand-in BIOS does not have: a

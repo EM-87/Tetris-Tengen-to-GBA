@@ -65,6 +65,25 @@ rom_header_end:
     ldr     r1, =0xFFFF
     strh    r1, [r0, #2]            @ IF: acknowledge whatever is pending
 
+    @ ...AND EVERY DMA CHANNEL AND TIMER STOPPED. From a cartridge they are
+    @ stopped already; after a Single-Pak transfer the BIOS that animated
+    @ its logo may have left one running, and a DMA that fires on each
+    @ vertical blank into internal WRAM would rewrite the code about to be
+    @ copied there — the interrupt handler first. On two SPs the slave died
+    @ on its first interrupt (INFERRED to be this).
+    mov     r0, #0x04000000
+    mov     r1, #0
+    add     r2, r0, #0xB8           @ DMA0CNT
+    str     r1, [r2]
+    str     r1, [r2, #12]           @ DMA1CNT
+    str     r1, [r2, #24]           @ DMA2CNT
+    str     r1, [r2, #36]           @ DMA3CNT
+    add     r2, r0, #0x100          @ TM0CNT
+    str     r1, [r2]
+    str     r1, [r2, #4]            @ TM1CNT
+    str     r1, [r2, #8]            @ TM2CNT
+    str     r1, [r2, #12]           @ TM3CNT
+
 .ifdef MULTIBOOT
     @ ...and a sign that this program has started, for whoever is watching
     @ a real console: the BIOS's logo goes and the screen shows nothing but

@@ -34,6 +34,20 @@ int main(void) {
     /* First: every screen from here on waits for its frame in vsync(), and
      * vsync() sleeps until an interrupt that this is what switches on. */
     MB_STAGE(0x4210);                      /* grey: in main, nothing on */
+#ifdef TENGEN_MULTIBOOT
+    /* ...and is the code crt0 copied into internal WRAM still what it
+     * copied, two seconds on? PURPLE, and stop, if not: something is
+     * writing over it, and the interrupt handler lives there. */
+    {
+        extern const uint32_t __iwram_lma[];
+        extern uint32_t __iwram_start[], __iwram_end[];
+        for (uint32_t *p = __iwram_start; p < __iwram_end; p++)
+            if (*p != __iwram_lma[p - __iwram_start]) {
+                MEM_PALETTE[0] = 0x7C10;
+                for (;;) { }
+            }
+    }
+#endif
     irq_init();
     MB_STAGE(0x03FF);                      /* yellow: interrupts on */
 #ifdef TENGEN_MULTIBOOT
