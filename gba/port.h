@@ -1736,6 +1736,7 @@ void vsync(void);
 uint8_t read_buttons(void);
 bool shoulder_chord(void);
 /* L+R+SELECT: see system_sleep (video.c). */
+extern volatile uint32_t g_vblank_count;   /* see irq_handler */
 bool sleep_keys_held(void);
 void psg_mute(bool mute);
 void system_sleep(void);

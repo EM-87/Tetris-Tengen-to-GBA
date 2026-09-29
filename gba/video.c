@@ -136,10 +136,15 @@ uint8_t g_view;
  * IF and ORed into the BIOS's mirror, which is what VBlankIntrWait is
  * actually sleeping on — a handler that acknowledged the hardware and not
  * the mirror would leave it asleep for good. */
+/* Vertical blanks taken, counted by the handler: the Single-Pak slave's
+ * vsync waits on it (see vsync), and its start checks one has come at all. */
+volatile uint32_t g_vblank_count;
+
 IWRAM_CODE void irq_handler(void);
 void irq_handler(void) {
     /* Only the sources this program switched on: IF can latch others. */
     uint16_t flags = REG_IF & REG_IE;
+    if (flags & IRQ_VBLANK) g_vblank_count++;
     if (flags & IRQ_SERIAL) link_serial_service();
     REG_IF = flags;
     BIOS_IF_MIRROR |= flags;
@@ -176,7 +181,15 @@ void irq_init(void) {
 static void soft_reset_check(void);
 
 __attribute__((noinline)) void vsync(void) {
-#if defined(__thumb__)
+#if defined(TENGEN_MULTIBOOT)
+    /* NOT THROUGH THE BIOS ON THE SINGLE-PAK SLAVE. On two SPs its start got
+     * as far as switching interrupts on and then never came back from the
+     * first VBlankIntrWait. The frame is waited for here on the handler's
+     * own count instead, which needs nothing from the BIOS but the
+     * interrupt itself. */
+    uint32_t seen = g_vblank_count;
+    while (g_vblank_count == seen) { }
+#elif defined(__thumb__)
     __asm__ volatile ("swi 0x05" ::: "r0", "r1", "r2", "r3", "memory");
 #else
     __asm__ volatile ("swi 0x050000" ::: "r0", "r1", "r2", "r3", "memory");

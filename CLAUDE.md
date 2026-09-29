@@ -193,7 +193,14 @@ story behind each; the item number is in brackets.
   the probe, the game switches interrupts on at once (irq_init): the next
   build holds every colour two seconds, crt0's red included, and adds
   GREY on entering main, so "dies on the first interrupt" (grey, then a
-  flash of yellow) reads apart from "never started" (white). The cartridge mutes the PSG while the BIOS sends: the
+  flash of yellow) reads apart from "never started" (white). It showed
+  red, grey, yellow and stayed: the start got to the first vsync() after
+  switching interrupts on and never came back from the BIOS's
+  VBlankIntrWait. So on the slave vsync() waits on the handler's own
+  count of vertical blanks (g_vblank_count) and makes no BIOS call, and
+  the start paints BLACK and stops if no vertical blank has arrived at all
+  in the two seconds yellow is held (then the interrupt itself is what is
+  broken). The cartridge mutes the PSG while the BIOS sends: the
   last note held for the whole transfer, a long beep.
 - **The soft reset is done by hand** (`soft_reset_check`, video.c), not
   by the BIOS's SoftReset, which mGBA's stand-in BIOS does not have: a
