@@ -83,7 +83,6 @@ int main(void) {
      * runs on is the sound engine's. */
     init_title_sprites();
     restart_title_sprites();
-    MB_STAGE(0x7C1F);                      /* magenta: title sprites */
     MEM_PALETTE[0] = backdrop;             /* ...and the backdrop back */
 
     REG_BG0CNT = BG_4BPP | BG_SIZE_32x32 | BG_CHARBLOCK(CHARBLOCK) |

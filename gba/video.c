@@ -144,6 +144,11 @@ IWRAM_CODE void irq_handler(void);
 void irq_handler(void) {
     /* Only the sources this program switched on: IF can latch others. */
     uint16_t flags = REG_IF & REG_IE;
+#ifdef TENGEN_MULTIBOOT
+    /* The Single-Pak slave's breadcrumb for "the first interrupt got here":
+     * the backdrop MAGENTA (see MB_STAGE in main.c). */
+    if (g_vblank_count == 0) MEM_PALETTE[0] = 0x7C1F;
+#endif
     if (flags & IRQ_VBLANK) g_vblank_count++;
     if (flags & IRQ_SERIAL) link_serial_service();
     REG_IF = flags;

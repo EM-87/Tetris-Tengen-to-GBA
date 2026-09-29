@@ -206,7 +206,13 @@ story behind each; the item number is in brackets.
   that animated its logo may leave a vertical-blank DMA writing into
   internal WRAM, where the handler is: INFERRED), and after grey the
   slave compares internal WRAM's code with what crt0 copied, PURPLE and
-  stop if anything has written over it. The cartridge mutes the PSG while the BIOS sends: the
+  stop if anything has written over it. Still YELLOW (no purple): the
+  handler's code is intact and correctly placed (checked in the ELF), so
+  the next build asks the console two things directly: crt0's first
+  colour is RED if the BIOS started it in system mode and BLUE if not
+  (then its mode switches, and the interrupt stacks, would not take), and
+  the handler paints MAGENTA the first time it is entered (the title
+  sprites' magenta is gone). The cartridge mutes the PSG while the BIOS sends: the
   last note held for the whole transfer, a long beep.
 - **The soft reset is done by hand** (`soft_reset_check`, video.c), not
   by the BIOS's SoftReset, which mGBA's stand-in BIOS does not have: a

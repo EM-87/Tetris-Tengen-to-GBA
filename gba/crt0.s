@@ -94,8 +94,14 @@ rom_header_end:
     mov     r1, #0
     strh    r1, [r0]                @ DISPCNT: mode 0, nothing on
     mov     r0, #0x05000000
-    mov     r1, #0x1F
-    strh    r1, [r0]                @ backdrop: red
+    @ RED if the BIOS started this in system mode, as GBATEK says it does;
+    @ BLUE if in any other: then the stacks below could not be set.
+    mrs     r4, cpsr
+    and     r4, r4, #0x1F
+    cmp     r4, #0x1F
+    moveq   r1, #0x1F               @ backdrop: red
+    movne   r1, #0x7C00             @ ...or blue
+    strh    r1, [r0]
     @ ...held for two seconds (120 frames counted on VCOUNT), so it can be
     @ seen before the next step replaces it or goes wrong.
     ldr     r2, =0x04000006
