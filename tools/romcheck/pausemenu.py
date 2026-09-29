@@ -240,8 +240,15 @@ def pausemenu_check(rom_path):
             failures.append("salir a la fuerza pasa por la tabla de records")
         elif "EXIT" in row(PM_EXIT) or "PAUSE" in row(PM_HEAD):
             failures.append("decir SI no sale de la partida")
+        # ...and a game walked out of is not one to come back to at the next
+        # power-on: the paused game gba/suspend.c keeps in the save memory
+        # ($0E004000, "SUSP") is gone.
+        elif bytes(core.memory.u8[0x0E004000 + i] for i in range(4)) == b"SUSP":
+            failures.append("salir con EXIT deja la partida guardada para el "
+                            "siguiente encendido")
         else:
-            print("  SI sale al titulo, sin pasar por la tabla")
+            print("  SI sale al titulo, sin pasar por la tabla, y la partida "
+                  "guardada se borra")
 
     # ONCE FOUND, STILL FOUND. The chord is a thing you discover, not a thing
     # you should have to remember to do at the start of every game — so the

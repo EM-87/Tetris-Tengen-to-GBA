@@ -235,10 +235,20 @@ story behind each; the item number is in brackets.
   (`romcheck/harness.py`), because every check was written against a
   console that reaches the title at once; `suspend_check` is the one that
   looks at it.
-- **The soft reset is done by hand** (`soft_reset_check`, video.c), not
-  by the BIOS's SoftReset, which mGBA's stand-in BIOS does not have: a
-  restart the checks cannot run is one nobody knows works. It leaves the
-  serial port alone for the same reason sio_reset does.
+- **The soft reset ends in the BIOS's SoftReset** (SWI 0, `soft_reset_check`,
+  video.c), after stopping the DMA, timers and sound and emptying the
+  video memory by hand. A plain jump to $08000000 left a flash cart on a
+  black screen (INFERRED: the cart's start-up code expects what SoftReset
+  leaves — the top of internal WRAM cleared, the stacks reset, system
+  mode). If the emulator's stand-in BIOS returns from the call, the jump
+  by hand follows. $03007FFA picks the ROM or, for the Single-Pak copy,
+  external WRAM. It leaves the serial port alone for the same reason
+  sio_reset does, and drops the paused game kept on the battery.
+- **EXIT on the pause menu leaves with the game still paused and the match
+  still "running" for that frame** (`quit_match`; the way out is further
+  down the loop). Anything that asks "is a paused game on the plaque?"
+  has to ask about `quit_match` too: the battery's copy survived EXIT
+  until it did (`pausemenu_check`).
 - **A real cable is not the emulated one.** What two SPs taught us, one
   rule each; `run_link.py`'s cable models every one of them, and each has a
   check that the build before it fails:

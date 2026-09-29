@@ -1094,10 +1094,12 @@ int main(void) {
 #ifndef TENGEN_MULTIBOOT
         /* ON THE PAUSE PLAQUE THE GAME GOES TO THE BATTERY (suspend.c), and
          * again if the tune is changed under it; off the plaque — played
-         * on, over, or left — it is wiped. */
+         * on, over, or left — it is wiped. LEFT is `quit_match`: EXIT on the
+         * pause menu leaves with the game still paused and still "running"
+         * this frame (the way out is below), and was kept. */
         {
-            bool keep = match_running && !g_linked && !g_demo &&
-                        g_session.game.paused;
+            bool keep = match_running && !quit_match && !g_linked &&
+                        !g_demo && g_session.game.paused;
             if (keep && (!suspended || g_music != suspended_music)) {
                 SuspendMenu m = {
                     .game_mode = game_mode, .start_level = start_level,
