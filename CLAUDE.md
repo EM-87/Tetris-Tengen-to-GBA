@@ -212,7 +212,13 @@ story behind each; the item number is in brackets.
   colour is RED if the BIOS started it in system mode and BLUE if not
   (then its mode switches, and the interrupt stacks, would not take), and
   the handler paints MAGENTA the first time it is entered (the title
-  sprites' magenta is gone). The cartridge mutes the PSG while the BIOS sends: the
+  sprites' magenta is gone). It stayed YELLOW, neither black nor
+  magenta: an interrupt was taken (yellow's two seconds never ran out)
+  and never reached the handler, so the slave dies inside the BIOS's
+  dispatch. The big probe (R+SELECT) now takes vertical-blank interrupts
+  with a handler of its own in EWRAM and blinks green/blue: that tells
+  "no image received over the cable can take interrupts this way" from
+  "something in the game's start". The cartridge mutes the PSG while the BIOS sends: the
   last note held for the whole transfer, a long beep.
 - **The soft reset is done by hand** (`soft_reset_check`, video.c), not
   by the BIOS's SoftReset, which mGBA's stand-in BIOS does not have: a

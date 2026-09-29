@@ -34,10 +34,59 @@ probe_start:
     strh    r1, [r0]                @ DISPCNT: mode 0, nothing on
     add     r2, r0, #0x200
     strh    r1, [r2, #8]            @ IME off
-    mov     r0, #0x05000000
+    mov     r3, #0x05000000
     mov     r1, #0x3E0
-    strh    r1, [r0]                @ backdrop: green
+    strh    r1, [r3]                @ backdrop: green
+.ifdef BIG
+    @ THE BIG PROBE ALSO TAKES INTERRUPTIONS: the vertical blank's, with a
+    @ handler of its own right here in EWRAM, which flips the backdrop
+    @ between green and blue every 32 frames. A slave that blinks can take
+    @ interrupts; one that stays green cannot, whatever the program.
+    mov     r1, #0x12
+    msr     cpsr_c, r1              @ IRQ mode: its stack
+    ldr     sp, =0x03007F00
+    mov     r1, #0x1F
+    msr     cpsr_c, r1              @ system mode: its stack
+    ldr     sp, =0x03007E00
+    ldr     r1, =probe_irq
+    ldr     r3, =0x03007FFC
+    str     r1, [r3]                @ the BIOS's interrupt vector
+    mov     r1, #0
+    ldr     r3, =0x03000000
+    str     r1, [r3]                @ the frame count
+    mov     r1, #8
+    strh    r1, [r0, #4]            @ DISPSTAT: vertical-blank interrupt
+    mov     r1, #1
+    strh    r1, [r2]                @ IE: vertical blank
+    ldr     r1, =0xFFFF
+    strh    r1, [r2, #2]            @ IF: nothing pending
+    mov     r1, #1
+    strh    r1, [r2, #8]            @ IME on
+.endif
 1:  b       1b
+
+.ifdef BIG
+probe_irq:
+    mov     r0, #0x04000000
+    add     r0, r0, #0x200
+    mov     r1, #1
+    strh    r1, [r0, #2]            @ IF: acknowledge
+    ldr     r3, =0x03007FF8
+    ldrh    r2, [r3]
+    orr     r2, r2, #1
+    strh    r2, [r3]                @ ...and the BIOS's copy of it
+    ldr     r3, =0x03000000
+    ldr     r2, [r3]
+    add     r2, r2, #1
+    str     r2, [r3]
+    tst     r2, #32
+    moveq   r1, #0x3E0              @ green
+    movne   r1, #0x7C00             @ blue
+    mov     r3, #0x05000000
+    strh    r1, [r3]
+    bx      lr
+    .pool
+.endif
 
     .balign 16
     .space  0x200                   @ over the BIOS's minimum of $100
