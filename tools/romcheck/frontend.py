@@ -1086,9 +1086,11 @@ def link_check(rom_path):
     # long as it takes, and B is the way out. (The timeout is for a partner
     # that answered and then went quiet; run_link.py's late_check covers the
     # meeting.)
+    # With no cable the SI pin floats high and the console takes itself for
+    # the slave's end with nobody transferring: it asks for the cable.
     run(core, LINK_TIMEOUT_FRAMES + 60)
     msg = tilemap_text(core, LINK_MSG_ROW)
-    if "WAITING" not in msg:
+    if "CONNECT THE CABLE" not in msg:
         failures.append(f"el lobby deja de esperar sin cable (fila "
                         f"{LINK_MSG_ROW}: {msg!r})")
     else:

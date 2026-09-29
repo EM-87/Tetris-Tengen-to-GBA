@@ -1921,7 +1921,9 @@ def role_check(rom):
     if where[1] != "cable":
         failures.append(f"con el maestro fuera, el esclavo esta en {where[1]}")
     import run_rom
-    if "WAITING" not in run_rom.tilemap_text(cores[1], 10):
+    # Its master in a menu does not transfer, which from the slave's end is
+    # no cable at all: it asks for one, and waits.
+    if "CONNECT THE CABLE" not in run_rom.tilemap_text(cores[1], 10):
         failures.append("con el maestro fuera, el esclavo no vuelve a esperar")
     tap("START", who=0)                 # the master comes back
     both(60)
@@ -2529,6 +2531,82 @@ def mb_send_check(rom):
     if failures:
         return 1
     print("OK: el envio de Single-Pak llega entero, del cartucho y de la copia.")
+    return peer_check(rom)
+
+
+class DeadEnd:
+    """The other end of the cable switched off: every slot it would fill
+    reads $FFFF."""
+    state = "off"
+    done = 0
+
+    def answer(self, m):
+        return ABSENT
+
+
+def peer_check(rom):
+    """THE LINK CABLE SCREEN SAYS WHAT IS ON THE OTHER END.
+
+    A console with no cartridge (the stand-in BIOS, which the master finds
+    by asking it $6200 now and then, link_probe): the screen offers to send
+    it the game. Another of ours, still in its menu: wait for its player,
+    and no offer. Nothing (the other end switched off): switch it on. And
+    while the game goes, the bar is a growing I piece with the figure under
+    it, not a row of dashes.
+    """
+    import run_rom
+    failures = []
+
+    def rows(core):
+        return " ".join(run_rom.tilemap_text(core, r) for r in range(8, 16))
+
+    cases = (("una GBA sin cartucho", FakeMultibootBios(),
+              "THE OTHER GBA IS EMPTY", True),
+             ("otra GBA con el juego, en su menu", None,
+              "WAITING FOR OTHER PLAYER", False),
+             ("la otra GBA apagada", DeadEnd(),
+              "SWITCH THE OTHER GBA ON", False))
+    for name, other, want, offer in cases:
+        cores, cable, both, tap = _pair(rom)
+        cable.fake_bios = other
+        both(300)
+        tap("START", who=0)
+        tap("DOWN", who=0)
+        tap("START", who=0)
+        both(120)
+        text = rows(cores[0])
+        offered = "SELECT SENDS THE GAME" in text
+        if want not in text:
+            failures.append(f"{name}: la pantalla no dice {want!r} "
+                            f"({' '.join(text.split())!r})")
+        elif offered != offer:
+            failures.append(f"{name}: {'no ' if offer else ''}ofrece enviar "
+                            f"el juego")
+        else:
+            print(f"  {name}: '{want}'"
+                  f"{' y ofrece enviar' if offer else ''}")
+        if isinstance(other, FakeMultibootBios):
+            tap("SELECT", who=0)
+            pct = cells = False
+            for _ in range(200):
+                both(5)
+                row = run_rom.tilemap_text(cores[0], 14)
+                if " KB OF " in row and " 0 KB" not in row:
+                    pct = True
+                    cells = "-" not in run_rom.tilemap_text(cores[0], 12)
+                    break
+            if not pct:
+                failures.append("durante el envio no sale lo enviado")
+            elif not cells:
+                failures.append("la barra de envio sigue siendo de guiones")
+            else:
+                print(f"  enviando: la pieza I crece, "
+                      f"'{run_rom.tilemap_text(cores[0], 14).strip()}'")
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: la pantalla del cable dice que hay al otro lado y que hacer.")
     return 0
 
 

@@ -83,6 +83,9 @@ static volatile uint16_t g_starved = 0xFFFF;
 static volatile uint8_t g_tx_frame;
 static volatile bool g_auto_tx;      /* the interrupt loads the buttons itself */
 static bool g_armed;
+static uint8_t g_peer_empty;     /* see link_probe */
+#define LINK_QUIET_RESTART 180
+static uint8_t g_quiet_frames;   /* a slave's frames unlinked */
 /* What the send register is supposed to hold, so a reset can put it back. */
 static volatile uint16_t g_tx_word;
 static uint8_t g_busy_frames;
@@ -266,6 +269,8 @@ void link_init(void) {
     g_starved = 0xFFFF;      /* nothing has ever arrived */
     g_tx_frame = 0;
     g_auto_tx = false;
+    g_peer_empty = 0;
+    g_quiet_frames = 0;
 
     /* The vector is already irq_handler's (irq_init, at boot); the cable
      * only has to switch its own source on. */
@@ -290,9 +295,24 @@ void link_shutdown(void) {
     REG_SIOCNT &= (uint16_t)~SIO_IRQ;
     REG_IE &= (uint16_t)~IRQ_SERIAL;
     REG_SIOMLT_SEND = 0;
+    REG_IF = IRQ_SERIAL;     /* a transfer that landed on the way out is not served */
     g_auto_tx = false;
     g_armed = false;
     REG_IME = IME_ON;
+}
+
+/* THE PORT AT REST FROM THE MOMENT THE GAME STARTS: multiplayer mode, no
+ * interrupt, $0000 to send — the state link_shutdown leaves it in. A
+ * console whose port has never been touched is not in multiplayer mode,
+ * holds SD low, and the other end cannot tell it from one switched off;
+ * one at rest reads as a console that is there and not in its lobby yet,
+ * and the LINK CABLE screen on the other end says to wait for its player
+ * (link_peer) rather than to switch it on. */
+void link_rest(void) {
+    if (REG_RCNT & 0xC000) REG_RCNT = 0x0000;
+    REG_SIOCNT = SIO_NORMAL_SO_HIGH;
+    REG_SIOCNT = SIO_MODE_MULTI | SIO_BAUD;
+    REG_SIOMLT_SEND = 0;
 }
 
 /* THE SI PIN IS NOT THE CABLE'S ANSWER WHILE A TRANSFER IS PASSING. The
@@ -425,6 +445,23 @@ void link_lobby_step(TengenLobby *lobby) {
 
     link_tick();
     bool master = link_is_master();
+    /* A SLAVE THAT HEARS NOTHING FOR SECONDS starts its port over, now and
+     * then, as pulling the plug and pushing it back would. A master that
+     * hears nothing does it already (LINK_ABSENT_LIMIT); a slave has no
+     * transfers to count, and on two real SPs two copies of the Single-Pak
+     * image that had both left the lobby for the menu and come back never
+     * found each other again — a port stuck somewhere this cannot see is
+     * one explanation (INFERRED; the emulator's cable does not do it). Every
+     * LINK_QUIET_RESTART frames is nothing like the storms of old. */
+    if (!master && !lobby->linked && g_starved >= LINK_QUIET_RESTART &&
+        ++g_quiet_frames >= LINK_QUIET_RESTART) {
+        g_quiet_frames = 0;
+        REG_IME = 0;
+        g_reset_cool = 0;
+        sio_reset();
+        REG_IME = IME_ON;
+    }
+    if (g_starved < LINK_QUIET_RESTART) g_quiet_frames = 0;
     /* A CONSOLE THAT FINDS IT IS THE OTHER ONE starts the conversation again
      * in the right role (tengen_lobby_forget): what it built up in the wrong
      * one would have it taking its own echo for its partner's. */
@@ -685,4 +722,58 @@ LinkSendResult link_multiboot_send(const uint8_t *image, uint32_t len,
     mb_transfer(MB_FINAL_CRC);
     if (mb_transfer((uint16_t)crc) != (uint16_t)crc) return LINK_SEND_RETRY;
     return LINK_SEND_DONE;
+}
+
+/* ----------------------------------------------------------------------- *
+ * What is on the other end
+ * ----------------------------------------------------------------------- */
+
+/* THE FIRST STEP OF A SEND, AND NO MORE: $6200 at the BIOS's speed, which a
+ * console waiting in its BIOS answers $720x (GBATEK's table: $0000 the
+ * first time, while it is still settling, so two). The lobby's own
+ * transfers run at 38400 and cannot hear that console at all. Every
+ * sixteenth frame, through normal mode both ways (see sio_reset), with the
+ * port's interrupt off meanwhile, at the port and in IE, so that neither
+ * transfer reaches the lobby's queue. A console of ours on the other end takes the probe for a
+ * word out of order and answers NONE, which costs the handshake a turn;
+ * the LINK CABLE screen probes only while the lobby has not linked. */
+#define LINK_PROBE_EVERY 16
+static uint8_t g_probe_clock;
+
+void link_probe(void) {
+    if (++g_probe_clock % LINK_PROBE_EVERY) return;
+    if (!g_armed || !link_is_master()) {
+        g_peer_empty = 0;
+        return;
+    }
+    if (REG_SIOCNT & SIO_START) return;
+    REG_IME = 0;
+    REG_IE = (uint16_t)(REG_IE & ~IRQ_SERIAL);
+    REG_SIOCNT = SIO_NORMAL_SO_HIGH;
+    REG_SIOCNT = SIO_MODE_MULTI | SIO_BAUD_115200;
+    REG_IME = IME_ON;
+    uint16_t got = LINK_ABSENT;
+    /* SD low is nobody in multiplayer mode on the other end: nothing to
+     * ask, and a start would only set the error bit. */
+    if (REG_SIOCNT & SIO_SD) {
+        mb_transfer(0x6200);
+        got = mb_transfer(0x6200);
+    }
+    REG_IME = 0;
+    REG_SIOCNT = SIO_NORMAL_SO_HIGH;
+    REG_SIOCNT = SIO_MODE_MULTI | SIO_BAUD;
+    REG_IF = IRQ_SERIAL;
+    REG_IE = (uint16_t)(REG_IE | IRQ_SERIAL);
+    REG_SIOCNT = (uint16_t)(REG_SIOCNT | SIO_IRQ);
+    load_send();
+    REG_IME = IME_ON;
+    /* Found at once, lost only after two probes in a row say so: the
+     * screen should not flicker for one transfer that went astray. */
+    if ((got & 0xFFF0) == 0x7200) g_peer_empty = 2;
+    else if (g_peer_empty) g_peer_empty--;
+}
+
+LinkPeer link_peer(void) {
+    if (g_peer_empty) return LINK_PEER_EMPTY_GBA;
+    return link_connected() ? LINK_PEER_SOMEONE : LINK_PEER_NOBODY;
 }

@@ -241,6 +241,15 @@ void tengen_lobby_apply(TengenLobby *lobby, bool master, bool got,
         lobby_quiet_turn(lobby, master);
         return;
     }
+    /* A GO WITH SOMETHING IN IT IS NOT OURS. It is the $6200 a master
+     * sends, the way a Single-Pak send starts, to ask whether a console
+     * with no cartridge is on the cable (link_probe) — tag GO by accident,
+     * and taken for one: a slave walking in halfway through a handshake
+     * went into the match on it, alone. Our GO is always empty, so the
+     * probe is heard as nothing at all. */
+    if (!master && tag_of(master_word) == TENGEN_LOBBY_GO &&
+        (master_word & TENGEN_LOBBY_PAYLOAD_MASK))
+        return;
 
     if (master) {
         TengenLobbyTag echo = tag_of(slave_word);

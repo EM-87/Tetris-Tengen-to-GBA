@@ -191,4 +191,22 @@ LinkSendResult link_multiboot_send(const uint8_t *image, uint32_t len,
                                     void (*progress)(uint32_t done,
                                                      uint32_t total));
 
+/* At boot: the port in multiplayer mode, silent, as link_shutdown leaves
+ * it — so that the other end can tell this console is there. */
+void link_rest(void);
+
+/* WHAT IS ON THE OTHER END, while the lobby has found nobody to talk to —
+ * for the LINK CABLE screen to say what to do next. */
+typedef enum {
+    LINK_PEER_NOBODY,      /* no transfers, or nothing in the other slot */
+    LINK_PEER_SOMEONE,     /* a console in multiplayer mode, not (yet) ours */
+    LINK_PEER_EMPTY_GBA    /* one with no cartridge, waiting in its BIOS */
+} LinkPeer;
+
+/* Once a frame on the LINK CABLE screen, before link_lobby_step, while the
+ * lobby is not linked: now and then asks the cable, the way a Single-Pak
+ * send starts, whether a console with no cartridge is waiting there. */
+void link_probe(void);
+LinkPeer link_peer(void);
+
 #endif /* LINK_H */

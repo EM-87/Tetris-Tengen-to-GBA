@@ -13,6 +13,9 @@ int main(void) {
     /* First: every screen from here on waits for its frame in vsync(), and
      * vsync() sleeps until an interrupt that this is what switches on. */
     irq_init();
+    /* ...and the cable answers from the start, wherever the player is: see
+     * link_rest. */
+    link_rest();
 
     upload_tiles();
     upload_palettes();
@@ -594,6 +597,10 @@ int main(void) {
             /* Quiet while the cable is looking for the other end; there is
              * nothing to preview yet. */
             front_music(FRONT_SILENCE);
+            /* WHO IS THERE, for the screen to say: a console with no
+             * cartridge is asked for separately (link_probe), and only
+             * until somebody has answered the lobby. */
+            if (!lobby.linked) link_probe();
             /* One handshake transfer per frame until both consoles agree on a
              * seed, a level and a tune — or until the cable gives up. */
             link_lobby_step(&lobby);
@@ -631,6 +638,7 @@ int main(void) {
                 uint32_t img_len = single_pak_length();
                 screen_blip();
                 bool wrong_end = false;
+                bool muted = false;
                 for (int frame = 0;; frame++) {
                     vsync();
                     draw_link_sending(wrong_end);
@@ -639,14 +647,21 @@ int main(void) {
                     /* A few frames between tries, as gba-link-connection
                      * waits: a BIOS that has just been switched on needs
                      * them to be listening. */
-                    if (frame % 8) continue;
+                    if (frame % 8 != 7) continue;
                     /* NOTHING SOUNDS WHILE IT SENDS. The sound engine
                      * does not run meanwhile, and whatever note was on
-                     * would hold for the whole of it: a long beep. */
-                    psg_mute(true);
+                     * would hold for the whole of it: a long beep. Muted
+                     * from the first try to the end, once — the blip has
+                     * had its eight frames by then — and not around each
+                     * try: with nobody answering, the volume going off and
+                     * on again with every try clicked in the speaker two
+                     * to four times a second. */
+                    if (!muted) {
+                        psg_mute(true);
+                        muted = true;
+                    }
                     LinkSendResult r = link_multiboot_send(img, img_len,
                                                            draw_send_progress);
-                    psg_mute(false);
                     if (r == LINK_SEND_DONE) {
                         /* A SECOND OF QUIET before the lobby starts talking:
                          * the other console is starting the image now. */
@@ -658,6 +673,7 @@ int main(void) {
                     }
                     wrong_end = r == LINK_SEND_WRONG_END;
                 }
+                if (muted) psg_mute(false);
                 held_last = read_buttons();   /* B is not the lobby's */
                 link_init();
                 tengen_lobby_forget(&lobby, link_is_master());

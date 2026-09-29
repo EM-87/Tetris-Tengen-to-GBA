@@ -1426,6 +1426,27 @@ static void test_a_single_pak_slave_takes_the_masters_mode(void) {
     }
 }
 
+static void test_a_single_pak_probe_is_not_a_go(void) {
+    /* The master asks the cable for a console with no cartridge with $6200
+     * (link_probe), which reads as GO with something in it. A slave hears
+     * it at every stage of a handshake, and nothing changes: it is not let
+     * into the match, and the handshake finishes together. */
+    TengenLobby master, slave;
+    tengen_lobby_start(&master, 0xC0DE, 3, 1);
+    tengen_lobby_start(&slave, 0, 0, 0);
+    int left_apart = 0;
+    for (int i = 0; i < 200 && !master.ready; i++) {
+        TengenLobby before = slave;
+        uint16_t sw = tengen_lobby_word(&slave, false);
+        tengen_lobby_apply(&slave, false, true, 0x6200, sw);
+        CHECK(memcmp(&before, &slave, sizeof slave) == 0);
+        lobby_transfer(&master, &slave, true);
+        if (master.ready != slave.ready) left_apart++;
+    }
+    CHECK(master.ready && slave.ready);
+    CHECK(left_apart == 0 && slave.seed == 0xC0DE);
+}
+
 static void test_a_slave_that_saw_one_go_does_not_carry_it_over(void) {
     /* A GO seen in a conversation that never finished (the master went
      * away between its two GOs) is forgotten when the next one opens with
@@ -3570,6 +3591,7 @@ int main(void) {
     test_a_slave_that_saw_one_go_does_not_carry_it_over();
     test_two_consoles_that_chose_different_modes_never_link();
     test_a_single_pak_slave_takes_the_masters_mode();
+    test_a_single_pak_probe_is_not_a_go();
     test_the_lobby_ends_even_when_one_side_leaves_first();
     test_a_console_that_took_itself_for_the_master_starts_again();
     test_no_lobby_word_can_look_like_an_absent_console();

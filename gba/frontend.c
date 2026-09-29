@@ -596,13 +596,38 @@ void draw_link_wait(const TengenLobby *lobby, int elapsed) {
     clear_both(MENU_IN_TX, 10, MENU_IN_W, 7);
     if (!lobby->linked) {
         oam_hide_all();
-        /* Not "PLAYER 2": neither console knows which it is until the other
-         * answers, and half the time the one reading this is player 2. */
-        draw_text_centred(10, "WAITING FOR OTHER PLAYER", menu_bank());
-        draw_text_centred(12, "B TO GO BACK", menu_bank());
-        /* SINGLE-PAK: the other console needs no cartridge — and the one
-         * that came over the cable can send itself on (single_pak_image). */
-        draw_text_centred(14, "SELECT SENDS THE GAME", BANK_NOTE);
+        /* WHAT TO DO DEPENDS ON WHAT IS ON THE OTHER END (link_peer). A
+         * console with no cartridge: send it the game — offered only then,
+         * though SELECT sends whatever the screen says. One of ours, or any
+         * console in multiplayer mode: wait for its player. Nobody: on the
+         * master's end (the SI pin grounded by the cable's plug) the cable
+         * is in and the other console is off or elsewhere; on the other
+         * end, no transfers is as much no cable as a console not in its
+         * lobby, and the screen says both. Not "PLAYER 2" anywhere: neither
+         * console knows which it is until the other answers. */
+        switch (link_peer()) {
+            case LINK_PEER_EMPTY_GBA:
+                draw_text_centred(10, "THE OTHER GBA IS EMPTY", menu_bank());
+                draw_text_centred(12, "SELECT SENDS THE GAME", menu_bank());
+                draw_text_centred(14, "B TO GO BACK", BANK_NOTE);
+                break;
+            case LINK_PEER_SOMEONE:
+                draw_text_centred(10, "WAITING FOR OTHER PLAYER", menu_bank());
+                draw_text_centred(12, "B TO GO BACK", menu_bank());
+                draw_text_centred(14, "PICK 2 PLAYER THERE TOO", BANK_NOTE);
+                break;
+            default:
+                if (link_is_master()) {
+                    draw_text_centred(10, "SWITCH THE OTHER GBA ON", menu_bank());
+                    draw_text_centred(12, "B TO GO BACK", menu_bank());
+                    draw_text_centred(14, "IT NEEDS NO CARTRIDGE", BANK_NOTE);
+                } else {
+                    draw_text_centred(10, "CONNECT THE CABLE", menu_bank());
+                    draw_text_centred(12, "B TO GO BACK", menu_bank());
+                    draw_text_centred(14, "THEN 2 PLAYER ON BOTH", BANK_NOTE);
+                }
+                break;
+        }
         return;
     }
     if (link_is_master()) {
@@ -777,22 +802,63 @@ uint32_t single_pak_length(void) {
 #endif
 }
 
-/* THE BAR: twenty cells under the words, filling as the image goes out.
+/* THE BAR: twenty blocks of the I piece's colours filling a row of their
+ * own outlines as the image goes out, and how far it has got in kilobytes.
+ * (It was the cartridge's solid tile and dashes, which on the SP read as
+ * "nnnn------"; and the game's own block tiles are not loaded while a menu
+ * is up.) The two tiles are drawn here, pixel by pixel, into slots at the
+ * top of the tile memory that nothing else uses (SEND_TILE_BASE): a
+ * bevelled block — light edge top and left, dark bottom and right, the
+ * middle shade inside — and its outline in the dark shade. Colours 1-3 are
+ * the piece's light, middle and dark (kRomPiecePalettes), in the falling
+ * piece's bank, which no menu uses.
+ *
  * Called from inside the sending (link_multiboot_send) every few hundred
- * words, between transfers, so it draws straight into the map — no frame
+ * words, between transfers, so it draws straight into the map: no frame
  * is waited for, and a cell or two drawn mid-scanout is nothing. */
+#define SEND_TILE_BASE 1008
 #define SEND_BAR_W  20
-#define SEND_BAR_TY 15
+#define SEND_BAR_TY 12
+#define SEND_KB_TY  14
+static void make_send_tiles(void) {
+    vu16 *dst = MEM_CHARBLOCK(CHARBLOCK) + SEND_TILE_BASE * 16;
+    for (int tile = 0; tile < 2; tile++) {
+        for (int y = 0; y < 8; y++) {
+            uint32_t row = 0;
+            for (int x = 0; x < 8; x++) {
+                bool edge = x == 0 || y == 0 || x == 7 || y == 7;
+                uint32_t c;
+                if (tile == 1) c = edge ? 3 : 0;
+                else if (y == 7 || x == 7) c = 3;
+                else if (y == 0 || x == 0) c = 1;
+                else c = 2;
+                row |= c << (4 * x);
+            }
+            dst[tile * 16 + y * 2] = (uint16_t)row;
+            dst[tile * 16 + y * 2 + 1] = (uint16_t)(row >> 16);
+        }
+    }
+}
+
 void draw_send_progress(uint32_t done, uint32_t total) {
     int filled = total ? (int)((uint64_t)done * SEND_BAR_W / total) : 0;
     int tx = MENU_IN_TX + (MENU_IN_W - SEND_BAR_W) / 2;
-    /* A solid tile of the cartridge's ($8B, two colours edge to edge) for
-     * what has gone, a dash for what has not; on the row "B TO STOP" had,
-     * on both layers, since B does nothing mid-send. */
-    const uint8_t block = 0x8B;
-    clear_both(MENU_IN_TX, SEND_BAR_TY, MENU_IN_W, 1);
+    make_send_tiles();
+    set_bank_from_piece(PAL_PIECE_BANK, TT_I);
+    clear_both(MENU_IN_TX, SEND_BAR_TY, MENU_IN_W, 4);
     for (int i = 0; i < SEND_BAR_W; i++)
         set_map_tile(tx + i, SEND_BAR_TY,
-                     i < filled ? WITH_BANK(block, menu_bank())
-                                : WITH_BANK(ascii_tile('-'), BANK_NOTE));
+                     WITH_BANK(SEND_TILE_BASE + (i < filled ? 0 : 1),
+                               PAL_PIECE_BANK));
+    /* "74 KB OF 188 KB": the font has no per cent sign. */
+    char row[24];
+    unsigned n = append_number(row, 0, (done * 4 + 512) / 1024);
+    const char *of = " KB OF ";
+    for (int i = 0; of[i]; i++) row[n++] = of[i];
+    n = append_number(row, n, (total * 4 + 512) / 1024);
+    row[n++] = ' ';
+    row[n++] = 'K';
+    row[n++] = 'B';
+    row[n] = '\0';
+    draw_text_centred(SEND_KB_TY, row, BANK_NOTE);
 }

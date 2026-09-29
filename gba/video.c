@@ -188,7 +188,12 @@ static void soft_reset_check(void);
  * the master starts one transfer per frame, so a transfer is served within
  * the frame it lands in. */
 void poll_interrupts(void) {
-    uint16_t flags = (uint16_t)(REG_IF & (IRQ_VBLANK | IRQ_SERIAL));
+    /* ...AND ONLY THE ONES SWITCHED ON, as the interrupt would have had
+     * them. IF records a finished transfer whatever IE says, and a slave
+     * that left the lobby with one pending used to serve it from the menu:
+     * the lobby's word went back on the wire, and the console on the other
+     * end heard a partner that had gone. */
+    uint16_t flags = (uint16_t)(REG_IF & REG_IE & (IRQ_VBLANK | IRQ_SERIAL));
     if (!flags) return;
     REG_IF = flags;
     if (flags & IRQ_SERIAL) link_serial_service();

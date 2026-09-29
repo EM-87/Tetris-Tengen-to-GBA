@@ -159,10 +159,13 @@ simulan la misma partida desde la misma semilla y solo se mandan botones, y
 se va, las dos lo detectan. Las dos necesitan esta misma versión del ROM
 (con otra más vieja se conectan igual, pero sin skin).
 
-**Single-Pak**: la otra consola no necesita cartucho. En la pantalla LINK
-CABLE, **SELECT** le envía el juego por el cable (la consola con cartucho
-tiene que estar en el extremo maestro; si no, lo dice). La otra se enciende
-sin cartucho y su BIOS lo recibe, con una barra de progreso en la que envía;
+**Single-Pak**: la otra consola no necesita cartucho. La pantalla LINK
+CABLE dice qué hay al otro lado: una GBA sin cartucho (y entonces ofrece
+**SELECT** para enviarle el juego), otra consola con el juego (esperar a su
+jugador) o nada (encenderla, o conectar el cable). La consola que envía
+tiene que estar en el extremo maestro; si no, lo dice. La otra se enciende
+sin cartucho y su BIOS lo recibe, con una barra de bloques y los KB en la
+que envía;
 arranca directamente en el lobby, juega el modo que eligió la del cartucho y
 no guarda récords. Y la copia puede hacer copias: en su propia pantalla LINK
 CABLE, SELECT la envía a su vez a otra consola sin cartucho, desde su

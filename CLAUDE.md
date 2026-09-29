@@ -183,8 +183,36 @@ story behind each; the item number is in brackets.
     start after somebody else's code should do.
   - mGBA takes a multiboot image whose $C0 branch is exactly 28 bytes for
     a cartridge: hence the spare word after the $E0 entry.
-  - The cartridge mutes the PSG while it sends, and waits a second after,
+  - The sender mutes the PSG from its first try to the end of the send —
+    once: muting and unmuting around every try clicked in the speaker at
+    two to four hertz while nobody answered — and waits a second after,
     before its lobby talks over the new console's start.
+  - **The LINK CABLE screen says what is on the other end** (`link_peer`).
+    The port rests in multiplayer mode from boot (`link_rest`), so one of
+    ours anywhere in the game reads as "someone" (wait for its player). A
+    console with no cartridge cannot be heard at the lobby's 38400 baud:
+    the master asks for it with the send's first word, $6200 at 115200,
+    every sixteenth frame while the lobby is unlinked (`link_probe`), and
+    offers SELECT only when $720x comes back (INFERRED from GBATEK's
+    table and gba-link-connection; the stand-in BIOS answers so). The
+    probe's interrupt is kept out of IE as well as SIOCNT — the emulated
+    cable raises IF regardless, and the master's lobby ate its own probe
+    — and $6200 is tag GO with a payload, which a slave of ours once took
+    for a GO and walked into the match alone: our GO is always empty, so
+    a GO with something in it is ignored (`tengen_lobby_apply`). Nobody
+    answering: on the master's end, switch the other one on; on the
+    other, no transfers is as much no cable as a master in its menu, and
+    the screen asks for both.
+  - `poll_interrupts` serves only what IE has switched on, as the
+    interrupt would: a transfer pending as the slave left the lobby was
+    served from the menu, putting the lobby's word back on the wire.
+  - **Open: two copies that both leave the lobby for the menu and come
+    back never find each other** (after a match they do). The emulator
+    does not do it in any order or timing tried. Two guesses went in:
+    the IE mask above, and a slave that hears nothing for three seconds
+    restarting its port through normal mode (`LINK_QUIET_RESTART`), as
+    re-plugging would. What the LINK CABLE screen says on each console
+    when it happens is the next clue.
   - A probe as small as the BIOS allows (784 bytes) never started on the
     SPs; one of the game's size did. Not followed up.
   `singlepak_check` plays the cartridge against the polling slave byte for
@@ -415,9 +443,10 @@ And what has run only in an emulator:
 
 - **Single-Pak** worked on two SPs with the cartridge sending through the
   BIOS's SWI $25 and the slave polling (build bb77e71): a coop match, the
-  skins and the chord. The software sender that replaced SWI $25, its
-  progress bar, and the copy sending itself have run only in mGBA against
-  the stand-in BIOS (`mb_send_check`).
+  skins and the chord; the software sender, its bar and the copy sending
+  itself on the SPs too (build bccaf9d). The block bar, the steady mute,
+  the cable-state screen and the probe behind it have run only in mGBA
+  (`peer_check`).
 - **The sleep** has run only in mGBA, whose stand-in BIOS has no Stop:
   `system_check` checks the way in and out, the console the rest.
 
