@@ -2335,10 +2335,15 @@ def singlepak_check(rom):
 
 class FakeMultibootBios:
     """THE BIOS OF A CONSOLE SWITCHED ON WITH NO CARTRIDGE, as far as the
-    handshake before SWI $25 goes: each of the cartridge's words answered
-    the way gba-link-connection's LinkCableMultiboot checks for, the words
-    that matter written down. It says nothing for its first few transfers,
-    like a console that is still being switched on."""
+    cable can tell: the handshake, then the image word by word, decrypted
+    the way GBATEK's pseudo-code for SWI $25 encrypts it, and the checksum
+    at the end. What arrives is kept, so a check can compare it with what
+    was meant to be sent. It says nothing for its first few transfers, like
+    a console that is still being switched on, and answers the first
+    end-of-image request with "not yet" ($0074), as a slave still checking
+    would."""
+
+    CRC_XOR, DATA_XOR, SEED_MUL = 0xA517, 0x6465646F, 0x6F646573
 
     def __init__(self):
         self.state = "asleep"
@@ -2346,55 +2351,143 @@ class FakeMultibootBios:
         self.header = []
         self.palette = None
         self.handshake = None
-        self.done = 0          # handshakes that reached the end
         self.client_data = 0x5A
+        self.random = 0x42
+        self.done = 0          # images received whole, checksum agreed
+        self.received = None
+
+    @classmethod
+    def crc(cls, crc, data):
+        for _ in range(32):
+            low = (crc ^ data) & 1
+            data >>= 1
+            crc >>= 1
+            if low:
+                crc ^= cls.CRC_XOR
+        return crc
 
     def answer(self, m):
         if self.naps:
             self.naps -= 1
             return ABSENT
-        if m == 0x6200 and self.state in ("asleep", "found", "done"):
+        st = self.state
+        if m == 0x6200 and st in ("asleep", "found", "done", "failed"):
             self.state, self.header = "found", []
             return 0x7202
-        if m == 0x6102 and self.state == "found":
+        if m == 0x6102 and st == "found":
             self.state = "header"
             return 0x7202
-        if self.state == "header":
+        if st == "header":
             left = 0x60 - len(self.header)
             self.header.append(m)
             if len(self.header) == 0x60:
                 self.state = "header_done"
             return (left << 8) | 2
-        if m == 0x6200 and self.state == "header_done":
+        if m == 0x6200 and st == "header_done":
             self.state = "again"
             return 0x0002
-        if m == 0x6202 and self.state == "again":
+        if m == 0x6202 and st == "again":
             self.state = "palette"
             return 0x7202
-        if (m & 0xFF00) == 0x6300 and self.state == "palette":
+        if (m & 0xFF00) == 0x6300 and st == "palette":
             self.palette = m & 0xFF
             self.state = "handshake"
             return 0x7300 | self.client_data
-        if (m & 0xFF00) == 0x6400 and self.state == "handshake":
+        if (m & 0xFF00) == 0x6400 and st == "handshake":
             self.handshake = m & 0xFF
-            self.state = "done"
-            self.done += 1
+            self.state = "length"
             return 0x7300
+        if st == "length":
+            self.length = m * 4 + 0x190
+            self.words = self.length // 4
+            self.i = 0xC0 // 4
+            self.low = None
+            self.seed = (self.palette | (self.client_data << 8)
+                         | 0xFFFF0000)
+            self.crc_c = 0xFFF8
+            self.image = bytearray(0xC0)
+            for k, h in enumerate(self.header):
+                self.image[2 * k] = h & 0xFF
+                self.image[2 * k + 1] = h >> 8
+            self.state = "data"
+            self.not_yet = True
+            return 0x7300 | self.random
+        if st == "data":
+            addr = (self.i << 2) & 0xFFFF
+            if self.low is None:
+                self.low = m
+                return addr
+            enc = (m << 16) | self.low
+            self.low = None
+            self.seed = (self.seed * self.SEED_MUL + 1) & 0xFFFFFFFF
+            plain = (enc ^ self.DATA_XOR ^ self.seed
+                     ^ ((0xFE000000 - (self.i << 2)) & 0xFFFFFFFF))
+            self.image += plain.to_bytes(4, "little")
+            self.crc_c = self.crc(self.crc_c, plain)
+            self.i += 1
+            if self.i >= self.words:
+                self.state = "end"
+            return (addr + 2) & 0xFFFF
+        if st == "end" and m == 0x0065:
+            if self.not_yet:
+                self.not_yet = False
+                return 0x0074
+            self.state = "final"
+            return 0x0075
+        if st == "final" and m == 0x0066:
+            self.state = "crc"
+            return 0x0075
+        if st == "crc":
+            final = (self.handshake | (self.random << 8)) | 0xFFFF0000
+            want = self.crc(self.crc_c & 0xFFFF, final) & 0xFFFF
+            if m == want:
+                self.done += 1
+                self.received = bytes(self.image)
+                self.state = "done"
+            else:
+                self.state = "failed"
+            return want
         return 0x0000
 
 
-def mb_send_check(rom):
-    """SINGLE-PAK: THE CARTRIDGE'S SIDE OF THE HANDSHAKE, UP TO THE BIOS.
+def _send_to_fake(rom, master_rom, image):
+    """One console (master_rom) on the master's end, the stand-in BIOS on
+    the other; SELECT on the LINK CABLE screen; the image it takes in."""
+    import run_rom
+    cores, cable, both, tap = _pair(master_rom, slave_rom=rom)
+    bios = FakeMultibootBios()
+    cable.fake_bios = bios
+    both(1000)
+    if master_rom != rom:                  # the cartridge: to the lobby first
+        tap("START", who=0)
+        tap("DOWN", who=0)
+        tap("START", who=0)
+        both(30)
+    rows = " ".join(run_rom.tilemap_text(cores[0], r) for r in range(8, 16))
+    offered = "SELECT SENDS THE GAME" in rows
+    tap("SELECT", who=0)
+    bar = False
+    for _ in range(120):
+        both(30)
+        rows = " ".join(run_rom.tilemap_text(cores[0], r) for r in range(8, 16))
+        bar = bar or "SENDING THE GAME" in rows
+        if bios.done:
+            break
+    both(120)
+    return offered, bar, bios, _screen_of(cores[0])
 
-    On the LINK CABLE screen, SELECT sends the game to a console with no
-    cartridge (link_multiboot_send). Everything before the BIOS's own
-    MultiBoot call is the program's, and that is what runs here against a
-    stand-in for the other console's BIOS: the cartridge finds it, sends
-    the image's 0xC0-byte header a halfword at a time, the palette byte,
-    and the handshake byte worked out from the other console's answer —
-    each as GBATEK and gba-link-connection have them. SWI $25 itself, and
-    the image arriving, are the BIOS's and only hardware can show them.
-    B stops trying and puts the lobby back.
+
+def mb_send_check(rom):
+    """SINGLE-PAK: THE SENDING, WHOLE, AND THE COPY SENDING ITSELF.
+
+    SELECT on the LINK CABLE screen sends the game to a console with no
+    cartridge (link_multiboot_send), all of it in software. Here the other
+    end is a stand-in for that console's BIOS that decrypts what it is sent
+    the way GBATEK's pseudo-code encrypts it: the image it takes in has to
+    be the image, byte for byte, and the two checksums have to agree. Twice:
+    from the cartridge, sending the image it carries, and from a console
+    running that image, sending itself out of EWRAM. After a send the
+    console is back in its lobby.
     """
     mb = os.path.splitext(rom)[0] + "_mb.mb"
     if not os.path.exists(mb):
@@ -2402,47 +2495,40 @@ def mb_send_check(rom):
         return 0
     image = open(mb, "rb").read()
     failures = []
-    cores, cable, both, tap = _pair(rom, slave_rom=mb)
-    bios = FakeMultibootBios()
-    cable.fake_bios = bios
-    both(1000)
-    tap("START", who=0)
-    tap("DOWN", who=0)
-    tap("START", who=0)
-    both(30)
-    import run_rom
-    rows = " ".join(run_rom.tilemap_text(cores[0], r) for r in range(8, 16))
-    if "SELECT SENDS THE GAME" not in rows:
-        failures.append(f"la pantalla del cable no ofrece enviar: {rows!r}")
-    tap("SELECT", who=0)
-    both(60)
-    rows = " ".join(run_rom.tilemap_text(cores[0], r) for r in range(8, 16))
-    want_header = [image[i] | (image[i + 1] << 8) for i in range(0, 0xC0, 2)]
-    want_hs = (0x11 + bios.client_data + 0xFF + 0xFF) & 0xFF
-    if "SENDING THE GAME" not in rows:
-        failures.append(f"SELECT no pone la pantalla de envio: {rows!r}")
-    elif not bios.done:
-        failures.append(f"el saludo no llega al final (se quedo en "
-                        f"{bios.state})")
-    elif bios.header != want_header:
-        failures.append("la cabecera enviada no es la de la imagen")
-    elif bios.palette != 0x93:
-        failures.append(f"paleta {bios.palette:#x}, no 0x93")
-    elif bios.handshake != want_hs:
-        failures.append(f"handshake {bios.handshake:#x}, no {want_hs:#x}")
-    else:
-        print(f"  el cartucho encuentra a la otra consola, le manda la "
-              f"cabecera de la imagen, la paleta y el handshake "
-              f"({want_hs:#04x}): {bios.done} veces hasta la llamada a la BIOS")
-    tap("B", who=0)
-    both(30)
-    if _screen_of(cores[0]) != "cable":
-        failures.append(f"B no vuelve al lobby ({_screen_of(cores[0])})")
+    for name, master in (("el cartucho", rom), ("la copia", mb)):
+        # The console on the other end is only there to hold the cable in
+        # multiplayer mode (SD high); its answers are the stand-in's.
+        offered, bar, bios, where = _send_to_fake(mb, master, image)
+        got = bios.received
+        if not offered:
+            failures.append(f"{name}: la pantalla del cable no ofrece enviar")
+        elif not bar:
+            failures.append(f"{name}: SELECT no pone la pantalla de envio")
+        elif not bios.done:
+            failures.append(f"{name}: el envio no termina (se quedo en "
+                            f"{bios.state})")
+        elif bios.palette != 0x93:
+            failures.append(f"{name}: paleta {bios.palette:#x}, no 0x93")
+        elif got is None or len(got) != len(image) or any(
+                got[k] != image[k] for k in range(len(image))
+                if k not in (0xC4, 0xC5)):
+            diff = next((k for k in range(min(len(got or b""), len(image)))
+                         if got[k] != image[k] and k not in (0xC4, 0xC5)),
+                        None)
+            failures.append(f"{name}: lo recibido no es la imagen "
+                            f"({len(got or b'')} de {len(image)} bytes, "
+                            f"primera diferencia en {diff})")
+        elif where != "cable":
+            failures.append(f"{name}: tras enviar no vuelve al lobby ({where})")
+        else:
+            print(f"  {name}: {len(image)} bytes, cifrados, recibidos y "
+                  f"descifrados identicos, la suma de comprobacion coincide "
+                  f"y vuelve al lobby")
     for f in failures:
         print(f"FALLA: {f}")
     if failures:
         return 1
-    print("OK: el cartucho hace su parte del envio de Single-Pak.")
+    print("OK: el envio de Single-Pak llega entero, del cartucho y de la copia.")
     return 0
 
 

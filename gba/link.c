@@ -525,56 +525,48 @@ void link_name_step(TengenNameSwap *swap) {
  *
  * A GBA switched on with no cartridge in (or with START and SELECT held)
  * sits in its BIOS waiting for a program on the cable. This is the other
- * end of that: the handshake the BIOS expects, a halfword at a time in
- * multiplayer mode, and then the BIOS's own MultiBoot (SWI $25) sends the
- * rest and starts it. The steps and every word in them are GBATEK's
- * ("BIOS Multi Boot (Single Game Pak)") as gba-link-connection's
- * LinkCableMultiboot runs them on hardware: that library's synchronous
- * sender, for one slave, in C.
+ * end of that, all of it in software, a halfword at a time in multiplayer
+ * mode: the handshake, then the image itself, encrypted word by word, then
+ * the checksum. The steps and every constant are GBATEK's ("BIOS Multi Boot
+ * (Single Game Pak)", its pseudo-code for SWI $25) as gba-link-connection's
+ * LinkCableMultiboot::Async runs them on hardware, for one slave.
  *
- * Only the cartridge's build sends; the image it sends is that build's
- * other half (see mb.ld and kSlaveImage).
+ * NOT THROUGH THE BIOS's OWN MultiBoot (SWI $25), which did the second half
+ * until the Single-Pak slave had to send too: it keeps the CPU for the
+ * whole transfer, so nothing can be drawn meanwhile (no progress bar), and
+ * a slave on two real SPs could take no interrupt at all (see IME_ON), so
+ * nothing the BIOS does behind its back is taken on trust there.
+ *
+ * The cartridge sends the image it carries (kSlaveImage); the slave sends
+ * ITSELF, the image still sitting in EWRAM where its BIOS put it.
  * ----------------------------------------------------------------------- */
-#ifndef TENGEN_MULTIBOOT
-
 #define SIO_BAUD_115200   0x0003    /* what the BIOS's MultiPlay expects */
 #define MB_CLIENT_BIT     0x02      /* the one slave, in slot 1 */
 #define MB_TRIES          16
 #define MB_PALETTE        0x93      /* the logo's colour and its movement */
 #define MB_SPIN_LIMIT     100000u   /* a transfer is ~150us; this is ~50ms */
+#define MB_HEADER         0xC0
+/* GBATEK's pseudo-code: c, x, k and m's multiplier, for MultiPlay. */
+#define MB_CRC_START      0xFFF8u
+#define MB_CRC_XOR        0xA517u
+#define MB_DATA_XOR       0x6465646Fu
+#define MB_SEED_MUL       0x6F646573u
+#define MB_ROM_END        0x0065
+#define MB_ROM_END_ACK    0x0075
+#define MB_FINAL_CRC      0x0066
 
-/* GBATEK's MultiBootParam, byte for byte: the BIOS reads it by offset. */
-typedef struct {
-    uint32_t reserved1[5];
-    uint8_t handshake_data;         /* $14 */
-    uint8_t padding;
-    uint16_t handshake_timeout;
-    uint8_t probe_count;
-    uint8_t client_data[3];         /* $19 */
-    uint8_t palette_data;           /* $1C */
-    uint8_t response_bit;
-    uint8_t client_bit;             /* $1E */
-    uint8_t reserved2;
-    const uint8_t *boot_srcp;       /* $20: the image after its header */
-    const uint8_t *boot_endp;       /* $24: its end */
-    const uint8_t *masterp;
-    const uint8_t *reserved3[3];
-    uint32_t system_work2[4];
-    uint8_t sendflag;
-    uint8_t probe_target_bit;
-    uint8_t check_wait;
-    uint8_t server_type;
-} MultiBootParam;
-/* ...which C99 cannot assert directly, so an array that would have a
- * negative size if a field moved. */
-typedef char mb_param_client_data_at_19[
-    (__builtin_offsetof(MultiBootParam, client_data) == 0x19) ? 1 : -1];
-typedef char mb_param_boot_srcp_at_20[
-    (__builtin_offsetof(MultiBootParam, boot_srcp) == 0x20) ? 1 : -1];
+/* Waits a whole frame by the scanline counter: vsync() would serve the
+ * serial port as the lobby's (poll_interrupts, on the slave's build), and
+ * the port is this exchange's for now. */
+static void mb_frame(void) {
+    while (REG_VCOUNT >= 160) { }
+    while (REG_VCOUNT < 160) { }
+}
 
 /* One halfword each way, waited for: the slave's answer, or LINK_ABSENT
  * for a transfer that did not happen. A port stuck busy is started over
- * the gentle way (through normal mode; see sio_reset). */
+ * the gentle way (through normal mode; see sio_reset). Then GBATEK's 36us
+ * before the next, for the slave's BIOS to have its answer ready. */
 static uint16_t mb_transfer(uint16_t word) {
     REG_SIOMLT_SEND = word;
     REG_SIOCNT = (uint16_t)(REG_SIOCNT | SIO_START);
@@ -586,22 +578,26 @@ static uint16_t mb_transfer(uint16_t word) {
         }
     }
     uint16_t cnt = REG_SIOCNT;
+    uint16_t got = REG_SIOMULTI(1);
+    for (volatile int wait = 0; wait < 60; wait++) { }
     if (!(cnt & SIO_SD) || (cnt & SIO_ERR)) return LINK_ABSENT;
-    return REG_SIOMULTI(1);
+    return got;
 }
 
-static int bios_multiboot(const MultiBootParam *param, uint32_t mode) {
-    register uint32_t r0 __asm__("r0") = (uint32_t)param;
-    register uint32_t r1 __asm__("r1") = mode;
-#if defined(__thumb__)
-    __asm__ volatile ("swi 0x25" : "+r"(r0), "+r"(r1) :: "r2", "r3", "memory");
-#else
-    __asm__ volatile ("swi 0x250000" : "+r"(r0), "+r"(r1) :: "r2", "r3", "memory");
-#endif
-    return (int)r0;
+/* GBATEK's checksum step: 32 bits of `data` into `crc`. */
+static uint32_t mb_crc(uint32_t crc, uint32_t data) {
+    for (int bit = 0; bit < 32; bit++) {
+        uint32_t low = (crc ^ data) & 1u;
+        data >>= 1;
+        crc >>= 1;
+        if (low) crc ^= MB_CRC_XOR;
+    }
+    return crc;
 }
 
-LinkSendResult link_multiboot_send(const uint8_t *image, uint32_t len) {
+LinkSendResult link_multiboot_send(const uint8_t *image, uint32_t len,
+                                    void (*progress)(uint32_t done,
+                                                     uint32_t total)) {
     /* The lobby's interrupt-driven cable steps aside: every transfer here
      * is started and waited for by hand. link_init puts it back. */
     REG_IME = 0;
@@ -618,26 +614,17 @@ LinkSendResult link_multiboot_send(const uint8_t *image, uint32_t len) {
      * can only ever be the slave: this one has to be on the master's end. */
     if (REG_SIOCNT & SIO_SI) return LINK_SEND_WRONG_END;
 
-    MultiBootParam p;
-    uint8_t *raw = (uint8_t *)&p;
-    for (unsigned i = 0; i < sizeof(p); i++) raw[i] = 0;
-    p.client_data[0] = p.client_data[1] = p.client_data[2] = 0xFF;
-    p.palette_data = MB_PALETTE;
-    p.boot_srcp = image + 0xC0;
-    p.boot_endp = image + len;
-
     /* 3. $6200 until the slave answers $7202. */
     bool found = false;
     for (int t = 0; t < MB_TRIES && !found; t++)
         found = mb_transfer(0x6200) == (0x7200 | MB_CLIENT_BIT);
     if (!found) return LINK_SEND_NOBODY;
     /* 4. Which slaves there are, $610Y; each answers $720Y. */
-    p.client_bit = MB_CLIENT_BIT;
     if (mb_transfer(0x6100 | MB_CLIENT_BIT) != (0x7200 | MB_CLIENT_BIT))
         return LINK_SEND_RETRY;
     /* 5. The header, a halfword at a time; the slave counts them down. */
     const uint16_t *half = (const uint16_t *)image;
-    for (uint16_t left = 0xC0 / 2; left > 0; left--)
+    for (uint16_t left = MB_HEADER / 2; left > 0; left--)
         if (mb_transfer(*half++) != (uint16_t)((left << 8) | MB_CLIENT_BIT))
             return LINK_SEND_RETRY;
     /* 6. $6200 ($000Y back), then $620Y ($720Y). */
@@ -645,23 +632,57 @@ LinkSendResult link_multiboot_send(const uint8_t *image, uint32_t len) {
     if (mb_transfer(0x6200 | MB_CLIENT_BIT) != (0x7200 | MB_CLIENT_BIT))
         return LINK_SEND_RETRY;
     /* 7. The palette, $63PP, until the slave answers $73CC. */
+    uint8_t client = 0;
     found = false;
     for (int t = 0; t < MB_TRIES && !found; t++) {
         uint16_t v = mb_transfer(0x6300 | MB_PALETTE);
         if ((v & 0xFF00) == 0x7300) {
-            p.client_data[0] = (uint8_t)v;
+            client = (uint8_t)v;
             found = true;
         }
     }
     if (!found) return LINK_SEND_RETRY;
     /* 8. $11 plus the three slaves' bytes ($FF for the two not there). */
-    p.handshake_data = (uint8_t)(0x11 + p.client_data[0] + p.client_data[1] +
-                                 p.client_data[2]);
-    if ((mb_transfer(0x6400 | p.handshake_data) & 0xFF00) != 0x7300)
+    uint8_t handshake = (uint8_t)(0x11 + client + 0xFF + 0xFF);
+    if ((mb_transfer(0x6400 | handshake) & 0xFF00) != 0x7300)
         return LINK_SEND_RETRY;
-    /* 9. The rest is the BIOS's: MultiPlay (1), and 0 back is a slave that
-     * has the whole image and is already running it. */
-    return bios_multiboot(&p, 1) == 0 ? LINK_SEND_DONE : LINK_SEND_RETRY;
-}
 
-#endif /* !TENGEN_MULTIBOOT */
+    /* ...AND WHAT SWI $25 WOULD DO FROM HERE. A sixteenth of a second, then
+     * the length (in words, less $34), which the slave answers with a byte
+     * of its own for the checksum. */
+    for (int f = 0; f < 4; f++) mb_frame();
+    uint16_t reply = mb_transfer((uint16_t)((len - 0x190) / 4));
+    uint32_t crc_final = handshake | ((uint32_t)(reply & 0xFF) << 8) |
+                         0xFFFF0000u;
+    uint32_t seed = MB_PALETTE | ((uint32_t)client << 8) | 0xFFFF0000u;
+    uint32_t crc = MB_CRC_START;
+
+    /* The image after its header, a word at a time in two halves, each
+     * encrypted against its own address and a running seed; the slave
+     * answers every half with where it has put it. */
+    const uint32_t *word = (const uint32_t *)image;
+    uint32_t words = len / 4;
+    for (uint32_t i = MB_HEADER / 4; i < words; i++) {
+        seed = seed * MB_SEED_MUL + 1u;
+        uint32_t data = word[i] ^ (0xFE000000u - (i << 2)) ^ seed ^ MB_DATA_XOR;
+        if (mb_transfer((uint16_t)data) != (uint16_t)(i << 2))
+            return LINK_SEND_RETRY;
+        if (mb_transfer((uint16_t)(data >> 16)) != (uint16_t)((i << 2) + 2))
+            return LINK_SEND_RETRY;
+        crc = mb_crc(crc, word[i]);
+        if (progress && (i & 0xFF) == 0) progress(i, words);
+    }
+    if (progress) progress(words, words);
+
+    /* The end: $0065 until the slave has checked it all ($0075), then
+     * $0066 and the checksum, which the slave must give back the same. */
+    crc = mb_crc(crc & 0xFFFFu, crc_final);
+    int tries = 0;
+    while (mb_transfer(MB_ROM_END) != MB_ROM_END_ACK) {
+        if (++tries > 300) return LINK_SEND_RETRY;
+        mb_frame();
+    }
+    mb_transfer(MB_FINAL_CRC);
+    if (mb_transfer((uint16_t)crc) != (uint16_t)crc) return LINK_SEND_RETRY;
+    return LINK_SEND_DONE;
+}

@@ -158,77 +158,39 @@ story behind each; the item number is in brackets.
   (`gba/mb.ld`, `-DTENGEN_MULTIBOOT`, crt0's multiboot entries under
   MULTIBOOT) and carried inside the cartridge's ROM (`gba/mb_image.s`),
   which is why the ROM is 512 KB. Image plus the 6502's 64 KB must fit in
-  256 KB and the link asserts it (about 11 KB spare). The slave boots into
-  the lobby following the master's mode (`tengen_lobby_mode_any`) and
-  never touches save memory: a console booted into multiboot can have
-  another game's cartridge in. mGBA takes a multiboot image whose $C0
-  branch is exactly 28 bytes for a cartridge, hence the spare word after
-  the $E0 entry. crt0 switches interrupts off before anything else and
-  irq_init sets IE outright: on two SPs the first slave froze on the BIOS's
-  logo after a transfer the master's BIOS called good — INFERRED to be the
-  receiving BIOS's serial interrupt still on while the cartridge, back in
-  its lobby, talked over crt0 (in mGBA, a slave started that way never
-  linked). The cartridge also waits a second after sending. The next
-  build started (the slave went white) and stopped before drawing
-  anything: crt0 now also sets the supervisor's stack, which every BIOS
-  call runs on and which only a cartridge boot is sure to leave at
-  $03007FE0 (INFERRED cause). Until a slave is seen reaching the lobby on
-  hardware, its start paints the backdrop a colour per step (MB_STAGE,
-  main.c): red crt0, yellow interrupts on, green the first vsync, cyan the
-  art, blue the sound engine, magenta the title sprites. The colour it
-  stops on is where. That build stayed WHITE, not red: the image never ran
-  a single instruction (the white is the BIOS's, and so was the previous
-  one), though the master's MultiBoot returned good. So the cartridge also
-  carries two probes (gba/mb_probe.s: a header and a green screen, small
-  and padded to the game's size) sent on L+SELECT and R+SELECT, to tell a
-  broken send from an image the BIOS will not start, and size from
-  content. The ROM is 1 MB while they are in. On the SPs the big probe
-  went green and the game went white again (the small one never started;
-  not followed up): the sending works at the game's size, and the game's
-  own start is identical to the probe's, so it runs and something later
-  turns the screen white. The only thing in the slave that does is the
-  soft reset (forced blank); on that build it paints ORANGE and stops
-  instead, and each breadcrumb is held half a second so it can be seen.
-  That build stayed white with no colour at all, orange included. Unlike
-  the probe, the game switches interrupts on at once (irq_init): the next
-  build holds every colour two seconds, crt0's red included, and adds
-  GREY on entering main, so "dies on the first interrupt" (grey, then a
-  flash of yellow) reads apart from "never started" (white). It showed
-  red, grey, yellow and stayed: the start got to the first vsync() after
-  switching interrupts on and never came back from the BIOS's
-  VBlankIntrWait. So on the slave vsync() waits on the handler's own
-  count of vertical blanks (g_vblank_count) and makes no BIOS call, and
-  the start paints BLACK and stops if no vertical blank has arrived at all
-  in the two seconds yellow is held (then the interrupt itself is what is
-  broken). It stayed YELLOW, not black: the check after yellow never ran,
-  so the slave died inside yellow's two seconds, on its first interrupt.
-  Next: crt0 stops all four DMA channels and timers first thing (a BIOS
-  that animated its logo may leave a vertical-blank DMA writing into
-  internal WRAM, where the handler is: INFERRED), and after grey the
-  slave compares internal WRAM's code with what crt0 copied, PURPLE and
-  stop if anything has written over it. Still YELLOW (no purple): the
-  handler's code is intact and correctly placed (checked in the ELF), so
-  the next build asks the console two things directly: crt0's first
-  colour is RED if the BIOS started it in system mode and BLUE if not
-  (then its mode switches, and the interrupt stacks, would not take), and
-  the handler paints MAGENTA the first time it is entered (the title
-  sprites' magenta is gone). It stayed YELLOW, neither black nor
-  magenta: an interrupt was taken (yellow's two seconds never ran out)
-  and never reached the handler, so the slave dies inside the BIOS's
-  dispatch. The big probe (R+SELECT) now takes vertical-blank interrupts
-  with a handler of its own in EWRAM and blinks green/blue: that tells
-  "no image received over the cable can take interrupts this way" from
-  "something in the game's start". It stayed GREEN: on those SPs no
-  image received over the cable took an interrupt, twenty instructions
-  included (crt0's first colour was red: system mode, as GBATEK says).
-  Why is not known. So THE SINGLE-PAK SLAVE TAKES NO INTERRUPTS: IME_ON is
-  0 on that build, and vsync() polls IF for the vertical blank and the end
-  of a transfer and serves each as the handler would (poll_interrupts,
-  video.c). The master starts one transfer a frame, so the slave serves
-  it within the frame; singlepak_check plays the cartridge against it
-  byte for byte on the slow cable. The big probe now blinks the same way,
-  IME off, watching IF. The cartridge mutes the PSG while the BIOS sends: the
-  last note held for the whole transfer, a long beep.
+  256 KB and the link asserts it. The slave boots into the lobby following
+  the master's mode (`tengen_lobby_mode_any`) and never touches save
+  memory (a console booted into multiboot can have another game's
+  cartridge in). What eleven rounds on two SPs taught, one line each:
+  - **ON THAT HARDWARE A MULTIBOOTED IMAGE CANNOT TAKE AN INTERRUPT.** Not
+    the game, not a probe of twenty instructions with a handler of its
+    own: the first vertical blank taken never reached the handler (the
+    CPU was in system mode, as GBATEK says; internal WRAM intact; why is
+    NOT known). So the slave never sets IME (`IME_ON` is 0 there) and
+    vsync() polls IF for the vertical blank and the end of a transfer and
+    serves each as the handler would (`poll_interrupts`, video.c). The
+    master starts one transfer a frame, so that is soon enough.
+  - **The sending is all software** (`link_multiboot_send`): the BIOS's
+    handshake, then GBATEK's SWI $25 pseudo-code (length, seed, each word
+    encrypted in two halves, the checksum), as gba-link-connection's
+    Async sender does it. Not SWI $25 itself: it keeps the CPU for the
+    whole transfer (no progress bar) and nothing the BIOS does behind the
+    slave's back is taken on trust. The slave can send too: ITSELF, from
+    EWRAM (`single_pak_image`), so the copy makes copies.
+  - crt0 switches interrupts off, stops the four DMA channels and timers
+    and sets the supervisor's stack before anything else, and irq_init
+    sets IE outright; none of it was the cause above, all of it is what a
+    start after somebody else's code should do.
+  - mGBA takes a multiboot image whose $C0 branch is exactly 28 bytes for
+    a cartridge: hence the spare word after the $E0 entry.
+  - The cartridge mutes the PSG while it sends, and waits a second after,
+    before its lobby talks over the new console's start.
+  - A probe as small as the BIOS allows (784 bytes) never started on the
+    SPs; one of the game's size did. Not followed up.
+  `singlepak_check` plays the cartridge against the polling slave byte for
+  byte; `mb_send_check` sends to a stand-in BIOS that decrypts what it
+  gets: the image must come out identical, from the cartridge and from the
+  copy.
 - **The soft reset is done by hand** (`soft_reset_check`, video.c), not
   by the BIOS's SoftReset, which mGBA's stand-in BIOS does not have: a
   restart the checks cannot run is one nobody knows works. It leaves the
@@ -451,11 +413,13 @@ And what has run only in an emulator:
   interrupt handler. mGBA is accurate on all three, but it is not the
   console.
 
-- **Single-Pak, the sleep and the soft reset** have run only in mGBA,
-  and mGBA's stand-in BIOS has neither Stop nor MultiBoot: the emulator
-  checks everything up to the BIOS call (`system_check`, `mb_send_check`,
-  and the image playing the cartridge in `singlepak_check`), the console
-  the rest.
+- **Single-Pak** worked on two SPs with the cartridge sending through the
+  BIOS's SWI $25 and the slave polling (build bb77e71): a coop match, the
+  skins and the chord. The software sender that replaced SWI $25, its
+  progress bar, and the copy sending itself have run only in mGBA against
+  the stand-in BIOS (`mb_send_check`).
+- **The sleep** has run only in mGBA, whose stand-in BIOS has no Stop:
+  `system_check` checks the way in and out, the console the rest.
 
 Ideas not started:
 

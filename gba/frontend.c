@@ -600,12 +600,9 @@ void draw_link_wait(const TengenLobby *lobby, int elapsed) {
          * answers, and half the time the one reading this is player 2. */
         draw_text_centred(10, "WAITING FOR OTHER PLAYER", menu_bank());
         draw_text_centred(12, "B TO GO BACK", menu_bank());
-#ifndef TENGEN_MULTIBOOT
-        /* SINGLE-PAK: the other console needs no cartridge. Only the
-         * cartridge's build says so; the one that came over the cable has
-         * nothing to send. */
+        /* SINGLE-PAK: the other console needs no cartridge — and the one
+         * that came over the cable can send itself on (single_pak_image). */
         draw_text_centred(14, "SELECT SENDS THE GAME", BANK_NOTE);
-#endif
         return;
     }
     if (link_is_master()) {
@@ -737,7 +734,6 @@ void draw_level_settings(int chosen, uint8_t start_level, uint8_t music,
     draw_text_centred(MENU_FOOT_TY, "PRESS START TO PLAY", BANK_NOTE);
 }
 
-#ifndef TENGEN_MULTIBOOT
 /* SINGLE-PAK, WHILE IT SENDS: what to do at the other end, and how to stop.
  * `wrong_end` is a cable plugged in the other way round: only the console
  * on the master's end can send, and one with no cartridge can only be on
@@ -755,4 +751,48 @@ void draw_link_sending(bool wrong_end) {
     }
     draw_text_centred(15, "B TO STOP", menu_bank());
 }
+
+/* WHAT IS SENT. The cartridge sends the slave's image it carries
+ * (mb_image.s); a console running that image sends the image itself, from
+ * the EWRAM its BIOS put it in: its code and its constants are never
+ * written to, and the copies crt0 made of .iwram and .data leave their
+ * originals where they were, so the bytes there are the bytes that came.
+ * (The BIOS wrote the boot mode and slave number into the header's $C4 and
+ * $C5; the next BIOS overwrites both.) The length up to __image_end,
+ * rounded to the 16 bytes the BIOS wants. */
+const uint8_t *single_pak_image(void) {
+#ifdef TENGEN_MULTIBOOT
+    return (const uint8_t *)0x02000000;
+#else
+    return kSlaveImage;
 #endif
+}
+
+uint32_t single_pak_length(void) {
+#ifdef TENGEN_MULTIBOOT
+    extern const uint8_t __image_end[];
+    return ((uint32_t)(__image_end - (const uint8_t *)0x02000000) + 15u) & ~15u;
+#else
+    return (uint32_t)(kSlaveImageEnd - kSlaveImage);
+#endif
+}
+
+/* THE BAR: twenty cells under the words, filling as the image goes out.
+ * Called from inside the sending (link_multiboot_send) every few hundred
+ * words, between transfers, so it draws straight into the map — no frame
+ * is waited for, and a cell or two drawn mid-scanout is nothing. */
+#define SEND_BAR_W  20
+#define SEND_BAR_TY 15
+void draw_send_progress(uint32_t done, uint32_t total) {
+    int filled = total ? (int)((uint64_t)done * SEND_BAR_W / total) : 0;
+    int tx = MENU_IN_TX + (MENU_IN_W - SEND_BAR_W) / 2;
+    /* A solid tile of the cartridge's ($8B, two colours edge to edge) for
+     * what has gone, a dash for what has not; on the row "B TO STOP" had,
+     * on both layers, since B does nothing mid-send. */
+    const uint8_t block = 0x8B;
+    clear_both(MENU_IN_TX, SEND_BAR_TY, MENU_IN_W, 1);
+    for (int i = 0; i < SEND_BAR_W; i++)
+        set_map_tile(tx + i, SEND_BAR_TY,
+                     i < filled ? WITH_BANK(block, menu_bank())
+                                : WITH_BANK(ascii_tile('-'), BANK_NOTE));
+}

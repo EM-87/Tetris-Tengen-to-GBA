@@ -1901,9 +1901,12 @@ void draw_link_sending(bool wrong_end);   /* Single-Pak; see frontend.c */
 /* The Single-Pak slave's image, inside the cartridge (gba/mb_image.s). */
 extern const uint8_t kSlaveImage[];
 extern const uint8_t kSlaveImageEnd[];
-/* ...and the two probes (gba/mb_probe.s): green screen, small and big. */
-extern const uint8_t kProbeImage[], kProbeImageEnd[];
-extern const uint8_t kProbeBigImage[], kProbeBigImageEnd[];
+/* What SELECT on the LINK CABLE screen sends, and how long it is: the
+ * image above from the cartridge, the console's own from EWRAM on the
+ * slave's build. See frontend.c. */
+const uint8_t *single_pak_image(void);
+uint32_t single_pak_length(void);
+void draw_send_progress(uint32_t done, uint32_t total);
 void draw_level_settings(int chosen, uint8_t start_level, uint8_t music,
                                  const uint8_t handicap[2], bool two_player,
                                  int handicap_who);

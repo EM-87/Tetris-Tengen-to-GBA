@@ -179,13 +179,16 @@ void link_name_step(TengenNameSwap *swap);
 /* SINGLE-PAK: sends `image` (a multiboot image, `len` a multiple of 16) to
  * a console on the other end that has no cartridge and is waiting in its
  * BIOS. One attempt; call again on LINK_SEND_NOBODY or _RETRY, and
- * link_init afterwards whatever came back. The cartridge's build only. */
+ * link_init afterwards whatever came back. `progress`, if given, is told
+ * how far the image has got now and then, in words. */
 typedef enum {
     LINK_SEND_DONE,        /* the other console is running it */
     LINK_SEND_NOBODY,      /* no console waiting answered */
     LINK_SEND_RETRY,       /* one answered and the handshake broke off */
     LINK_SEND_WRONG_END    /* this console is not on the master's end */
 } LinkSendResult;
-LinkSendResult link_multiboot_send(const uint8_t *image, uint32_t len);
+LinkSendResult link_multiboot_send(const uint8_t *image, uint32_t len,
+                                    void (*progress)(uint32_t done,
+                                                     uint32_t total));
 
 #endif /* LINK_H */

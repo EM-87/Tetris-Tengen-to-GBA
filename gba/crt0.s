@@ -84,37 +84,6 @@ rom_header_end:
     str     r1, [r2, #8]            @ TM2CNT
     str     r1, [r2, #12]           @ TM3CNT
 
-.ifdef MULTIBOOT
-    @ ...and a sign that this program has started, for whoever is watching
-    @ a real console: the BIOS's logo goes and the screen shows nothing but
-    @ the backdrop, RED, which main then turns to other colours as it gets
-    @ through its start (MB_STAGE, main.c) until it draws the lobby. The
-    @ colour a slave stops on is the step it stopped in.
-    mov     r0, #0x04000000
-    mov     r1, #0
-    strh    r1, [r0]                @ DISPCNT: mode 0, nothing on
-    mov     r0, #0x05000000
-    @ RED if the BIOS started this in system mode, as GBATEK says it does;
-    @ BLUE if in any other: then the stacks below could not be set.
-    mrs     r4, cpsr
-    and     r4, r4, #0x1F
-    cmp     r4, #0x1F
-    moveq   r1, #0x1F               @ backdrop: red
-    movne   r1, #0x7C00             @ ...or blue
-    strh    r1, [r0]
-    @ ...held for two seconds (120 frames counted on VCOUNT), so it can be
-    @ seen before the next step replaces it or goes wrong.
-    ldr     r2, =0x04000006
-    mov     r3, #120
-8:  ldrh    r1, [r2]
-    cmp     r1, #160
-    bcs     8b                      @ out of any blank under way
-9:  ldrh    r1, [r2]
-    cmp     r1, #160
-    bcc     9b                      @ ...to the start of the next
-    subs    r3, r3, #1
-    bne     8b
-.endif
 
     @ THE SUPERVISOR'S STACK, which every BIOS call (SWI) runs on. A
     @ cartridge boot leaves it at $03007FE0, where the BIOS keeps it; after

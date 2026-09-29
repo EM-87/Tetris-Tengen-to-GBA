@@ -9,52 +9,11 @@
 #include "port.h"
 
 
-/* SINGLE-PAK BREADCRUMBS: on the slave's build only, the backdrop (all a
- * screen with nothing on it shows) turns a colour for each step of the
- * start that has been got through, so a slave that stops on real hardware
- * says where. crt0 starts it red. Gone when main switches the screen on. */
-#ifdef TENGEN_MULTIBOOT
-/* Each colour held for two seconds, long enough to see on a console and to
- * tell apart from a step that goes wrong the moment it starts. The wait
- * counts scanlines rather than calling vsync(), which is itself one of the
- * steps being watched. */
-static void mb_stage(uint16_t bgr555) {
-    MEM_PALETTE[0] = bgr555;
-    for (int frame = 0; frame < 120; frame++) {
-        while (REG_VCOUNT >= 160) { }
-        while (REG_VCOUNT < 160) { }
-    }
-}
-#define MB_STAGE(bgr555) mb_stage((uint16_t)(bgr555))
-#else
-#define MB_STAGE(bgr555) ((void)0)
-#endif
-
 int main(void) {
     /* First: every screen from here on waits for its frame in vsync(), and
      * vsync() sleeps until an interrupt that this is what switches on. */
-    MB_STAGE(0x4210);                      /* grey: in main, nothing on */
-#ifdef TENGEN_MULTIBOOT
-    /* ...and is the code crt0 copied into internal WRAM still what it
-     * copied, two seconds on? PURPLE, and stop, if not: something is
-     * writing over it, and the interrupt handler lives there. */
-    {
-        extern const uint32_t __iwram_lma[];
-        extern uint32_t __iwram_start[], __iwram_end[];
-        for (uint32_t *p = __iwram_start; p < __iwram_end; p++)
-            if (*p != __iwram_lma[p - __iwram_start]) {
-                MEM_PALETTE[0] = 0x7C10;
-                for (;;) { }
-            }
-    }
-#endif
     irq_init();
-    MB_STAGE(0x03FF);                      /* yellow: interrupts set up */
 
-#ifdef TENGEN_MULTIBOOT
-    vsync();                               /* the first BIOS call */
-#endif
-    MB_STAGE(0x03E0);                      /* green: a frame went by */
     upload_tiles();
     upload_palettes();
     /* What the battery kept, or the cartridge's cold-boot table if there is
@@ -63,20 +22,15 @@ int main(void) {
     leader_load();
     set_field_palette_for_level(0);
     clear_screen();
-    uint16_t backdrop = MEM_PALETTE[0];    /* the breadcrumbs borrow it */
-    (void)backdrop;
-    MB_STAGE(0x7FE0);                      /* cyan: art and table in */
 
     upload_title_tiles();
     upload_sprite_tiles();
     oam_hide_all();
     nes_audio_init();
-    MB_STAGE(0x7C00);                      /* blue: the sound engine runs */
     /* After nes_audio_init: this runs the cartridge's code, and the machine it
      * runs on is the sound engine's. */
     init_title_sprites();
     restart_title_sprites();
-    MEM_PALETTE[0] = backdrop;             /* ...and the backdrop back */
 
     REG_BG0CNT = BG_4BPP | BG_SIZE_32x32 | BG_CHARBLOCK(CHARBLOCK) |
                   BG_SCREENBLOCK(SCREENBLOCK) | BG_PRIORITY(1);
@@ -663,28 +617,18 @@ int main(void) {
                 continue;
             }
 
-#ifndef TENGEN_MULTIBOOT
             /* SINGLE-PAK: SELECT, while nobody has answered, sends the game
-             * to a console with no cartridge (link_multiboot_send). It
-             * keeps trying — the other console may not be switched on yet —
-             * until the game is across or B stops it, and then the cable is
-             * this lobby's again, which is where the other console's copy
-             * comes looking for it. */
+             * to a console with no cartridge (link_multiboot_send) — from
+             * the cartridge, the image it carries; from a console that got
+             * the game that way, ITSELF, still in EWRAM where its BIOS put
+             * it, so the copy can make a copy. It keeps trying — the other
+             * console may not be switched on yet — until the game is
+             * across or B stops it, and then the cable is this lobby's
+             * again, which is where the other console's copy comes
+             * looking for it. */
             if (!lobby.linked && (pressed & TENGEN_BTN_SELECT)) {
-                /* WHICH IMAGE: the game, or — with a shoulder held — one of
-                 * the probes that only turn the other screen green, for
-                 * telling a broken send from a broken image on a real
-                 * console (gba/mb_probe.s). */
-                uint16_t shoulders = (uint16_t)~REG_KEYINPUT;
-                const uint8_t *img = kSlaveImage;
-                uint32_t img_len = (uint32_t)(kSlaveImageEnd - kSlaveImage);
-                if (shoulders & KEY_L) {
-                    img = kProbeImage;
-                    img_len = (uint32_t)(kProbeImageEnd - kProbeImage);
-                } else if (shoulders & KEY_R) {
-                    img = kProbeBigImage;
-                    img_len = (uint32_t)(kProbeBigImageEnd - kProbeBigImage);
-                }
+                const uint8_t *img = single_pak_image();
+                uint32_t img_len = single_pak_length();
                 screen_blip();
                 bool wrong_end = false;
                 for (int frame = 0;; frame++) {
@@ -696,19 +640,16 @@ int main(void) {
                      * waits: a BIOS that has just been switched on needs
                      * them to be listening. */
                     if (frame % 8) continue;
-                    /* NOTHING SOUNDS WHILE THE BIOS SENDS. It keeps the
-                     * CPU for as long as the transfer takes, the sound
-                     * engine does not run meanwhile, and whatever note was
-                     * on held for the whole of it: a long beep, as if the
-                     * console had broken. */
+                    /* NOTHING SOUNDS WHILE IT SENDS. The sound engine
+                     * does not run meanwhile, and whatever note was on
+                     * would hold for the whole of it: a long beep. */
                     psg_mute(true);
-                    LinkSendResult r = link_multiboot_send(img, img_len);
+                    LinkSendResult r = link_multiboot_send(img, img_len,
+                                                           draw_send_progress);
                     psg_mute(false);
                     if (r == LINK_SEND_DONE) {
                         /* A SECOND OF QUIET before the lobby starts talking:
-                         * the other console is starting the image now, and
-                         * words on the cable while it lays itself out are
-                         * words it has no way to take yet (crt0). */
+                         * the other console is starting the image now. */
                         for (int wait = 0; wait < 60; wait++) {
                             vsync();
                             audio_frame();
@@ -726,7 +667,6 @@ int main(void) {
                 clear_screen();
                 continue;
             }
-#endif
             if (pressed & TENGEN_BTN_B) {
                 screen = SCREEN_GAME_SELECT;
                 link_shutdown();

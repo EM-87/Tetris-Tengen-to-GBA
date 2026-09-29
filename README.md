@@ -162,10 +162,11 @@ se va, las dos lo detectan. Las dos necesitan esta misma versión del ROM
 **Single-Pak**: la otra consola no necesita cartucho. En la pantalla LINK
 CABLE, **SELECT** le envía el juego por el cable (la consola con cartucho
 tiene que estar en el extremo maestro; si no, lo dice). La otra se enciende
-sin cartucho y su BIOS lo recibe; arranca directamente en el lobby, juega el
-modo que eligió la del cartucho y no guarda récords. El envío en sí lo hace
-la BIOS, que el emulador no tiene: está comprobado todo hasta esa llamada, y
-el resto (y cuánto tarda) queda por ver en consola; ver `CLAUDE.md`.
+sin cartucho y su BIOS lo recibe, con una barra de progreso en la que envía;
+arranca directamente en el lobby, juega el modo que eligió la del cartucho y
+no guarda récords. Y la copia puede hacer copias: en su propia pantalla LINK
+CABLE, SELECT la envía a su vez a otra consola sin cartucho, desde su
+memoria. Ver `CLAUDE.md` para lo que se aprendió por el camino.
 
 ## Compilar
 
