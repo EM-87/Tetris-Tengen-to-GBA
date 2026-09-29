@@ -78,7 +78,8 @@ running ROM; only the side panels need reflowing).
   the screens around a match; `match.c` one frame of play and the pause menu;
   `main.c` the state machine. Plus `nes6502.c` + `nes_audio.c` (the
   cartridge's sound engine, run), `handtunes.c` (the two hand-entered tunes)
-  and `link.c` (the cable). A symbol is shared only if another file names it
+  `link.c` (the cable), `suspend.c` (the paused game on the battery) and
+  `splash.c` (the logo at power-on). A symbol is shared only if another file names it
   in code; everything else is `static`.
 - **`tools/`** — `extract_assets.py` (all the art, from a dump);
   `run_rom.py` (the command `make gba-check` runs) with its checks in
@@ -103,7 +104,7 @@ minus those).
 | --- | --- | --- |
 | `make test` | no | always — the rules, in milliseconds |
 | `make gba` | headers | to build `build/tengen.gba` |
-| `make gba-check` | headers | before calling any change done: 61 checks on the running ROM in mGBA, eighteen of them on two consoles with a cable |
+| `make gba-check` | headers | before calling any change done: 63 checks on the running ROM in mGBA, eighteen of them on two consoles with a cable |
 | `make trace ROM=... [MODE=coop\|versus\|with\|demo]` | yes | after touching `tengen_step` or `tengen_ai.c`: the port against the cartridge, iteration by iteration. The 1P and coop scripts never complete a row; `MODE="with --pad1"` plays player 1 with the port's computer and clears plenty; add `--handicap N` to any mode |
 | `make tune-check ROM=...` | yes | after touching audio: the four tunes against the cartridge, note by note |
 | `make dance-check ROM=...` | yes | after touching the dancers: their choreography against the cartridge's driver |
@@ -219,6 +220,21 @@ story behind each; the item number is in brackets.
   byte; `mb_send_check` sends to a stand-in BIOS that decrypts what it
   gets: the image must come out identical, from the cartridge and from the
   copy.
+- **The paused game on the battery** (`suspend.c`, SRAM from $4000, above
+  the high scores) is the core's `TengenGame` and the computer's
+  `TengenAi` copied whole, with what the menus chose. Structures copied
+  whole are only trusted by the build that wrote them: the record carries a
+  hash of that build's date and time, and another build ignores it. It is
+  put back by starting the match the way LEVEL SETTINGS does (`resuming`
+  confirms it) and copying the game over the one just dealt, so everything
+  a match lays out is laid out. Written as the plaque goes up and when its
+  tune changes; wiped off the plaque and by the soft reset.
+- **The logo at power-on skips itself after a soft reset** by a word in
+  external WRAM that crt0 does not clear (`g_splash_seen`). The checks skip
+  it the same way, writing that word after every reset
+  (`romcheck/harness.py`), because every check was written against a
+  console that reaches the title at once; `suspend_check` is the one that
+  looks at it.
 - **The soft reset is done by hand** (`soft_reset_check`, video.c), not
   by the BIOS's SoftReset, which mGBA's stand-in BIOS does not have: a
   restart the checks cannot run is one nobody knows works. It leaves the
@@ -399,8 +415,13 @@ ten seconds for a quiet cable (LINK ISSUES) before giving it up (the CABLE
 LOST window, and out to the title); the XE mod's two
 off-by-one bugs mended (XE only); Single-Pak (SELECT on the LINK CABLE
 screen sends the game to a console with no cartridge); sleep (L+R+SELECT
-in a paused solo match) and soft reset (A+B+START+SELECT), as commercial
-games had. [8, 11, 17, 19, 20, 23, 28, 30]
+anywhere but a match in play — a solo match pauses first and sleeps on its
+plaque, a linked one not at all; any button but L and R wakes it) and soft
+reset (A+B+START+SELECT), as commercial games had; a paused solo game kept
+on the battery through a power cycle, as Tetris DX does (`suspend.c`); the
+publisher's logo on white at power-on (`splash.c`, from an image you supply
+through `tools/make_splash.py`, gitignored like the cartridge's art).
+[8, 11, 17, 19, 20, 23, 28, 30]
 
 **Knowingly not shown**: proto_c's title animation (its rows are the ones
 the composition drops); a screen-change noise under proto_a (its dump has
@@ -448,7 +469,13 @@ And what has run only in an emulator:
   the cable-state screen and the probe behind it have run only in mGBA
   (`peer_check`).
 - **The sleep** has run only in mGBA, whose stand-in BIOS has no Stop:
-  `system_check` checks the way in and out, the console the rest.
+  `system_check` checks the way in and out, the console the rest — and
+  that a Stop entered with IME off (the Single-Pak copy) still wakes on
+  the keypad is INFERRED.
+- **The paused game through a power cycle and the logo** have run only in
+  mGBA (`suspend_check`). On a flash cart the save memory has to reach the
+  card for the game to survive: the EZ-Flash IV and the SuperCard each do
+  that their own way, as they do for the high scores.
 
 Ideas not started:
 

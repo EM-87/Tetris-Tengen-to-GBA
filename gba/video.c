@@ -213,7 +213,11 @@ __attribute__((noinline)) void vsync(void) {
     __asm__ volatile ("swi 0x050000" ::: "r0", "r1", "r2", "r3", "memory");
 #endif
     soft_reset_check();
+    if (!g_sleep_blocked && sleep_keys_held()) system_sleep();
 }
+
+/* See system_sleep: main says when a match is in play. */
+bool g_sleep_blocked;
 
 /* A+B+START+SELECT, HELD TOGETHER, STARTS THE CARTRIDGE OVER, from anywhere.
  * Nintendo asked it of every GBA game it published, and a console on a
@@ -234,7 +238,9 @@ __attribute__((noinline)) void vsync(void) {
  * multiplayer mode lets go of its lines, and the console on the other end of
  * a cable hears that as a storm of empty transfers (see sio_reset in
  * link.c); link_init starts it over properly when the cable is next used.
- * The cartridge's save RAM is not touched at all. */
+ * The cartridge's save RAM is touched once: a paused game kept there for
+ * the power switch (suspend.c) is let go of, or the restart a player asked
+ * for would put them straight back in it. */
 #define RESET_KEYS (KEY_A | KEY_B | KEY_START | KEY_SELECT)
 #ifdef TENGEN_MULTIBOOT
 #define RESET_ENTRY 0x02000000u   /* the Single-Pak image: still in EWRAM */
@@ -245,6 +251,7 @@ __attribute__((noinline)) void vsync(void) {
 static void soft_reset_check(void) {
     if ((uint16_t)(~REG_KEYINPUT & RESET_KEYS) != RESET_KEYS) return;
     while ((uint16_t)(~REG_KEYINPUT & KEY_MASK)) { }
+    suspend_clear();
     REG_IME = 0;
     REG_IE = 0;
     REG_IF = 0xFFFF;
@@ -261,20 +268,24 @@ static void soft_reset_check(void) {
     for (;;) { }
 }
 
-/* SLEEP: L+R+SELECT, the combination commercial games used, and the same
- * again to wake. The screen goes to forced blank, the PSG's volume to
- * nought, and the CPU into the BIOS's Stop (SWI 3), which only an interrupt
- * from the keypad, the cartridge or the serial port ends — and only the
- * keypad's is switched on, for exactly those three keys held together. A
- * console left paused in a bag then draws next to nothing instead of
- * running its screen and its sound for hours.
+/* SLEEP: L+R+SELECT, the combination commercial games used, from any
+ * screen (vsync, below) except a match in play: a solo one pauses first and
+ * sleeps on the plaque (solo_play_frame), and one over the cable does not
+ * sleep at all, since the other console would be left talking to nobody.
+ * The screen goes to forced blank, the PSG's volume to nought, and the CPU
+ * into the BIOS's Stop (SWI 3), which only an interrupt from the keypad,
+ * the cartridge or the serial port ends — and only the keypad's is
+ * switched on. ANY BUTTON BUT THE SHOULDERS WAKES IT: the same three keys
+ * again, as it first was, is not what anybody tries on a console that
+ * looks switched off, and L and R are the ones a bag presses. A console
+ * left in a bag then draws next to nothing instead of running its screen
+ * and its sound for hours.
  *
- * Each combination is waited out before the next step, or the keys still
- * held from going to sleep would wake it on the spot, and the ones held
- * from waking would be read by the game. The caller decides when it is
- * allowed (a paused solo match): over a cable the other console would be
- * left talking to nobody. */
+ * The keys are waited out both ways: the ones held from going to sleep
+ * would wake it on the spot, and the one that woke it would otherwise be
+ * read by the game as a press. */
 #define SLEEP_KEYS (KEY_L | KEY_R | KEY_SELECT)
+#define WAKE_KEYS  (KEY_MASK & ~(KEY_L | KEY_R))
 #define REG_SOUNDCNT_L_HW (*(vu16 *)0x04000080)
 
 /* The PSG's master volume to nothing and back, leaving every channel as it
@@ -299,7 +310,7 @@ void system_sleep(void) {
     REG_IME = 0;
     REG_DISPCNT = (uint16_t)(dispcnt | DCNT_FORCED_BLANK);
     REG_SOUNDCNT_L_HW = 0;
-    REG_KEYCNT = (uint16_t)(KEYCNT_IRQ | KEYCNT_AND | SLEEP_KEYS);
+    REG_KEYCNT = (uint16_t)(KEYCNT_IRQ | WAKE_KEYS);   /* any of them */
     REG_IE = IRQ_KEYPAD;
     REG_IF = IRQ_KEYPAD;
     REG_IME = IME_ON;
@@ -313,7 +324,7 @@ void system_sleep(void) {
     REG_IE = ie;
     REG_IF = (uint16_t)(IRQ_KEYPAD | IRQ_VBLANK);
     REG_IME = IME_ON;
-    while ((uint16_t)(~REG_KEYINPUT & SLEEP_KEYS)) { }
+    while ((uint16_t)(~REG_KEYINPUT & KEY_MASK)) { }
     REG_SOUNDCNT_L_HW = psg;
     REG_DISPCNT = dispcnt;
 }

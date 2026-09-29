@@ -14,6 +14,56 @@ except ImportError as exc:  # pragma: no cover - environment problem, not logic
     sys.exit(f"mGBA python bindings unavailable ({exc}).\n"
              "Install with: pip install pygba && apt-get install libmgba0.10")
 
+# THE SPLASH IS SKIPPED, as a soft reset skips it: every check was written
+# against a console that reaches the title at once, and the logo would eat
+# their first presses. After each reset the word gba/splash.c looks for is
+# put in external WRAM, where its ELF says it lives. `splash_check` turns
+# this off to see the logo itself (SHOW_SPLASH).
+SPLASH_SEEN = 0x54454E47
+SHOW_SPLASH = [False]
+_splash_addr = {}
+
+
+def _splash_word(rom_path):
+    if rom_path not in _splash_addr:
+        elf = os.path.splitext(rom_path)[0] + ".elf"
+        addr = None
+        try:
+            out = subprocess.check_output(
+                [os.environ.get("NM", "arm-none-eabi-nm"), elf],
+                stderr=subprocess.DEVNULL).decode()
+            for line in out.splitlines():
+                parts = line.split()
+                if len(parts) == 3 and parts[2] == "g_splash_seen":
+                    addr = int(parts[0], 16)
+        except (OSError, subprocess.CalledProcessError):
+            pass
+        _splash_addr[rom_path] = addr
+    return _splash_addr[rom_path]
+
+
+_load_path = mgba.core.load_path
+_reset = mgba.core.Core.reset
+
+
+def _load_path_kept(path):
+    core = _load_path(path)
+    if core is not None:
+        core._tengen_rom = path
+    return core
+
+
+def _reset_past_splash(self):
+    _reset(self)
+    addr = _splash_word(getattr(self, "_tengen_rom", ""))
+    if addr is not None and not SHOW_SPLASH[0]:
+        for b in range(4):
+            self.memory.u8[addr + b] = (SPLASH_SEEN >> (8 * b)) & 0xFF
+
+
+mgba.core.load_path = _load_path_kept
+mgba.core.Core.reset = _reset_past_splash
+
 SCREEN_W, SCREEN_H = 240, 160
 TILE = 8
 SCREEN_TW_TILES = SCREEN_W // TILE

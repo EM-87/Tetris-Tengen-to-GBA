@@ -131,8 +131,19 @@ Lo que el GBA tiene de más:
 | GAME SELECT o LEVEL SETTINGS | L+R | destapa las canciones ocultas (Korobeiniki, Katiuska, MUSIC MIX), los niveles 18-19 y el menú de pausa |
 | Título | L+R | recorre los títulos de los prototipos (su skin llega al juego) |
 | Carrera, tablero muerto | A+B | se levanta y sigue, como en el cartucho |
-| Partida en solitario, en pausa | L+R+SELECT | reposo: pantalla y sonido apagados, casi sin gastar pila; lo mismo otra vez despierta |
+| En cualquier sitio salvo una partida por cable | L+R+SELECT | reposo: pantalla y sonido apagados, casi sin gastar pila (una partida en solitario se pausa antes); cualquier botón menos L y R despierta |
 | En cualquier momento | A+B+START+SELECT | reinicia el juego |
+
+**Apagar en pausa no pierde la partida**, como en Tetris DX: una partida en
+solitario en pausa se guarda en la memoria del cartucho, y al encender vuelve
+en pausa donde estaba. Si se reanuda, se acaba o se sale, se borra; el
+reinicio A+B+START+SELECT también la borra. (Una ROM nueva no recupera la
+partida de otra: la estructura puede haber cambiado.)
+
+**Al encender sale el logo de Tengen** sobre blanco, como en los juegos de
+GBA, y solo al encender (no tras el reinicio por botones ni en la copia
+Single-Pak). El logo no va en el repo: se genera una vez con
+`python3 tools/make_splash.py logo.png`, y sin él la ROM arranca directa.
 | Pantalla LINK CABLE | SELECT | Single-Pak: envía el juego a una GBA sin cartucho |
 
 Con el juego en pausa entran los tres códigos originales, un botón por

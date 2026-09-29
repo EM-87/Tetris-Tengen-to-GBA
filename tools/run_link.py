@@ -46,6 +46,9 @@ import os
 import subprocess
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import romcheck.harness  # noqa: E402,F401 - skips the splash; see there
+
 try:
     import mgba.core
     import mgba.gba

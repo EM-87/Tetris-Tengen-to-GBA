@@ -16,6 +16,8 @@ int main(void) {
     /* ...and the cable answers from the start, wherever the player is: see
      * link_rest. */
     link_rest();
+    /* The publisher's logo, at power-on only; see splash.c. */
+    splash_show();
 
     upload_tiles();
     upload_palettes();
@@ -116,7 +118,31 @@ int main(void) {
     }
 #endif
 
+#ifndef TENGEN_MULTIBOOT
+    /* A PAUSED GAME LEFT ON THE BATTERY (suspend.c) comes back: the menu's
+     * choices first, then LEVEL SETTINGS confirms itself (`resuming`), the
+     * match starts as it always does, and the game is put back over it. */
+    SuspendMenu resume = { 0 };
+    bool resuming = suspend_load(&resume);
+    if (resuming) {
+        game_mode = resume.game_mode;
+        start_level = resume.start_level;
+        g_music = resume.music;
+        handicap[0] = resume.handicap[0];
+        handicap[1] = resume.handicap[1];
+        g_title_skin = resume.title_skin;
+        if (resume.unlocked) cheats_restore();
+        screen = SCREEN_LEVEL_SELECT;
+    }
+    bool suspended = false;          /* the battery holds this match */
+    uint8_t suspended_music = 0;
+#else
+    const bool resuming = false;
+#endif
+
     for (;;) {
+        /* Asleep from any screen but a match in play; see system_sleep. */
+        g_sleep_blocked = screen == SCREEN_PLAYING && match_running;
         uint8_t buttons = read_buttons();
         uint8_t pressed = (uint8_t)(buttons & ~held_last);
         held_last = buttons;
@@ -481,7 +507,7 @@ int main(void) {
                 clear_screen();
                 continue;
             }
-            if (pressed & MENU_CONFIRM) {
+            if ((pressed & MENU_CONFIRM) || resuming) {
                 /* START, and only START, confirms on the cartridge ($A011);
                  * A is the port's second confirm, as everywhere else here. */
                 uint16_t seed = (uint16_t)(seed_source.lo | (seed_source.hi << 8));
@@ -575,6 +601,22 @@ int main(void) {
                 over_frames = 0;
                 skin_begin_match(false, -1);
                 g_front_tune = FRONT_NOTHING;
+#ifndef TENGEN_MULTIBOOT
+                if (resuming) {
+                    /* ...and the game itself, over the one just dealt. */
+                    resuming = false;
+                    suspend_apply();
+                    g_mix_step = resume.mix_step;
+                    g_hud = resume.hud;
+                    g_idle_palette = resume.idle_palette;
+                    g_ai_last_piece = resume.ai_last_piece;
+                    g_ai_last_partner = resume.ai_last_partner;
+                    g_ai_frame = resume.ai_frame;
+                    set_piece_palette(g_session.game.player[0].piece.current);
+                    start_music(g_music);
+                    match_resumed_paused();
+                } else
+#endif
                 start_music(g_music);
                 vsync();
                 audio_frame();
@@ -1048,6 +1090,35 @@ int main(void) {
                 }
             }
         }
+
+#ifndef TENGEN_MULTIBOOT
+        /* ON THE PAUSE PLAQUE THE GAME GOES TO THE BATTERY (suspend.c), and
+         * again if the tune is changed under it; off the plaque — played
+         * on, over, or left — it is wiped. */
+        {
+            bool keep = match_running && !g_linked && !g_demo &&
+                        g_session.game.paused;
+            if (keep && (!suspended || g_music != suspended_music)) {
+                SuspendMenu m = {
+                    .game_mode = game_mode, .start_level = start_level,
+                    .music = g_music,
+                    .handicap = { handicap[0], handicap[1] },
+                    .title_skin = g_title_skin,
+                    .unlocked = g_pause_unlocked, .mix_step = g_mix_step,
+                    .hud = g_hud, .idle_palette = g_idle_palette,
+                    .ai_last_piece = g_ai_last_piece,
+                    .ai_last_partner = g_ai_last_partner,
+                    .ai_frame = g_ai_frame,
+                };
+                suspend_save(&m);
+                suspended = true;
+                suspended_music = g_music;
+            } else if (!keep && suspended) {
+                suspend_clear();
+                suspended = false;
+            }
+        }
+#endif
 
         /* THE DEMO SEES ITSELF OUT. Nothing is waiting for a button here, so
          * the game over holds for a moment and the title comes back. */

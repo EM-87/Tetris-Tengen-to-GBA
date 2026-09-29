@@ -13,3 +13,6 @@ gba/dancer_poses.h
 __pycache__/
 gba/audio_prg.h
 gba/audio_golden.bin
+# The publisher's logo for the splash screen, from an image you supply:
+#   python3 tools/make_splash.py logo.png
+gba/splash_logo.h

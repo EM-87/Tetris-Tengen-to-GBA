@@ -53,6 +53,13 @@ bool unlock_cheats(void) {
     return true;
 }
 
+void cheats_restore(void) {
+    g_music_unlocked = true;
+    g_pause_unlocked = true;
+    g_xe = true;
+    set_credit_colour();
+}
+
 uint8_t start_level_choices(void) {
     return (uint8_t)(g_xe ? START_LEVEL_COUNT_XE : START_LEVEL_COUNT);
 }

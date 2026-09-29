@@ -1740,7 +1740,29 @@ extern volatile uint32_t g_vblank_count;   /* see irq_handler */
 bool sleep_keys_held(void);
 void psg_mute(bool mute);
 void system_sleep(void);
+/* True while a match is in play: vsync() does not put the console to sleep
+ * then (a solo match does it on its pause plaque; see system_sleep). */
+extern bool g_sleep_blocked;
 bool pressed_shoulder(int which);
+
+/* THE PAUSED GAME THAT OUTLIVES THE POWER SWITCH (suspend.c). What the
+ * menus chose, kept with the game so the match can be started again as the
+ * menu would start it before the game itself is put back. */
+typedef struct {
+    uint8_t game_mode, start_level, music, handicap[2];
+    uint8_t title_skin, unlocked, mix_step, hud, idle_palette;
+    TengenTetromino ai_last_piece, ai_last_partner;
+    uint8_t ai_frame;
+} SuspendMenu;
+void suspend_save(const SuspendMenu *menu);
+void suspend_clear(void);
+bool suspend_load(SuspendMenu *menu);
+void suspend_apply(void);
+void match_resumed_paused(void);
+/* The chord's three doors, opened without its chirp: for a game put back. */
+void cheats_restore(void);
+/* The publisher's logo on white, at power-on only (splash.c). */
+void splash_show(void);
 void upload_tiles(void);
 void upload_palette_set(int base, const uint8_t *set, vu16 *memory);
 void upload_palettes(void);

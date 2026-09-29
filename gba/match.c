@@ -973,6 +973,14 @@ static void pause_toggled(bool was_paused) {
     if (was_paused) g_repaint = true;
 }
 
+/* A GAME PUT BACK FROM THE BATTERY (suspend.c) comes back paused: the
+ * plaque, the menu on its first row and the tune suspended, as if its
+ * START had just been pressed. */
+void match_resumed_paused(void) {
+    pause_toggled(false);
+    g_repaint = true;
+}
+
 /* One frame of a solo game: Start pauses, the cheat codes go in while paused
  * — both are the core's job (tengen_pause_input mirrors the ROM's own
  * pauseOrUnpause, which is where checkCodeInput lives). A code that fires
@@ -982,12 +990,21 @@ bool solo_play_frame(uint8_t buttons, uint8_t pressed, bool *quit) {
     /* THE MENU EATS THE PAD WHILE IT IS OPEN, and it has to: the cheat codes
      * are typed on the pad while paused too, so a Down meant for this menu is
      * the first byte of one of them. */
-    /* A PAUSED SOLO MATCH CAN SLEEP (system_sleep). Paused, because a game
-     * that is running would have to be paused first anyway; solo, because
-     * a linked one would leave the other console talking to nobody. */
-    if (g_session.game.paused && sleep_keys_held()) {
-        system_sleep();
-        return !match_over();
+    /* A SOLO MATCH SLEEPS ON ITS PAUSE PLAQUE (system_sleep). A running
+     * one is paused first, this frame, as its START would do — and sleeps
+     * the next, with the keys still held, by which time main has written
+     * the paused game to the battery (suspend.c): a console that runs flat
+     * asleep still comes back to it. A linked match never gets here with
+     * this: the other console would be left talking to nobody. */
+    if (sleep_keys_held()) {
+        if (g_session.game.paused) {
+            system_sleep();
+            return !match_over();
+        }
+        if (g_session.game.player[0].game_active) {
+            buttons = 0;
+            pressed = TENGEN_BTN_START;
+        }
     }
     if (pause_menu_input(pressed, quit)) { buttons = 0; pressed = 0; }
     if (g_session.game.player[0].game_active) {

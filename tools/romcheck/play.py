@@ -1339,4 +1339,98 @@ def system_check(rom_path):
     if failures:
         return 1
     print("OK: el reinicio por software y el reposo hacen lo que deben.")
+    return suspend_check(rom_path)
+
+
+def suspend_check(rom_path):
+    """A PAUSED GAME OUTLIVES THE POWER SWITCH, AND THE LOGO OPENS A COLD ONE.
+
+    L+R+SELECT in a match that is running pauses it and then sleeps (the
+    stand-in BIOS's Stop returns at once). On the plaque the game goes to
+    the battery (gba/suspend.c): the console switched off and on (a reset,
+    which keeps the save memory) comes back to the same game, paused, piece
+    and score where they were. Played on, it is gone: the next power cycle
+    is the title. And a console switched on shows the publisher's logo on
+    white before the title (gba/splash.c) — if the build has one — which
+    every other check skips (harness.SHOW_SPLASH).
+    """
+    from . import harness
+    base, why = game_state_address(rom_path)
+    if base is None:
+        print(f"SALTADO: {why}")
+        return 0
+    off = game_offsets(rom_path)
+    core, screen = load(rom_path)    # `screen` must stay alive; see load()
+    _ = screen
+    failures = []
+
+    def hold(keys, frames):
+        core.set_keys(*[KEYS[k] for k in keys]); run(core, frames)
+
+    def u8(k):
+        return core.memory.u8[base + off[k]]
+
+    run(core, 20)
+    press_start(core); run(core, 10)
+    press_start(core); run(core, 12)
+    press_start(core); run(core, 90)          # 1 PLAYER, playing
+    hold(["L", "R", "SELECT"], 6); hold([], 30)
+    if not u8("paused"):
+        failures.append("L+R+SELECT con la partida en marcha no la pausa")
+    y, piece = u8("y"), u8("current")
+    score = bytes(core.memory.u8[base + off["score"] + i] for i in range(4))
+
+    core.reset()                              # off and on: the battery stays
+    run(core, 60)
+    rows = " ".join(tilemap_text(core, r) for r in range(20))
+    back = bytes(core.memory.u8[base + off["score"] + i] for i in range(4))
+    if not u8("active") or not u8("paused"):
+        failures.append(f"al encender no vuelve la partida en pausa "
+                        f"(activa {u8('active')}, pausa {u8('paused')}): "
+                        f"{' '.join(rows.split())[:80]!r}")
+    elif (u8("y"), u8("current"), back) != (y, piece, score):
+        failures.append("la partida que vuelve no es la que se apago")
+    else:
+        print("  apagar en pausa y encender: la misma partida, en pausa")
+        hold(["START"], 4); hold([], 30)
+        if u8("paused"):
+            failures.append("START no reanuda la partida recuperada")
+        core.reset()
+        run(core, 60)
+        if u8("active") and u8("paused"):
+            failures.append("jugada la partida, el siguiente encendido "
+                            "la vuelve a traer")
+        else:
+            print("  reanudada, el siguiente encendido ya no la trae")
+
+    if os.path.exists(os.path.join(os.path.dirname(rom_path), "..", "gba",
+                                   "splash_logo.h")):
+        harness.SHOW_SPLASH[0] = True
+        try:
+            core2, screen2 = load(rom_path)
+            run(core2, 70)
+            px = pixels(screen2)
+            white = px[5][5]
+            reds = sum(1 for row in px for (r, g, b) in row
+                       if r > 200 and g < 80 and b < 80)
+            run(core2, 200)
+            if white[0] < 230 or white[1] < 230 or white[2] < 230 or reds < 500:
+                failures.append(f"al encender no sale el logo sobre blanco "
+                                f"(esquina {white}, {reds} px rojos)")
+            elif core2._native.memory.io[0] & 0x87 != 0:   # mode 0, lit
+                failures.append("tras el logo no llega el titulo")
+            else:
+                print(f"  al encender: el logo sobre blanco ({reds} px rojos), "
+                      f"y luego el titulo")
+        finally:
+            harness.SHOW_SPLASH[0] = False
+    else:
+        print("  (sin gba/splash_logo.h: esta construccion no tiene logo)")
+
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: la partida en pausa sobrevive al apagado, y el logo abre el "
+          "encendido.")
     return 0

@@ -103,7 +103,8 @@ GBA_ASSETS := gba/tiles_game.h gba/screen_1p.h gba/screen_coop.h \
 # The front end is five files sharing gba/port.h; see the note at the top of
 # that header for what is in which.
 GBA_SRC  := gba/main.c gba/video.c gba/hud.c gba/frontend.c gba/match.c \
-            gba/nes_audio.c gba/nes6502.c gba/handtunes.c gba/link.c $(CORE_SRC)
+            gba/nes_audio.c gba/nes6502.c gba/handtunes.c gba/link.c gba/suspend.c \
+            gba/splash.c $(CORE_SRC)
 GBA_ELF  := $(BUILD)/tengen.elf
 GBA_ROM  := $(BUILD)/tengen.gba
 # THE SINGLE-PAK SLAVE: the same program, linked to run from external WRAM
@@ -122,7 +123,7 @@ gba: $(GBA_ROM)
 # still reaches the helpful message below instead of "no rule to make target".
 $(GBA_ELF): $(GBA_SRC) $(CORE_HDR) gba/port.h gba/gba_hw.h gba/link.h \
              gba/crt0.s gba/gba.ld gba/mb_image.s $(GBA_MB) \
-             $(wildcard $(GBA_ASSETS)) | $(BUILD)
+             $(wildcard $(GBA_ASSETS) gba/splash_logo.h) | $(BUILD)
 	@command -v $(ARMCC) >/dev/null 2>&1 || { \
 	    echo "error: $(ARMCC) not found."; \
 	    echo "Install an arm-none-eabi toolchain (see the Makefile header),"; \
