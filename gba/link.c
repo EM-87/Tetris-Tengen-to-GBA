@@ -274,7 +274,7 @@ void link_init(void) {
     REG_IF = IRQ_SERIAL;     /* discard anything already pending */
     REG_SIOCNT |= SIO_IRQ;
     g_armed = true;
-    REG_IME = 1;
+    REG_IME = IME_ON;
 }
 
 /* ...BUT NOT OUT OF MULTIPLAYER MODE. This took the port to general purpose
@@ -292,7 +292,7 @@ void link_shutdown(void) {
     REG_SIOMLT_SEND = 0;
     g_auto_tx = false;
     g_armed = false;
-    REG_IME = 1;
+    REG_IME = IME_ON;
 }
 
 /* THE SI PIN IS NOT THE CABLE'S ANSWER WHILE A TRANSFER IS PASSING. The
@@ -345,7 +345,7 @@ void link_pump(void) {
         if (++g_busy_frames > LINK_BUSY_LIMIT) {
             REG_IME = 0;
             sio_reset();
-            REG_IME = 1;
+            REG_IME = IME_ON;
             g_busy_frames = 0;
         }
         return;
@@ -471,7 +471,7 @@ void link_play_begin(void) {
      * last GO. */
     tx(tengen_link_pack(link_read_buttons(), 0));
     g_auto_tx = true;
-    REG_IME = 1;
+    REG_IME = IME_ON;
 }
 
 void link_play_end(void) {
@@ -609,7 +609,7 @@ LinkSendResult link_multiboot_send(const uint8_t *image, uint32_t len) {
     REG_IE = (uint16_t)(REG_IE & ~IRQ_SERIAL);
     g_armed = false;
     g_auto_tx = false;
-    REG_IME = 1;
+    REG_IME = IME_ON;
     if (REG_RCNT & 0xC000) REG_RCNT = 0x0000;
     REG_SIOCNT = SIO_NORMAL_SO_HIGH;
     REG_SIOCNT = SIO_MODE_MULTI | SIO_BAUD_115200;

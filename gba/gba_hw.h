@@ -39,6 +39,15 @@ typedef volatile uint32_t vu32;
 #define IRQ_VBLANK    0x0001
 #define IRQ_SERIAL    0x0080
 #define IRQ_KEYPAD    0x1000
+/* WHAT "INTERRUPTS ON" MEANS. On the Single-Pak slave, nothing: on two real
+ * SPs no image received over the cable could take an interrupt at all (a
+ * probe of twenty instructions included), so that build never sets IME and
+ * polls the same flags in IF instead (poll_interrupts, video.c). */
+#ifdef TENGEN_MULTIBOOT
+#define IME_ON 0
+#else
+#define IME_ON 1
+#endif
 /* KEYCNT: which keys raise IRQ_KEYPAD, bit 14 the enable and bit 15 "all of
  * them at once" rather than "any of them". Only the sleep uses it. */
 #define REG_KEYCNT    (*(vu16 *)0x04000132)

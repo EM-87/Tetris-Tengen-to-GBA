@@ -144,11 +144,6 @@ IWRAM_CODE void irq_handler(void);
 void irq_handler(void) {
     /* Only the sources this program switched on: IF can latch others. */
     uint16_t flags = REG_IF & REG_IE;
-#ifdef TENGEN_MULTIBOOT
-    /* The Single-Pak slave's breadcrumb for "the first interrupt got here":
-     * the backdrop MAGENTA (see MB_STAGE in main.c). */
-    if (g_vblank_count == 0) MEM_PALETTE[0] = 0x7C1F;
-#endif
     if (flags & IRQ_VBLANK) g_vblank_count++;
     if (flags & IRQ_SERIAL) link_serial_service();
     REG_IF = flags;
@@ -166,7 +161,7 @@ void irq_init(void) {
      * switched on (see crt0), and the cable adds its own when it starts. */
     REG_IE = IRQ_VBLANK;
     REG_IF = 0xFFFF;         /* discard anything already pending */
-    REG_IME = 1;
+    REG_IME = IME_ON;
 }
 
 /* THE WAIT FOR THE NEXT FRAME SLEEPS. It used to spin on VCOUNT — first
@@ -185,15 +180,28 @@ void irq_init(void) {
  * wrong. */
 static void soft_reset_check(void);
 
+#if defined(TENGEN_MULTIBOOT)
+/* THE SINGLE-PAK SLAVE TAKES NO INTERRUPTS (see IME_ON): what the handler
+ * would do, this does when asked. IF still latches the vertical blank and
+ * the end of a transfer with IME off; each is served as the handler would
+ * serve it and acknowledged. vsync() asks continuously while it waits, and
+ * the master starts one transfer per frame, so a transfer is served within
+ * the frame it lands in. */
+void poll_interrupts(void) {
+    uint16_t flags = (uint16_t)(REG_IF & (IRQ_VBLANK | IRQ_SERIAL));
+    if (!flags) return;
+    REG_IF = flags;
+    if (flags & IRQ_SERIAL) link_serial_service();
+    if (flags & IRQ_VBLANK) g_vblank_count++;
+}
+#endif
+
 __attribute__((noinline)) void vsync(void) {
 #if defined(TENGEN_MULTIBOOT)
-    /* NOT THROUGH THE BIOS ON THE SINGLE-PAK SLAVE. On two SPs its start got
-     * as far as switching interrupts on and then never came back from the
-     * first VBlankIntrWait. The frame is waited for here on the handler's
-     * own count instead, which needs nothing from the BIOS but the
-     * interrupt itself. */
+    /* NOT THROUGH THE BIOS, AND NOT ON AN INTERRUPT: on two SPs the slave
+     * died on the first one it took. The frame is waited for by polling. */
     uint32_t seen = g_vblank_count;
-    while (g_vblank_count == seen) { }
+    while (g_vblank_count == seen) poll_interrupts();
 #elif defined(__thumb__)
     __asm__ volatile ("swi 0x05" ::: "r0", "r1", "r2", "r3", "memory");
 #else
@@ -298,7 +306,7 @@ void system_sleep(void) {
     REG_KEYCNT = (uint16_t)(KEYCNT_IRQ | KEYCNT_AND | SLEEP_KEYS);
     REG_IE = IRQ_KEYPAD;
     REG_IF = IRQ_KEYPAD;
-    REG_IME = 1;
+    REG_IME = IME_ON;
 #if defined(__thumb__)
     __asm__ volatile ("swi 0x03" ::: "r0", "r1", "r2", "r3", "memory");
 #else
@@ -308,7 +316,7 @@ void system_sleep(void) {
     REG_KEYCNT = 0;
     REG_IE = ie;
     REG_IF = (uint16_t)(IRQ_KEYPAD | IRQ_VBLANK);
-    REG_IME = 1;
+    REG_IME = IME_ON;
     while ((uint16_t)(~REG_KEYINPUT & SLEEP_KEYS)) { }
     REG_SOUNDCNT_L_HW = psg;
     REG_DISPCNT = dispcnt;

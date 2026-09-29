@@ -218,7 +218,16 @@ story behind each; the item number is in brackets.
   dispatch. The big probe (R+SELECT) now takes vertical-blank interrupts
   with a handler of its own in EWRAM and blinks green/blue: that tells
   "no image received over the cable can take interrupts this way" from
-  "something in the game's start". The cartridge mutes the PSG while the BIOS sends: the
+  "something in the game's start". It stayed GREEN: on those SPs no
+  image received over the cable took an interrupt, twenty instructions
+  included (crt0's first colour was red: system mode, as GBATEK says).
+  Why is not known. So THE SINGLE-PAK SLAVE TAKES NO INTERRUPTS: IME_ON is
+  0 on that build, and vsync() polls IF for the vertical blank and the end
+  of a transfer and serves each as the handler would (poll_interrupts,
+  video.c). The master starts one transfer a frame, so the slave serves
+  it within the frame; singlepak_check plays the cartridge against it
+  byte for byte on the slow cable. The big probe now blinks the same way,
+  IME off, watching IF. The cartridge mutes the PSG while the BIOS sends: the
   last note held for the whole transfer, a long beep.
 - **The soft reset is done by hand** (`soft_reset_check`, video.c), not
   by the BIOS's SoftReset, which mGBA's stand-in BIOS does not have: a

@@ -49,15 +49,8 @@ int main(void) {
     }
 #endif
     irq_init();
-    MB_STAGE(0x03FF);                      /* yellow: interrupts on */
-#ifdef TENGEN_MULTIBOOT
-    /* ...and did any arrive, in the two seconds yellow was held? BLACK, and
-     * stop, if not: the interrupt itself is what is broken. */
-    if (g_vblank_count == 0) {
-        MEM_PALETTE[0] = 0x0000;
-        for (;;) { }
-    }
-#endif
+    MB_STAGE(0x03FF);                      /* yellow: interrupts set up */
+
 #ifdef TENGEN_MULTIBOOT
     vsync();                               /* the first BIOS call */
 #endif
