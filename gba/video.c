@@ -243,42 +243,6 @@ bool g_sleep_blocked;
  * for would put them straight back in it. */
 #define RESET_KEYS (KEY_A | KEY_B | KEY_START | KEY_SELECT)
 
-/* THE RESTART, MEASURED ON THE HARDWARE (temporary). Three ways of
- * restarting have come to a black screen on an EZ-Flash IV and all three
- * work in mGBA; black and not white means the screen was lit again, so the
- * program came back and stopped somewhere. soft_reset_check leaves this
- * word in external WRAM, which crt0 does not clear, and main paints the
- * backdrop at each step while it is there (reset_probe): magenta before
- * main, red at main, orange past irq_init, yellow past the splash, cyan at
- * the top of the loop, green once a vertical blank has woken vsync() —
- * which lasts a second and then puts the backdrop back. The colour the
- * screen stays is where it stops. */
-#define RESET_PROBE 0x52535450u      /* "RSTP" */
-__attribute__((section(".ewram"))) static volatile uint32_t g_reset_probe;
-static uint16_t g_probe_backdrop;
-static uint32_t g_probe_vblank;
-static int g_probe_frames;
-
-void reset_probe(uint16_t colour) {
-    if (g_reset_probe != RESET_PROBE) return;
-    if (colour == 0x7FE0) {              /* cyan: the loop is next */
-        g_probe_backdrop = MEM_PALETTE[0];
-        g_probe_vblank = g_vblank_count;
-        g_probe_frames = 0;
-    }
-    MEM_PALETTE[0] = colour;
-    if (REG_DISPCNT & DCNT_FORCED_BLANK) REG_DISPCNT = 0;
-}
-
-void reset_probe_tick(void) {
-    if (g_reset_probe != RESET_PROBE) return;
-    if (g_vblank_count == g_probe_vblank) return;
-    MEM_PALETTE[0] = 0x03E0;             /* green: a vertical blank came */
-    if (++g_probe_frames < 60) return;
-    MEM_PALETTE[0] = g_probe_backdrop;
-    g_reset_probe = 0;
-}
-
 static void soft_reset_check(void) {
     if ((uint16_t)(~REG_KEYINPUT & RESET_KEYS) != RESET_KEYS) return;
     while ((uint16_t)(~REG_KEYINPUT & KEY_MASK)) { }
@@ -300,12 +264,6 @@ static void soft_reset_check(void) {
      * the ROM, where a flash cart may have its own start-up code — on an
      * EZ-Flash IV both came to a black screen. The Single-Pak copy's
      * _restart is in external WRAM, where it has been all along. */
-    /* TEMPORARY, UNTIL THE RESTART WORKS ON AN EZ-FLASH IV: a colour on
-     * the screen for how far it got (reset_probe). Magenta from here: the
-     * screen stays magenta if crt0 never reaches main. */
-    g_reset_probe = RESET_PROBE;
-    MEM_PALETTE[0] = 0x7C1F;
-    REG_DISPCNT = 0;
     extern void _restart(void);
     __asm__ volatile ("bx %0" :: "r"(_restart) : "memory");
     for (;;) { }
@@ -318,9 +276,10 @@ static void soft_reset_check(void) {
  * The screen goes to forced blank, the PSG's volume to nought, and the CPU
  * into the BIOS's Stop (SWI 3), which only an interrupt from the keypad,
  * the cartridge or the serial port ends — and only the keypad's is
- * switched on. ANY BUTTON BUT THE SHOULDERS WAKES IT: the same three keys
- * again, as it first was, is not what anybody tries on a console that
- * looks switched off, and L and R are the ones a bag presses. A console
+ * switched on. A, B, START OR SELECT WAKES IT: the same three keys again,
+ * as it first was, is not what anybody tries on a console that looks
+ * switched off; L and R are the ones a bag presses, and the pad went too,
+ * at the player's asking. A console
  * left in a bag then draws next to nothing instead of running its screen
  * and its sound for hours.
  *
@@ -328,7 +287,7 @@ static void soft_reset_check(void) {
  * would wake it on the spot, and the one that woke it would otherwise be
  * read by the game as a press. */
 #define SLEEP_KEYS (KEY_L | KEY_R | KEY_SELECT)
-#define WAKE_KEYS  (KEY_MASK & ~(KEY_L | KEY_R))
+#define WAKE_KEYS  (KEY_A | KEY_B | KEY_SELECT | KEY_START)
 #define REG_SOUNDCNT_L_HW (*(vu16 *)0x04000080)
 
 /* The PSG's master volume to nothing and back, leaving every channel as it
@@ -367,11 +326,15 @@ static void wait_keys_settled(void) {
 }
 
 void system_sleep(void) {
+    /* SILENT FIRST. The sound engine does not run while the keys settle,
+     * so whatever note was sounding held for those frames and then cut:
+     * a glitch in the speaker on the way to sleep. */
+    uint16_t psg = REG_SOUNDCNT_L_HW;
+    REG_SOUNDCNT_L_HW = 0;
     wait_keys_settled();
-    uint16_t ie = REG_IE, dispcnt = REG_DISPCNT, psg = REG_SOUNDCNT_L_HW;
+    uint16_t ie = REG_IE, dispcnt = REG_DISPCNT;
     REG_IME = 0;
     REG_DISPCNT = (uint16_t)(dispcnt | DCNT_FORCED_BLANK);
-    REG_SOUNDCNT_L_HW = 0;
     REG_KEYCNT = (uint16_t)(KEYCNT_IRQ | WAKE_KEYS);   /* any of them */
     REG_IE = IRQ_KEYPAD;
     REG_IF = IRQ_KEYPAD;

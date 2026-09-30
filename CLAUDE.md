@@ -245,8 +245,9 @@ story behind each; the item number is in brackets.
   A check that names a colour passes the NES one through the same table
   (`on_screen` in romcheck/harness.py: keep the two in step).
 - **Sleep waits for the keys to settle** (`wait_keys_settled`): every key
-  up for four frames, both before the Stop and after the wake. Any button
-  wakes it, and one bounce of SELECT on the way in woke it on the spot —
+  up for four frames, both before the Stop and after the wake, and the PSG
+  silenced before that wait, not after (a note held through it and cut
+  was a glitch in the speaker). A, B, START or SELECT wakes it, and one bounce of SELECT on the way in woke it on the spot —
   on two SPs it took up to four tries. A solo match remembers that it is
   to sleep on the frame it pauses (`sleep_next`), so quick hands do not
   only pause it.
@@ -258,12 +259,12 @@ story behind each; the item number is in brackets.
   goes there too (INFERRED: the cart's code at the top of the ROM). The
   Single-Pak copy's `_restart` is in external WRAM, where it already is.
   It leaves the serial port alone for the same reason sio_reset does, and
-  drops the paused game kept on the battery. **Open: it still does not
-  work on an EZ-Flash IV** (build a762adb: black, where a forced blank on
-  hardware is WHITE — so the program came back and stopped somewhere).
-  `reset_probe` paints the backdrop at each step after a restart, magenta
-  to green; the colour it stays is where it stops. Temporary: out with it
-  once the restart works.
+  drops the paused game kept on the battery. **On an EZ-Flash IV it never
+  runs:** with a probe that turned the screen magenta as the very first
+  thing the restart did (build c81cb67), the screen went black and never
+  magenta — so the cart takes A+B+START+SELECT for itself (INFERRED: its
+  own soft-reset hotkey, back to its menu) before the game sees it. Not
+  the game's to fix; the cart's option is.
 - **EXIT on the pause menu leaves with the game still paused and the match
   still "running" for that frame** (`quit_match`; the way out is further
   down the loop). Anything that asks "is a paused game on the plaque?"

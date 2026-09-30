@@ -131,8 +131,8 @@ Lo que el GBA tiene de más:
 | GAME SELECT o LEVEL SETTINGS | L+R | destapa las canciones ocultas (Korobeiniki, Katiuska, MUSIC MIX), los niveles 18-19 y el menú de pausa |
 | Título | L+R | recorre los títulos de los prototipos (su skin llega al juego) |
 | Carrera, tablero muerto | A+B | se levanta y sigue, como en el cartucho |
-| En cualquier sitio salvo una partida por cable | L+R+SELECT | reposo: pantalla y sonido apagados, casi sin gastar pila (una partida en solitario se pausa antes); cualquier botón menos L y R despierta |
-| En cualquier momento | A+B+START+SELECT | reinicia el juego |
+| En cualquier sitio salvo una partida por cable | L+R+SELECT | reposo: pantalla y sonido apagados, casi sin gastar pila (una partida en solitario se pausa antes); A, B, START o SELECT despiertan |
+| En cualquier momento | A+B+START+SELECT | reinicia el juego (en la EZ-Flash IV lo intercepta el propio cartucho) |
 
 **Apagar en pausa no pierde la partida**, como en Tetris DX: una partida en
 solitario en pausa se guarda en la memoria del cartucho, y al encender vuelve
