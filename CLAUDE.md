@@ -235,6 +235,15 @@ story behind each; the item number is in brackets.
   (`romcheck/harness.py`), because every check was written against a
   console that reaches the title at once; `suspend_check` is the one that
   looks at it.
+- **Every colour goes through the screen's curve** (`kLcdGamma`,
+  `lcd_colour` in gba/palette.h) on its way to palette memory: each 5-bit
+  channel to the power 1/1.6, as games made for the GBA's dark LCD drew
+  their colours brighter. Always on, not an option. A check that names a
+  colour names the NES one and passes it through the same curve
+  (`on_screen` in romcheck/harness.py, a copy of the table: keep the two in
+  step). The exponent is the port's choice, INFERRED as a middle ground
+  between the unlit GBA and the backlit SP; the table is the one place to
+  change it.
 - **The soft reset comes back into crt0 past the header** (`_restart`,
   `soft_reset_check`, video.c), after stopping the DMA, timers and sound and
   emptying the video memory by hand. NOT through $08000000, where a flash
@@ -430,7 +439,8 @@ plaque, a linked one not at all; any button but L and R wakes it) and soft
 reset (A+B+START+SELECT), as commercial games had; a paused solo game kept
 on the battery through a power cycle, as Tetris DX does (`suspend.c`); the
 publisher's logo on white at power-on (`splash.c`, from an image you supply
-through `tools/make_splash.py`, gitignored like the cartridge's art).
+through `tools/make_splash.py`, gitignored like the cartridge's art); every
+colour brightened for the GBA's LCD (`kLcdGamma`).
 [8, 11, 17, 19, 20, 23, 28, 30]
 
 **Knowingly not shown**: proto_c's title animation (its rows are the ones

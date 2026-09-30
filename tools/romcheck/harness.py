@@ -290,7 +290,20 @@ def map_row_text(core, row):
 # the same way.
 # The braid's own mid blue, which the shelves are drawn in. Sampled rather
 # than named: it is palette bank 2 colour 2 of the cartridge's game set.
-BRAID_BLUE = (74, 156, 239)
+# THE SCREEN'S CURVE, as gba/palette.h's kLcdGamma applies it to every colour
+# the ROM writes, and mGBA's 5-to-8-bit expansion after it: what a colour the
+# cartridge names comes out as in the framebuffer. Keep in step with
+# kLcdGamma.
+LCD_GAMMA = [0, 4, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+             21, 21, 22, 23, 24, 24, 25, 26, 26, 27, 28, 28, 29, 30, 30, 31]
+
+
+def on_screen(rgb):
+    """An 8-bit NES RGB colour as it reaches mGBA's framebuffer."""
+    return tuple((LCD_GAMMA[c >> 3] << 3) | (LCD_GAMMA[c >> 3] >> 2) for c in rgb)
+
+
+BRAID_BLUE = on_screen((76, 154, 236))   # the braid's NES $21
 
 PAUSE_W = 8
 PAUSE_H = 2

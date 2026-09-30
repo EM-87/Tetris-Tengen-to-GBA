@@ -50,7 +50,7 @@ void splash_show(void) {
     g_splash_seen = SPLASH_SEEN;
 
     REG_DISPCNT = DCNT_FORCED_BLANK;
-    for (int i = 0; i < 16; i++) MEM_PALETTE[i] = kSplashPalette[i];
+    for (int i = 0; i < 16; i++) MEM_PALETTE[i] = lcd_colour(kSplashPalette[i]);
     vu16 *page = (vu16 *)0x06000000;
     for (int i = 0; i < 240 * 160 / 2; i++) page[i] = 0;
     const int x0 = ((240 - SPLASH_W) / 2) & ~1;
