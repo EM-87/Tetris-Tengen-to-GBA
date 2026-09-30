@@ -996,15 +996,20 @@ bool solo_play_frame(uint8_t buttons, uint8_t pressed, bool *quit) {
      * the paused game to the battery (suspend.c): a console that runs flat
      * asleep still comes back to it. A linked match never gets here with
      * this: the other console would be left talking to nobody. */
-    if (sleep_keys_held()) {
-        if (g_session.game.paused) {
-            system_sleep();
-            return !match_over();
-        }
-        if (g_session.game.player[0].game_active) {
-            buttons = 0;
-            pressed = TENGEN_BTN_START;
-        }
+    /* ...and the sleep is REMEMBERED from the frame that paused, so keys
+     * let go of quickly still get there (they only paused it, and a second
+     * try was needed). */
+    static bool sleep_next;
+    if (g_session.game.paused && (sleep_next || sleep_keys_held())) {
+        sleep_next = false;
+        system_sleep();
+        return !match_over();
+    }
+    sleep_next = false;
+    if (sleep_keys_held() && g_session.game.player[0].game_active) {
+        buttons = 0;
+        pressed = TENGEN_BTN_START;
+        sleep_next = true;
     }
     if (pause_menu_input(pressed, quit)) { buttons = 0; pressed = 0; }
     if (g_session.game.player[0].game_active) {

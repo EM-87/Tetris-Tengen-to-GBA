@@ -12,12 +12,15 @@
 int main(void) {
     /* First: every screen from here on waits for its frame in vsync(), and
      * vsync() sleeps until an interrupt that this is what switches on. */
+    reset_probe(0x001F);                 /* red: main (see reset_probe) */
     irq_init();
+    reset_probe(0x021F);                 /* orange: past irq_init */
     /* ...and the cable answers from the start, wherever the player is: see
      * link_rest. */
     link_rest();
     /* The publisher's logo, at power-on only; see splash.c. */
     splash_show();
+    reset_probe(0x03FF);                 /* yellow: past the splash */
 
     upload_tiles();
     upload_palettes();
@@ -140,7 +143,9 @@ int main(void) {
     const bool resuming = false;
 #endif
 
+    reset_probe(0x7FE0);                 /* cyan: the loop is next */
     for (;;) {
+        reset_probe_tick();              /* green once vsync() has woken */
         /* Asleep from any screen but a match in play; see system_sleep. */
         g_sleep_blocked = screen == SCREEN_PLAYING && match_running;
         uint8_t buttons = read_buttons();

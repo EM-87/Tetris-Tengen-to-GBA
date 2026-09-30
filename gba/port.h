@@ -1761,6 +1761,9 @@ void suspend_apply(void);
 void match_resumed_paused(void);
 /* The chord's three doors, opened without its chirp: for a game put back. */
 void cheats_restore(void);
+/* The restart measured on the hardware; temporary (video.c). */
+void reset_probe(uint16_t colour);
+void reset_probe_tick(void);
 /* The publisher's logo on white, at power-on only (splash.c). */
 void splash_show(void);
 void upload_tiles(void);

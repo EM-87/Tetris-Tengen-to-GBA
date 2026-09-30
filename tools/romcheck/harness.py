@@ -294,8 +294,7 @@ def map_row_text(core, row):
 # the ROM writes, and mGBA's 5-to-8-bit expansion after it: what a colour the
 # cartridge names comes out as in the framebuffer. Keep in step with
 # kLcdGamma.
-LCD_GAMMA = [0, 4, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
-             21, 21, 22, 23, 24, 24, 25, 26, 26, 27, 28, 28, 29, 30, 30, 31]
+LCD_GAMMA = list(range(32))   # the identity today; see kLcdGamma
 
 
 def on_screen(rgb):

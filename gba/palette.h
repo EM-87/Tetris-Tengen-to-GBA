@@ -61,18 +61,18 @@ static const uint8_t kNesPaletteRGB[64][3] = {
 /* The NES backdrop these palettes share ($0F is black). */
 #define TENGEN_BACKDROP_INDEX 0x0F
 
-/* THE GBA'S SCREEN IS DARKER THAN A TELEVISION, and games made for it drew
- * their colours brighter to make up for it: the original GBA and the first
- * SP light their panels from the front, or not at all, and flatten the dark
- * half of every channel. So every colour on the way to the hardware goes
- * through this: each 5-bit channel raised to the power 1/1.6, black kept
- * black and white kept white. Always, as the games of the day did — not an
- * option. The curve is the port's choice (INFERRED as a middle ground: a
- * full correction for the unlit panel washes the colours out on the
- * backlit SP, AGS-101); change kLcdGamma, not the colours. */
+/* THE SCREEN'S CURVE, and today it is a straight line. Games made for the
+ * GBA drew their colours brighter than a television needs, because the
+ * original GBA and the front-lit SP (AGS-001) flatten the dark half of every
+ * channel; emulators go the other way and DARKEN to imitate those panels
+ * (an LCD gamma of about 4 against a monitor's 2.2). The NES palette was
+ * made for a television, and on the backlit SP (AGS-101) a brightening
+ * curve (x^(1/1.6), build 822ac6c) washed everything out, so the table is
+ * the identity: every colour as the cartridge names it. It stays the one
+ * place to put a curve back, should a front-lit screen want one. */
 static const uint8_t kLcdGamma[32] = {
-     0,  4,  6,  7,  9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
-    21, 21, 22, 23, 24, 24, 25, 26, 26, 27, 28, 28, 29, 30, 30, 31,
+     0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15,
+    16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
 };
 
 static inline uint16_t lcd_colour(uint16_t c) {

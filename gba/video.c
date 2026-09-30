@@ -243,6 +243,42 @@ bool g_sleep_blocked;
  * for would put them straight back in it. */
 #define RESET_KEYS (KEY_A | KEY_B | KEY_START | KEY_SELECT)
 
+/* THE RESTART, MEASURED ON THE HARDWARE (temporary). Three ways of
+ * restarting have come to a black screen on an EZ-Flash IV and all three
+ * work in mGBA; black and not white means the screen was lit again, so the
+ * program came back and stopped somewhere. soft_reset_check leaves this
+ * word in external WRAM, which crt0 does not clear, and main paints the
+ * backdrop at each step while it is there (reset_probe): magenta before
+ * main, red at main, orange past irq_init, yellow past the splash, cyan at
+ * the top of the loop, green once a vertical blank has woken vsync() —
+ * which lasts a second and then puts the backdrop back. The colour the
+ * screen stays is where it stops. */
+#define RESET_PROBE 0x52535450u      /* "RSTP" */
+__attribute__((section(".ewram"))) static volatile uint32_t g_reset_probe;
+static uint16_t g_probe_backdrop;
+static uint32_t g_probe_vblank;
+static int g_probe_frames;
+
+void reset_probe(uint16_t colour) {
+    if (g_reset_probe != RESET_PROBE) return;
+    if (colour == 0x7FE0) {              /* cyan: the loop is next */
+        g_probe_backdrop = MEM_PALETTE[0];
+        g_probe_vblank = g_vblank_count;
+        g_probe_frames = 0;
+    }
+    MEM_PALETTE[0] = colour;
+    if (REG_DISPCNT & DCNT_FORCED_BLANK) REG_DISPCNT = 0;
+}
+
+void reset_probe_tick(void) {
+    if (g_reset_probe != RESET_PROBE) return;
+    if (g_vblank_count == g_probe_vblank) return;
+    MEM_PALETTE[0] = 0x03E0;             /* green: a vertical blank came */
+    if (++g_probe_frames < 60) return;
+    MEM_PALETTE[0] = g_probe_backdrop;
+    g_reset_probe = 0;
+}
+
 static void soft_reset_check(void) {
     if ((uint16_t)(~REG_KEYINPUT & RESET_KEYS) != RESET_KEYS) return;
     while ((uint16_t)(~REG_KEYINPUT & KEY_MASK)) { }
@@ -264,6 +300,12 @@ static void soft_reset_check(void) {
      * the ROM, where a flash cart may have its own start-up code — on an
      * EZ-Flash IV both came to a black screen. The Single-Pak copy's
      * _restart is in external WRAM, where it has been all along. */
+    /* TEMPORARY, UNTIL THE RESTART WORKS ON AN EZ-FLASH IV: a colour on
+     * the screen for how far it got (reset_probe). Magenta from here: the
+     * screen stays magenta if crt0 never reaches main. */
+    g_reset_probe = RESET_PROBE;
+    MEM_PALETTE[0] = 0x7C1F;
+    REG_DISPCNT = 0;
     extern void _restart(void);
     __asm__ volatile ("bx %0" :: "r"(_restart) : "memory");
     for (;;) { }
@@ -305,8 +347,27 @@ bool sleep_keys_held(void) {
     return (uint16_t)(~REG_KEYINPUT & SLEEP_KEYS) == SLEEP_KEYS;
 }
 
+/* EVERY KEY UP, AND STILL UP A FEW FRAMES LATER. A key let go of bounces
+ * for a few milliseconds on the hardware, and with any button waking the
+ * console, one bounce of SELECT after going to sleep woke it on the spot:
+ * on two SPs it took up to four tries to stay asleep. Frames are counted
+ * off the scanline counter, not vsync(), which is what called this. */
+#define SLEEP_SETTLE_FRAMES 4
+static void wait_keys_settled(void) {
+    int quiet = 0;
+    while (quiet < SLEEP_SETTLE_FRAMES) {
+        while (REG_VCOUNT >= 160) {
+            if ((uint16_t)(~REG_KEYINPUT & KEY_MASK)) quiet = -1;
+        }
+        while (REG_VCOUNT < 160) {
+            if ((uint16_t)(~REG_KEYINPUT & KEY_MASK)) quiet = -1;
+        }
+        quiet++;
+    }
+}
+
 void system_sleep(void) {
-    while ((uint16_t)(~REG_KEYINPUT & SLEEP_KEYS)) { }
+    wait_keys_settled();
     uint16_t ie = REG_IE, dispcnt = REG_DISPCNT, psg = REG_SOUNDCNT_L_HW;
     REG_IME = 0;
     REG_DISPCNT = (uint16_t)(dispcnt | DCNT_FORCED_BLANK);
@@ -325,7 +386,7 @@ void system_sleep(void) {
     REG_IE = ie;
     REG_IF = (uint16_t)(IRQ_KEYPAD | IRQ_VBLANK);
     REG_IME = IME_ON;
-    while ((uint16_t)(~REG_KEYINPUT & KEY_MASK)) { }
+    wait_keys_settled();
     REG_SOUNDCNT_L_HW = psg;
     REG_DISPCNT = dispcnt;
 }

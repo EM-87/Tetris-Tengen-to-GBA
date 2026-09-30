@@ -236,14 +236,20 @@ story behind each; the item number is in brackets.
   console that reaches the title at once; `suspend_check` is the one that
   looks at it.
 - **Every colour goes through the screen's curve** (`kLcdGamma`,
-  `lcd_colour` in gba/palette.h) on its way to palette memory: each 5-bit
-  channel to the power 1/1.6, as games made for the GBA's dark LCD drew
-  their colours brighter. Always on, not an option. A check that names a
-  colour names the NES one and passes it through the same curve
-  (`on_screen` in romcheck/harness.py, a copy of the table: keep the two in
-  step). The exponent is the port's choice, INFERRED as a middle ground
-  between the unlit GBA and the backlit SP; the table is the one place to
-  change it.
+  `lcd_colour` in gba/palette.h) on its way to palette memory, and today
+  that curve is the identity. A brightening one (x^(1/1.6), build 822ac6c)
+  washed everything out on the backlit SP: emulators DARKEN to imitate the
+  unlit panels (an LCD gamma of about 4 against a monitor's 2.2), games of
+  the day drew bright art to make up for them, and the NES palette was
+  made for a television. The table is the one place to put a curve back.
+  A check that names a colour passes the NES one through the same table
+  (`on_screen` in romcheck/harness.py: keep the two in step).
+- **Sleep waits for the keys to settle** (`wait_keys_settled`): every key
+  up for four frames, both before the Stop and after the wake. Any button
+  wakes it, and one bounce of SELECT on the way in woke it on the spot —
+  on two SPs it took up to four tries. A solo match remembers that it is
+  to sleep on the frame it pauses (`sleep_next`), so quick hands do not
+  only pause it.
 - **The soft reset comes back into crt0 past the header** (`_restart`,
   `soft_reset_check`, video.c), after stopping the DMA, timers and sound and
   emptying the video memory by hand. NOT through $08000000, where a flash
@@ -252,7 +258,12 @@ story behind each; the item number is in brackets.
   goes there too (INFERRED: the cart's code at the top of the ROM). The
   Single-Pak copy's `_restart` is in external WRAM, where it already is.
   It leaves the serial port alone for the same reason sio_reset does, and
-  drops the paused game kept on the battery.
+  drops the paused game kept on the battery. **Open: it still does not
+  work on an EZ-Flash IV** (build a762adb: black, where a forced blank on
+  hardware is WHITE — so the program came back and stopped somewhere).
+  `reset_probe` paints the backdrop at each step after a restart, magenta
+  to green; the colour it stays is where it stops. Temporary: out with it
+  once the restart works.
 - **EXIT on the pause menu leaves with the game still paused and the match
   still "running" for that frame** (`quit_match`; the way out is further
   down the loop). Anything that asks "is a paused game on the plaque?"
