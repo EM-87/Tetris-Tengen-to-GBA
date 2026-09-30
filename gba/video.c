@@ -242,11 +242,6 @@ bool g_sleep_blocked;
  * the power switch (suspend.c) is let go of, or the restart a player asked
  * for would put them straight back in it. */
 #define RESET_KEYS (KEY_A | KEY_B | KEY_START | KEY_SELECT)
-#ifdef TENGEN_MULTIBOOT
-#define RESET_ENTRY 0x02000000u   /* the Single-Pak image: still in EWRAM */
-#else
-#define RESET_ENTRY 0x08000000u   /* crt0's _start, in ARM */
-#endif
 
 static void soft_reset_check(void) {
     if ((uint16_t)(~REG_KEYINPUT & RESET_KEYS) != RESET_KEYS) return;
@@ -264,22 +259,13 @@ static void soft_reset_check(void) {
     for (vu32 *p = (vu32 *)0x06000000; p < (vu32 *)0x06018000; p++) *p = 0;
     for (vu32 *p = (vu32 *)0x07000000; p < (vu32 *)0x07000400; p++) *p = 0;
     for (vu32 *p = (vu32 *)0x05000000; p < (vu32 *)0x05000400; p++) *p = 0;
-    /* THE BIOS's SoftReset, as the games did it: it clears the top of
-     * internal WRAM (the BIOS's own stacks, its interrupt vector and flags),
-     * puts the three stack pointers back, zeroes the registers and enters
-     * system mode before jumping — to the cartridge, or to external WRAM if
-     * $03007FFA is not 0, which is what the Single-Pak copy needs. The jump
-     * by hand that was here showed a black screen on a flash cart: a
-     * restart the cart's own start-up code was not written for (INFERRED).
-     * An emulator whose stand-in BIOS has no SoftReset returns from the
-     * call, and gets the jump by hand. */
-    *(volatile uint8_t *)0x03007FFA = (RESET_ENTRY == 0x02000000u) ? 1 : 0;
-#if defined(__thumb__)
-    __asm__ volatile ("swi 0x00" ::: "r0", "r1", "r2", "r3", "memory");
-#else
-    __asm__ volatile ("swi 0x000000" ::: "r0", "r1", "r2", "r3", "memory");
-#endif
-    __asm__ volatile ("bx %0" :: "r"(RESET_ENTRY) : "memory");
+    /* INTO crt0 PAST THE HEADER (_restart), in ARM: not the BIOS's
+     * SoftReset and not 0x08000000, both of which go through the top of
+     * the ROM, where a flash cart may have its own start-up code — on an
+     * EZ-Flash IV both came to a black screen. The Single-Pak copy's
+     * _restart is in external WRAM, where it has been all along. */
+    extern void _restart(void);
+    __asm__ volatile ("bx %0" :: "r"(_restart) : "memory");
     for (;;) { }
 }
 

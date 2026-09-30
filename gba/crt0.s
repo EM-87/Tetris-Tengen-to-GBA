@@ -48,6 +48,14 @@ _start:
     .word   0
 .endif
 
+    @ THE SOFT RESET COMES BACK IN HERE, past the header, and not at
+    @ 0x08000000 (soft_reset_check, video.c): a flash cart may have put its
+    @ own start-up code at the top of the ROM, and on an EZ-Flash IV a
+    @ restart through there, by hand or through the BIOS's SoftReset, came
+    @ to a black screen (INFERRED). Everything from here on is this
+    @ program's, and it lays the machine out whatever state it finds it in.
+    .global _restart
+_restart:
 rom_header_end:
     @ INTERRUPTS OFF BEFORE ANYTHING ELSE. From a cartridge they are off
     @ already; from the cable they may not be: the BIOS that received the

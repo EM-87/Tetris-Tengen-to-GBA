@@ -235,15 +235,15 @@ story behind each; the item number is in brackets.
   (`romcheck/harness.py`), because every check was written against a
   console that reaches the title at once; `suspend_check` is the one that
   looks at it.
-- **The soft reset ends in the BIOS's SoftReset** (SWI 0, `soft_reset_check`,
-  video.c), after stopping the DMA, timers and sound and emptying the
-  video memory by hand. A plain jump to $08000000 left a flash cart on a
-  black screen (INFERRED: the cart's start-up code expects what SoftReset
-  leaves — the top of internal WRAM cleared, the stacks reset, system
-  mode). If the emulator's stand-in BIOS returns from the call, the jump
-  by hand follows. $03007FFA picks the ROM or, for the Single-Pak copy,
-  external WRAM. It leaves the serial port alone for the same reason
-  sio_reset does, and drops the paused game kept on the battery.
+- **The soft reset comes back into crt0 past the header** (`_restart`,
+  `soft_reset_check`, video.c), after stopping the DMA, timers and sound and
+  emptying the video memory by hand. NOT through $08000000, where a flash
+  cart may have put its own start-up code: on an EZ-Flash IV a jump there
+  by hand came to a black screen, and so did the BIOS's SoftReset, which
+  goes there too (INFERRED: the cart's code at the top of the ROM). The
+  Single-Pak copy's `_restart` is in external WRAM, where it already is.
+  It leaves the serial port alone for the same reason sio_reset does, and
+  drops the paused game kept on the battery.
 - **EXIT on the pause menu leaves with the game still paused and the match
   still "running" for that frame** (`quit_match`; the way out is further
   down the loop). Anything that asks "is a paused game on the plaque?"
