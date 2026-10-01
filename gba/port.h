@@ -1945,6 +1945,7 @@ void draw_title_sprites(void);
 void draw_game_select(uint8_t choice);
 void draw_link_wait(const TengenLobby *lobby, int elapsed);
 void draw_link_sending(bool wrong_end);   /* Single-Pak; see frontend.c */
+void draw_air_sending(int stage, uint32_t done, uint32_t total);
 /* The Single-Pak slave's image, inside the cartridge (gba/mb_image.s). */
 extern const uint8_t kSlaveImage[];
 extern const uint8_t kSlaveImageEnd[];

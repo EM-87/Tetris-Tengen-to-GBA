@@ -291,7 +291,23 @@ story behind each; the item number is in brackets.
   the transport as it stood; the match waits with LINK ISSUES meanwhile,
   and gone for good it ends under SIGNAL LOST, not CABLE LOST (decided as
   it is lost: the port is put away before the window is drawn). Not on the
-  Single-Pak copy, which is stubs (it had no room). Every wait is on the
+  The game goes over the air too (`wireless_multiboot_send`): SELECT on the
+  WIRELESS screen opens a room with bit 15 of the game ID set, which the
+  adapter's own loader on a GBA with no cartridge lists; the handshake, the
+  image in 84-byte packets with acknowledgements and four in flight, and
+  the end are Nintendo's layer as gba-link-connection's
+  LinkWirelessMultiboot runs it, step for step — but over SendData and
+  ReceiveData a few times a frame, not SendDataAndWait (INFERRED harmless).
+  The loader boots only what says RFU-MBOOT in bytes 4-15; the copy reads
+  them in its own image (`booted_over_air`) and only then asks for an
+  adapter, never after a cable (the login's flutter), and over the air it
+  only ever joins (`wireless_client_only`: its lobby follows the master).
+  To have the driver in it at all, the prototypes' title art is LZ77 for
+  the BIOS (`lz77_gba` in extract_assets.py, SWI 12h into video memory, no
+  match one byte back): 24KB to 7KB. A search compares all sixteen bits of
+  the game ID, so a sending room is never joined to play (`air_send_check`,
+  with `LoaderClient` losing a packet in five, and the copy booted on a
+  second core finding the cartridge). Every wait is on the
   scanline counter and no interrupt is used. Written from GBATEK and gba-link-connection, and run
   only against `FakeAdapter` (`run_wireless.py`), which is the same
   documentation as a model: INFERRED until two real adapters agree. Booting
@@ -526,7 +542,7 @@ today); the Game Boy Player's logo at power-on, its rumble, and on it the
 cartridge's three settings pages instead of the one (`gbp.c`,
 `draw_tv_page`); 2 PLAYER and COOPERATIVE over the Wireless Adapter, found by
 itself at power-on or plugged in later, the LINK CABLE screen saying
-WIRELESS (`wireless.c`);
+WIRELESS, and Single-Pak over it as well (`wireless.c`);
 "EXIT GAME", not "EXIT", on the pause menu (a player took it for closing the
 menu); the high scores erased by L+R+B held at power-on, asked twice with NO
 chosen (`erase_records_prompt`); under the chord, a seventh credit, BUILD and
@@ -593,7 +609,8 @@ And what has run only in an emulator:
 - **The Wireless Adapter** has run only against `FakeAdapter`: the login,
   the commands and their handshake, the rooms, the data, both modes, an
   adapter pulled out and put back on either side, one gone for good, and
-  the records swap.
+  the records swap; the game sent over the air only against `LoaderClient`,
+  a model of the adapter's loader from gba-link-connection's code.
 - **The paused game through a power cycle and the logo** have run only in
   mGBA (`suspend_check`). On a flash cart the save memory has to reach the
   card for the game to survive: the EZ-Flash IV and the SuperCard each do

@@ -569,12 +569,18 @@ void upload_title_tiles(void) {
  * question of cartridge space instead of video memory. 8KB a swap is more
  * than a vblank's worth of writes, which is why the caller clears the map
  * first: with the map blank the tiles being rewritten are not on screen. */
+/* Kept compressed (the Single-Pak copy has 256KB for everything), and
+ * unpacked by the BIOS straight into video memory: SWI 12h,
+ * LZ77UnCompReadNormalWrite16bit, the halfword-writing one VRAM needs. */
 void upload_proto_tiles(int skin) {
     vu16 *dst = MEM_CHARBLOCK(CHARBLOCK) + PROTO_TILE_BASE * 16;
-    const uint8_t *src = kProtoTiles[skin];
-    for (unsigned i = 0; i < TILES_PROTO_BYTES; i += 2) {
-        dst[i / 2] = (uint16_t)(src[i] | (src[i + 1] << 8));
-    }
+    register const uint8_t *src __asm__("r0") = kProtoTilesLz[skin];
+    register vu16 *out __asm__("r1") = dst;
+#if defined(__thumb__)
+    __asm__ volatile ("swi 0x12" : "+r"(src), "+r"(out) :: "r2", "r3", "memory");
+#else
+    __asm__ volatile ("swi 0x120000" : "+r"(src), "+r"(out) :: "r2", "r3", "memory");
+#endif
 }
 #endif
 

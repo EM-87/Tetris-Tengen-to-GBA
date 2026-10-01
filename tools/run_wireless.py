@@ -63,10 +63,138 @@ class Air:
     def __init__(self):
         self.adapters = []
         self.delivered = 0          # data packets that reached the other side
+        self.loaders = []           # GBAs with no cartridge, in the loader
 
     def rooms(self, asker):
         return [a for a in self.adapters
                 if a is not asker and a.hosting and a.room_open]
+
+
+class LoaderClient:
+    """A GBA SWITCHED ON WITH NO CARTRIDGE AND AN ADAPTER IN: the adapter's
+    own loader, which lists the rooms that send a game (game ID bit 15),
+    joins one and downloads it. Its side of Nintendo's layer, as
+    LinkWirelessMultiboot (gba-link-connection) expects it and runs against
+    on hardware: a greeting (n=1, STARTING) and then another (n=2,
+    STARTING), each until acknowledged; its name,
+    "RFU-MB-DL", in two packets (n=1, phases 0 and 1), each until
+    acknowledged; a last word OFF; then it acknowledges "ROM start", every
+    packet of the image in order (and again any it has had already), and the
+    end; three OFFs later it boots what it has. `loss` is the chance that
+    any one packet either way goes astray. INFERRED: this is the
+    documentation as a model, not the loader."""
+
+    START = 1
+    COMM = 2
+    ENDING = 3
+
+    def __init__(self, loss=0.0, rng=None):
+        self.host = None
+        self.connected = False
+        self.ident = 0x2222
+        self.inbox = None
+        self.outbox = None          # all it says goes back through heard()
+        self.loss = loss
+        self.rng = rng or random.Random(1)
+        self.stage = "hello"
+        self.image = {}
+        self.expect = 0             # the next image packet, by number
+        self.booted = None          # the bytes, once it boots
+        self.offs = 0
+
+    @staticmethod
+    def seq(pid):
+        return (((pid + 4) // 4) % 4, pid % 4)
+
+    def packet(self, n, phase, state, ack=False, payload=b""):
+        h = len(payload) | phase << 5 | n << 7 | int(ack) << 9 | state << 10
+        data = bytes([h & 0xFF, h >> 8]) + payload
+        words = [int.from_bytes(data[i:i + 4].ljust(4, b"\0"), "little")
+                 for i in range(0, len(data), 4)]
+        return (len(data), words)
+
+    def heard(self, nbytes, words):
+        """The host transmitted: what the loader sends back, or None."""
+        if self.booted is not None:
+            return None
+        raw = b"".join(w.to_bytes(4, "little") for w in words)[:nbytes]
+        got = None
+        if len(raw) >= 3 and self.rng.random() >= self.loss:
+            v = raw[0] | raw[1] << 8 | raw[2] << 16
+            got = dict(size=v & 0x7F, phase=(v >> 9) & 3, n=(v >> 11) & 3,
+                       ack=(v >> 13) & 1, state=(v >> 14) & 0xF,
+                       payload=raw[3:3 + (v & 0x7F)])
+        reply = self.respond(got)
+        if reply is not None and self.rng.random() < self.loss:
+            return None
+        return reply
+
+    def respond(self, p):
+        # Two greetings: whatever it says first the host takes as it is and
+        # acknowledges, and then it waits for n=2 STARTING (handshakeClient's
+        # first two steps), so the first cannot be that one already.
+        if self.stage == "hello":
+            if p and p["ack"] and p["n"] == 1 and p["state"] == self.START:
+                self.stage = "hello2"
+            else:
+                return self.packet(1, 0, self.START)
+        if self.stage == "hello2":
+            if p and p["ack"] and p["n"] == 2 and p["state"] == self.START:
+                self.stage = "name0"
+            else:
+                return self.packet(2, 0, self.START)
+        if self.stage == "name0":
+            if p and p["ack"] and p["n"] == 1 and p["phase"] == 0:
+                self.stage = "name1"
+            else:
+                return self.packet(1, 0, self.COMM, payload=bytes(
+                    [0x00, 0x00, 0x52, 0x46, 0x55, 0x2D]))
+        if self.stage == "name1":
+            if p and p["ack"] and p["n"] == 1 and p["phase"] == 1:
+                self.stage = "off"
+            else:
+                return self.packet(1, 1, self.COMM, payload=bytes(
+                    [0x4D, 0x42, 0x2D, 0x44, 0x4C, 0x00]))
+        if self.stage == "off":
+            self.stage = "quiet"
+            return self.packet(0, 0, 0)
+        if (self.stage == "quiet" and p and p["ack"] and p["n"] == 1 and
+                p["phase"] == 1):
+            return self.packet(0, 0, 0)      # still being thanked: OFF again
+        if p is None or p["ack"]:
+            return None
+        if self.stage == "quiet":
+            if p["state"] == self.START and p["n"] == 1:
+                self.stage = "image"
+                return self.packet(1, p["phase"], self.START, ack=True)
+            return None
+        if self.stage == "image":
+            if p["state"] == self.START and p["n"] == 1:
+                return self.packet(1, p["phase"], self.START, ack=True)
+            if p["state"] == self.COMM:
+                for back in range(0, 4):
+                    pid = self.expect - back
+                    if pid < 0 or self.seq(pid) != (p["n"], p["phase"]):
+                        continue
+                    if back == 0:
+                        self.image[pid] = p["payload"]
+                        self.expect += 1
+                    return self.packet(p["n"], p["phase"], self.COMM, ack=True)
+                return None
+            if p["state"] == self.ENDING:
+                self.stage = "ending"
+                return self.packet(p["n"], p["phase"], self.ENDING, ack=True)
+            return None
+        if self.stage == "ending":
+            if p["state"] == self.ENDING:
+                return self.packet(p["n"], p["phase"], self.ENDING, ack=True)
+            if p["state"] == 0:
+                self.offs += 1
+                if self.offs >= 1:
+                    self.booted = b"".join(self.image[i]
+                                           for i in range(self.expect))
+            return None
+        return None
 
 
 class FakeAdapter(mgba.gba.GBASIODriver):
@@ -121,6 +249,14 @@ class FakeAdapter(mgba.gba.GBASIODriver):
             self.clients = []
             return []
         if cmd in (0x1A, 0x1B):                      # PollConnections, EndHost
+            # A loader that sees a room sending the game picks it.
+            if (cmd == 0x1A and self.hosting and self.room_open and
+                    self.broadcast[0] & 0x8000):
+                for ld in self.air.loaders:
+                    if ld.host is None and not self.clients:
+                        ld.host = self
+                        ld.connected = True
+                        self.clients.append(ld)
             if cmd == 0x1B:
                 self.room_open = False
             return [c.ident | (i << 16) for i, c in enumerate(self.clients)]
@@ -160,8 +296,13 @@ class FakeAdapter(mgba.gba.GBASIODriver):
             header, words = params[0], list(params[1:])
             if self.hosting:
                 n = header & 0x7F
-                for c in self.clients:
-                    if c.connected:
+                for c in list(self.clients):
+                    if isinstance(c, LoaderClient):
+                        reply = c.heard(n, words)
+                        if reply is not None:
+                            self.inbox = reply
+                        self.air.delivered += 1
+                    elif c.connected:
                         c.inbox = (n, words)
                         self.air.delivered += 1
                 # ...and what each client had waiting comes back with it.
@@ -798,6 +939,114 @@ def plug_check(rom):
     return 0
 
 
+def air_send_check(rom, shots=None):
+    """THE GAME SENT OVER THE AIR, AND THE COPY PLAYING OVER THE AIR.
+
+    The cartridge on 2 PLAYER, over the air, nobody found: SELECT opens a
+    room that sends the game (wireless_multiboot_send). A GBA with no
+    cartridge and an adapter in — the loader, LoaderClient, losing one
+    packet in five either way — joins it and downloads the Single-Pak image:
+    it must come out byte for byte, but for RFU-MBOOT in bytes 4-15. Then
+    that image boots on a second console with an adapter of its own: it
+    knows it came over the air (booted_over_air), finds its adapter, joins
+    the cartridge's room, and the cartridge reaches LEVEL SETTINGS as the
+    master."""
+    import run_rom
+    mb_path = os.path.join(os.path.dirname(rom), "tengen_mb.mb")
+    if not os.path.exists(mb_path):
+        print(f"SALTADO: no encuentro {mb_path}")
+        return 0
+    image = open(mb_path, "rb").read()
+    random.seed(12)
+    mgba.log.silence()
+    air = Air()
+    loader = LoaderClient(loss=0.2, rng=random.Random(3))
+    core = mgba.core.load_path(rom)
+    screen = mgba.image.Image(SCREEN_W, SCREEN_H)
+    core.set_video_buffer(screen)
+    core.reset()
+    fake = FakeAdapter(air, core, 0x1111)
+    core.attach_sio(fake, lib.SIO_NORMAL_32)
+    _KEEP.append(([core], [screen], [fake], air))
+
+    def run(frames, keys=()):
+        for _ in range(frames):
+            core.set_keys(*[KEYS[k] for k in keys])
+            core.run_frame()
+
+    def tap(key):
+        run(4, (key,))
+        run(10)
+
+    run(60)
+    tap("START")
+    tap("DOWN")
+    tap("START")
+    run(60)
+    tap("SELECT")
+    run(30)
+    text = _rows(core)
+    if "THEN PICK TENGEN TETRIS" not in text:
+        print(f"FALLA: SELECT no abre la sala para enviar: "
+              f"{' '.join(text.split())!r}")
+        return 1
+    if shots:
+        screen.to_pil().convert("RGB").resize((480, 320)).save(shots[0])
+    air.loaders.append(loader)          # ...and the other GBA switched on
+    took = None
+    for f in range(9000):
+        run(1)
+        if shots and f == 600:
+            screen.to_pil().convert("RGB").resize((480, 320)).save(shots[1])
+        if loader.booted is not None:
+            took = f
+            break
+    if took is None:
+        print(f"FALLA: el juego no llega por el aire (cargador en "
+              f"{loader.stage!r}, {loader.expect} paquetes)")
+        return 1
+    want = bytearray(image)
+    want[4:16] = b"RFU-MBOOT\0\0\0"
+    got = loader.booted[:len(image)]
+    if got != bytes(want):
+        bad = next(i for i in range(min(len(got), len(want)))
+                   if got[i] != want[i]) if len(got) == len(want) else len(got)
+        print(f"FALLA: la imagen llega distinta (byte {bad} de {len(want)})")
+        return 1
+    print(f"  enviado por el aire con un paquete de cada cinco perdido: "
+          f"{len(image)} bytes identicos (RFU-MBOOT en 4-15) en {took} frames")
+
+    # The copy boots, with an adapter of its own.
+    path = os.path.join(os.path.dirname(rom), "air_copy.mb")
+    with open(path, "wb") as fh:
+        fh.write(bytes(want))
+    copy = mgba.core.load_path(path)
+    cscreen = mgba.image.Image(SCREEN_W, SCREEN_H)
+    copy.set_video_buffer(cscreen)
+    copy.reset()
+    cfake = FakeAdapter(air, copy, 0x3333)
+    copy.attach_sio(cfake, lib.SIO_NORMAL_32)
+    _KEEP.append(([copy], [cscreen], [cfake], air))
+    present, _ = symbol(rom, "g_wl_present")
+    linked = None
+    for f in range(2400):
+        for c in random.sample([core, copy], 2):
+            c.run_frame()
+        if "HANDICAP" in _rows(core):
+            linked = f
+            break
+    if linked is None:
+        print(f"FALLA: la copia llegada por el aire no encuentra el cartucho: "
+              f"cartucho {' '.join(_rows(core).split())[:50]!r}, copia "
+              f"{' '.join(_rows(copy).split())[:50]!r}")
+        return 1
+    print(f"  la copia arranca, sabe que llego por el aire, encuentra su "
+          f"adaptador y al cartucho: LEVEL SETTINGS en {linked} frames")
+    if shots:
+        cscreen.to_pil().convert("RGB").resize((480, 320)).save(shots[2])
+    return 0
+
+
 def main():
     if len(sys.argv) not in (2, 3):
         sys.exit("usage: run_wireless.py build/tengen.gba [lost.png]")
@@ -805,7 +1054,7 @@ def main():
     code = (plain_check(rom) or together_check(rom) or _play(rom, False) or
             _play(rom, True) or drop_check(rom) or
             gone_check(rom) or exit_check(rom) or
-            plug_check(rom))
+            plug_check(rom) or air_send_check(rom))
     if not code:
         print("OK: dos GBA con adaptador inalambrico (el de prueba) se "
               "encuentran y juegan la misma partida.")

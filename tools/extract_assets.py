@@ -2580,6 +2580,105 @@ def read_prototype(path):
     }, None
 
 
+def lz77_gba(data: bytes) -> bytes:
+    """THE BIOS'S OWN LZ77 (GBATEK, "BIOS Decompression Functions", SWI
+    11h/12h): a word of header (10h, then the length), then groups of eight
+    under a flag byte, highest bit first — a literal byte, or two bytes of
+    match, the length less three in the top nibble and the distance less one
+    in the twelve bits after. Every match is at least TWO bytes back: the
+    16-bit version that writes straight into video memory (SWI 12h) has not
+    written the byte just before yet when it reads it. Greedy, and padded to
+    a whole word."""
+    out = bytearray([0x10, len(data) & 0xFF, (len(data) >> 8) & 0xFF,
+                     (len(data) >> 16) & 0xFF])
+    # Where each three-byte run has been seen, newest last: only those can
+    # start a match worth having.
+    seen = {}
+
+    def note(upto):
+        while note.at < upto:
+            if note.at + 3 <= len(data):
+                seen.setdefault(data[note.at:note.at + 3], []).append(note.at)
+            note.at += 1
+    note.at = 0
+
+    i = 0
+    while i < len(data):
+        flag_at = len(out)
+        out.append(0)
+        for bit in range(8):
+            if i >= len(data):
+                break
+            note(i - 1)          # never a match one byte back
+            best_len, best_dist = 0, 0
+            for at in reversed(seen.get(data[i:i + 3], ())):
+                dist = i - at
+                if dist > 4096:
+                    break
+                n = 0
+                while (n < 18 and i + n < len(data) and
+                       data[i + n] == data[at + n]):
+                    n += 1
+                if n > best_len:
+                    best_len, best_dist = n, dist
+                    if n == 18:
+                        break
+            if best_len >= 3:
+                out[flag_at] |= 0x80 >> bit
+                d = best_dist - 1
+                out.append(((best_len - 3) << 4) | (d >> 8))
+                out.append(d & 0xFF)
+                i += best_len
+            else:
+                out.append(data[i])
+                i += 1
+    while len(out) % 4:
+        out.append(0)
+    return bytes(out)
+
+
+def lz77_gba_decode(blob: bytes) -> bytes:
+    """The other way, as the BIOS does it — for the self-test."""
+    size = blob[1] | blob[2] << 8 | blob[3] << 16
+    out = bytearray()
+    i = 4
+    while len(out) < size:
+        flags = blob[i]
+        i += 1
+        for bit in range(8):
+            if len(out) >= size:
+                break
+            if flags & (0x80 >> bit):
+                n = (blob[i] >> 4) + 3
+                d = ((blob[i] & 0x0F) << 8 | blob[i + 1]) + 1
+                i += 2
+                for _ in range(n):
+                    out.append(out[-d])
+            else:
+                out.append(blob[i])
+                i += 1
+    return bytes(out[:size])
+
+
+def lz77_match_distances(blob: bytes):
+    """Every match's distance back, for the self-test."""
+    size = blob[1] | blob[2] << 8 | blob[3] << 16
+    done, i = 0, 4
+    while done < size:
+        flags = blob[i]
+        i += 1
+        for bit in range(8):
+            if done >= size:
+                break
+            if flags & (0x80 >> bit):
+                yield ((blob[i] & 0x0F) << 8 | blob[i + 1]) + 1
+                done += (blob[i] >> 4) + 3
+                i += 2
+            else:
+                done += 1
+                i += 1
+
+
 def _table(lines, decl, rows, fmt, per):
     lines.append(decl)
     for skin_rows in rows:
@@ -2633,10 +2732,23 @@ def emit_proto_header(skins, notes):
     _table(lines,
            "static const uint8_t kScreenProtoPalettes[SCREEN_PROTO_COUNT][600] = {",
            [s["banks"] for s in skins], str, 30)
-    _table(lines,
-           "static const uint8_t kProtoTiles[SCREEN_PROTO_COUNT]"
-           "[TILES_PROTO_BYTES] = {",
-           [s["chr"] for s in skins], lambda b: f"0x{b:02X}", 16)
+    # COMPRESSED, with the BIOS's own LZ77: three 8KB pattern tables are the
+    # biggest thing in the Single-Pak copy, which has to fit in 256KB with
+    # the wireless driver in it. upload_proto_tiles hands them to SWI 12h.
+    lines += [
+        "/* The pattern tables, each LZ77-compressed for the BIOS (SWI 12h,",
+        " * straight into video memory). See lz77_gba in extract_assets.py. */",
+    ]
+    for i, sk in enumerate(skins):
+        blob = lz77_gba(bytes(sk["chr"]))
+        lines.append(f"static const uint8_t kProtoTilesLz{i}[{len(blob)}] "
+                     "__attribute__((aligned(4))) = {")
+        for j in range(0, len(blob), 16):
+            lines.append("    " + ", ".join(f"0x{b:02X}" for b in blob[j:j + 16]) + ",")
+        lines += ["};", ""]
+    lines.append("static const uint8_t *const kProtoTilesLz[SCREEN_PROTO_COUNT] = {")
+    lines.append("    " + ", ".join(f"kProtoTilesLz{i}" for i in range(len(skins))) + ",")
+    lines += ["};", ""]
     lines += emit_skin_play(skins)
     lines += ["#endif /* SCREEN_PROTO_H */", ""]
     return "\n".join(lines)
@@ -3254,6 +3366,21 @@ def self_test() -> int:
     px = tile_2bpp_to_pixels(bytes([0x80] + [0x00] * 15))
     if px[0] != 1 or any(px[1:]):
         failures.append("el bit alto deberia ser el pixel de la izquierda")
+
+    # The BIOS's LZ77, both ways, and never a match one byte back (SWI 12h
+    # writes halfwords and has not written that byte yet).
+    import random as _random
+    _rng = _random.Random(5)
+    for sample in (bytes(64), bytes(range(256)) * 3,
+                   bytes(_rng.randrange(4) for _ in range(3000)), b"ab" * 40):
+        blob = lz77_gba(sample)
+        if lz77_gba_decode(blob) != sample or len(blob) % 4:
+            failures.append("LZ77 no vuelve a dar los mismos bytes")
+            break
+        if min(lz77_match_distances(blob), default=2) < 2:
+            failures.append("LZ77 copia desde un byte atras: SWI 12h lo leeria "
+                            "sin haberlo escrito")
+            break
 
     if pixels_to_gba_4bpp([1, 2] + [0] * 62)[0] != 0x21:
         failures.append("empaquetado 4bpp invertido")

@@ -231,10 +231,21 @@ bool wireless_hosting(void);    /* waiting, as host, for somebody to join */
 void wireless_frame(void);      /* once a frame, from link_pump */
 void wireless_match_begin(void);
 void wireless_lobby_begin(void);
+void wireless_client_only(void);   /* the Single-Pak copy: join, never host */
 
 /* What wireless.c needs of link.c: the word the lobby has loaded, a
  * transfer to queue as if the cable had made it, and "the other console
  * was heard". */
+/* THE GAME, SENT OVER THE AIR to a GBA switched on with no cartridge and
+ * an adapter in, whose adapter's own loader picks this room (wireless.c).
+ * Blocks until it is across, stopped or failed; `frame` is called once a
+ * frame (it waits for the vertical blank, draws, and returns true for B). */
+typedef enum { WL_SEND_DONE, WL_SEND_STOPPED, WL_SEND_FAILED } WlSendResult;
+enum { WL_SEND_WAITING, WL_SEND_SENDING, WL_SEND_FINISHING };
+WlSendResult wireless_multiboot_send(const uint8_t *image, uint32_t len,
+                                     bool (*frame)(int stage, uint32_t done,
+                                                   uint32_t total));
+
 uint16_t link_tx_word(void);
 void link_push_pair(uint16_t master, uint16_t slave);
 void link_heard(void);

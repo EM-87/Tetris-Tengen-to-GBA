@@ -40,9 +40,6 @@
  *     frame counter in both words — so the match code cannot tell. */
 #include "port.h"
 
-/* Not on the Single-Pak copy, which came over a cable and has no room to
- * spare: there the adapter is never there (stubs at the bottom). */
-#ifndef TENGEN_MULTIBOOT
 
 #define WL_SIOCNT  (*(vu16 *)0x04000128)
 #define WL_SIODATA (*(vu32 *)0x04000120)
@@ -233,15 +230,19 @@ static int wl_command(uint8_t cmd, const uint32_t *params, int n,
 /* Reset, login, Hello at the slow clock, then the fast one and Setup:
  * two players, four transmissions, no wait timeout (LinkRawWireless's
  * setup, magic 003C0000h). */
-static bool wl_start(void) {
+static bool wl_start_tx(unsigned max_tx) {
     wl_ping();
     wl_spi(false);
     if (!wl_login()) return false;
     wl_wait_lines(WL_GAP_LINES);
     if (wl_command(CMD_HELLO, 0, 0, 0, 0) < 0) return false;
     wl_spi(true);
-    uint32_t setup = 0x003C0000u | (3u << 16) | (4u << 8) | 0u;
+    uint32_t setup = 0x003C0000u | (3u << 16) | (max_tx << 8) | 0u;
     return wl_command(CMD_SETUP, &setup, 1, 0, 0) >= 0;
+}
+
+static bool wl_start(void) {
+    return wl_start_tx(4);
 }
 
 /* ----------------------------------------------------------------------- *
@@ -290,6 +291,14 @@ static uint16_t g_rand = 0x1D2B;
  * and the transport carries on from where it stood — the match waits
  * meanwhile with LINK ISSUES, as for a cable. */
 static bool g_paired;
+/* THE SINGLE-PAK COPY ONLY EVER JOINS: its lobby follows the other
+ * console's mode (tengen_lobby_mode_any), which a host — the master — has
+ * nobody to follow for. So it looks for a room and never opens one. */
+static bool g_client_only;
+
+void wireless_client_only(void) {
+    g_client_only = true;
+}
 static int g_quiet;              /* linked frames with nothing heard */
 static int g_off_wait;           /* frames before the next login try */
 static int g_login_fails;        /* logins in a row nobody answered */
@@ -315,13 +324,14 @@ static void wl_search_begin(void) {
 
 static void wl_host_begin(void);
 
-static void wl_host_begin(void) {
-    /* Game ID, "TENGEN TETRIS", "PLAYER", the way LinkRawWireless lays
-     * the six words out (two characters to a halfword, low first). */
+/* The room's six words: game ID, "TENGEN TETRIS", "PLAYER", the way
+ * LinkRawWireless lays them out (two characters to a halfword, low first);
+ * then the room opened. */
+static bool wl_open_room(uint16_t game_id) {
     static const char game[14] = "TENGEN TETRIS";
     static const char user[8] = "PLAYER";
     uint32_t b[6];
-    b[0] = WL_GAME_ID | ((uint32_t)(uint8_t)game[0] << 16) |
+    b[0] = game_id | ((uint32_t)(uint8_t)game[0] << 16) |
            ((uint32_t)(uint8_t)game[1] << 24);
     for (int w = 1; w < 4; w++) {
         int k = 2 + (w - 1) * 4;
@@ -335,8 +345,12 @@ static void wl_host_begin(void) {
                ((uint32_t)(uint8_t)user[k + 2] << 16) |
                ((uint32_t)(uint8_t)user[k + 3] << 24);
     }
-    if (wl_command(CMD_BROADCAST, b, 6, 0, 0) < 0 ||
-        wl_command(CMD_START_HOST, 0, 0, 0, 0) < 0) {
+    return wl_command(CMD_BROADCAST, b, 6, 0, 0) >= 0 &&
+           wl_command(CMD_START_HOST, 0, 0, 0, 0) >= 0;
+}
+
+static void wl_host_begin(void) {
+    if (!wl_open_room(WL_GAME_ID)) {
         g_state = WL_OFF;
         return;
     }
@@ -394,7 +408,9 @@ static void wl_session_step(void) {
             for (int i = 0; i + 7 <= n; i += 7) {
                 uint16_t id = (uint16_t)r[i];
                 uint8_t slot = (uint8_t)(r[i] >> 16);
-                if ((r[i + 1] & 0x7FFF) != WL_GAME_ID || slot == 0xFF) continue;
+                /* All sixteen bits: with bit 15 it is a room sending the game
+                 * (wireless_multiboot_send), not one to play in. */
+                if ((r[i + 1] & 0xFFFF) != WL_GAME_ID || slot == 0xFF) continue;
                 uint32_t param = id;
                 if (wl_command(CMD_READ_END, 0, 0, 0, 0) < 0 ||
                     wl_command(CMD_CONNECT, &param, 1, 0, 0) < 0) {
@@ -407,7 +423,7 @@ static void wl_session_step(void) {
             if (g_timer >= g_limit) {
                 if (wl_command(CMD_READ_END, 0, 0, 0, 0) < 0) { g_state = WL_OFF; return; }
                 /* A client that has lost its host only looks for it. */
-                if (g_paired) wl_search_begin();
+                if (g_paired || g_client_only) wl_search_begin();
                 else wl_host_begin();
             }
             return;
@@ -742,18 +758,405 @@ void wireless_frame(void) {
     if (g_match) wl_play();
 }
 
-#else  /* TENGEN_MULTIBOOT */
+/* ----------------------------------------------------------------------- *
+ * The game, sent over the air
+ *
+ * A GBA switched on with no cartridge and an adapter in boots the adapter's
+ * own loader, which lists the "multiboot" rooms around and downloads the
+ * one the player picks. This is the other end: the room (game ID bit 15),
+ * a handshake with the loader, the image in 84-byte packets, and the end.
+ * The loader is Nintendo's and speaks Nintendo's own layer over the
+ * adapter's data — a 3-byte header from the host, 2 from a client, with a
+ * sequence number, an acknowledgement bit and a state — so everything
+ * below is that layer, as gba-link-connection (afska) implements and runs
+ * it on hardware: LinkWirelessOpenSDK.hpp for the layer,
+ * LinkWirelessMultiboot.hpp for the steps, which are followed one by one.
+ *
+ * ONE DIFFERENCE, and it is INFERRED harmless: that code exchanges with
+ * SendDataAndWait, where the adapter takes the clock back to say it has
+ * transmitted; this uses SendData and ReceiveData, as its own LinkWireless
+ * does for everything, a few times a frame, and lets the protocol's own
+ * retries cover a packet that was not on the air yet. Checked only against
+ * the stand-in loader in tools/run_wireless.py (INFERRED until a real
+ * adapter has booted it).
+ * ----------------------------------------------------------------------- */
 
-bool wireless_detect(void) { return false; }
-bool wireless_present(void) { return false; }
-void wireless_open(void) {}
-void wireless_close(void) {}
-bool wireless_on(void) { return false; }
-bool wireless_linked(void) { return false; }
-bool wireless_host(void) { return false; }
-bool wireless_hosting(void) { return false; }
-void wireless_frame(void) {}
-void wireless_match_begin(void) {}
-void wireless_lobby_begin(void) {}
+#define MB_GAME_ID_FLAG   0x8000u
+#define MB_PAYLOAD        84      /* bytes in one of the host's packets */
+#define MB_INFLIGHT       4       /* packets sent and not yet acknowledged */
+#define MB_PER_FRAME      4       /* exchanges with the adapter a frame */
+#define MB_FINAL_OFFS     3
+#define MB_PATIENCE       600     /* frames without progress, then give up */
 
-#endif
+enum { MB_OFF = 0, MB_STARTING = 1, MB_COMMUNICATING = 2, MB_ENDING = 3 };
+
+typedef struct {
+    uint8_t size, phase, n, ack, state;
+} MbHeader;
+
+/* The host's 22 bits: size 0-6, phase 9-10, n 11-12, ack 13, state 14-17,
+ * the clients it is for 18-21. */
+static uint32_t mb_server_header(MbHeader h, unsigned slots) {
+    return (uint32_t)h.size | ((uint32_t)h.phase << 9) | ((uint32_t)h.n << 11) |
+           ((uint32_t)h.ack << 13) | ((uint32_t)h.state << 14) |
+           ((uint32_t)slots << 18);
+}
+
+/* A client's 14: size 0-4, phase 5-6, n 7-8, ack 9, state 10-13. */
+static MbHeader mb_client_header(unsigned v) {
+    MbHeader h;
+    h.size = (uint8_t)(v & 0x1F);
+    h.phase = (uint8_t)((v >> 5) & 3);
+    h.n = (uint8_t)((v >> 7) & 3);
+    h.ack = (uint8_t)((v >> 9) & 1);
+    h.state = (uint8_t)((v >> 10) & 0xF);
+    return h;
+}
+
+/* SequenceNumber::fromPacketId: a packet's number as (n, phase). */
+static MbHeader mb_sequence(uint32_t id) {
+    MbHeader h = { 0, (uint8_t)(id % 4), (uint8_t)(((id + 4) / 4) % 4), 0,
+                   MB_COMMUNICATING };
+    return h;
+}
+
+static bool mb_same(MbHeader a, MbHeader b) {
+    return a.n == b.n && a.phase == b.phase && a.state == b.state;
+}
+
+/* What came back from the client last exchange: its packets, parsed. */
+#define MB_MAX_PACKETS 8
+static MbHeader g_mb_in[MB_MAX_PACKETS];
+static uint8_t g_mb_in_payload[MB_MAX_PACKETS][14];
+static int g_mb_in_count;
+
+/* One exchange: the host's packet (words already laid out, `bytes` of
+ * them counted), then what the client sent. False if the adapter did not
+ * answer. */
+static bool mb_exchange(const uint32_t *words, int n_words, unsigned bytes) {
+    uint32_t p[24];
+    p[0] = bytes;                       /* the host's field */
+    for (int i = 0; i < n_words; i++) p[1 + i] = words[i];
+    if (wl_command(CMD_SEND_DATA, p, 1 + n_words, 0, 0) < 0) return false;
+    uint32_t r[24];
+    int m = wl_command(CMD_RECEIVE_DATA, 0, 0, r, 24);
+    if (m < 0) return false;
+    g_mb_in_count = 0;
+    if (m < 2) return true;
+    unsigned client = (r[0] >> 8) & 0x1F;      /* client 0's bytes */
+    if (client > 16) client = 16;
+    const uint8_t *b = (const uint8_t *)&r[1];
+    unsigned at = 0;
+    if (client > (unsigned)(m - 1) * 4) return true;
+    while (client - at >= 2 && g_mb_in_count < MB_MAX_PACKETS) {
+        MbHeader h = mb_client_header((unsigned)(b[at] | (b[at + 1] << 8)));
+        at += 2;
+        for (unsigned j = 0; j < 14; j++) g_mb_in_payload[g_mb_in_count][j] = 0;
+        if (h.size > 0 && h.size <= 14 && client - at >= h.size) {
+            for (unsigned j = 0; j < h.size; j++)
+                g_mb_in_payload[g_mb_in_count][j] = b[at + j];
+            at += h.size;
+        }
+        g_mb_in[g_mb_in_count++] = h;
+    }
+    return true;
+}
+
+/* LinkWirelessOpenSDK::createServerBuffer: the header and the payload's
+ * first byte in one word, the rest four to a word. */
+static int mb_server_buffer(uint32_t *w, const uint8_t *data, uint32_t size,
+                            MbHeader seq, unsigned slots, uint32_t offset,
+                            const uint8_t *first_page, unsigned *bytes) {
+    /* min(size, 84) whatever the offset, as createServerBuffer has it: the
+     * last packet goes out whole, zeros past the end. */
+    uint32_t payload = size > MB_PAYLOAD ? MB_PAYLOAD : size;
+    seq.size = (uint8_t)payload;
+    seq.ack = 0;
+    int n = 0;
+#define MB_BYTE(i) ((offset + (i)) >= size ? 0 : \
+                    (offset + (i)) < MB_PAYLOAD && first_page ? \
+                    first_page[offset + (i)] : data[offset + (i)])
+    w[n] = mb_server_header(seq, slots);
+    if (payload) w[n] |= (uint32_t)MB_BYTE(0) << 24;
+    n++;
+    for (uint32_t i = 1; i < payload; i += 4) {
+        uint32_t word = 0;
+        for (uint32_t j = 0; j < 4 && i + j < payload; j++)
+            word |= (uint32_t)MB_BYTE(i + j) << (8 * j);
+        w[n++] = word;
+    }
+#undef MB_BYTE
+    *bytes = 3 + payload;
+    return n;
+}
+
+/* The host's acknowledgement of a client's packet. */
+static int mb_ack_buffer(uint32_t *w, MbHeader of, unsigned *bytes) {
+    of.size = 0;
+    of.ack = 1;
+    w[0] = mb_server_header(of, 1);
+    *bytes = 3;
+    return 1;
+}
+
+/* The frame's work: every MB_PER_FRAME exchanges the caller's frame (which
+ * waits for the vertical blank, draws, and says whether B stopped it);
+ * between those, a pause, so the adapter's radio has turns of its own. */
+typedef bool (*MbFrame)(int stage, uint32_t done, uint32_t total);
+static MbFrame g_mb_frame;
+static int g_mb_beat;
+static int g_mb_stage;
+static uint32_t g_mb_done, g_mb_total;
+
+static bool mb_tick(void) {
+    if (++g_mb_beat % MB_PER_FRAME)
+        wl_wait_lines(228 / MB_PER_FRAME);
+    else if (g_mb_frame(g_mb_stage, g_mb_done, g_mb_total))
+        return false;
+    return true;
+}
+
+typedef enum { MB_GO, MB_STOP, MB_FAIL } MbStep;
+
+/* LinkWirelessMultiboot::exchangeAndValidate, around one of three sends:
+ * nothing (a byte of nothing, as the loader expects), an acknowledgement of
+ * the last good header, or a given packet. `want` decides which packet
+ * from the client ends the step; `sticky` makes every packet looked at the
+ * one acknowledged next (the name's step). */
+typedef bool (*MbWant)(MbHeader h, const uint8_t *payload);
+static MbHeader g_mb_last;
+
+static MbStep mb_until(int send, const uint32_t *words, int n_words,
+                       unsigned bytes, MbWant want, bool sticky) {
+    int quiet = 0;
+    for (;;) {
+        if (!mb_tick()) return MB_STOP;
+        uint32_t w[24] = { 0 };
+        int n = 0;
+        unsigned b = 1;
+        if (send == 1) n = mb_ack_buffer(w, g_mb_last, &b);
+        if (send == 2) {
+            for (int i = 0; i < n_words; i++) w[i] = words[i];
+            n = n_words;
+            b = bytes;
+        }
+        if (!mb_exchange(w, n, b)) return MB_FAIL;
+        for (int i = 0; i < g_mb_in_count; i++) {
+            if (sticky) g_mb_last = g_mb_in[i];
+            if (want(g_mb_in[i], g_mb_in_payload[i])) {
+                g_mb_last = g_mb_in[i];
+                return MB_GO;
+            }
+        }
+        if (++quiet > MB_PATIENCE * MB_PER_FRAME) return MB_FAIL;
+    }
+}
+
+static uint8_t g_mb_name[2][6];
+static bool g_mb_named;
+
+static bool mb_any(MbHeader h, const uint8_t *p) {
+    (void)h; (void)p;
+    return true;
+}
+static bool mb_starting(MbHeader h, const uint8_t *p) {
+    (void)p;
+    return h.n == 2 && h.state == MB_STARTING;
+}
+static bool mb_name_first(MbHeader h, const uint8_t *p) {
+    if (!(h.n == 1 && h.phase == 0 && h.state == MB_COMMUNICATING)) return false;
+    for (int i = 0; i < 6; i++) g_mb_name[0][i] = p[i];
+    return true;
+}
+static bool mb_name_rest(MbHeader h, const uint8_t *p) {
+    if (h.n == 1 && h.phase == 1 && h.state == MB_COMMUNICATING) {
+        for (int i = 0; i < 6; i++) g_mb_name[1][i] = p[i];
+        g_mb_named = true;
+    }
+    return h.state == MB_OFF;
+}
+static MbHeader g_mb_expect;
+static bool mb_acked(MbHeader h, const uint8_t *p) {
+    (void)p;
+    return h.ack && mb_same(h, g_mb_expect);
+}
+
+/* What the loader says it is: "RFU-MB-DL", split over two packets. */
+static bool mb_name_ok(void) {
+    static const uint8_t kName[2][6] = {
+        { 0x00, 0x00, 0x52, 0x46, 0x55, 0x2D },
+        { 0x4D, 0x42, 0x2D, 0x44, 0x4C, 0x00 }
+    };
+    if (!g_mb_named) return false;
+    for (int i = 0; i < 2; i++)
+        for (int j = 0; j < 6; j++)
+            if (g_mb_name[i][j] != kName[i][j]) return false;
+    return true;
+}
+
+/* MultiTransfer, for the one client: which packets are out and which have
+ * come back acknowledged, `acked` the count of the first ones all done. */
+typedef struct { uint32_t id; bool ack; bool on; } MbPending;
+
+static MbStep mb_send_image(const uint8_t *image, uint32_t len) {
+    /* The loader boots only an image whose bytes 4-15 say RFU-MBOOT (and
+     * the Single-Pak copy reads them to know where it came from). */
+    uint8_t first[MB_PAYLOAD];
+    static const uint8_t kPatch[12] = { 0x52, 0x46, 0x55, 0x2D, 0x4D, 0x42,
+                                        0x4F, 0x4F, 0x54, 0x00, 0x00, 0x00 };
+    for (int i = 0; i < MB_PAYLOAD; i++)
+        first[i] = (i >= 4 && i < 16) ? kPatch[i - 4] : image[i];
+
+    MbPending pend[MB_INFLIGHT];
+    for (int i = 0; i < MB_INFLIGHT; i++) pend[i].on = false;
+    uint32_t acked = 0;            /* packets 0..acked-1 are across */
+    uint32_t next = 0;             /* the one to send */
+    uint32_t packets = (len + MB_PAYLOAD - 1) / MB_PAYLOAD;
+    int quiet = 0;
+
+    while (acked < packets) {
+        g_mb_done = acked * MB_PAYLOAD / 4;
+        if (!mb_tick()) return MB_STOP;
+        /* Note it as out, unless it is already. */
+        bool known = false;
+        uint32_t top = 0;
+        int out = 0;
+        for (int i = 0; i < MB_INFLIGHT; i++)
+            if (pend[i].on) {
+                out++;
+                if (pend[i].id == next) known = true;
+                if (pend[i].id > top) top = pend[i].id;
+            }
+        if (!known && next >= acked && (out == 0 || next > top))
+            for (int i = 0; i < MB_INFLIGHT; i++)
+                if (!pend[i].on) {
+                    pend[i].id = next;
+                    pend[i].ack = false;
+                    pend[i].on = true;
+                    break;
+                }
+        uint32_t w[24];
+        unsigned bytes;
+        int n = mb_server_buffer(w, image, len, mb_sequence(next), 0xF,
+                                 next * MB_PAYLOAD, next == 0 ? first : 0,
+                                 &bytes);
+        if (!mb_exchange(w, n, bytes)) return MB_FAIL;
+        /* Acknowledgements: mark, and move `acked` past every packet done
+         * with nothing older still out. */
+        bool moved = false;
+        for (int k = 0; k < g_mb_in_count; k++) {
+            if (!g_mb_in[k].ack) continue;
+            for (int i = 0; i < MB_INFLIGHT; i++)
+                if (pend[i].on && mb_same(mb_sequence(pend[i].id), g_mb_in[k]))
+                    pend[i].ack = true;
+            int best = -1;
+            for (int i = 0; i < MB_INFLIGHT; i++)
+                if (pend[i].on && pend[i].ack &&
+                    (best < 0 || pend[i].id > pend[best].id))
+                    best = i;
+            if (best < 0) continue;
+            bool complete = true;
+            for (int i = 0; i < MB_INFLIGHT; i++)
+                if (pend[i].on && !pend[i].ack && pend[i].id < pend[best].id)
+                    complete = false;
+            if (complete) {
+                acked = pend[best].id + 1;
+                for (int i = 0; i < MB_INFLIGHT; i++)
+                    if (pend[i].on && pend[i].ack) pend[i].on = false;
+                moved = true;
+            }
+        }
+        quiet = moved ? 0 : quiet + 1;
+        if (quiet > MB_PATIENCE * MB_PER_FRAME) return MB_FAIL;
+        /* Transfer::nextCursor: the next new one while there is room in
+         * flight, otherwise the oldest still unacknowledged. */
+        out = 0;
+        top = 0;
+        uint32_t oldest = 0xFFFFFFFFu;
+        for (int i = 0; i < MB_INFLIGHT; i++)
+            if (pend[i].on) {
+                out++;
+                if (pend[i].id > top) top = pend[i].id;
+                if (!pend[i].ack && pend[i].id < oldest) oldest = pend[i].id;
+            }
+        if (out > 0 && out < MB_INFLIGHT) next = top + 1;
+        else next = oldest != 0xFFFFFFFFu ? oldest : acked;
+        if (next >= packets) next = oldest != 0xFFFFFFFFu ? oldest : acked;
+    }
+    g_mb_done = g_mb_total;
+    return MB_GO;
+}
+
+WlSendResult wireless_multiboot_send(const uint8_t *image, uint32_t len,
+                                     MbFrame frame) {
+    g_mb_frame = frame;
+    g_mb_beat = 0;
+    g_mb_stage = WL_SEND_WAITING;
+    g_mb_done = 0;
+    g_mb_total = len / 4;
+    g_mb_named = false;
+    MbHeader zero = { 0, 0, 0, 0, MB_OFF };
+    g_mb_last = zero;
+    MbStep step = MB_FAIL;
+    uint32_t r[4];
+    int n;
+
+    if (!wl_start_tx(1) || !wl_open_room(WL_GAME_ID | MB_GAME_ID_FLAG))
+        goto out;
+    /* Nobody yet: the room stays open until a loader joins it, or B. */
+    for (;;) {
+        if (frame(g_mb_stage, 0, g_mb_total)) { step = MB_STOP; goto out; }
+        n = wl_command(CMD_POLL_CONNS, 0, 0, r, 4);
+        if (n < 0) goto out;
+        if (n > 0) break;
+    }
+    g_mb_stage = WL_SEND_SENDING;
+    /* The handshake, in LinkWirelessMultiboot::handshakeClient's order. */
+    if ((step = mb_until(0, 0, 0, 1, mb_any, false)) != MB_GO) goto out;
+    if ((step = mb_until(1, 0, 0, 0, mb_starting, false)) != MB_GO) goto out;
+    if ((step = mb_until(1, 0, 0, 0, mb_name_first, false)) != MB_GO) goto out;
+    if ((step = mb_until(1, 0, 0, 0, mb_name_rest, true)) != MB_GO) goto out;
+    step = MB_FAIL;
+    if (!mb_name_ok()) goto out;
+    /* ...what the loader still had to say, until it has nothing. */
+    for (int quiet = 0;; quiet++) {
+        if (!mb_tick()) { step = MB_STOP; goto out; }
+        if (!mb_exchange(0, 0, 1)) goto out;
+        if (g_mb_in_count == 0) break;
+        if (quiet > MB_PATIENCE * MB_PER_FRAME) goto out;
+    }
+    if (wl_command(CMD_END_HOST, 0, 0, r, 4) < 0) goto out;
+
+    /* "ROM start", acknowledged; the image; the end, acknowledged; and
+     * three last words of the session going off. */
+    {
+        static const uint8_t kStart[7] = { 0x00, 0x54, 0x00, 0x00, 0x00, 0x02, 0x00 };
+        MbHeader seq = { 0, 0, 1, 0, MB_STARTING };
+        uint32_t w[24];
+        unsigned bytes;
+        int nw = mb_server_buffer(w, kStart, 7, seq, 1, 0, 0, &bytes);
+        g_mb_expect = seq;
+        if ((step = mb_until(2, w, nw, bytes, mb_acked, false)) != MB_GO) goto out;
+    }
+    if ((step = mb_send_image(image, len)) != MB_GO) goto out;
+    g_mb_stage = WL_SEND_FINISHING;
+    {
+        MbHeader seq = { 0, 0, 0, 0, MB_ENDING };
+        uint32_t w[24];
+        unsigned bytes;
+        int nw = mb_server_buffer(w, 0, 0, seq, 1, 0, 0, &bytes);
+        g_mb_expect = seq;
+        if ((step = mb_until(2, w, nw, bytes, mb_acked, false)) != MB_GO) goto out;
+        MbHeader off = { 0, 0, 1, 0, MB_OFF };
+        nw = mb_server_buffer(w, 0, 0, off, 0xF, 0, 0, &bytes);
+        for (int i = 0; i < MB_FINAL_OFFS; i++) {
+            if (!mb_tick()) { step = MB_STOP; goto out; }
+            if (!mb_exchange(w, nw, bytes)) { step = MB_FAIL; goto out; }
+        }
+    }
+    step = MB_GO;
+out:
+    wl_command(CMD_BYE, 0, 0, 0, 0);
+    return step == MB_GO ? WL_SEND_DONE
+         : step == MB_STOP ? WL_SEND_STOPPED : WL_SEND_FAILED;
+}

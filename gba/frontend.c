@@ -644,7 +644,12 @@ void draw_link_wait(const TengenLobby *lobby, int elapsed) {
                     /* Looking for a room, or holding one open, by turns. */
                     draw_text_centred(10, "LOOKING FOR OTHER GBA", menu_bank());
                     draw_text_centred(12, "B TO GO BACK", menu_bank());
-                    draw_text_centred(14, "PICK 2 PLAYER THERE TOO", BANK_NOTE);
+                    /* ...or one with no cartridge, which SELECT sends the
+                     * game to over the air (main.c): the two notes by turns. */
+                    clear_both(MENU_IN_TX, 14, MENU_IN_W, 1);
+                    draw_text_centred(14, (elapsed / 150) & 1 ? "SELECT SENDS THE GAME"
+                                                              : "PICK 2 PLAYER THERE TOO",
+                                      BANK_NOTE);
                 } else if (link_is_master()) {
                     draw_text_centred(10, "SWITCH THE OTHER GBA ON", menu_bank());
                     draw_text_centred(12, "B TO GO BACK", menu_bank());
@@ -947,6 +952,28 @@ void draw_link_sending(bool wrong_end) {
         draw_text_centred(13, "WITH NO CARTRIDGE IN", BANK_NOTE);
     }
     draw_text_centred(15, "B TO STOP", menu_bank());
+}
+
+/* SINGLE-PAK OVER THE AIR (wireless_multiboot_send): first the room is
+ * open and the other GBA has to find it — switched on with no cartridge and
+ * its adapter in, the adapter's own loader lists the rooms around — then
+ * the bar, as over the cable, and then the copy starting. */
+void draw_air_sending(int stage, uint32_t done, uint32_t total) {
+    draw_menu_frame();
+    draw_text_centred(8, "SINGLE-PAK", menu_bank());
+    if (stage == WL_SEND_WAITING) {
+        clear_both(MENU_IN_TX, 10, MENU_IN_W, 7);
+        draw_text_centred(10, "THE GAME IS ON THE AIR", menu_bank());
+        /* (No comma in the font.) */
+        draw_text_centred(12, "SWITCH THE OTHER GBA ON", BANK_NOTE);
+        draw_text_centred(13, "ADAPTER IN AND NO GAME", BANK_NOTE);
+        draw_text_centred(14, "THEN PICK TENGEN TETRIS", BANK_NOTE);
+    } else {
+        draw_text_centred(10, stage == WL_SEND_SENDING ? "SENDING THE GAME"
+                                                       : "STARTING IT", menu_bank());
+        draw_send_progress(done, total);
+    }
+    draw_text_centred(16, "B TO STOP", menu_bank());
 }
 
 /* WHAT IS SENT. The cartridge sends the slave's image it carries
