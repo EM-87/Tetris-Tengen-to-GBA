@@ -114,7 +114,21 @@ void cossack_watch(int slot, TengenStepResult step) {
     idle_cossack_celebrate(rows);
 }
 
+/* THE GAME BOY PLAYER'S RUMBLE (gbp.c), on what this console's player
+ * does: a clear, longer the more rows — a TETRIS the most — the level going
+ * up, and the top-out. Nothing on a GBA, which has no motor. */
+static void rumble_step(TengenStepResult step) {
+    if (step.lines_cleared) {
+        int rows = 0;
+        for (uint32_t m = step.rows_cleared_mask; m; m &= m - 1) rows++;
+        gbp_rumble(rows >= 4 ? 30 : 4 + 4 * rows);
+    }
+    if (step.leveled_up) gbp_rumble(20);
+    if (step.topped_out) gbp_rumble(45);
+}
+
 static void announce_step(TengenStepResult step) {
+    rumble_step(step);
     if (step.piece_locked) nes_audio_play(NES_SOUND_DROP);
     /* ONE call per event, and the level-up is one event. A clear that also
      * raises the level used to reach setMusicOrSoundEffect(MUSIC_LEVELUP)
@@ -489,7 +503,9 @@ static void draw_pause_menu(void) {
     const char *ask[] = { "EXIT?", "YES", "NO" };
     /* THE TUNE'S NAME IS THE ENTRY. A label over a value that is itself the
      * choice is a label saying nothing. See PMENU_H. */
-    const char *menu[] = { "PAUSE", kMusicNames[g_music], "EXIT" };
+    /* "EXIT GAME", not "EXIT": a player took the bare word for closing the
+     * menu and walked out of the game. */
+    const char *menu[] = { "PAUSE", kMusicNames[g_music], "EXIT GAME" };
     const char *const *lines = g_pause_confirm ? ask : menu;
     int w = pmenu_width(lines, 3);
     /* The first box since the screen was last whole: keep what it covers. */
@@ -902,6 +918,7 @@ void front_music(uint8_t which) {
  * so a paused coop match over the cable played its tune on under the
  * plaque. */
 static void pause_toggled(bool was_paused) {
+    gbp_rumble_stop();       /* a paused game does not shake */
     /* EVERY PAUSE OPENS ON MUSIC. The cursor used to be left where
      * the last one ended, so a player who had been to EXIT came back
      * to a menu whose START — the button that means resume

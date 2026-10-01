@@ -16,3 +16,6 @@ gba/audio_golden.bin
 # The publisher's logo for the splash screen, from an image you supply:
 #   python3 tools/make_splash.py logo.png
 gba/splash_logo.h
+# The Game Boy Player's logo (Nintendo's), from a picture you supply:
+#   python3 tools/make_gbp_logo.py gbp_logo.png
+gba/gbp_logo.h

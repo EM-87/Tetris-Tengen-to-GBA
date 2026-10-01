@@ -1199,6 +1199,14 @@ void leader_reset(void) {
     g_high_score = g_leader[0].score;
 }
 
+/* EVERY TABLE BACK TO THE CARTRIDGE'S COLD ONE, in memory and in the save:
+ * what the erase at power-on does (erase_records_prompt), after asking
+ * twice. */
+void leader_erase_all(void) {
+    leader_reset();
+    leader_save();
+}
+
 /* WHICH BUILD'S TABLE IS IN PLAY, by the skin: -1 is the release and 0 and up
  * are the prototypes in their title order. Called where the skin is settled,
  * not read every frame, because switching is also what refreshes the HIGH

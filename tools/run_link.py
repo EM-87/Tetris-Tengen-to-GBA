@@ -1924,9 +1924,9 @@ def role_check(rom):
     if where[1] != "cable":
         failures.append(f"con el maestro fuera, el esclavo esta en {where[1]}")
     import run_rom
-    # Its master in a menu does not transfer, which from the slave's end is
-    # no cable at all: it asks for one, and waits.
-    if "CONNECT THE CABLE" not in run_rom.tilemap_text(cores[1], 10):
+    # Its master in a menu says it is there (link_beacon), so the slave
+    # waits for its player rather than asking for a cable.
+    if "WAITING FOR OTHER PLAYER" not in run_rom.tilemap_text(cores[1], 10):
         failures.append("con el maestro fuera, el esclavo no vuelve a esperar")
     tap("START", who=0)                 # the master comes back
     both(60)
@@ -2376,7 +2376,11 @@ class FakeMultibootBios:
             self.naps -= 1
             return ABSENT
         st = self.state
-        if m == 0x6200 and st in ("asleep", "found", "done", "failed"):
+        # A CONSOLE THAT HAS THE GAME IS RUNNING IT, not waiting in its BIOS:
+        # from the checksum on it answers as the game at rest does (0).
+        if st == "done":
+            return 0x0000
+        if m == 0x6200 and st in ("asleep", "found", "failed"):
             self.state, self.header = "found", []
             return 0x7202
         if m == 0x6102 and st == "found":
@@ -2469,9 +2473,13 @@ def _send_to_fake(rom, master_rom, image):
         tap("START", who=0)
         both(30)
     rows = " ".join(run_rom.tilemap_text(cores[0], r) for r in range(8, 16))
-    offered = "SELECT SENDS THE GAME" in rows
-    tap("SELECT", who=0)
-    bar = False
+    # It sends by itself once the cable has found the stand-in (link_peer),
+    # so by now it may be sending, or done; SELECT is the way to send again.
+    offered = ("THE OTHER GBA IS EMPTY" in rows or "SENDING THE GAME" in rows
+               or bios.done > 0)
+    bar = "SENDING THE GAME" in rows or bios.done > 0
+    if not bios.done and "SENDING THE GAME" not in rows:
+        tap("SELECT", who=0)
     for _ in range(120):
         both(30)
         rows = " ".join(run_rom.tilemap_text(cores[0], r) for r in range(8, 16))
@@ -2569,27 +2577,35 @@ def peer_check(rom):
               "WAITING FOR OTHER PLAYER", False),
              ("la otra GBA apagada", DeadEnd(),
               "SWITCH THE OTHER GBA ON", False))
-    for name, other, want, offer in cases:
+    for name, other, want, sends in cases:
         cores, cable, both, tap = _pair(rom)
         cable.fake_bios = other
         both(300)
         tap("START", who=0)
         tap("DOWN", who=0)
         tap("START", who=0)
-        both(120)
-        text = rows(cores[0])
-        offered = "SELECT SENDS THE GAME" in text
-        if want not in text:
+        # A CONSOLE WITH NO CARTRIDGE GETS THE GAME WITHOUT ANYBODY ASKING:
+        # the screen says what it found, and then the sending starts by
+        # itself (main.c, AUTO_SEND_FRAMES). Nobody presses SELECT here.
+        saw = sending = False
+        last = ""
+        for _ in range(120):
+            both(1)
+            last = rows(cores[0])
+            saw = saw or want in last
+            sending = sending or "SENDING THE GAME" in last
+            if sending:
+                break
+        if not saw:
             failures.append(f"{name}: la pantalla no dice {want!r} "
-                            f"({' '.join(text.split())!r})")
-        elif offered != offer:
-            failures.append(f"{name}: {'no ' if offer else ''}ofrece enviar "
-                            f"el juego")
+                            f"({' '.join(last.split())!r})")
+        elif sending != sends:
+            failures.append(f"{name}: {'no ' if sends else ''}empieza a "
+                            f"enviar el juego solo")
         else:
             print(f"  {name}: '{want}'"
-                  f"{' y ofrece enviar' if offer else ''}")
-        if isinstance(other, FakeMultibootBios):
-            tap("SELECT", who=0)
+                  f"{' y empieza a enviar sola' if sends else ''}")
+        if sends and sending:
             pct = cells = False
             for _ in range(200):
                 both(5)
@@ -2605,6 +2621,24 @@ def peer_check(rom):
             else:
                 print(f"  enviando: la pieza I crece, "
                       f"'{run_rom.tilemap_text(cores[0], 14).strip()}'")
+
+    # THE SLAVE'S END OF THE CABLE, ITS PARTNER IN ITS MENUS. With no
+    # transfers that end could not tell this from no cable at all; the
+    # console in its menus now says it is there (link_beacon), and the
+    # screen waits for its player instead of asking for a cable.
+    cores, cable, both, tap = _pair(rom)
+    both(300)
+    tap("START", who=1)
+    tap("DOWN", who=1)
+    tap("START", who=1)
+    both(120)
+    text = rows(cores[1])
+    if "WAITING FOR OTHER PLAYER" not in text:
+        failures.append(f"el extremo esclavo, con la otra en su menu, no "
+                        f"espera: {' '.join(text.split())!r}")
+    else:
+        print("  extremo esclavo, la otra en el titulo: 'WAITING FOR OTHER "
+              "PLAYER'")
     for f in failures:
         print(f"FALLA: {f}")
     if failures:

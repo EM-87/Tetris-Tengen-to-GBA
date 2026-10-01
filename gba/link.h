@@ -195,6 +195,10 @@ LinkSendResult link_multiboot_send(const uint8_t *image, uint32_t len,
  * it — so that the other end can tell this console is there. */
 void link_rest(void);
 
+/* Once a frame on the menus: the master's end says it is there (see
+ * link.c). */
+void link_beacon(void);
+
 /* WHAT IS ON THE OTHER END, while the lobby has found nobody to talk to —
  * for the LINK CABLE screen to say what to do next. */
 typedef enum {

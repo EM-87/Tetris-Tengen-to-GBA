@@ -1447,6 +1447,25 @@ static void test_a_single_pak_probe_is_not_a_go(void) {
     CHECK(left_apart == 0 && slave.seed == 0xC0DE);
 }
 
+static void test_the_game_boy_players_handshake(void) {
+    /* GBATEK's table, sent one row at a time: every answer as listed, the
+     * first row whatever came before its "NI", and the steady state saying
+     * on or off. */
+    static const uint32_t table[][2] = {
+        { 0x0000494Eu, 0x494EB6B1u }, { 0x1234494Eu, 0x494EB6B1u },
+        { 0xB6B1494Eu, 0x544EB6B1u }, { 0xB6B1544Eu, 0x544EABB1u },
+        { 0xABB1544Eu, 0x4E45ABB1u }, { 0xABB14E45u, 0x4E45B1BAu },
+        { 0xB1BA4E45u, 0x4F44B1BAu }, { 0xB1BA4F44u, 0x4F44B0BBu },
+        { 0xB0BB4F44u, 0x8000B0BBu }, { 0xB0BB8002u, 0x10000010u },
+        { 0x10000010u, 0x20000013u }, { 0x20000013u, 0x40000004u },
+        { 0x30000003u, 0x40000004u },
+    };
+    for (unsigned i = 0; i < sizeof table / sizeof table[0]; i++)
+        CHECK(tengen_gbp_reply(table[i][0], false) == table[i][1]);
+    CHECK(tengen_gbp_reply(0x30000003u, true) == 0x40000026u);
+    CHECK(tengen_gbp_reply(0x30000003u, false) == 0x40000004u);
+}
+
 static void test_a_slave_that_saw_one_go_does_not_carry_it_over(void) {
     /* A GO seen in a conversation that never finished (the master went
      * away between its two GOs) is forgotten when the next one opens with
@@ -3592,6 +3611,7 @@ int main(void) {
     test_two_consoles_that_chose_different_modes_never_link();
     test_a_single_pak_slave_takes_the_masters_mode();
     test_a_single_pak_probe_is_not_a_go();
+    test_the_game_boy_players_handshake();
     test_the_lobby_ends_even_when_one_side_leaves_first();
     test_a_console_that_took_itself_for_the_master_starts_again();
     test_no_lobby_word_can_look_like_an_absent_console();

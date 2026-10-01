@@ -30,12 +30,6 @@
 #define HOLD_FRAMES 120
 #define HOLD_SKIPPABLE 30
 
-/* Survives the soft reset (crt0 clears .bss, not this) and not a power
- * cycle: RAM switched off comes back as whatever it comes back as, and
- * this word is vanishingly unlikely to be it. */
-#define SPLASH_SEEN 0x54454E47u      /* "TENG" */
-__attribute__((section(".ewram"))) static volatile uint32_t g_splash_seen;
-
 static void fade(uint16_t mode, int from, int to) {
     REG_BLDCNT = (uint16_t)(BLD_BG2_BACKDROP | mode);
     for (int f = 0; f <= FADE_FRAMES; f++) {
@@ -45,10 +39,7 @@ static void fade(uint16_t mode, int from, int to) {
     }
 }
 
-void splash_show(void) {
-    if (g_splash_seen == SPLASH_SEEN) return;
-    g_splash_seen = SPLASH_SEEN;
-
+static void tengen_logo(void) {
     REG_DISPCNT = DCNT_FORCED_BLANK;
     for (int i = 0; i < 16; i++) MEM_PALETTE[i] = lcd_colour(kSplashPalette[i]);
     vu16 *page = (vu16 *)0x06000000;
@@ -85,5 +76,25 @@ void splash_show(void) {
     while (read_buttons()) vsync();
 }
 #else
-void splash_show(void) {}
+static void tengen_logo(void) {}
 #endif
+
+/* Survives the soft reset (crt0 clears .bss, not this) and not a power
+ * cycle: RAM switched off comes back as whatever it comes back as, and
+ * this word is vanishingly unlikely to be it. */
+#define SPLASH_SEEN 0x54454E47u      /* "TENG" */
+__attribute__((section(".ewram"))) static volatile uint32_t g_splash_seen;
+
+/* THE TWO LOGOS AT POWER-ON: the Game Boy Player's first — which is how a
+ * Player is found, gbp.c — and the publisher's after it, each out of white
+ * and the first back into it. Neither after a soft reset, nor on the
+ * Single-Pak copy. */
+void splash_show(void) {
+#ifdef TENGEN_MULTIBOOT
+    return;
+#endif
+    if (g_splash_seen == SPLASH_SEEN) return;
+    g_splash_seen = SPLASH_SEEN;
+    gbp_show_logo();
+    tengen_logo();
+}

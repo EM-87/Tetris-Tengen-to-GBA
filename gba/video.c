@@ -145,7 +145,11 @@ void irq_handler(void) {
     /* Only the sources this program switched on: IF can latch others. */
     uint16_t flags = REG_IF & REG_IE;
     if (flags & IRQ_VBLANK) g_vblank_count++;
-    if (flags & IRQ_SERIAL) link_serial_service();
+    if (flags & IRQ_SERIAL) {
+        /* The port is the cable's or, on a Game Boy Player, the Player's. */
+        if (gbp_owns_serial()) gbp_serial_service();
+        else link_serial_service();
+    }
     REG_IF = flags;
     BIOS_IF_MIRROR |= flags;
 }
@@ -213,6 +217,7 @@ __attribute__((noinline)) void vsync(void) {
     __asm__ volatile ("swi 0x050000" ::: "r0", "r1", "r2", "r3", "memory");
 #endif
     soft_reset_check();
+    gbp_tick();
     if (!g_sleep_blocked && sleep_keys_held()) system_sleep();
 }
 

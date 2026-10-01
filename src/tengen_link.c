@@ -472,3 +472,26 @@ void tengen_name_apply(TengenNameSwap *swap, bool got, uint16_t word) {
         else swap->linger++;
     }
 }
+
+/* GBATEK's table, "Receive / Response", row by row. The first word only
+ * has to END in "NI" (494Eh: it arrives as 0000494Eh and then as whatever
+ * was in the register), and anything not in the table is answered as the
+ * table's last row is — the steady state — so a transfer the Player drops
+ * and repeats lands back in step. */
+uint32_t tengen_gbp_reply(uint32_t received, bool rumble) {
+    switch (received) {
+        case 0xB6B1494Eu: return 0x544EB6B1u;
+        case 0xB6B1544Eu: return 0x544EABB1u;
+        case 0xABB1544Eu: return 0x4E45ABB1u;
+        case 0xABB14E45u: return 0x4E45B1BAu;
+        case 0xB1BA4E45u: return 0x4F44B1BAu;
+        case 0xB1BA4F44u: return 0x4F44B0BBu;
+        case 0xB0BB4F44u: return 0x8000B0BBu;
+        case 0xB0BB8002u: return 0x10000010u;
+        case 0x10000010u: return 0x20000013u;
+        case 0x20000013u: return 0x40000004u;
+        default: break;
+    }
+    if ((received & 0xFFFFu) == 0x494Eu) return 0x494EB6B1u;
+    return 0x40000000u | (rumble ? TENGEN_GBP_RUMBLE_ON : TENGEN_GBP_RUMBLE_OFF);
+}

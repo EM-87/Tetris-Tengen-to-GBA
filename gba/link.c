@@ -1,5 +1,10 @@
 /* link.c — GBA serial multiplayer mode. See link.h for the shape of it. */
 #include "link.h"
+
+/* The Game Boy Player shares the port (gbp.c). */
+void gbp_start(void);
+void gbp_release(void);
+bool gbp_owns_serial(void);
 #include "gba_hw.h"
 
 /* The serial registers. Declared here rather than in gba_hw.h: nothing else
@@ -240,6 +245,7 @@ void link_serial_service(void) {
 }
 
 void link_init(void) {
+    gbp_release();           /* the port is the cable's now, not the Player's */
     /* RCNT bits 14-15 pick between the serial modes and the general-purpose
      * ones; zero leaves SIOCNT in charge. NOT through general purpose on the
      * way: see sio_reset for what that does to the other console. And only
@@ -299,6 +305,7 @@ void link_shutdown(void) {
     g_auto_tx = false;
     g_armed = false;
     REG_IME = IME_ON;
+    gbp_start();             /* ...and back to a Game Boy Player, if one */
 }
 
 /* THE PORT AT REST FROM THE MOMENT THE GAME STARTS: multiplayer mode, no
@@ -309,6 +316,7 @@ void link_shutdown(void) {
  * and the LINK CABLE screen on the other end says to wait for its player
  * (link_peer) rather than to switch it on. */
 void link_rest(void) {
+    if (gbp_owns_serial()) return;
     if (REG_RCNT & 0xC000) REG_RCNT = 0x0000;
     REG_SIOCNT = SIO_NORMAL_SO_HIGH;
     REG_SIOCNT = SIO_MODE_MULTI | SIO_BAUD;
@@ -776,4 +784,29 @@ void link_probe(void) {
 LinkPeer link_peer(void) {
     if (g_peer_empty) return LINK_PEER_EMPTY_GBA;
     return link_connected() ? LINK_PEER_SOMEONE : LINK_PEER_NOBODY;
+}
+
+/* A CONSOLE OF OURS IN ITS MENUS SAYS IT IS THERE. The slave's end of the
+ * cable cannot tell "no cable" from "the console on the master's end is in
+ * its menus": both are a cable with no transfers on it (link_peer). So the
+ * master's end, with its port at rest (link_rest, link_shutdown) and away
+ * from any lobby, starts an empty transfer now and then: a word of 0, which
+ * a lobby on the other end takes for a console not in one (tag NONE) —
+ * enough for its LINK CABLE screen to say "waiting for the other player"
+ * rather than "connect the cable". Not on the slave's end (only the master
+ * starts transfers), not with SD low (nobody in multiplayer mode there),
+ * and with the port's interrupt off, as it is at rest: nothing here reaches
+ * this console's own lobby queue. */
+#define LINK_BEACON_EVERY 8
+static uint8_t g_beacon_clock;
+
+void link_beacon(void) {
+    if (g_armed) return;
+    if (++g_beacon_clock % LINK_BEACON_EVERY) return;
+    uint16_t cnt = REG_SIOCNT;
+    if ((cnt & 0x3000) != SIO_MODE_MULTI) return;   /* not at rest */
+    if (cnt & (SIO_SI | SIO_START | SIO_IRQ)) return;
+    if (!(cnt & SIO_SD)) return;
+    REG_SIOMLT_SEND = 0;
+    REG_SIOCNT = (uint16_t)(cnt | SIO_START);
 }

@@ -1761,8 +1761,20 @@ void suspend_apply(void);
 void match_resumed_paused(void);
 /* The chord's three doors, opened without its chirp: for a game put back. */
 void cheats_restore(void);
-/* The publisher's logo on white, at power-on only (splash.c). */
+/* The Player's logo and the publisher's, at power-on only (splash.c). */
 void splash_show(void);
+
+/* THE GAME BOY PLAYER (gbp.c): found by its logo at power-on, then the
+ * serial port is its, for the rumble. */
+bool gbp_show_logo(void);
+bool gbp_present(void);
+void gbp_start(void);
+void gbp_release(void);
+bool gbp_owns_serial(void);
+void gbp_serial_service(void);
+void gbp_rumble(int frames);
+void gbp_rumble_stop(void);
+void gbp_tick(void);
 void upload_tiles(void);
 void upload_palette_set(int base, const uint8_t *set, vu16 *memory);
 void upload_palettes(void);
@@ -1867,6 +1879,10 @@ void bonus_end(void);
 extern int g_leader_row;
 bool leader_load(void);
 void leader_reset(void);
+void leader_erase_all(void);
+/* L+R+B held at power-on: the erase, asked twice (frontend.c). */
+bool erase_chord_held(void);
+void erase_records_prompt(void);
 void leader_reset_table(int table);
 void leader_use_table(int skin);   /* -1 release, 0.. the prototypes */
 void draw_leader_row(int row);

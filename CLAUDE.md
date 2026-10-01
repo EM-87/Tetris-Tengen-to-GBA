@@ -78,8 +78,8 @@ running ROM; only the side panels need reflowing).
   the screens around a match; `match.c` one frame of play and the pause menu;
   `main.c` the state machine. Plus `nes6502.c` + `nes_audio.c` (the
   cartridge's sound engine, run), `handtunes.c` (the two hand-entered tunes)
-  `link.c` (the cable), `suspend.c` (the paused game on the battery) and
-  `splash.c` (the logo at power-on). A symbol is shared only if another file names it
+  `link.c` (the cable), `suspend.c` (the paused game on the battery),
+  `splash.c` (the logos at power-on) and `gbp.c` (the Game Boy Player). A symbol is shared only if another file names it
   in code; everything else is `static`.
 - **`tools/`** — `extract_assets.py` (all the art, from a dump);
   `run_rom.py` (the command `make gba-check` runs) with its checks in
@@ -104,7 +104,7 @@ minus those).
 | --- | --- | --- |
 | `make test` | no | always — the rules, in milliseconds |
 | `make gba` | headers | to build `build/tengen.gba` |
-| `make gba-check` | headers | before calling any change done: 63 checks on the running ROM in mGBA, eighteen of them on two consoles with a cable |
+| `make gba-check` | headers | before calling any change done: 65 checks on the running ROM in mGBA, eighteen of them on two consoles with a cable |
 | `make trace ROM=... [MODE=coop\|versus\|with\|demo]` | yes | after touching `tengen_step` or `tengen_ai.c`: the port against the cartridge, iteration by iteration. The 1P and coop scripts never complete a row; `MODE="with --pad1"` plays player 1 with the port's computer and clears plenty; add `--handicap N` to any mode |
 | `make tune-check ROM=...` | yes | after touching audio: the four tunes against the cartridge, note by note |
 | `make dance-check ROM=...` | yes | after touching the dancers: their choreography against the cartridge's driver |
@@ -203,7 +203,14 @@ story behind each; the item number is in brackets.
     a GO with something in it is ignored (`tengen_lobby_apply`). Nobody
     answering: on the master's end, switch the other one on; on the
     other, no transfers is as much no cable as a master in its menu, and
-    the screen asks for both.
+    the screen asks for both — or did: a console of ours in its menus now
+    says it is there (`link_beacon`, a transfer of 0 every eighth frame from
+    the master's end with the port at rest), so the slave's end waits for
+    its player and asks for the cable only when nothing is on it. A console
+    with no cartridge gets the game by itself three-quarters of a second
+    after it is found (`AUTO_SEND_FRAMES`); B on the sending screen stops it
+    and leaves SELECT until another comes. The stand-in BIOS answers as the
+    game at rest once it has it, as the console would.
   - `poll_interrupts` serves only what IE has switched on, as the
     interrupt would: a transfer pending as the slave left the lobby was
     served from the menu, putting the lobby's word back on the wire.
@@ -229,6 +236,21 @@ story behind each; the item number is in brackets.
   confirms it) and copying the game over the one just dealt, so everything
   a match lays out is laid out. Written as the plaque goes up and when its
   tune changes; wiped off the plaque and by the soft reset.
+- **The Game Boy Player is found by its logo** (`gbp.c`), shown at power-on
+  before the publisher's on every GBA, as the games that supported it did:
+  while it is up a Player holds all four directions one frame in three
+  (KEYINPUT 030Fh, GBATEK), and only a Player can. The logo is Nintendo's,
+  generated from a picture you supply (`tools/make_gbp_logo.py`, a
+  lossless 240x160 capture of a game that shows it), shown in its exact
+  colours — not through `kLcdGamma` — as a Mode 4 bitmap; GBATEK says
+  tiles or bitmap alike. Found, the serial port is the Player's: 32-bit
+  normal mode on its clock, answering GBATEK's NINTENDO handshake row by
+  row (`tengen_gbp_reply`, host-tested) and then 400000yyh, rumble on or
+  off — a clear, longer for more rows, the level and the top-out
+  (`rumble_step`). The cable takes the port in `link_init` and gives it
+  back in `link_shutdown`. The result survives a soft reset with the
+  splash's word. Run only against a stand-in (`gbp_check`, `FakePlayer`):
+  the mGBA the checks use does not emulate a Player.
 - **The logo at power-on skips itself after a soft reset** by a word in
   external WRAM that crt0 does not clear (`g_splash_seen`). The checks skip
   it the same way, writing that word after every reset
@@ -447,12 +469,16 @@ LOST window, and out to the title); the XE mod's two
 off-by-one bugs mended (XE only); Single-Pak (SELECT on the LINK CABLE
 screen sends the game to a console with no cartridge); sleep (L+R+SELECT
 anywhere but a match in play — a solo match pauses first and sleeps on its
-plaque, a linked one not at all; any button but L and R wakes it) and soft
+plaque, a linked one not at all; A, B, START or SELECT wakes it) and soft
 reset (A+B+START+SELECT), as commercial games had; a paused solo game kept
 on the battery through a power cycle, as Tetris DX does (`suspend.c`); the
 publisher's logo on white at power-on (`splash.c`, from an image you supply
 through `tools/make_splash.py`, gitignored like the cartridge's art); every
-colour brightened for the GBA's LCD (`kLcdGamma`).
+colour through one table for the GBA's LCD (`kLcdGamma`, the identity
+today); the Game Boy Player's logo at power-on and its rumble (`gbp.c`);
+"EXIT GAME", not "EXIT", on the pause menu (a player took it for closing the
+menu); the high scores erased by L+R+B held at power-on, asked twice with NO
+chosen (`erase_records_prompt`).
 [8, 11, 17, 19, 20, 23, 28, 30]
 
 **Knowingly not shown**: proto_c's title animation (its rows are the ones
@@ -504,6 +530,8 @@ And what has run only in an emulator:
   `system_check` checks the way in and out, the console the rest — and
   that a Stop entered with IME off (the Single-Pak copy) still wakes on
   the keypad is INFERRED.
+- **The Game Boy Player** has run only against `FakePlayer`: the logo,
+  the 030Fh answer, GBATEK's handshake and the rumble.
 - **The paused game through a power cycle and the logo** have run only in
   mGBA (`suspend_check`). On a flash cart the save memory has to reach the
   card for the game to survive: the EZ-Flash IV and the SuperCard each do
@@ -511,9 +539,8 @@ And what has run only in an emulator:
 
 Ideas not started:
 
-- **Game Boy Player rumble.** The Player only turns it on for a game that
-  shows the Player's own logo at boot, and that logo is Nintendo's art,
-  which the port does not have: it would come from a dump, like the rest.
+- **The classic three-page menus on a Game Boy Player** (LEVEL, HANDICAP,
+  MUSIC with their columns of numbers), now that a Player can be found.
 - **Wireless adapter** — only with one to test on.
 
 A new idea starts in the cartridge (`tools/nes_console.py`,

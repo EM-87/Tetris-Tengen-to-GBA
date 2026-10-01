@@ -614,9 +614,11 @@ void draw_link_wait(const TengenLobby *lobby, int elapsed) {
          * console knows which it is until the other answers. */
         switch (link_peer()) {
             case LINK_PEER_EMPTY_GBA:
+                /* It sends by itself a moment later (main.c); SELECT is
+                 * the way to send again after B stopped it. */
                 draw_text_centred(10, "THE OTHER GBA IS EMPTY", menu_bank());
-                draw_text_centred(12, "SELECT SENDS THE GAME", menu_bank());
-                draw_text_centred(14, "B TO GO BACK", BANK_NOTE);
+                draw_text_centred(12, "SENDING IT THE GAME", menu_bank());
+                draw_text_centred(14, "SELECT SENDS IT AGAIN", BANK_NOTE);
                 break;
             case LINK_PEER_SOMEONE:
                 draw_text_centred(10, "WAITING FOR OTHER PLAYER", menu_bank());
@@ -646,6 +648,74 @@ void draw_link_wait(const TengenLobby *lobby, int elapsed) {
     /* The guest: the master is choosing, and the cossack does the waiting. */
     draw_text_centred(11, "YOU ARE PLAYER 2", BANK_NOTE);
     draw_guest_dancer(elapsed);
+}
+
+/* ERASING THE HIGH SCORES, the way the games of the day offered it: a
+ * chord held while switching on (L+R+B — not SELECT, which with L and R is
+ * the sleep), a warning, and the question asked TWICE with NO already
+ * chosen both times. Up and Down move, A or START takes the line, B is NO.
+ * Only YES twice erases: every table back to the cartridge's cold one, and
+ * the paused game kept for the power switch with them. */
+#define ERASE_KEYS (KEY_L | KEY_R | KEY_B)
+
+bool erase_chord_held(void) {
+    return (uint16_t)(~REG_KEYINPUT & ERASE_KEYS) == ERASE_KEYS;
+}
+
+static void draw_erase_page(int stage, bool yes) {
+    draw_menu_frame();
+    clear_both(MENU_IN_TX, 9, MENU_IN_W, 8);
+    if (stage == 0) {
+        draw_text_centred(9, "ERASE ALL HIGH SCORES?", menu_bank());
+        draw_text_centred(11, "EVERY TABLE GOES BACK", BANK_NOTE);
+        draw_text_centred(12, "TO THE FACTORY SCORES", BANK_NOTE);
+    } else {
+        draw_text_centred(9, "ARE YOU SURE?", menu_bank());
+        draw_text_centred(11, "THEY CANNOT COME BACK", BANK_NOTE);
+    }
+    const int tx = MENU_IN_TX + MENU_IN_W / 2 - 2;
+    const char *answer[2] = { "NO", "YES" };
+    for (int i = 0; i < 2; i++) {
+        int ty = 14 + i;
+        bool on = (i == 1) == yes;
+        set_map_tile(tx - 2, ty, on ? WITH_BANK(ascii_tile(MENU_ARROW_R), BANK_ARROW)
+                                    : WITH_BANK(ascii_tile(' '), menu_bank()));
+        for (int c = 0; answer[i][c]; c++)
+            set_map_tile(tx + c, ty, WITH_BANK(ascii_tile(answer[i][c]), menu_bank()));
+    }
+}
+
+void erase_records_prompt(void) {
+    uint8_t held = read_buttons();
+    for (int stage = 0; stage < 2; stage++) {
+        bool yes = false;
+        for (;;) {
+            vsync();
+            draw_erase_page(stage, yes);
+            audio_frame();
+            uint8_t now = read_buttons();
+            uint8_t pressed = (uint8_t)(now & ~held);
+            held = now;
+            if (pressed & (TENGEN_BTN_UP | TENGEN_BTN_DOWN)) {
+                yes = !yes;
+                cursor_blip();
+            }
+            if (pressed & TENGEN_BTN_B) yes = false;
+            if (pressed & (MENU_CONFIRM | TENGEN_BTN_B)) break;
+        }
+        screen_blip();
+        /* The answer's button is the prompt's, not the title's (or the
+         * paused game's, which a B would otherwise walk out of). */
+        while (read_buttons()) { vsync(); audio_frame(); }
+        held = 0;
+        if (!yes) {
+            clear_screen();
+            return;
+        }
+    }
+    leader_erase_all();
+    suspend_clear();
+    clear_screen();
 }
 
 /* Appends a number with no leading zeroes, however many digits it has.

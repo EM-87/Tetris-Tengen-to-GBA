@@ -331,4 +331,20 @@ static inline bool tengen_name_have(const TengenNameSwap *swap) {
     return swap->got == ((1u << TENGEN_NAME_LETTERS) - 1u);
 }
 
+/* ----------------------------------------------------------------------- *
+ * The Game Boy Player's rumble
+ *
+ * Once a game has shown the Player's logo and been recognised, the Player
+ * talks to it over the serial port in 32-bit normal mode, on its own clock,
+ * about once a frame: first "NINTENDO" in 16-bit pieces with each piece's
+ * bitwise inverse, then a few setup words, then 30000003h for ever, which
+ * the game answers with 400000yyh — yy 26h for the motor on, 04h for off.
+ * GBATEK ("GBA Gameboy Player"), table copied exactly; untested on a
+ * Player. This is the answer to one received word; the serial interrupt
+ * loads it for the next transfer.
+ * ----------------------------------------------------------------------- */
+#define TENGEN_GBP_RUMBLE_ON  0x26u
+#define TENGEN_GBP_RUMBLE_OFF 0x04u
+uint32_t tengen_gbp_reply(uint32_t received, bool rumble);
+
 #endif /* TENGEN_LINK_H */

@@ -13,11 +13,17 @@ int main(void) {
     /* First: every screen from here on waits for its frame in vsync(), and
      * vsync() sleeps until an interrupt that this is what switches on. */
     irq_init();
+    /* Read before anything waits for the buttons to be let go (the splash
+     * does): see erase_records_prompt. */
+    bool erase_asked = erase_chord_held();
     /* ...and the cable answers from the start, wherever the player is: see
      * link_rest. */
     link_rest();
     /* The publisher's logo, at power-on only; see splash.c. */
     splash_show();
+    /* A Game Boy Player answered its logo — now, or at power-on before a
+     * soft reset: the serial port is its, for the rumble (gbp.c). */
+    gbp_start();
 
     upload_tiles();
     upload_palettes();
@@ -62,6 +68,13 @@ int main(void) {
     REG_BG3VOFS = STATS_LIFT_PX;
     REG_DISPCNT = DCNT_MODE0 | DCNT_BG0 | DCNT_BG1 | DCNT_BG2 | DCNT_BG3 |
                    DCNT_OBJ | DCNT_OBJ_1D;
+#ifndef TENGEN_MULTIBOOT
+    /* THE ERASE, asked twice, before anything reads the save again — the
+     * paused game on the battery included. */
+    if (erase_asked) erase_records_prompt();
+#else
+    (void)erase_asked;
+#endif
 
     Screen screen = SCREEN_TITLE;
     int leader_frames = 0;
@@ -76,6 +89,10 @@ int main(void) {
     /* Which of the three settings the cursor is on. */
     int menu_field = MENU_FIELD_LEVEL;
     int link_wait_frames = 0;
+    /* The Single-Pak send that starts by itself; see the LINK CABLE screen. */
+#define AUTO_SEND_FRAMES 45
+    int auto_send_wait = 0;
+    bool auto_send_refused = false;
     uint8_t held_last = 0;
     bool sweeping = false;   /* true while the line-clear sweep owns the OAM */
     bool match_running = false;
@@ -143,6 +160,12 @@ int main(void) {
     for (;;) {
         /* Asleep from any screen but a match in play; see system_sleep. */
         g_sleep_blocked = screen == SCREEN_PLAYING && match_running;
+        /* On the menus, the cable says this console is there (link_beacon):
+         * a console waiting at the other end then knows to wait. */
+        if (screen == SCREEN_TITLE || screen == SCREEN_GAME_SELECT ||
+            screen == SCREEN_LEADERBOARD ||
+            (screen == SCREEN_LEVEL_SELECT && !GAME_IS_LINKED(game_mode)))
+            link_beacon();
         uint8_t buttons = read_buttons();
         uint8_t pressed = (uint8_t)(buttons & ~held_last);
         held_last = buttons;
@@ -675,7 +698,21 @@ int main(void) {
              * across or B stops it, and then the cable is this lobby's
              * again, which is where the other console's copy comes
              * looking for it. */
-            if (!lobby.linked && (pressed & TENGEN_BTN_SELECT)) {
+            /* ...AND BY ITSELF, ONCE THE CABLE HAS FOUND ONE (link_peer): a
+             * console with no cartridge waiting in its BIOS has no use for
+             * anything else. Three-quarters of a second of the screen
+             * saying so first; B on the sending screen stops it, and then
+             * it waits for SELECT until that console goes away and another
+             * comes. */
+            if (!lobby.linked && link_peer() == LINK_PEER_EMPTY_GBA) {
+                if (auto_send_wait < AUTO_SEND_FRAMES) auto_send_wait++;
+            } else {
+                auto_send_wait = 0;
+                auto_send_refused = false;
+            }
+            bool auto_send = auto_send_wait >= AUTO_SEND_FRAMES &&
+                             !auto_send_refused;
+            if (!lobby.linked && ((pressed & TENGEN_BTN_SELECT) || auto_send)) {
                 const uint8_t *img = single_pak_image();
                 uint32_t img_len = single_pak_length();
                 screen_blip();
@@ -685,7 +722,10 @@ int main(void) {
                     vsync();
                     draw_link_sending(wrong_end);
                     audio_frame();
-                    if (read_buttons() & TENGEN_BTN_B) break;
+                    if (read_buttons() & TENGEN_BTN_B) {
+                        auto_send_refused = true;
+                        break;
+                    }
                     /* A few frames between tries, as gba-link-connection
                      * waits: a BIOS that has just been switched on needs
                      * them to be listening. */

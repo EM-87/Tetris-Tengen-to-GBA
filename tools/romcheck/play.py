@@ -1408,12 +1408,14 @@ def suspend_check(rom_path):
         harness.SHOW_SPLASH[0] = True
         try:
             core2, screen2 = load(rom_path)
-            run(core2, 70)
+            # The Game Boy Player's logo first, when the build has it
+            # (about a second and a half), then the publisher's.
+            run(core2, 160)
             px = pixels(screen2)
             white = px[5][5]
             reds = sum(1 for row in px for (r, g, b) in row
                        if r > 200 and g < 80 and b < 80)
-            run(core2, 200)
+            run(core2, 240)
             if white[0] < 230 or white[1] < 230 or white[2] < 230 or reds < 500:
                 failures.append(f"al encender no sale el logo sobre blanco "
                                 f"(esquina {white}, {reds} px rojos)")
@@ -1433,4 +1435,228 @@ def suspend_check(rom_path):
         return 1
     print("OK: la partida en pausa sobrevive al apagado, y el logo abre el "
           "encendido.")
+    return erase_check(rom_path)
+
+
+def erase_check(rom_path):
+    """L+R+B AT POWER-ON ERASES THE HIGH SCORES, ASKED TWICE.
+
+    The question comes up with NO chosen; B (or NO) goes on to the game as
+    if nothing was asked — here, the paused game kept on the battery comes
+    back. YES and YES again puts every table back to the cartridge's cold
+    one and drops the paused game with them (gba/frontend.c,
+    erase_records_prompt).
+    """
+    base, why = game_state_address(rom_path)
+    if base is None:
+        print(f"SALTADO: {why}")
+        return 0
+    off = game_offsets(rom_path)
+    core, screen = load(rom_path)
+    _ = screen
+    failures = []
+
+    def hold(keys, frames):
+        core.set_keys(*[KEYS[k] for k in keys]); run(core, frames)
+
+    def tap(k):
+        hold([k], 4); hold([], 12)
+
+    def susp():
+        return bytes(core.memory.u8[0x0E004000 + i] for i in range(4)) == b"SUSP"
+
+    def text():
+        return " ".join(" ".join(tilemap_text(core, r).split()) for r in range(8, 17))
+
+    run(core, 20)
+    press_start(core); run(core, 10)
+    press_start(core); run(core, 12)
+    press_start(core); run(core, 60)
+    tap("START")                              # paused: on the battery
+    if not susp():
+        failures.append("no hay partida guardada de la que partir")
+    core.reset(); hold(["L", "R", "B"], 10); hold([], 20)
+    if "ERASE ALL HIGH SCORES?" not in text() or "> NO" not in text():
+        failures.append(f"L+R+B al encender no pregunta, con NO elegido: "
+                        f"{text()[:80]!r}")
+    tap("B"); run(core, 40)
+    if not susp() or not core.memory.u8[base + off["paused"]]:
+        failures.append("decir que no borra algo, o no sigue a la partida")
+    else:
+        print("  L+R+B al encender pregunta con NO elegido; B sigue a la "
+              "partida guardada")
+    core.reset(); hold(["L", "R", "B"], 10); hold([], 20)
+    tap("DOWN"); tap("A")
+    if "ARE YOU SURE?" not in text() or "> NO" not in text():
+        failures.append(f"no pregunta otra vez con NO elegido: {text()[:80]!r}")
+    tap("DOWN"); tap("A"); run(core, 30)
+    magic = bytes(core.memory.u8[0x0E000000 + i] for i in range(4))
+    if susp() or magic != b"LOGG":
+        failures.append(f"SI y SI no deja la memoria borrada y escrita "
+                        f"(partida {susp()}, firma {magic!r})")
+    else:
+        print("  SI dos veces: tablas de fabrica escritas y la partida "
+              "guardada borrada")
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: borrar los records pregunta dos veces y solo borra con SI.")
+    return gbp_check(rom_path)
+
+
+# GBATEK's table ("GBA Gameboy Player"): what the Player sends, and what the
+# game must answer — the answer goes out on the NEXT transfer. The second
+# row's high half is anything at all ("xxxx").
+GBP_TABLE = [
+    (0x0000494E, 0x494EB6B1), (0xFFFF494E, 0x494EB6B1),
+    (0xB6B1494E, 0x544EB6B1), (0xB6B1544E, 0x544EABB1),
+    (0xABB1544E, 0x4E45ABB1), (0xABB14E45, 0x4E45B1BA),
+    (0xB1BA4E45, 0x4F44B1BA), (0xB1BA4F44, 0x4F44B0BB),
+    (0xB0BB4F44, 0x8000B0BB), (0xB0BB8002, 0x10000010),
+    (0x10000010, 0x20000013), (0x20000013, 0x40000004),
+]
+
+
+class FakePlayer:
+    """A GAME BOY PLAYER, as far as the game can tell. While its logo is on
+    the screen it holds all four directions one frame in three (030Fh,
+    GBATEK); once the game has its port in 32-bit normal mode with the
+    start bit set, it clocks one transfer a frame through GBP_TABLE and
+    then 30000003h for ever, keeping what the game answered."""
+
+    def __init__(self, core, logo):
+        self.core = core
+        self.logo = logo            # the PNG's pixels, or None
+        self.logo_frames = 0
+        self.sent = 0
+        self.answers = []
+
+    def frame(self, keys=()):
+        from mgba._pylib import lib
+        core = self.core
+        on_logo = self.logo is not None and self.logo == self.screen_pixels()
+        if on_logo:
+            self.logo_frames += 1
+        press = list(keys)
+        if on_logo and self.logo_frames % 3 == 0:
+            press += [KEYS["LEFT"], KEYS["RIGHT"], KEYS["UP"], KEYS["DOWN"]]
+        core.set_keys(*press)
+        core.run_frame()
+        io = core._native.memory.io
+        cnt = io[0x128 >> 1]
+        if (cnt & 0x3000) == 0x1000 and (cnt & 0x0081) == 0x0080:
+            out = io[0x120 >> 1] | (io[0x122 >> 1] << 16)
+            if self.sent:
+                self.answers.append(out)
+            word = (GBP_TABLE[self.sent][0] if self.sent < len(GBP_TABLE)
+                    else 0x30000003)
+            io[0x120 >> 1] = word & 0xFFFF
+            io[0x122 >> 1] = word >> 16
+            io[0x128 >> 1] = cnt & ~0x0080
+            self.sent += 1
+            lib.GBARaiseIRQ(core._native, 7, 0)
+            for _ in range(1500):
+                core.step()
+
+    def screen_pixels(self):
+        return self.pixels_of(self.screen)
+
+    @staticmethod
+    def pixels_of(screen):
+        return screen.to_pil().convert("RGB").tobytes()
+
+
+def gbp_check(rom_path):
+    """THE GAME BOY PLAYER: ITS LOGO, ITS ANSWER, ITS HANDSHAKE, ITS RUMBLE.
+
+    A console switched on shows the Player's logo before the publisher's
+    (gba/gbp.c); a Player (FakePlayer) answers on the pad while it is up,
+    and the game takes the port for it: GBATEK's handshake answered row by
+    row, then "rumble off" until a clear, which turns it on. A plain GBA —
+    nobody answering — leaves the port to the cable. Skipped without the
+    logo, which is Nintendo's and generated (tools/make_gbp_logo.py)."""
+    from . import harness
+    import os as _os
+    root = _os.path.join(_os.path.dirname(rom_path), "..")
+    if not _os.path.exists(_os.path.join(root, "gba", "gbp_logo.h")):
+        print("SALTADO: sin gba/gbp_logo.h esta construccion no busca un "
+              "Game Boy Player")
+        return 0
+    png = _os.path.join(_os.path.dirname(rom_path), "gbp_logo.png")
+    if not _os.path.exists(png):
+        print(f"SALTADO: no encuentro {png} para reconocer el logo")
+        return 0
+    from PIL import Image
+    logo = Image.open(png).convert("RGB").tobytes()
+    base, why = game_state_address(rom_path)
+    if base is None:
+        print(f"SALTADO: {why}")
+        return 0
+    off = game_offsets(rom_path)
+    failures = []
+
+    harness.SHOW_SPLASH[0] = True
+    try:
+        core, screen = load(rom_path)
+    finally:
+        harness.SHOW_SPLASH[0] = False
+    player = FakePlayer(core, logo)
+    player.screen = screen
+    for _ in range(400):
+        player.frame()
+    if player.logo_frames < 3:
+        failures.append(f"el logo del Game Boy Player no sale entero "
+                        f"({player.logo_frames} frames)")
+    want = [r for _, r in GBP_TABLE]
+    got = player.answers[:len(want)]
+    if got != want:
+        bad = next((i for i in range(min(len(got), len(want)))
+                    if got[i] != want[i]), len(got))
+        failures.append(f"el saludo se tuerce en la fila {bad}: "
+                        f"{[hex(x) for x in got[:bad + 1]]}")
+    elif any(a != 0x40000004 for a in player.answers[len(want):]):
+        failures.append("sin jugar, la vibracion no esta apagada")
+    else:
+        print(f"  el logo {player.logo_frames} frames; el Player lo ve, y el "
+              f"saludo NINTENDO sale fila por fila; vibracion apagada")
+
+    # A game, four rows ready to go, a piece dropped on them: the clear
+    # turns the motor on, and it goes off again.
+    for wait in (10, 12, 60):                 # title, GAME SELECT, LEVEL
+        player.frame([KEYS["START"]])
+        for _ in range(wait):
+            player.frame()
+    fill_rows(core, base + off["field"], [16, 17, 18, 19])
+    mark = len(player.answers)
+    for _ in range(240):
+        player.frame([KEYS["DOWN"]])
+    after = player.answers[mark:]
+    if 0x40000026 not in after:
+        failures.append("una limpieza no enciende la vibracion")
+    elif after[-1] != 0x40000004:
+        failures.append("la vibracion no se apaga despues")
+    else:
+        n = after.count(0x40000026)
+        print(f"  un TETRIS: vibracion encendida {n} frames, y apagada luego")
+
+    # And a plain GBA: nobody answers the logo, the port stays the cable's.
+    harness.SHOW_SPLASH[0] = True
+    try:
+        core2, screen2 = load(rom_path)
+    finally:
+        harness.SHOW_SPLASH[0] = False
+    run(core2, 400)
+    cnt = core2._native.memory.io[0x128 >> 1]
+    if (cnt & 0x3000) != 0x2000:
+        failures.append(f"en una GBA sin Player el puerto no queda en "
+                        f"multijugador (SIOCNT {cnt:#06x})")
+    else:
+        print("  en una GBA sin Player: el puerto sigue siendo del cable")
+
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: el Game Boy Player se reconoce, saluda y vibra.")
     return 0

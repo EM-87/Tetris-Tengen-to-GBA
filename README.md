@@ -133,12 +133,21 @@ Lo que el GBA tiene de más:
 | Carrera, tablero muerto | A+B | se levanta y sigue, como en el cartucho |
 | En cualquier sitio salvo una partida por cable | L+R+SELECT | reposo: pantalla y sonido apagados, casi sin gastar pila (una partida en solitario se pausa antes); A, B, START o SELECT despiertan |
 | En cualquier momento | A+B+START+SELECT | reinicia el juego (en la EZ-Flash IV lo intercepta el propio cartucho) |
+| Al encender, mantenidos | L+R+B | borra los récords (pregunta dos veces, con NO elegido) |
 
 **Apagar en pausa no pierde la partida**, como en Tetris DX: una partida en
 solitario en pausa se guarda en la memoria del cartucho, y al encender vuelve
 en pausa donde estaba. Si se reanuda, se acaba o se sale, se borra; el
 reinicio A+B+START+SELECT también la borra. (Una ROM nueva no recupera la
 partida de otra: la estructura puede haber cambiado.)
+
+**Game Boy Player**: al encender sale su logo, como en los juegos que lo
+soportaban, y si el juego corre en un Game Boy Player lo reconoce y el mando
+de GameCube vibra al hacer líneas (más con un TETRIS), al subir de nivel y al
+perder. El logo es de Nintendo y no va en el repo: se genera con
+`python3 tools/make_gbp_logo.py captura.png` a partir de una captura sin
+pérdidas (240x160) de un juego que lo muestre; sin él no sale ni se busca el
+Player.
 
 **Al encender sale el logo de Tengen** sobre blanco, como en los juegos de
 GBA, y solo al encender (no tras el reinicio por botones ni en la copia
@@ -171,8 +180,8 @@ se va, las dos lo detectan. Las dos necesitan esta misma versión del ROM
 (con otra más vieja se conectan igual, pero sin skin).
 
 **Single-Pak**: la otra consola no necesita cartucho. La pantalla LINK
-CABLE dice qué hay al otro lado: una GBA sin cartucho (y entonces ofrece
-**SELECT** para enviarle el juego), otra consola con el juego (esperar a su
+CABLE dice qué hay al otro lado: una GBA sin cartucho (y se lo envía sola; B lo
+para y **SELECT** lo vuelve a enviar), otra consola con el juego (esperar a su
 jugador) o nada (encenderla, o conectar el cable). La consola que envía
 tiene que estar en el extremo maestro; si no, lo dice. La otra se enciende
 sin cartucho y su BIOS lo recibe, con una barra de bloques y los KB en la
