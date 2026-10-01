@@ -1621,6 +1621,26 @@ def gbp_check(rom_path):
         print(f"  el logo {player.logo_frames} frames; el Player lo ve, y el "
               f"saludo NINTENDO sale fila por fila; vibracion apagada")
 
+    # ASLEEP, THE MOTOR STOPS. A sleep taken while it still runs — the
+    # last of a top-out's, from the plaque — leaves nothing to answer the
+    # Player, and the answer left in the port was "on" (gbp_quiet).
+    rumble_at, _ = game_state_address(rom_path, "g_gbp_rumble")
+    if rumble_at is not None:
+        core.memory.u16[rumble_at] = 300
+        for _ in range(4):
+            player.frame()
+        mark = len(player.answers)
+        for _ in range(8):
+            player.frame([KEYS["L"], KEYS["R"], KEYS["SELECT"]])
+        for _ in range(20):
+            player.frame()
+        slept = player.answers[mark:]
+        if 0x40000004 not in slept[:3]:
+            failures.append(f"a dormir con la vibracion en marcha, sigue "
+                            f"vibrando: {[hex(a) for a in slept[:6]]}")
+        else:
+            print("  a dormir con la vibracion en marcha: se apaga antes")
+
     # A game, four rows ready to go, a piece dropped on them: the clear
     # turns the motor on, and it goes off again.
     # Title, GAME SELECT, and on a Player the settings' three pages

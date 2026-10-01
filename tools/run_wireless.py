@@ -665,13 +665,83 @@ def drop_check(rom):
     return 0
 
 
+def exit_check(rom):
+    """EXIT GAME OVER THE AIR, from either console: both leave for the
+    title together. The two reach the EXIT frame a little apart (the input
+    is delayed), and the first used to say Bye at once and leave the other
+    waiting for frames that never came, under SIGNAL LOST ten seconds later
+    (wireless_close sends the tail first now)."""
+    import run_rom
+    lost, why = symbol(rom, "g_link_lost")
+    if lost is None:
+        print(f"SALTADO: {why}")
+        return 0
+    failures = []
+    from romcheck import harness
+    ref, _ref_screen = harness.load(rom)
+    harness.run(ref, 40)
+    face = _title_face(ref)
+    for who in ("anfitriona", "invitada"):
+        random.seed(4)
+        cores, air, fakes, both, tap = _pair(rom)
+        # The chord on GAME SELECT, for the pause menu.
+        both(60)
+        for w in (0, 1):
+            tap("START", who=w)
+            both(4, [[KEYS["L"], KEYS["R"]] if w == i else [] for i in range(2)])
+            both(10)
+            tap("DOWN", who=w)
+            tap("START", who=w)
+            both(30)
+        host = None
+        for _ in range(60):
+            both(20)
+            host = next((i for i, c in enumerate(cores)
+                         if "HANDICAP" in _rows(c)), None)
+            if host is not None:
+                break
+        if host is None:
+            failures.append("no se encuentran por el aire")
+            break
+        tap("START", who=host)
+        both(120)
+        x = host if who == "anfitriona" else 1 - host
+        tap("START", who=x)
+        both(20)
+        for key in ("DOWN", "A", "DOWN", "A"):     # EXIT GAME, YES
+            tap(key, who=x)
+        out = None
+        for f in range(300):
+            both(1)
+            if any(c.memory.u8[lost[0]] for c in cores):
+                break
+            if all(_title_face(c) == face for c in cores):
+                out = f
+                break
+        if out is None:
+            failures.append(f"sale la {who}: la otra no sale con ella "
+                            f"({'SIGNAL LOST' if any(c.memory.u8[lost[0]] for c in cores) else 'sigue en la partida'})")
+        else:
+            print(f"  EXIT GAME desde la {who}: las dos salen al titulo")
+    for f in failures:
+        print(f"FALLA: {f}")
+    return 1 if failures else 0
+
+
+def _title_face(core):
+    """Three rows of the title's own tilemap, which no other screen has
+    (as play.py's quit check reads it)."""
+    import run_rom
+    return tuple(run_rom.tilemap_text(core, r) for r in (4, 6, 8))
+
+
 def main():
     if len(sys.argv) not in (2, 3):
         sys.exit("usage: run_wireless.py build/tengen.gba [lost.png]")
     rom = sys.argv[1]
     code = (plain_check(rom) or together_check(rom) or _play(rom, False) or
             _play(rom, True) or drop_check(rom) or
-            gone_check(rom))
+            gone_check(rom) or exit_check(rom))
     if not code:
         print("OK: dos GBA con adaptador inalambrico (el de prueba) se "
               "encuentran y juegan la misma partida.")

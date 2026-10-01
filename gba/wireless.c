@@ -337,12 +337,15 @@ static void wl_host_begin(void) {
 }
 
 static void wl_transport_reset(void);
+static void wl_transport_relink(void);
 
 /* Linked: a first time, from scratch; again, the transport as it was. */
 static void wl_linked(bool host) {
     if (!g_paired) {
         g_host = host;
         wl_transport_reset();
+    } else {
+        wl_transport_relink();
     }
     g_paired = true;
     g_quiet = 0;
@@ -443,6 +446,7 @@ static bool g_match;               /* the transport's mode */
  * that leaves a match keeps sending its frames, from where the other has
  * played, until the other is heard from the records too. */
 static bool g_tail;
+static bool g_played_match;        /* this session has had its match */
 /* The lobby's stop-and-wait. */
 static uint8_t g_seq;              /* host: the number in flight */
 static uint16_t g_seq_word;        /* host: its word */
@@ -460,6 +464,7 @@ static uint32_t g_remote_played;   /* the other side's, last heard */
 static void wl_transport_reset(void) {
     g_match = false;
     g_tail = false;
+    g_played_match = false;
     g_seq = 1;
     g_seq_word = link_tx_word();
     g_seq_answered = false;
@@ -468,10 +473,18 @@ static void wl_transport_reset(void) {
     g_own_next = g_played = g_remote_played = 0;
 }
 
+/* Linked again, the pair as it was. Back in a lobby — perhaps with a
+ * console that left it and came back, whose numbers start again — a
+ * client answers whatever is sent first. */
+static void wl_transport_relink(void) {
+    if (!g_match && !g_tail && !g_host) g_last_seq = 0xFF;
+}
+
 /* link_play_begin, over the air: frame-indexed, the first WL_DELAY frames
  * of both consoles no buttons at all. */
 void wireless_match_begin(void) {
     g_match = true;
+    g_played_match = true;
     g_played = 0;
     g_remote_played = 0;
     g_own_next = 0;
@@ -533,7 +546,10 @@ static void wl_take(const uint32_t *w, int n) {
          * a client gone to the match, which answers lobby words no more —
          * its first move is the echo (tengen_lobby_apply, the master at
          * GO), as on the cable. */
-        if (!g_match && !g_tail && n >= 2) {
+        /* Only into the lobby BEFORE the match: after it, the other's
+         * last tail packets, still coming while our records word goes
+         * out, would land in the names swap as answers. */
+        if (!g_match && !g_played_match && n >= 2) {
             if (g_host) link_push_pair(g_seq_word, (uint16_t)w[1]);
             else link_push_pair((uint16_t)w[1], link_tx_word());
         }
@@ -644,8 +660,25 @@ void wireless_open(void) {
     wl_transport_reset();
 }
 
+/* A MATCH LEFT STRAIGHT FOR THE TITLE — EXIT GAME on the pause menu, which
+ * both consoles take on the same frame of the match but not at the same
+ * moment — goes nowhere near the records, where the tail is sent: the one
+ * that got there first said Bye at once, and the other, still frames short
+ * of the EXIT, waited ten seconds for them and ended under SIGNAL LOST. So
+ * the tail goes out here, a frame at a time, until the other has left too
+ * (bit 29 or a lobby word from it), or WL_FLUSH_FRAMES have gone by. */
+#define WL_FLUSH_FRAMES 30
+
 void wireless_close(void) {
     if (!g_wl_on) return;
+    if (g_state == WL_LINKED && (g_match || g_tail)) {
+        g_match = false;
+        g_tail = true;
+        for (int f = 0; f < WL_FLUSH_FRAMES && g_tail; f++) {
+            vsync();
+            if (!wl_exchange()) break;
+        }
+    }
     g_wl_on = false;
     wl_command(CMD_BYE, 0, 0, 0, 0);
     g_state = WL_OFF;

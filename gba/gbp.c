@@ -33,6 +33,7 @@ __attribute__((section(".ewram"))) static volatile uint32_t g_gbp_word;
 
 static volatile bool g_gbp_serial;        /* the port is the Player's */
 static volatile uint16_t g_gbp_rumble;    /* frames of rumble still to go */
+static volatile uint32_t g_gbp_heard;     /* the Player's last word */
 
 bool gbp_present(void) {
     return g_gbp_word == GBP_SEEN;
@@ -134,6 +135,7 @@ bool gbp_owns_serial(void) {
 IWRAM_CODE void gbp_serial_service(void);
 void gbp_serial_service(void) {
     uint32_t got = REG_SIODATA32_GBP;
+    g_gbp_heard = got;
     REG_SIODATA32_GBP = tengen_gbp_reply(got, g_gbp_rumble != 0);
     REG_SIOCNT_GBP = (uint16_t)(REG_SIOCNT_GBP | SIO_GBP_START);
 }
@@ -151,4 +153,18 @@ void gbp_tick(void) {
 
 void gbp_rumble_stop(void) {
     g_gbp_rumble = 0;
+}
+
+/* BEFORE THE CONSOLE SLEEPS: the motor off, and the answer already loaded
+ * for the Player's next word made again as "off". Asleep nothing answers
+ * the interrupt, and the word left in the port is what the Player keeps
+ * getting — a sleep taken in the last rumble of a top-out would otherwise
+ * have shaken all night (INFERRED: what a Player does with a port that
+ * stops answering is not in GBATEK). */
+void gbp_quiet(void) {
+    REG_IME = 0;
+    g_gbp_rumble = 0;
+    if (g_gbp_serial)
+        REG_SIODATA32_GBP = tengen_gbp_reply(g_gbp_heard, false);
+    REG_IME = IME_ON;
 }

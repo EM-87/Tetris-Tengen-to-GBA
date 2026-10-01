@@ -1782,6 +1782,7 @@ bool gbp_owns_serial(void);
 void gbp_serial_service(void);
 void gbp_rumble(int frames);
 void gbp_rumble_stop(void);
+void gbp_quiet(void);           /* before a sleep: see gbp.c */
 void gbp_tick(void);
 void upload_tiles(void);
 void upload_palette_set(int base, const uint8_t *set, vu16 *memory);

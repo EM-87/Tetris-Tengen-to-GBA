@@ -251,7 +251,10 @@ story behind each; the item number is in brackets.
   off — a clear, longer for more rows, the level and the top-out
   (`rumble_step`). The cable takes the port in `link_init` and gives it
   back in `link_shutdown`. The result survives a soft reset with the
-  splash's word. On a Player, LEVEL SETTINGS is the cartridge's three
+  splash's word. Before a sleep the motor goes off and the answer already
+  in the port is made again as "off" (`gbp_quiet`): asleep nothing serves
+  the interrupt, and a sleep in the last of a top-out's rumble left "on"
+  there (`gbp_check`). On a Player, LEVEL SETTINGS is the cartridge's three
   pages, LEVEL, HANDICAP and MUSIC, each a column with the arrow beside
   the choice (`draw_tv_page`, `tv_page` in main.c; `tv_menu_check`): the
   shape for a television across a room that the one page gave up for a
@@ -272,7 +275,11 @@ story behind each; the item number is in brackets.
   sending its frames (the TAIL, `g_tail`, bit 29 once both have left)
   until the other is heard from the records: with the input delayed the two
   do not reach the last frame together, and the one left behind ended a
-  piece short — another score, another table. Once paired, the two keep
+  piece short — another score, another table. EXIT GAME goes straight to
+  the title, past the records, so `wireless_close` sends the tail itself
+  (up to WL_FLUSH_FRAMES) before its Bye: the first to leave used to say
+  Bye at once and the other sat at "EXIT? YES" until SIGNAL LOST
+  (`exit_check`). Once paired, the two keep
   their roles until `link_shutdown`: nothing heard for WL_LOST_FRAMES and
   both start over, the host straight to hosting, the client only searching,
   the transport as it stood; the match waits with LINK ISSUES meanwhile,

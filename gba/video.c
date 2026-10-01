@@ -336,6 +336,9 @@ void system_sleep(void) {
      * a glitch in the speaker on the way to sleep. */
     uint16_t psg = REG_SOUNDCNT_L_HW;
     REG_SOUNDCNT_L_HW = 0;
+    /* ...and still: a Game Boy Player's rumble off before nothing answers
+     * it any more (gbp.c). */
+    gbp_quiet();
     wait_keys_settled();
     uint16_t ie = REG_IE, dispcnt = REG_DISPCNT;
     REG_IME = 0;
