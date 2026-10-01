@@ -2648,6 +2648,101 @@ static void test_reading_the_partner_makes_the_shared_board_last(void) {
     CHECK(run[1].lines > run[0].lines * 2);
 }
 
+/* One playout for the port's own computer against the cartridge's: `smart`
+ * on both pads or neither, at the cartridge's pace (no soft drop, no
+ * settle), coop or a ten-wide board alone. Counts lines, lost games, and
+ * how many pieces came to rest where the computer was aiming. */
+typedef struct { long lines, lost, pieces, on_target; } SmartTally;
+
+static void smart_playout(bool smart, bool coop, uint8_t level, int games,
+                          long frames, SmartTally *t) {
+    memset(t, 0, sizeof(*t));
+    for (int g = 0; g < games; g++) {
+        TengenGame game;
+        TengenAi ai[2];
+        TengenTetromino last[2] = { TT_NONE, TT_NONE };
+        TengenTetromino partner[2] = { TT_NONE, TT_NONE };
+        int players = coop ? 2 : 1;
+        bool dead = false;
+        tengen_new_game(&game, (uint16_t)(0x1234 + g * 0x2F1B), level,
+                         coop, coop, false);
+        for (int s = 0; s < 2; s++) {
+            tengen_ai_reset(&ai[s]);
+            ai[s].coop_aware = coop;
+            ai[s].smart = smart;
+        }
+        for (long f = 0; f < frames && !dead; f++) {
+            for (int s = 0; s < players && !dead; s++) {
+                TengenPlayerSlot slot = (TengenPlayerSlot)s;
+                TengenPlayerState *p = &game.player[s];
+                if (!p->game_active) { dead = true; break; }
+                TengenTetromino mine = p->piece.current;
+                TengenTetromino theirs = game.player[s ^ 1].piece.current;
+                ai[s].partner_known = coop && smart && ai[s ^ 1].plan_have;
+                ai[s].partner_x = ai[s ^ 1].target_x;
+                ai[s].partner_o = ai[s ^ 1].target_orientation;
+                if (mine != last[s])
+                    tengen_ai_choose(&ai[s], &game, slot);
+                else if (coop && theirs != partner[s] && theirs != TT_NONE &&
+                         mine != TT_NONE)
+                    tengen_ai_rechoose(&ai[s], &game, slot);
+                last[s] = mine;
+                partner[s] = theirs;
+                uint8_t aim_x = ai[s].target_x, aim_o = ai[s].target_orientation;
+                TengenStepResult r = tengen_step(
+                    &game, slot, tengen_ai_buttons(&ai[s], &game, slot, (uint8_t)f));
+                if (r.piece_locked) {
+                    t->pieces++;
+                    if (p->last_x == (int8_t)aim_x &&
+                        p->last_orientation == (aim_o & 3))
+                        t->on_target++;
+                }
+                if (r.lines_collapsed)
+                    for (int i = 0; i < TENGEN_PF_HEIGHT; i++)
+                        if (r.rows_cleared_mask & (1u << i)) t->lines++;
+                if (r.topped_out) dead = true;
+            }
+        }
+        if (dead) t->lost++;
+    }
+}
+
+static void test_the_ports_computer_outplays_the_cartridges(void) {
+    /* The port's own computer (`smart`, behind the chord), against the
+     * cartridge's on the same seeds and at the same pace. The full table is
+     * in tengen_ai.c; this pins the DIRECTION, with wide margins, so a
+     * scorer that gets worse fails here and one that moves a little does
+     * not. */
+    SmartTally cart, port;
+
+    /* Two computers on the shared board: the cartridge's (reading its
+     * partner, as the chord already had it) bury it every time. */
+    smart_playout(false, true, 0, 8, 20000, &cart);
+    smart_playout(true, true, 0, 8, 20000, &port);
+    CHECK(port.lines > cart.lines * 3);
+    CHECK(port.lost < cart.lost);
+
+    /* Alone at level 18, where a shift every eighth frame against
+     * fractional gravity is the whole game: more lines, and no more lost. */
+    smart_playout(false, false, 18, 6, 20000, &cart);
+    smart_playout(true, false, 18, 6, 20000, &port);
+    CHECK(port.lines > cart.lines);
+    CHECK(port.lost <= cart.lost);
+}
+
+static void test_the_ports_computer_gets_where_it_aims(void) {
+    /* Its path is walked frame by frame before it is chosen (ai_reachable),
+     * so where it aims is where the piece comes to rest — even at level 18,
+     * where the first version's guess of the timing missed by enough to
+     * lose every game. A miss is a lie in the model. */
+    SmartTally t;
+    smart_playout(true, false, 18, 4, 20000, &t);
+    CHECK(t.pieces > 100);
+    CHECK(t.on_target * 100 >= t.pieces * 95);
+    smart_playout(true, false, 0, 2, 20000, &t);
+    CHECK(t.on_target * 100 >= t.pieces * 95);
+}
+
 static void test_coop_is_one_twelve_wide_board_over_the_cable(void) {
     /* COOPERATIVE is the third mode the cartridge offers and the only one
      * where the two players share a field: initPlayer1orCoopPlayfield leaves
@@ -3547,6 +3642,91 @@ static void test_locked_cells_never_overwrite_the_walls(void) {
     }
 }
 
+/* THE CARTRIDGE'S OWN BUGS, MENDED BEHIND THE CHORD (TengenGame.mended).
+ * Each is checked both ways: off, the cartridge's behaviour stands. */
+static void test_mended_coop_deal_waits_for_room(void) {
+    for (int mended = 0; mended < 2; mended++) {
+        TengenGame g;
+        tengen_new_game(&g, 0x4D2A, 0, true, true, false);
+        g.mended = (mended != 0);
+        tengen_step(&g, TENGEN_PLAYER_1, 0);       /* both pieces dealt */
+        tengen_step(&g, TENGEN_PLAYER_2, 0);
+        /* Player 2's piece is still at player 1's entry, and player 1's
+         * has just locked. */
+        TengenPiece *theirs = &g.player[TENGEN_PLAYER_2].piece;
+        theirs->current = TT_T;
+        theirs->orientation = 0;
+        theirs->x = TENGEN_SPAWN_X[TENGEN_PLAYER_1];
+        theirs->y = TENGEN_SPAWN_Y;
+        g.player[TENGEN_PLAYER_1].piece.current = TT_NONE;
+        tengen_step(&g, TENGEN_PLAYER_1, 0);
+        if (mended) {
+            /* Nothing dealt, nothing overlapping... */
+            CHECK(g.player[TENGEN_PLAYER_1].piece.current == TT_NONE);
+            /* ...and once there is room, the deal goes ahead. */
+            theirs->x = TENGEN_SPAWN_X[TENGEN_PLAYER_2];
+            tengen_step(&g, TENGEN_PLAYER_1, 0);
+            CHECK(g.player[TENGEN_PLAYER_1].piece.current != TT_NONE);
+            CHECK(!tengen_coop_pieces_overlap(&g, TENGEN_PLAYER_1));
+        } else {
+            /* The cartridge deals into it. */
+            CHECK(g.player[TENGEN_PLAYER_1].piece.current != TT_NONE);
+            CHECK(tengen_coop_pieces_overlap(&g, TENGEN_PLAYER_1));
+        }
+    }
+}
+
+static void test_mended_collapse_lifts_the_falling_piece(void) {
+    for (int mended = 0; mended < 2; mended++) {
+        TengenGame g;
+        tengen_new_game(&g, 0x1357, 0, true, true, false);
+        g.mended = (mended != 0);
+        tengen_step(&g, TENGEN_PLAYER_1, 0);
+        tengen_step(&g, TENGEN_PLAYER_2, 0);
+        /* Player 1's O, somewhere in the middle; a settled block right
+         * above its top-left cell; the bottom row full and player 2's clear
+         * of it about to end. */
+        TengenPiece *mine = &g.player[TENGEN_PLAYER_1].piece;
+        mine->current = TT_O;
+        mine->orientation = 0;
+        mine->x = 4;
+        mine->y = 12;
+        TengenCell cells[4];
+        CHECK(tengen_active_piece_cells(&g, TENGEN_PLAYER_1, cells) == 4);
+        int top = cells[0].row, left = cells[0].col;
+        for (int i = 1; i < 4; i++) {
+            if (cells[i].row < top || (cells[i].row == top && cells[i].col < left)) {
+                top = cells[i].row;
+                left = cells[i].col;
+            }
+        }
+        CHECK(tengen_position_valid(&g, TENGEN_PLAYER_1));
+        g.field[0].cell[top - 1][left] = TT_I;
+        for (int c = 0; c < TENGEN_PF_WIDTH; c++)
+            g.field[0].cell[TENGEN_PF_HEIGHT - 1][c] = TT_J;
+        TengenPlayerState *q = &g.player[TENGEN_PLAYER_2];
+        q->piece.x = TENGEN_SPAWN_X[TENGEN_PLAYER_2];
+        q->clearing_rows = 1u << (TENGEN_PF_HEIGHT - 1);
+        q->line_clear_timer = 1;
+        int8_t before = mine->y;
+        tengen_step(&g, TENGEN_PLAYER_2, 0);       /* the rows come down */
+        CHECK(q->lines == 1);
+        if (mended) {
+            /* Clear again, and by the least it takes: the block came down
+             * into the O's top row, so one row up would still be on it. */
+            CHECK(tengen_position_valid(&g, TENGEN_PLAYER_1));
+            CHECK(mine->y == before - 2);
+            mine->y++;
+            CHECK(!tengen_position_valid(&g, TENGEN_PLAYER_1));
+            mine->y--;
+        } else {
+            /* The block came down into the piece. */
+            CHECK(!tengen_position_valid(&g, TENGEN_PLAYER_1));
+            CHECK(mine->y == before);
+        }
+    }
+}
+
 int main(void) {
     test_rng_is_deterministic_and_never_stalls();
     test_rng_zero_seed_does_not_lock_up();
@@ -3643,6 +3823,10 @@ int main(void) {
     test_the_computer_can_be_told_to_read_the_partner();
     test_the_computer_waits_its_turn_on_a_shared_board();
     test_reading_the_partner_makes_the_shared_board_last();
+    test_the_ports_computer_outplays_the_cartridges();
+    test_the_ports_computer_gets_where_it_aims();
+    test_mended_coop_deal_waits_for_room();
+    test_mended_collapse_lifts_the_falling_piece();
     test_either_player_can_pause_a_linked_game();
     test_level_starts_at_the_chosen_start_level();
     test_level_is_recomputed_from_the_line_total();

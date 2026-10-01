@@ -18,7 +18,9 @@
  *     or into the coop partner's falling piece, is a broken collision rule.
  *
  * Two things that look like the last and are the cartridge's own are left
- * alone, because the port must do them too:
+ * alone, because the port must do them too — except in the games played
+ * with them mended (TengenGame.mended, half of them), where they must not
+ * happen at all:
  *   - getNextTetromino deals the coop piece at its entry column without
  *     asking where the partner's is (main.asm.txt:3688-3725, no collision
  *     call), so a new piece can come up overlapping one still near the top;
@@ -89,6 +91,9 @@ int main(int argc, char **argv) {
         tengen_new_game(&g, (uint16_t)rnd(), start, two, coop, xe);
         if (!(rnd() % 4)) g.proto_rules = true;
         if (!(rnd() % 4)) g.piece_id_cells = true;
+        /* Half the games with the cartridge's bugs mended (TengenGame): in
+         * those, not even its own two overlaps may happen. */
+        g.mended = rnd() & 1;
         tengen_apply_handicap(&g, TENGEN_PLAYER_1, (uint8_t)(rnd() % 5));
         if (two && !coop)
             tengen_apply_handicap(&g, TENGEN_PLAYER_2, (uint8_t)(rnd() % 5));
@@ -97,6 +102,10 @@ int main(int argc, char **argv) {
         tengen_ai_reset(&ai[0]);
         tengen_ai_reset(&ai[1]);
         bool use_ai[2] = { (rnd() % 3) != 0, mode >= 3 || (rnd() & 1) };
+        /* The port's own computer on either pad half the time, so its
+         * planner runs under the sanitizers too. */
+        ai[0].smart = rnd() & 1;
+        ai[1].smart = rnd() & 1;
         TengenTetromino seen[2] = { TT_NONE, TT_NONE };
         uint8_t held[2] = { 0, 0 }, prev[2] = { 0, 0 };
         uint32_t lines_before[2] = { 0, 0 };
@@ -181,6 +190,15 @@ int main(int argc, char **argv) {
                     CHECK(ps->piece.next >= TT_I && ps->piece.next <= TT_Z,
                           "p%d next %d", p, ps->piece.next);
                 }
+            }
+            if (g.mended && coop) {
+                for (int p = 0; p < players; p++)
+                    if (piece_in_play(&g, p))
+                        CHECK(tengen_position_valid(&g, (TengenPlayerSlot)p),
+                              "mended, p%d inside the field", p);
+                if (piece_in_play(&g, 0) && piece_in_play(&g, 1))
+                    CHECK(!tengen_coop_pieces_overlap(&g, TENGEN_PLAYER_1),
+                          "mended, the two coop pieces overlap");
             }
             bool alive = g.player[0].game_active ||
                          (two && g.player[1].game_active);

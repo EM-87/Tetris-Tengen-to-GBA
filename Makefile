@@ -58,6 +58,19 @@ fuzz: $(BUILD)/fuzz_core $(BUILD)/fuzz_link
 	./$(BUILD)/fuzz_core $(FUZZ_GAMES) $(if $(filter-out 0,$(FUZZ_SEED)),$(FUZZ_SEED))
 	./$(BUILD)/fuzz_link $(FUZZ_RUNS) $(if $(filter-out 0,$(FUZZ_SEED)),$(FUZZ_SEED))
 
+# THE COMPUTERS, MEASURED: the cartridge's against the port's own (`smart`,
+# behind the chord) in every arrangement, lines and games lost
+# (tests/ai_bench.c). make ai-bench BENCH_GAMES=16 BENCH_FRAMES=30000
+# BENCH_LEVEL=18
+BENCH_GAMES  ?= 16
+BENCH_FRAMES ?= 30000
+BENCH_LEVEL  ?= 0
+.PHONY: ai-bench
+$(BUILD)/ai_bench: src/tengen_core.c src/tengen_ai.c $(CORE_HDR) tests/ai_bench.c | $(BUILD)
+	$(CC) -std=c99 -Wall -Wextra -O2 src/tengen_core.c src/tengen_ai.c tests/ai_bench.c -o $@
+ai-bench: $(BUILD)/ai_bench
+	./$(BUILD)/ai_bench $(BENCH_GAMES) $(BENCH_FRAMES) $(BENCH_LEVEL)
+
 # ---------------------------------------------------------------------------
 # GBA cross-build
 #
@@ -279,6 +292,7 @@ gba-check: $(GBA_ROM)
 	python3 tools/run_rom.py $(GBA_ROM) --menu
 	python3 tools/run_rom.py $(GBA_ROM) --computer
 	python3 tools/run_rom.py $(GBA_ROM) --coopai
+	python3 tools/run_rom.py $(GBA_ROM) --aiframe
 	python3 tools/run_rom.py $(GBA_ROM) --versushud
 	python3 tools/run_rom.py $(GBA_ROM) --statsshow
 	python3 tools/run_rom.py $(GBA_ROM) --sleep

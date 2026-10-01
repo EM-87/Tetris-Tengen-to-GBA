@@ -264,6 +264,578 @@ static void ai_score(TengenAi *ai, uint8_t *a, int x,
     ai->scratch[2] = orientation;
 }
 
+
+/* ======================================================================= *
+ * THE PORT'S OWN COMPUTER (`smart`, behind the chord)
+ *
+ * Everything above is computerMove, and it stays the computer the cartridge
+ * ships. This is a second one, for a player who rang the chord and wants a
+ * partner (or a rival) that plays well, built the way Tetris programs have
+ * been built since: a board read as bits, every placement scored by a
+ * weighted sum of the board's features, a look one piece further ahead with
+ * NEXT, and nothing tried that the pad could not actually do in time.
+ *
+ * THE BOARD AS BITS. One sixteen-bit word a row, bit c the storage column c,
+ * the playable columns in `full` (ten in a race, twelve in coop). A
+ * placement is a few shifts and ORs; a hole or a transition is an AND and a
+ * population count. Cheap enough for the GBA to score the lot in a few
+ * frames, which matters: see the budget below.
+ *
+ * THE SCORE is El-Tetris's (Islam El-Ashi, 2011), Pierre Dellacherie's six
+ * features with weights found by a particle swarm: the piece's landing
+ * height, the rows it clears, the row and column transitions, the holes,
+ * and the wells (each well's cells summed 1+2+...+depth). Scaled by a
+ * thousand and kept in integers.
+ *
+ * REACHABLE, AT THE CARTRIDGE'S PACE. The pad is still computerMove's — a
+ * shift every eighth frame, a turn every sixteenth (tengen_ai_buttons) —
+ * and it never presses Down (the computer plays at the cartridge's pace),
+ * so a placement across the board at level 15 is one the hands cannot get
+ * to. Each candidate's path is walked frame by frame as the core will play
+ * it (ai_reachable): fall timer, fractional gravity, shifts and turns on
+ * the driver's clock, the left kick. One out of reach is not dropped, it
+ * goes to the back of the queue (AI_UNREACHABLE): with nothing in reach,
+ * the least bad aim beats none, which is the piece dropped where it came
+ * in. A first version walked the turns and then the shifts at one gravity
+ * for the whole fall; at level 18 that was optimistic (fractional gravity
+ * is the faster of two rates on some rows) and the computer lost 16 games
+ * in 16 where the cartridge's lost 9.
+ *
+ * ON A SHARED BOARD it reads its partner: where the partner's falling piece
+ * is now is solid for the path; the columns it is going to land in cost
+ * W_CROSS each (whoever gets there second lands on the other); and every
+ * column past the middle costs W_SIDE while the partner has a piece. The
+ * partner's landing is NOT read as ground for the score (AI_SHADOW 0): it
+ * made the computer plan rows around cells that were not there yet, and
+ * the holes were its own. A computer partner says where it is going
+ * (`partner_known`); a person is guessed straight down from where they are.
+ *
+ * MEASURED (`make ai-bench`, sixteen games of up to 30000 frames each,
+ * the cartridge's pace for both, the budget below), lines cleared and
+ * games lost:
+ *
+ *                        level 0       level 10      level 18
+ *   SOLO  cartridge      234   1      1445   5      1483   9
+ *   SOLO  port's         263   0      1505   0      2152   0
+ *   COOP  cart + cart     78  16        43  16        48  16
+ *   COOP  port + port    468   0      1035   9       729  16
+ *   COOP+ port + cart    375  10       352  16       225  16
+ *
+ * At level 0 a solo board does not fill in 30000 frames either way; the
+ * difference there is pace. COOP+ is the port's computer with the
+ * cartridge's for a partner: one that does not say where it is going and
+ * plays badly, the hard case of a human. W_SIDE was tried at 0, -2000,
+ * -5000, -10000 and -20000; W_CROSS earlier at the soft drop's pace.
+ *
+ * THE BUDGET. Planning starts at the spawn (tengen_ai_choose) and is done
+ * a slice a frame from tengen_ai_buttons: first every placement of the
+ * piece in hand, each a walk and a score, charged two (a target as soon as
+ * they are all in, five frames or so), then, for the best few, every
+ * placement of NEXT on the board they leave — and a better total moves the
+ * target, while there is still time to get there. MEASURED on the ROM
+ * (`run_rom.py --aiframe`): sixteen a slice, charged one each, made 140
+ * turns of 3000 in WITH COMPUTER take two frames; eight, charged as above,
+ * none, the latest turn reaching draw_match at line 105 of 160. The shapes
+ * come from a table (ai_shape) and the wells are counted by set bit: a
+ * third of the cost, the same choices.
+ * ======================================================================= */
+
+#define AI_H TENGEN_PF_HEIGHT
+#ifndef TENGEN_AI_SMART_BUDGET
+#define TENGEN_AI_SMART_BUDGET 8
+#endif
+
+/* El-Tetris's weights, times a thousand. */
+#define W_LANDING   (-4500)
+#define W_CLEARED     3418
+#define W_ROW_TRANS (-3218)
+#define W_COL_TRANS (-9349)
+#define W_HOLES     (-7899)
+#define W_WELLS     (-3386)
+/* The port's: a column on the partner's side of a shared board. */
+#ifndef W_SIDE
+#define W_SIDE      (-5000)
+#endif
+/* ...and one under where the partner's falling piece is going to land:
+ * whichever of the two gets there second lands on the other. */
+#ifndef W_CROSS
+#define W_CROSS     (-15000)
+#endif
+/* Knobs for tests/ai_bench.c to measure each part by taking it away. */
+#ifndef AI_REACH
+#define AI_REACH 1
+#endif
+#ifndef AI_LOOKAHEAD
+#define AI_LOOKAHEAD 1
+#endif
+#define AI_DEAD     (-0x3FFFFFFF)
+#define AI_UNREACHABLE (-100000000)
+
+typedef struct {
+    uint16_t row[AI_H];
+    uint16_t full;
+} AiBoard;
+
+static int ai_popcount(uint32_t v) {
+    int n = 0;
+    while (v) { v &= v - 1; n++; }
+    return n;
+}
+
+static uint16_t ai_shift(uint16_t bits, int left) {
+    return (uint16_t)(left >= 0 ? bits << left : bits >> -left);
+}
+
+/* A piece's four rows as bits, bitmap column c at bit c. Worked out once
+ * from the core's own table, the first time it is asked for: the planner
+ * asks thousands of times a piece, and sixteen calls into the core each
+ * time was a fifth of what it cost on the GBA. */
+static uint16_t g_ai_shapes[TENGEN_TETROMINO_COUNT][4][4];
+static bool g_ai_shapes_ready;
+
+static void ai_shape(TengenTetromino piece, uint8_t o, uint16_t sh[4]) {
+    if (!g_ai_shapes_ready) {
+        for (int p = 0; p < TENGEN_TETROMINO_COUNT; p++)
+            for (int q = 0; q < 4; q++)
+                for (int r = 0; r < 4; r++) {
+                    uint16_t bits = 0;
+                    for (int c = 0; c < 4; c++)
+                        if (p > TT_NONE &&
+                            tengen_piece_occupies((TengenTetromino)p, (uint8_t)q, r, c))
+                            bits |= (uint16_t)(1u << c);
+                    g_ai_shapes[p][q][r] = bits;
+                }
+        g_ai_shapes_ready = true;
+    }
+    memcpy(sh, g_ai_shapes[piece][o & 3], 4 * sizeof(uint16_t));
+}
+
+static void ai_board(const TengenGame *g, TengenPlayerSlot slot, AiBoard *b) {
+    const TengenPlayfield *f = &g->field[g->coop ? 0 : slot];
+    b->full = g->coop ? 0x0FFF : 0x07FE;
+    for (int y = 0; y < AI_H; y++) {
+        uint16_t m = 0;
+        for (int c = 0; c < TENGEN_PF_WIDTH; c++)
+            if (f->cell[y][c]) m |= (uint16_t)(1u << c);
+        b->row[y] = (uint16_t)(m & b->full);
+    }
+}
+
+/* Does the shape at left column `l`, top row `t` hit anything? Rows above
+ * the field are open; below it and outside the playable columns are not. */
+static bool ai_hits(const AiBoard *b, const uint16_t sh[4], int l, int t) {
+    for (int r = 0; r < 4; r++) {
+        if (!sh[r]) continue;
+        uint16_t cols = ai_shift(sh[r], l);
+        if (l < 0 && (sh[r] & ((1u << -l) - 1))) return true;   /* off the left */
+        if (cols & ~b->full) return true;
+        int y = t + r;
+        if (y >= AI_H) return true;
+        if (y >= 0 && (b->row[y] & cols)) return true;
+    }
+    return false;
+}
+
+static int ai_drop(const AiBoard *b, const uint16_t sh[4], int l, int t) {
+    while (!ai_hits(b, sh, l, t + 1)) t++;
+    return t;
+}
+
+/* Puts it there and takes the full rows away; how many, or -1 if any of it
+ * is above the field (a top-out). */
+static int ai_place(AiBoard *b, const uint16_t sh[4], int l, int t) {
+    for (int r = 0; r < 4; r++) {
+        if (!sh[r]) continue;
+        if (t + r < 0) return -1;
+        b->row[t + r] |= ai_shift(sh[r], l);
+    }
+    int cleared = 0, to = AI_H - 1;
+    for (int y = AI_H - 1; y >= 0; y--) {
+        if ((b->row[y] & b->full) == b->full) { cleared++; continue; }
+        b->row[to--] = b->row[y];
+    }
+    while (to >= 0) b->row[to--] = 0;
+    return cleared;
+}
+
+/* The board's four El-Tetris terms (landing height and rows cleared are the
+ * placement's, added by the caller). */
+static int32_t ai_board_terms(const AiBoard *b) {
+    int row_trans = 0, col_trans = 0, holes = 0, wells = 0;
+    uint16_t covered = 0, prev = 0;
+    uint8_t run[16] = { 0 };
+    uint16_t in_well = 0;
+    for (int y = 0; y < AI_H; y++) {
+        uint16_t r = b->row[y];
+        /* Outside the playable columns reads as filled, one either side. */
+        uint16_t x = (uint16_t)(((r & b->full) << 1) | (uint16_t)~(b->full << 1));
+        x &= 0x3FFF;
+        row_trans += ai_popcount((uint16_t)(x ^ (x >> 1)) & 0x1FFF);
+        col_trans += ai_popcount((uint16_t)(r ^ prev) & b->full);
+        holes += ai_popcount((uint16_t)(covered & ~r) & b->full);
+        covered |= r;
+        prev = r;
+        /* A well cell: empty, both sides filled. */
+        uint16_t well = (uint16_t)(~x & (x << 1) & (x >> 1)) >> 1;
+        well &= b->full;
+        /* Only the columns that are wells now, or were a row up: the rest
+         * have nothing to add and nothing to reset. */
+        for (uint16_t m = (uint16_t)(well | in_well); m; m &= (uint16_t)(m - 1)) {
+            int c = 0;
+            while (!(m & (1u << c))) c++;
+            if (well & (1u << c)) { run[c]++; wells += run[c]; }
+            else run[c] = 0;
+        }
+        in_well = well;
+    }
+    col_trans += ai_popcount((uint16_t)~prev & b->full);   /* the floor */
+    return (int32_t)W_ROW_TRANS * row_trans + (int32_t)W_COL_TRANS * col_trans +
+           (int32_t)W_HOLES * holes + (int32_t)W_WELLS * wells;
+}
+
+static int ai_shape_rows(const uint16_t sh[4], int *top) {
+    int first = -1, last = -1;
+    for (int r = 0; r < 4; r++)
+        if (sh[r]) { if (first < 0) first = r; last = r; }
+    *top = first;
+    return last - first + 1;
+}
+
+/* Score of the shape dropped at `l` from row `t` on `b` (which is changed),
+ * El-Tetris in full; AI_DEAD for a top-out. */
+static int32_t ai_score_drop(AiBoard *b, const uint16_t sh[4], int l, int t,
+                             int *cleared_out) {
+    int land = ai_drop(b, sh, l, t);
+    int top, rows = ai_shape_rows(sh, &top);
+    int cleared = ai_place(b, sh, l, land);
+    if (cleared < 0) return AI_DEAD;
+    if (cleared_out) *cleared_out = cleared;
+    /* The middle of the piece, counted up from the floor, in halves. */
+    int height2 = 2 * AI_H - (2 * (land + top) + rows - 1);
+    return (int32_t)W_LANDING * height2 / 2 + (int32_t)W_CLEARED * cleared +
+           ai_board_terms(b);
+}
+
+/* The partner's piece, if it has one: where it is (`now`) and where it will
+ * land (`ahead`), both as cells added to an otherwise empty board. */
+static void ai_partner(const TengenGame *g, TengenPlayerSlot slot,
+                       const TengenAi *ai, const AiBoard *base, AiBoard *now,
+                       AiBoard *ahead, uint16_t *cols_out) {
+    *cols_out = 0;
+    memset(now, 0, sizeof(*now));
+    memset(ahead, 0, sizeof(*ahead));
+    now->full = ahead->full = base->full;
+    if (!g->coop) return;
+    const TengenPlayerState *q = &g->player[slot ^ 1];
+    if (!q->game_active || q->piece.current <= TT_NONE ||
+        q->piece.current >= TENGEN_TETROMINO_COUNT)
+        return;
+    uint16_t sh[4];
+    ai_shape(q->piece.current, q->piece.orientation, sh);
+    int l = q->piece.x - TENGEN_ROM_COL_ORIGIN;
+    int t = q->piece.y - TENGEN_ROM_ROW_ORIGIN;
+    for (int r = 0; r < 4; r++)
+        if (sh[r] && t + r >= 0 && t + r < AI_H)
+            now->row[t + r] |= (uint16_t)(ai_shift(sh[r], l) & base->full);
+    /* Where it is going: a computer's own target if the caller passed it
+     * on, otherwise straight down from where it is. */
+    if (ai->partner_known) {
+        ai_shape(q->piece.current, ai->partner_o, sh);
+        l = ai->partner_x - TENGEN_ROM_COL_ORIGIN;
+    }
+    int land = ai_drop(base, sh, l, t);
+    for (int r = 0; r < 4; r++) {
+        if (!sh[r]) continue;
+        uint16_t cols = (uint16_t)(ai_shift(sh[r], l) & base->full);
+        *cols_out |= cols;
+        if (land + r >= 0 && land + r < AI_H) ahead->row[land + r] |= cols;
+    }
+}
+
+static void ai_or(AiBoard *dst, const AiBoard *a, const AiBoard *b) {
+    dst->full = a->full;
+    for (int y = 0; y < AI_H; y++) dst->row[y] = (uint16_t)(a->row[y] | b->row[y]);
+}
+
+/* CAN THE PAD GET IT THERE IN TIME? Walked frame by frame the way the core
+ * will play it: the fall timer ticks first, reloading from the row the piece
+ * is on (tengen_frames_per_row, fractional gravity and all), then the
+ * driver's shift on every eighth frame of the clock and its turn on every
+ * sixteenth — together, as tengen_ai_buttons presses them — with the
+ * release's one-column left kick, and then the row gravity owes. Reachable
+ * if the piece is over its column, turned, before it comes to rest.
+ * INFERRED as close rather than exact: the partner's piece is taken to
+ * stand still meanwhile. */
+typedef struct {
+    uint8_t level, timer, clock;
+    bool coop, xe, kick;
+} AiPace;
+
+static bool ai_reachable(const AiBoard *obstacles, TengenTetromino piece,
+                         uint8_t o0, int l0, int t0, uint8_t o1, int l1,
+                         const AiPace *pace) {
+    uint16_t sh[4];
+    uint8_t o = o0;
+    int l = l0, t = t0;
+    uint8_t timer = pace->timer, clock = pace->clock;
+    ai_shape(piece, o, sh);
+    for (int f = 0; f < 600; f++, clock++) {
+        if (l == l1 && o == o1) return true;
+        bool fall = false;
+        if (timer > 0) timer--;
+        if (timer == 0) {
+            fall = true;
+            timer = tengen_frames_per_row(pace->level,
+                                          (int8_t)(t + TENGEN_ROM_ROW_ORIGIN),
+                                          pace->coop, pace->xe);
+        }
+        if ((clock & 0x07) == 0 && l != l1) {
+            int d = l1 > l ? 1 : -1;
+            if (!ai_hits(obstacles, sh, l + d, t)) l += d;
+        }
+        if ((clock & 0x0F) == 0 && o != o1) {
+            uint8_t delta = (uint8_t)((o1 - o) & 3);
+            uint8_t no = (uint8_t)((o + (delta < 3 ? 1 : 3)) & 3);
+            uint16_t ns[4];
+            ai_shape(piece, no, ns);
+            if (!ai_hits(obstacles, ns, l, t)) {
+                o = no; memcpy(sh, ns, sizeof(sh));
+            } else if (pace->kick && !ai_hits(obstacles, ns, l - 1, t)) {
+                o = no; l--; memcpy(sh, ns, sizeof(sh));
+            }
+        }
+        if (fall) {
+            if (ai_hits(obstacles, sh, l, t + 1))
+                return l == l1 && o == o1;      /* came to rest */
+            t++;
+        }
+    }
+    return false;
+}
+
+/* The working boards for this frame's slice: the settled board, what is in
+ * the way (that and the partner now), and what to score against (that and
+ * the partner where it will land). */
+typedef struct {
+    AiBoard base, obstacles, scored;
+    int l0, t0;
+    AiPace pace;
+    uint8_t o0;
+    TengenTetromino piece, next;
+    int side_mid;                /* coop: the column past which it is "theirs" */
+    int side_dir;                /* +1: mine is the left; -1: the right */
+    uint16_t partner_cols;       /* coop: the columns its piece is landing in */
+} AiView;
+
+static bool ai_view(const TengenGame *g, TengenPlayerSlot slot,
+                    const TengenAi *ai, AiView *v) {
+    const TengenPlayerState *p = &g->player[slot];
+    v->piece = p->piece.current;
+    v->next = p->piece.next;
+    if (v->piece <= TT_NONE || v->piece >= TENGEN_TETROMINO_COUNT) return false;
+    ai_board(g, slot, &v->base);
+    AiBoard now, ahead;
+    ai_partner(g, slot, ai, &v->base, &now, &ahead, &v->partner_cols);
+    ai_or(&v->obstacles, &v->base, &now);
+#ifndef AI_SHADOW
+#define AI_SHADOW 0
+#endif
+    if (AI_SHADOW) ai_or(&v->scored, &v->base, &ahead);
+    else v->scored = v->base;
+    v->l0 = p->piece.x - TENGEN_ROM_COL_ORIGIN;
+    v->t0 = p->piece.y - TENGEN_ROM_ROW_ORIGIN;
+    v->o0 = p->piece.orientation;
+    v->pace.level = p->level;
+    v->pace.timer = p->fall_timer;
+    v->pace.clock = ai->clock;
+    v->pace.coop = g->coop;
+    v->pace.xe = g->xe;
+    v->pace.kick = !g->proto_rules;
+    v->side_mid = 0;
+    v->side_dir = 0;
+    if (g->coop && g->player[slot ^ 1].game_active &&
+        g->player[slot ^ 1].piece.current != TT_NONE) {
+        v->side_mid = TENGEN_PF_WIDTH / 2;
+        v->side_dir = slot == TENGEN_PLAYER_1 ? 1 : -1;
+    }
+    return true;
+}
+
+/* What the side of a shared board costs this placement: columns past the
+ * middle (W_SIDE, off by default) and columns the partner's piece is landing
+ * in (W_CROSS). */
+static int32_t ai_trespass(const AiView *v, const uint16_t sh[4], int l) {
+    if (!v->side_dir) return 0;
+    uint16_t mine = 0;
+    for (int r = 0; r < 4; r++) mine |= ai_shift(sh[r], l);
+    int32_t cost = (int32_t)W_CROSS * ai_popcount(mine & v->partner_cols);
+    if (!W_SIDE) return cost;
+    int lo = 99, hi = -99;
+    for (int r = 0; r < 4; r++)
+        for (int c = 0; c < 4; c++)
+            if (sh[r] & (1u << c)) {
+                if (l + c < lo) lo = l + c;
+                if (l + c > hi) hi = l + c;
+            }
+    int past = v->side_dir > 0 ? (hi >= v->side_mid ? hi - v->side_mid + 1 : 0)
+                               : (lo < v->side_mid ? v->side_mid - lo : 0);
+    return cost + (int32_t)W_SIDE * past;
+}
+
+static void ai_set_target(TengenAi *ai, int l, uint8_t o) {
+    ai->target_x = (uint8_t)(l + TENGEN_ROM_COL_ORIGIN);
+    ai->target_orientation = o;
+    ai->plan_have = true;
+}
+
+static void ai_smart_start(TengenAi *ai, const TengenGame *g,
+                           TengenPlayerSlot slot) {
+    AiView v;
+    ai->plan_stage = 0;
+    ai->plan_count = 0;
+    ai->plan_cursor = 0;
+    ai->plan_inner = 0;
+    ai->plan_top_count = 0;
+    ai->plan_have = false;
+    if (!ai_view(g, slot, ai, &v)) return;
+    /* Every orientation once (the O's four are one, the I's S's and Z's
+     * two), at every left column it fits. */
+    uint16_t seen[4][4];
+    int distinct = 0;
+    for (uint8_t o = 0; o < 4; o++) {
+        uint16_t sh[4];
+        ai_shape(v.piece, o, sh);
+        bool dup = false;
+        for (int d = 0; d < distinct; d++)
+            if (!memcmp(seen[d], sh, sizeof(sh))) dup = true;
+        if (dup) continue;
+        memcpy(seen[distinct++], sh, sizeof(sh));
+        for (int l = -3; l < TENGEN_PF_WIDTH && ai->plan_count < TENGEN_AI_SMART_MAX; l++) {
+            if (ai_hits(&v.base, sh, l, v.t0 < 0 ? v.t0 : 0) &&
+                ai_hits(&v.base, sh, l, v.t0))
+                continue;
+            ai->plan_cand_l[ai->plan_count] = (uint8_t)(l + 3);
+            ai->plan_cand_o[ai->plan_count] = o;
+            ai->plan_count++;
+        }
+    }
+    ai->plan_best = AI_DEAD;
+    ai->plan_stage = 1;
+}
+
+/* One slice: up to `budget` placements scored. */
+static void ai_smart_think(TengenAi *ai, const TengenGame *g,
+                           TengenPlayerSlot slot, int budget) {
+    if (ai->plan_stage == 0 || ai->plan_stage == 3) return;
+    AiView v;
+    if (!ai_view(g, slot, ai, &v)) { ai->plan_stage = 3; return; }
+
+    while (budget > 0 && ai->plan_stage == 1) {
+        if (ai->plan_cursor >= ai->plan_count) {
+            /* Every placement of the piece in hand is in: aim at the best
+             * reachable one now, and pick the few to look ahead from. */
+            int best = -1;
+            for (int k = 0; k < ai->plan_count; k++) {
+                if (ai->plan_cand_score[k] == AI_DEAD) continue;
+                if (best < 0 || ai->plan_cand_score[k] > ai->plan_cand_score[best])
+                    best = k;
+            }
+            if (best >= 0) {
+                ai_set_target(ai, ai->plan_cand_l[best] - 3, ai->plan_cand_o[best]);
+                ai->plan_best = AI_DEAD;
+            }
+            for (int pick = 0; pick < TENGEN_AI_SMART_KEEP; pick++) {
+                int top = -1;
+                for (int k = 0; k < ai->plan_count; k++) {
+                    if (ai->plan_cand_score[k] == AI_DEAD) continue;
+                    bool taken = false;
+                    for (int j = 0; j < ai->plan_top_count; j++)
+                        if (ai->plan_top[j] == k) taken = true;
+                    if (taken) continue;
+                    if (top < 0 || ai->plan_cand_score[k] > ai->plan_cand_score[top])
+                        top = k;
+                }
+                if (top < 0) break;
+                ai->plan_top[ai->plan_top_count++] = (uint8_t)top;
+            }
+            ai->plan_cursor = 0;
+            ai->plan_inner = 0;
+            ai->plan_reply_best = AI_DEAD;
+            ai->plan_stage = (AI_LOOKAHEAD && ai->plan_top_count && v.next > TT_NONE &&
+                              v.next < TENGEN_TETROMINO_COUNT) ? 2 : 3;
+            break;
+        }
+        int k = ai->plan_cursor++;
+        int l = ai->plan_cand_l[k] - 3;
+        uint8_t o = ai->plan_cand_o[k];
+        uint16_t sh[4];
+        ai_shape(v.piece, o, sh);
+        budget -= 2;                 /* a score and a walk: two of the rest */
+        AiBoard b = v.scored;
+        int32_t score = ai_score_drop(&b, sh, l, v.t0, 0);
+        if (score != AI_DEAD) {
+            score += ai_trespass(&v, sh, l);
+            /* Out of reach is not out of the running: if nothing is in
+             * reach, the least bad of the rest is still a better aim than
+             * none, which is a piece dropped where it spawned. */
+            if (AI_REACH && !ai_reachable(&v.obstacles, v.piece, v.o0, v.l0,
+                                          v.t0, o, l, &v.pace))
+                score += AI_UNREACHABLE;
+        }
+        ai->plan_cand_score[k] = score;
+    }
+
+    while (budget > 0 && ai->plan_stage == 2) {
+        if (ai->plan_cursor >= ai->plan_top_count) { ai->plan_stage = 3; break; }
+        int k = ai->plan_top[ai->plan_cursor];
+        int l = ai->plan_cand_l[k] - 3;
+        uint8_t o = ai->plan_cand_o[k];
+        uint16_t sh[4];
+        ai_shape(v.piece, o, sh);
+        /* The board this one leaves, and its first piece's own terms. */
+        AiBoard after = v.scored;
+        int cleared = 0;
+        int land = ai_drop(&after, sh, l, v.t0);
+        int top, rows = ai_shape_rows(sh, &top);
+        cleared = ai_place(&after, sh, l, land);
+        if (cleared < 0) { ai->plan_cursor++; ai->plan_inner = 0; continue; }
+        int height2 = 2 * AI_H - (2 * (land + top) + rows - 1);
+        int32_t first = (int32_t)W_LANDING * height2 / 2 +
+                        (int32_t)W_CLEARED * cleared +
+                        ai_trespass(&v, sh, l);
+        /* NEXT, every orientation and column, dropped from the top. */
+        while (budget > 0 && ai->plan_inner < 4 * 16) {
+            uint8_t o2 = (uint8_t)(ai->plan_inner / 16);
+            int l2 = ai->plan_inner % 16 - 3;
+            ai->plan_inner++;
+            uint16_t sh2[4];
+            ai_shape(v.next, o2, sh2);
+            if (ai_hits(&after, sh2, l2, -2)) continue;
+            budget--;
+            AiBoard b2 = after;
+            int32_t s2 = ai_score_drop(&b2, sh2, l2, -2, 0);
+            if (s2 > ai->plan_reply_best) ai->plan_reply_best = s2;
+        }
+        if (ai->plan_inner < 4 * 16) break;      /* more next frame */
+        int32_t total = ai->plan_reply_best == AI_DEAD
+                        ? AI_DEAD : first + ai->plan_reply_best;
+        if (total > ai->plan_best) {
+            ai->plan_best = total;
+            /* Still reachable from where the piece is NOW? */
+            if (ai_reachable(&v.obstacles, v.piece, v.o0, v.l0, v.t0, o, l,
+                             &v.pace))
+                ai_set_target(ai, l, o);
+        }
+        ai->plan_cursor++;
+        ai->plan_inner = 0;
+        ai->plan_reply_best = AI_DEAD;
+    }
+}
+
+void tengen_ai_think(TengenAi *ai, const TengenGame *game, TengenPlayerSlot slot) {
+    if (ai->smart) ai_smart_think(ai, game, slot, TENGEN_AI_SMART_BUDGET);
+}
+
 void tengen_ai_reset(TengenAi *ai) {
     memset(ai, 0, sizeof(*ai));
 }
@@ -275,6 +847,12 @@ void tengen_ai_choose(TengenAi *ai, const TengenGame *game,
 
     /* A new piece is a new hand on the pad, as far as `settle` is concerned. */
     ai->since_spawn = 0;
+
+    /* The port's own computer plans over the next few frames instead. */
+    if (ai->smart) {
+        ai_smart_start(ai, game, slot);
+        return;
+    }
 
     if (piece <= TT_NONE || piece >= TENGEN_TETROMINO_COUNT) return;
     tengen_ai_heights(game, slot, a);
@@ -337,6 +915,17 @@ uint8_t tengen_ai_buttons(TengenAi *ai, const TengenGame *game,
                            TengenPlayerSlot slot, uint8_t frame_counter) {
     const TengenPlayerState *p = &game->player[slot];
     uint8_t buttons = 0;
+
+    /* The port's own computer thinks a slice a frame, and keeps its hands
+     * off the pad until it has a target. */
+    if (ai->smart) {
+        ai->clock = frame_counter;
+        ai_smart_think(ai, game, slot, TENGEN_AI_SMART_BUDGET);
+        if (!ai->plan_have) {
+            if (ai->since_spawn < 0xFF) ai->since_spawn++;
+            return 0;
+        }
+    }
 
     /* Look at it before touching it. See `settle` on TengenAi. */
     if (ai->since_spawn < ai->settle) {
@@ -407,8 +996,12 @@ uint8_t tengen_ai_buttons(TengenAi *ai, const TengenGame *game,
      * it cannot hang, because gravity runs whether Down is pressed or not.
      * Capping the wait was tried at 32, 48, 64 and 96 frames and every cap
      * was worse than no cap at all. */
+    /* The port's own computer waits on any board, for its column and its
+     * turn both: its plan assumed gravity only on the way across. */
     bool waiting = (ai->coop_aware && game->coop &&
-                     ai->target_x != (uint8_t)p->piece.x);
+                     ai->target_x != (uint8_t)p->piece.x) ||
+                   (ai->smart && (ai->target_x != (uint8_t)p->piece.x ||
+                                  ai->target_orientation != p->piece.orientation));
     if (ai->soft_drop && !buttons && !waiting && (frame_counter & 0x07) != 0x07)
         buttons |= TENGEN_BTN_DOWN;
     return buttons;

@@ -338,6 +338,22 @@ typedef struct {
     /* gameState == GAMESTATE_PAUSED. Start toggles it (pauseOrUnpause,
      * main.asm.txt:7184-7215) and it is where the cheat codes are entered. */
     bool paused;
+    /* THE CARTRIDGE'S OWN BUGS, MENDED — the port's, behind the chord, and
+     * off unless the caller sets it after tengen_new_game (which clears it;
+     * tengen_link_start sets it from the master's chord, so both consoles
+     * agree). Off, the cartridge is untouched. What it mends is coop's, the
+     * two places where a falling piece and something else end up in the same
+     * cells because the cartridge never asks:
+     *
+     *   - getNextTetromino deals at the entry column without looking where
+     *     the partner's falling piece is (main.asm.txt:3688-3725), so a new
+     *     piece can come up INSIDE one still near the top. Mended, the deal
+     *     waits a frame at a time until there is room.
+     *   - rows collapsing under the partner's clear bring settled blocks down
+     *     with no thought for the falling piece, which is not in the field
+     *     (INFERRED from the same split; seen by `make fuzz`). Mended, the
+     *     falling piece is lifted the least it takes to be clear again. */
+    bool mended;
 } TengenGame;
 
 /* ----------------------------------------------------------------------- *

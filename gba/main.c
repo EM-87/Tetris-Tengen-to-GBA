@@ -669,6 +669,9 @@ int main(void) {
                 g_ai_slot = TENGEN_PLAYER_2;
                 tengen_new_game(&g_session.game, seed, start_level,
                                  g_ai_active, GAME_IS_COOP(game_mode), g_xe);
+                /* The cartridge's own bugs mended, behind the chord (see
+                 * TengenGame.mended; over a cable the master's chord). */
+                g_session.game.mended = g_pause_unlocked;
                 tengen_ai_reset(&g_ai);
                 /* AT THE CARTRIDGE'S PACE. The port once had it hold Down
                  * and look at each piece first ("va un tanto lento"); that
@@ -693,6 +696,11 @@ int main(void) {
                  * that already turns the coop panel's last cells into the
                  * board's totals turns this on with them. */
                 g_ai.coop_aware = g_pause_unlocked && GAME_IS_COOP(game_mode);
+                /* ...and under the same chord, not the cartridge's computer
+                 * at all but the port's (`smart`, tengen_ai.c): same pad, same
+                 * pace, a better head. A person for a partner never says where
+                 * they are going, so `partner_known` stays off. */
+                g_ai.smart = g_pause_unlocked;
                 g_ai_last_piece = TT_NONE;
                 g_ai_last_partner = TT_NONE;
                 g_ai_frame = 0;

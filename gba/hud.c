@@ -792,6 +792,42 @@ static void draw_number_blank(int tx, int ty, uint32_t value, int digits, int ba
  * exactly where the cartridge's own vertical runs already are, so the
  * playfield keeps the frame it had; the rope simply carries on round the HUD
  * instead of stopping. */
+/* THE CARTRIDGE'S ONE-PIXEL GAP, MENDED behind the chord (with the rest of
+ * TengenGame.mended). The left wall tile $6A has a blank first column, so a
+ * shelf ($9D) that runs up to it stops a pixel short of the rope — the
+ * cartridge's art, and listed under "looks like a bug, is the cartridge's".
+ * Mended, the wall is drawn there with SHELF_JOIN_TILE instead: $6A with
+ * that column filled from the shelf's last, row for row, made from whatever
+ * the two tiles hold now — a skin's included. Only where a shelf meets the
+ * wall; everywhere else the wall is the cartridge's. */
+#define SHELF_JOIN_TILE 1016
+#define TILE_WALL_LEFT  0x6A
+#define TILE_SHELF      0x9D
+static void mend_shelf_joins(void) {
+    if (!g_session.game.mended) return;
+    vu16 *tiles = MEM_CHARBLOCK(CHARBLOCK);
+    vu16 *wall = tiles + TILE_WALL_LEFT * 16;
+    vu16 *shelf = tiles + TILE_SHELF * 16;
+    vu16 *join = tiles + SHELF_JOIN_TILE * 16;
+    for (int r = 0; r < 8; r++) {
+        /* A row is two halfwords; pixel 0 is the low nibble of the first,
+         * pixel 7 the high nibble of the second. */
+        uint16_t first = wall[r * 2];
+        uint16_t edge = (uint16_t)(shelf[r * 2 + 1] >> 12);
+        if (edge && !(first & 0x000F)) first = (uint16_t)(first | edge);
+        join[r * 2] = first;
+        join[r * 2 + 1] = wall[r * 2 + 1];
+    }
+    vu16 *map = MEM_SCREENBLOCK(SCREENBLOCK);
+    for (int ty = 0; ty < SCREEN_TH; ty++)
+        for (int tx = 1; tx < MAP_W; tx++) {
+            uint16_t e = map[ty * MAP_W + tx];
+            if ((e & 0x3FF) == TILE_WALL_LEFT &&
+                (map[ty * MAP_W + tx - 1] & 0x3FF) == TILE_SHELF)
+                map[ty * MAP_W + tx] = (uint16_t)((e & ~0x3FFu) | SHELF_JOIN_TILE);
+        }
+}
+
 void draw_static_screen(void) {
     apply_skin(play_skin());
     if (g_session.game.coop) {
@@ -836,6 +872,7 @@ void draw_static_screen(void) {
         clear_panel_region(COOP_R_TX, BRAID_T, COOP_PANEL_W, SCREEN_TH - BRAID_T);
         clear_stats_layer_at(COOP_R_TX);
         set_offset_layer(STATS_SHIFT_PX);
+        mend_shelf_joins();
         return;
     }
     for (int ty = 0; ty < SCREEN_TH; ty++) {
@@ -870,6 +907,7 @@ void draw_static_screen(void) {
     set_credit_layer(false);
     /* Back from whatever the title lent it; see set_offset_layer. */
     set_offset_layer(STATS_SHIFT_PX);
+    mend_shelf_joins();
 }
 
 void draw_game_over(void) {

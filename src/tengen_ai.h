@@ -23,6 +23,12 @@
 
 #include "tengen_core.h"
 
+/* The port's planner: how many placements one piece can have (four
+ * orientations, thirteen left columns) and how many of the best of them it
+ * looks one piece further ahead from. */
+#define TENGEN_AI_SMART_MAX  64
+#define TENGEN_AI_SMART_KEEP 6
+
 /* The ROM's scratch, kept between calls because the ROM keeps it.
  *
  * `computerScratchB` is six bytes: [0] and [1] the two candidates' columns,
@@ -80,12 +86,41 @@ typedef struct {
     bool coop_aware;
 
     uint8_t since_spawn;         /* frames since tengen_ai_choose was called */
+
+    /* THE PORT'S OWN COMPUTER, behind the chord: `smart`, and the rest of
+     * this its working state. Off, everything above is the cartridge's
+     * player and nothing below is read. See THE PORT'S OWN COMPUTER
+     * in tengen_ai.c for what it does and what it was measured at. */
+    bool smart;
+    uint8_t plan_stage;          /* 0 nothing, 1 first look, 2 lookahead, 3 done */
+    uint8_t plan_cursor;         /* the candidate being looked at */
+    uint8_t plan_inner;          /* ...and, in the lookahead, the reply */
+    uint8_t plan_count;          /* candidates for this piece */
+    uint8_t plan_cand_l[TENGEN_AI_SMART_MAX];   /* left column, storage */
+    uint8_t plan_cand_o[TENGEN_AI_SMART_MAX];
+    int32_t plan_cand_score[TENGEN_AI_SMART_MAX];
+    uint8_t plan_top[TENGEN_AI_SMART_KEEP];     /* the best few, by index */
+    uint8_t plan_top_count;
+    int32_t plan_best;           /* the best lookahead total so far */
+    int32_t plan_reply_best;     /* this candidate's best reply so far */
+    bool plan_have;              /* a target has been chosen */
+    /* Where a COMPUTER partner on the shared board is going, if the caller
+     * knows (it does when both pads are computers): read instead of
+     * guessing from where its piece is. */
+    bool partner_known;
+    uint8_t partner_x, partner_o;
+    uint8_t clock;               /* the frame counter tengen_ai_buttons last had */
 } TengenAi;
 
 /* A new game. The ROM does not clear this either — its scratch is whatever
  * the last game left — but a port that starts from uninitialised memory is a
  * port with a different bug every run, so this zeroes it. */
 void tengen_ai_reset(TengenAi *ai);
+
+/* The port's own computer (`smart`): one slice of its planning, which
+ * tengen_ai_buttons already does each frame. Exposed for a caller that wants
+ * to plan without pressing anything (the tests). */
+void tengen_ai_think(TengenAi *ai, const TengenGame *game, TengenPlayerSlot slot);
 
 /* Picks a column and an orientation for `slot`'s CURRENT piece. The ROM calls
  * this once per spawn, out of getNextTetromino (main.asm.txt:3735, 3749). */

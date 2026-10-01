@@ -1,8 +1,10 @@
 """
 The computer player, alone and as a partner.
 """
+import os
+
 from .harness import (
-    AI_COOP_AWARE, AI_SOFT_DROP, AI_TARGET_X, DEMO_START_FRAME,
+    AI_COOP_AWARE, AI_PLAN_HAVE, AI_SMART, AI_SOFT_DROP, AI_TARGET_X, DEMO_START_FRAME,
     KEYS, LEADER_HEAD_TY, TENGEN_PF_HEIGHT, TENGEN_PF_WIDTH,
     game_offsets, game_state_address, load, press_start,
     run, tilemap_text,
@@ -230,13 +232,35 @@ def coop_ai_check(rom_path):
             if aware != int(chord):
                 failures.append(f"con acorde={int(chord)} la maquina lee "
                                  f"coop_aware={aware}")
+            smart = core.memory.u8[ai + AI_SMART]
+            if smart != int(chord):
+                failures.append(f"con acorde={int(chord)} la maquina lee "
+                                 f"smart={smart}")
+            if chord:
+                # The port's computer plans over a few frames (a slice
+                # each): its target is the one it has once it has one, not
+                # the last piece's still sitting there.
+                for _ in range(40):
+                    if core.memory.u8[ai + AI_PLAN_HAVE]:
+                        break
+                    run(core, 1)
+                else:
+                    failures.append("bajo el acorde la maquina no llego a "
+                                     "elegir en 40 frames")
             seen.append(core.memory.u8[ai + AI_TARGET_X])
         if failures:
             break
         if not chord and any(t != WELL_TARGET for t in seen):
             failures.append(f"sin el acorde la maquina deberia ir al pozo "
                              f"siempre: eligio {seen}")
-        if chord and any(t == WELL_TARGET for t in seen):
+        # Under the chord it is the port's own computer (`smart`), which
+        # prices each column it shares with where the partner is landing
+        # (W_CROSS) instead of walling the partner's whole corridor off. The
+        # O is two columns from its x: at 10 it hangs over the whole well,
+        # and that it never takes; at 9 and 11 it shares one column, and
+        # filling the well before the partner lands flat on top is a fair
+        # trade it is allowed to make.
+        if chord and seen[1] == WELL_TARGET:
             failures.append(f"con el acorde la maquina se mete en el pozo que "
                              f"el companero va a tapar: eligio {seen}")
         if not failures:
@@ -260,4 +284,68 @@ def coop_ai_check(rom_path):
         return 1
     print("OK: bajo el acorde el ordenador lee a su companero, y solo en "
            "el tablero compartido.")
+    return 0
+
+
+def ai_frame_check(rom_path):
+    """THE PORT'S COMPUTER THINKS INSIDE A FRAME.
+
+    Under the chord VERSUS and WITH COMPUTER play the port's own computer
+    (`smart`), which plans over several frames a slice at a time
+    (TENGEN_AI_SMART_BUDGET). A slice too big makes the main loop's turn
+    spill into a second frame: the game slows for that frame and the seed,
+    which advances once a turn, moves. Measured by the turn: the frames
+    between one draw_match and the next must always be one. The first
+    version, sixteen placements a frame, took two frames on 140 turns of
+    3000 in WITH COMPUTER.
+    """
+    import subprocess
+    elf = rom_path[:-4] + ".elf"
+    try:
+        out = subprocess.check_output(
+            [os.environ.get("NM", "arm-none-eabi-nm"), elf]).decode()
+    except (OSError, subprocess.CalledProcessError) as exc:
+        print(f"SALTADO: no pude leer {elf}: {exc}")
+        return 0
+    dm = next((int(l.split()[0], 16) & ~1 for l in out.splitlines()
+               if l.endswith(" draw_match")), None)
+    if dm is None:
+        print("SALTADO: el ELF no exporta draw_match")
+        return 0
+    failures = []
+    for entry, name in ((3, "VERSUS COMPUTER"), (4, "WITH COMPUTER")):
+        core, screen = load(rom_path)   # `screen` must stay alive; see load()
+        run(core, 8)
+        press_start(core); run(core, 10)
+        core.set_keys(KEYS["L"], KEYS["R"]); run(core, 4)
+        core.set_keys(); run(core, 12)
+        for _ in range(entry):
+            core.set_keys(KEYS["DOWN"]); run(core, 4)
+            core.set_keys(); run(core, 10)
+        press_start(core); run(core, 12)
+        press_start(core); run(core, 20)
+        gaps, last, f0 = {}, None, core.frame_counter
+        while core.frame_counter < f0 + 2000:
+            core.step()
+            # The pipeline: the instruction at draw_match is executing when
+            # the PC reads four past it.
+            if (core.cpu.pc & ~1) == dm + 4:
+                fc = core.frame_counter
+                if last is not None:
+                    gaps[fc - last] = gaps.get(fc - last, 0) + 1
+                last = fc
+        turns = sum(gaps.values())
+        slow = turns - gaps.get(1, 0)
+        if turns < 1500:
+            failures.append(f"{name}: solo {turns} vueltas en 2000 frames")
+        elif slow:
+            failures.append(f"{name}: {slow} de {turns} vueltas ocupan mas de "
+                             f"un frame ({gaps})")
+        else:
+            print(f"  {name}: {turns} vueltas, todas en un frame")
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: el ordenador del puerto piensa dentro de cada frame.")
     return 0

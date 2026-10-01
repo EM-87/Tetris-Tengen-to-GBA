@@ -95,6 +95,8 @@ def main():
                      help="check the COMPUTER player plays VERSUS and WITH")
     ap.add_argument("--coopai", action="store_true",
                      help="check the computer reads its partner under the chord")
+    ap.add_argument("--aiframe", action="store_true",
+                     help="check the port's computer plans inside each frame")
     ap.add_argument("--vblank", action="store_true",
                      help="check each frame's drawing ends inside the vertical blank")
     ap.add_argument("--fireworks", action="store_true",
@@ -182,6 +184,8 @@ def main():
         sys.exit(computer_check(args.rom))
     if args.coopai:
         sys.exit(coop_ai_check(args.rom))
+    if args.aiframe:
+        sys.exit(ai_frame_check(args.rom))
     if args.versushud:
         sys.exit(versus_hud_check(args.rom))
     if args.statsshow:

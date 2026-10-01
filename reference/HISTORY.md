@@ -710,7 +710,8 @@ them does not spend the afternoon again.
   straight against it: `9D 9D 9D 9D 9D 9D 9D 6A 6B ... 73 74 9D 9D ...`.
   On the right the wall's LAST tile, `$74`, is lit to its edge, so that
   junction closes. Same art, same layout, same seam. Closing it would mean
-  drawing a tile the cartridge does not have.
+  drawing a tile the cartridge does not have — which is what the chord now
+  does, and only the chord (see below).
 - **Stacked pieces merging where a row was cleared** was not the cartridge's
   after all, and the note that used to stand here said it was. The blocks'
   separator lives on each tile's TOP row and LEFT column — `$01`-`$0E` — and
@@ -771,6 +772,70 @@ two-cell one, and both made it play WORSE: 1637 pieces and 197 lines became
 905 and 102, then 1177 and 152. The cartridge's scorer drops pieces onto a
 surface from above, and a hole it aims at but the driver cannot steer into
 is a piece hung on the overhang. It stays out.)*
+
+## Under the chord: the cartridge's bugs mended, and a computer of its own
+
+Asked for as "bajo truco, soluciona los bugs conocidos del propio cartucho,
+y mejora la IA, especialmente en cooperativo". Everything here is behind
+the chord, and without it the port is the cartridge, bugs and computer
+included.
+
+**The bugs** are the three on the "looks like a bug" list, and a fourth
+that was already mended (the XE mod's two off-by-ones). `TengenGame.mended`
+carries the decision into the core: set from the chord alone, and over a
+cable from the MASTER'S (`tengen_link_start`), so both consoles in lockstep
+agree.
+
+- *The coop deal on top of the partner* (getNextTetromino asks nothing,
+  main.asm.txt:3688-3725): mended, the deal WAITS a frame at a time while
+  the new piece would come up inside the partner's (`spawn_meets_partner`).
+  Waiting, not shifting: the entry column is the player's side of the
+  board, and a piece that came up elsewhere would be a different rule.
+- *Blocks coming down into a falling piece* when the partner's rows
+  collapse (INFERRED from the split between the settled buffer and the
+  falling piece): mended, the falling piece is lifted, a row at a time and
+  no more than it needs, out of what came down (`finish_clear`). Lifting is
+  what the player would have seen anyway, the stack rising into the piece.
+- *The gap between the left shelves and the rope*: a copy of `$6A` with its
+  first column drawn from `$9D`'s last, on the rows `$9D` has ink, put
+  wherever `$6A` stands right of a shelf (`mend_shelf_joins`, hud.c).
+  Measured on the screen, closed with the chord and unchanged without.
+
+`make fuzz` plays half its games mended and in those the two overlaps may
+not happen at all; in the other half they still may.
+
+**The computer.** The cartridge's computerMove reads a height profile and
+two candidate slots; the chord had already taught it to read its coop
+partner (`coop_aware`, roadmap 23). This is a second player, written the way
+Tetris programs have been since Dellacherie: the board as one sixteen-bit
+word a row, every placement scored by El-Tetris's six weighted features,
+NEXT looked at for the best six, and nothing chosen that the pad cannot
+actually do — each path walked frame by frame the way the core will play it.
+It drives the same pad at the same pace (a shift every eighth frame, a
+turn every sixteenth, no Down), so it is a better head, not faster hands.
+What it took to get there, in the order it went wrong:
+
+- The first version, measured with the soft drop on, looked like a giant;
+  at the cartridge's pace it LOST to computerMove at level 18 (16 games in
+  16 against 9). Its reachability turned first and then shifted, at one
+  gravity for the whole fall; the driver does both at once and the
+  fractional levels fall faster on some rows. Walked frame by frame
+  (`ai_reachable`) it reaches 905 aims of 905 at level 18, and wins.
+- A placement out of reach was dropped; with nothing in reach that left no
+  target at all, and the piece fell where it came in. Out of reach is now a
+  penalty, not a veto.
+- On the shared board, reading the partner's landing as ground for the
+  score (what `coop_aware` does) made it plan rows around cells that were
+  not there yet: the holes were its own. It prices the columns instead.
+- A cost for crossing to the partner's side measured worse with the soft
+  drop and better without it: -5000 a column.
+- On the ROM it spilled 140 turns of 3000 into a second frame. A shape
+  table, wells counted by set bit, and a slice of eight with the first look
+  charged double: none (`--aiframe`).
+
+The table it was measured at is in tengen_ai.c. Coop at level 18 still
+buries both; with a person for a partner — who does not say where they are
+going — it is guessed straight down from where their piece is.
 
 ## Why the GBA layer is five files
 

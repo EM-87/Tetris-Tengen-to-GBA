@@ -760,6 +760,24 @@ static void lock_piece(TengenGame *game, TengenPlayerSlot slot) {
  * keeps, which is the same two draws the pre-roll made.
  *
  * dropRatePossible is NOT touched by the second pass: it keeps its 20. */
+/* Would the piece about to be dealt come up inside the coop partner's? Only
+ * asked when the bugs are mended; see TengenGame. */
+static bool spawn_meets_partner(const TengenGame *game, TengenPlayerSlot slot) {
+    if (!game->mended || !game->coop) return false;
+    const TengenPlayerState *p = &game->player[slot];
+    const TengenPlayerState *q = &game->player[slot ^ 1];
+    if (!q->game_active || q->piece.current == TT_NONE ||
+        p->piece.next == TT_NONE)
+        return false;
+    TengenGame probe = *game;
+    TengenPiece *piece = &probe.player[slot].piece;
+    piece->current = p->piece.next;
+    piece->orientation = 0;
+    piece->y = TENGEN_SPAWN_Y;
+    piece->x = TENGEN_SPAWN_X[slot];
+    return tengen_coop_pieces_overlap(&probe, slot);
+}
+
 static void spawn_piece(TengenGame *game, TengenPlayerSlot slot) {
     TengenPlayerState *p = &game->player[slot];
     p->fall_timer = TENGEN_DROP_RATE_AT_SPAWN;
@@ -1297,6 +1315,19 @@ static void finish_clear(TengenGame *game, TengenPlayerSlot slot,
 
     tengen_collapse_rows_joined(field, cleared, !game->piece_id_cells);
 
+    /* MENDED (see TengenGame): the rows that came down may have come down
+     * into the partner's falling piece, which the field does not hold. Up,
+     * a row at a time, as far as it takes — a clear brings down at most four
+     * rows' worth, so four is as far as it can. */
+    if (game->mended && game->coop) {
+        TengenPlayerState *q = &game->player[slot ^ 1];
+        for (int lift = 0; lift < 4 && q->game_active &&
+                           q->piece.current != TT_NONE &&
+                           !tengen_position_valid(game, (TengenPlayerSlot)(slot ^ 1));
+             lift++)
+            q->piece.y--;
+    }
+
     int count = 0;
     for (int i = 0; i < TENGEN_PF_HEIGHT; i++) if (cleared & (1u << i)) count++;
     p->lines += (uint32_t)count;
@@ -1447,6 +1478,13 @@ TengenStepResult tengen_step(TengenGame *game, TengenPlayerSlot slot, uint8_t he
      * 47. One frame per piece does not sound like much until the difference
      * is what a stack at level 17 does to you. */
     if (p->piece.current == TT_NONE) {
+        /* MENDED (see TengenGame): not into the partner's piece. The frame
+         * goes by with nothing dealt, and the deal is tried again on the
+         * next; gravity moves the partner along meanwhile. */
+        if (spawn_meets_partner(game, slot)) {
+            p->held_last_frame = held_buttons;
+            return result;
+        }
         spawn_piece(game, slot);
         if (!tengen_position_valid(game, slot)) top_out(game, slot, &result);
         p->held_last_frame = held_buttons;

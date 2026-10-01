@@ -106,12 +106,13 @@ minus those).
 | --- | --- | --- |
 | `make test` | no | always — the rules, in milliseconds |
 | `make gba` | headers | to build `build/tengen.gba` |
-| `make gba-check` | headers | before calling any change done: 66 checks on the running ROM in mGBA, eighteen of them on two consoles with a cable, and then the Wireless Adapter's (`run_wireless.py`) |
+| `make gba-check` | headers | before calling any change done: 67 checks on the running ROM in mGBA, eighteen of them on two consoles with a cable, and then the Wireless Adapter's (`run_wireless.py`) |
 | `make trace ROM=... [MODE=coop\|versus\|with\|demo]` | yes | after touching `tengen_step` or `tengen_ai.c`: the port against the cartridge, iteration by iteration. The 1P and coop scripts never complete a row; `MODE="with --pad1"` plays player 1 with the port's computer and clears plenty; add `--handicap N` to any mode |
 | `make tune-check ROM=...` | yes | after touching audio: the four tunes against the cartridge, note by note |
 | `make dance-check ROM=...` | yes | after touching the dancers: their choreography against the cartridge's driver |
 | `make clear-check ROM=...` | yes | after touching line clears: the joins a clear breaks |
 | `make assets-check` | no | after touching `extract_assets.py` |
+| `make ai-bench [BENCH_LEVEL=18]` | no | after touching `tengen_ai.c`: the cartridge's computer against the port's own, alone and in coop, lines and games lost (`tests/ai_bench.c`) |
 | `make fuzz` | no | after touching `src/`: every mode played by random hands and the computer, and the lobby and names swap over a lossy link, invariants checked as they go, under ASan+UBSan (`tests/fuzz_core.c`, `tests/fuzz_link.c`; `FUZZ_GAMES`, `FUZZ_RUNS`, `FUZZ_SEED` for longer runs) |
 | `python3 tools/probes/proto_rules.py proto_*.nes` | yes | the prototypes' rules, measured on their dumps |
 
@@ -482,7 +483,18 @@ story behind each; the item number is in brackets.
   It dealt a frame late until a trace first cleared a row.
 - **The computer plays at the cartridge's pace.** No soft drop, no pause
   before it moves: TengenAi's `soft_drop` and `settle` stay off in every
-  mode. Only `coop_aware` is the port's, and it is behind the chord.
+  mode. `coop_aware` and `smart` are the port's, both behind the chord.
+  Measure a computer at THAT pace (`make ai-bench` does): the port's own
+  looked like a giant with the soft drop on and lost to the cartridge's at
+  level 18 without it.
+- **The port's computer thinks a slice a frame** (`TENGEN_AI_SMART_BUDGET`,
+  the first look at each placement charged double) and is a few frames
+  behind the deal before it has a target. A bigger slice spills the main
+  loop's turn into a second frame — `--aiframe` counts the frames between
+  turns in VERSUS and WITH COMPUTER under the chord. Its reachability is
+  the core's own pace walked frame by frame (`ai_reachable`): fall timer,
+  fractional gravity by row, the driver's shift and turn clock, the left
+  kick; a guess at any of it is a placement it aims at and misses.
 - **The NES pulse sweep is emulated** (`gba/nes_audio.c`, PulseSweep): the
   line clear is a rising sweep on pulse 2, and without it it was one low
   note. A period byte written replaces that byte of the SWEPT period, so the
@@ -523,7 +535,14 @@ credits rotating every four seconds; the cossacks staged on the panels'
 ledges where the cartridge uses a middle strip the port does not have; a
 second cossack for the rival in HUD VERSUS; a paused race under the chord
 showing the rival's board (not over the cable), with their NEXT, colours and numbers; the
-computer reading its coop partner under the chord; a handicap of its own
+computer reading its coop partner under the chord, and under the same
+chord not the cartridge's computer at all but the port's own in VERSUS and
+WITH COMPUTER (`smart`: El-Tetris's scoring on a bit board, NEXT looked at,
+only what the pad can reach in time; tengen_ai.c); the cartridge's own
+bugs mended under the chord (`TengenGame.mended`, the master's chord over a
+cable): a coop deal waits for room instead of coming up inside the
+partner's piece, a falling piece is lifted out of the partner's collapsed
+rows, and the left panel's shelves meet the rope (`mend_shelf_joins`); a handicap of its own
 for the computer in VERSUS COMPUTER under the chord; the pause menu over the
 cable, there if the MASTER found the chord and driven by both players'
 presses through lockstep (`link_match_begin`); a linked match that waits
@@ -570,7 +589,8 @@ In coop, a piece dealt on top of the partner's still near the entry
 (getNextTetromino asks nothing, main.asm.txt:3688-3725), and blocks coming
 down into a falling piece when the partner's rows collapse (INFERRED: the
 playfield buffer holds only settled cells). `make fuzz` finds both and
-leaves them alone.
+leaves them alone — except under the chord, where all three are mended
+(Decisions) and the fuzzer's mended half asserts the two never happen.
 
 ## Open
 

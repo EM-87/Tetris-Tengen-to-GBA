@@ -697,6 +697,10 @@ PAL_PIECE_BANK, PAL_NEXT_BANK = 12, 13
 # rather than the flags quietly reading each other's bytes.
 AI_TARGET_X, AI_TARGET_O = 6, 7
 AI_SETTLE, AI_SOFT_DROP, AI_COOP_AWARE = 8, 9, 10
+# ...and the port's own computer: `smart` right after since_spawn, and
+# `plan_have` after the planner's arrays (17 + 64 + 64 bytes, the scores
+# aligned to 148 and 256 long, the top six, the count, two int32s at 412).
+AI_SMART, AI_PLAN_HAVE = 12, 420
 
 
 # Where the pause menu's lines land, derived the way gba/port.h derives them:
