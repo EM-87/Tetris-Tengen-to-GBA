@@ -318,8 +318,8 @@ static void ai_score(TengenAi *ai, uint8_t *a, int x,
  *   SOLO  cartridge      234   1      1445   5      1483   9
  *   SOLO  port's         263   0      1505   0      2152   0
  *   COOP  cart + cart     78  16        43  16        48  16
- *   COOP  port + port    468   0      1035   9       729  16
- *   COOP+ port + cart    375  10       352  16       225  16
+ *   COOP  port + port    464   1      1052   9       715  16
+ *   COOP+ port + cart    375  10       366  16       225  16
  *
  * At level 0 a solo board does not fill in 30000 frames either way; the
  * difference there is pace. COOP+ is the port's computer with the
@@ -446,7 +446,7 @@ static int ai_drop(const AiBoard *b, const uint16_t sh[4], int l, int t) {
 static int ai_place(AiBoard *b, const uint16_t sh[4], int l, int t) {
     for (int r = 0; r < 4; r++) {
         if (!sh[r]) continue;
-        if (t + r < 0) return -1;
+        if (t + r < 0 || t + r >= AI_H) return -1;
         b->row[t + r] |= ai_shift(sh[r], l);
     }
     int cleared = 0, to = AI_H - 1;
@@ -505,6 +505,9 @@ static int ai_shape_rows(const uint16_t sh[4], int *top) {
  * El-Tetris in full; AI_DEAD for a top-out. */
 static int32_t ai_score_drop(AiBoard *b, const uint16_t sh[4], int l, int t,
                              int *cleared_out) {
+    /* A shape that does not fit where it would start from — a piece lying
+     * near the floor, asked about standing up — cannot be put there. */
+    if (ai_hits(b, sh, l, t)) return AI_DEAD;
     int land = ai_drop(b, sh, l, t);
     int top, rows = ai_shape_rows(sh, &top);
     int cleared = ai_place(b, sh, l, land);
@@ -795,6 +798,7 @@ static void ai_smart_think(TengenAi *ai, const TengenGame *g,
         /* The board this one leaves, and its first piece's own terms. */
         AiBoard after = v.scored;
         int cleared = 0;
+        if (ai_hits(&after, sh, l, v.t0)) { ai->plan_cursor++; ai->plan_inner = 0; continue; }
         int land = ai_drop(&after, sh, l, v.t0);
         int top, rows = ai_shape_rows(sh, &top);
         cleared = ai_place(&after, sh, l, land);
