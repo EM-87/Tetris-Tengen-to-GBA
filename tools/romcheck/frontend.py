@@ -669,6 +669,25 @@ def credits_check(rom_path):
         print(f"  los seis creditos del cartucho salen, uno a uno "
               f"({len(seen)} cambios en 1600 frames)")
 
+    # THE BUILD, behind the chord only: a seventh credit, BUILD over the
+    # commit (draw_credits). Not a credit, so not before the chord.
+    if any("BUILD" in a.split() for a, b in seen):
+        failures.append("la version sale sin haber encontrado el acorde")
+    core.set_keys(KEYS["L"], KEYS["R"]); run(core, 4)
+    core.set_keys(); run(core, 10)
+    build = None
+    for _ in range(1800):
+        if "BUILD" in tilemap_text(core, CREDIT_TY).split():
+            build = tilemap_text(core, CREDIT_TY + 1)
+            break
+        core.run_frame()
+    import re as _re
+    tag = build and _re.search(r"\b([0-9A-F]{7}|LOCAL)(-DEV)?\b", build)
+    if not tag:
+        failures.append(f"con el acorde no sale la version: {build!r}")
+    else:
+        print(f"  con el acorde, un septimo credito: BUILD {tag.group(0)}")
+
     # The invented line is gone: the cartridge spells him PAZHITNOV, on its
     # own level screen, and the port used to print a PAJITNOV of its own.
     if any("PAJITNOV" in a or "PAJITNOV" in b for a, b in seen):

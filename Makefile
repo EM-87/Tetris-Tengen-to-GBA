@@ -39,6 +39,25 @@ test: $(TEST_BIN)
 clean:
 	rm -rf $(BUILD)
 
+# THE FUZZERS: thousands of games of every mode (tests/fuzz_core.c) and of
+# lobbies and names swaps over a lossy link (tests/fuzz_link.c), with the
+# invariants checked as they go, under AddressSanitizer and UBSan. Longer
+# runs: make fuzz FUZZ_GAMES=2000 FUZZ_RUNS=100000; another sequence:
+# FUZZ_SEED=...
+FUZZ_GAMES ?= 60
+FUZZ_RUNS  ?= 20000
+FUZZ_SEED  ?= 0
+FUZZ_FLAGS := -std=c99 -Wall -Wextra -g -O1 -fsanitize=address,undefined \
+              -fno-sanitize-recover=all
+.PHONY: fuzz
+$(BUILD)/fuzz_core: $(CORE_SRC) $(CORE_HDR) tests/fuzz_core.c | $(BUILD)
+	$(CC) $(FUZZ_FLAGS) $(CORE_SRC) tests/fuzz_core.c -o $@
+$(BUILD)/fuzz_link: $(CORE_SRC) $(CORE_HDR) tests/fuzz_link.c | $(BUILD)
+	$(CC) $(FUZZ_FLAGS) $(CORE_SRC) tests/fuzz_link.c -o $@
+fuzz: $(BUILD)/fuzz_core $(BUILD)/fuzz_link
+	./$(BUILD)/fuzz_core $(FUZZ_GAMES) $(if $(filter-out 0,$(FUZZ_SEED)),$(FUZZ_SEED))
+	./$(BUILD)/fuzz_link $(FUZZ_RUNS) $(if $(filter-out 0,$(FUZZ_SEED)),$(FUZZ_SEED))
+
 # ---------------------------------------------------------------------------
 # GBA cross-build
 #
@@ -94,6 +113,18 @@ ARMFLAGS := -mcpu=arm7tdmi -mtune=arm7tdmi -mthumb -mthumb-interwork \
 # in newlib's syscall-backed side (no malloc, no stdio), so no stubs needed.
 ARMLDFLAGS := -T gba/gba.ld -nostartfiles -Wl,--gc-sections
 
+# THE BUILD, ON THE SCREEN: the commit, in capitals (the font has no lower
+# case), with -DEV when the tree has changes not committed — shown in the
+# title's credits once the chord is found (draw_credits), so a ROM on a flash
+# cart can be told from another without its file name. build/build_tag holds
+# it and is rewritten only when it changes, so a new commit rebuilds the ROM
+# and nothing else does.
+BUILD_TAG := $(shell git rev-parse --short=7 HEAD 2>/dev/null | tr a-f A-F)
+BUILD_TAG := $(if $(BUILD_TAG),$(BUILD_TAG),LOCAL)$(shell git diff --quiet HEAD -- . 2>/dev/null || echo -DEV)
+BUILD_TAG_FILE := $(BUILD)/build_tag
+$(shell mkdir -p $(BUILD); echo '$(BUILD_TAG)' | cmp -s - $(BUILD_TAG_FILE) || echo '$(BUILD_TAG)' > $(BUILD_TAG_FILE))
+ARMFLAGS += -DTENGEN_BUILD='"$(BUILD_TAG)"'
+
 # Graphics headers built from a cartridge dump by `make assets`. They are not
 # in version control (the artwork is the original game's), so the ROM target
 # checks for them and says what to do rather than failing in the compiler.
@@ -122,7 +153,7 @@ gba: $(GBA_ROM)
 # directly: that way regenerating assets rebuilds the ROM, while a missing one
 # still reaches the helpful message below instead of "no rule to make target".
 $(GBA_ELF): $(GBA_SRC) $(CORE_HDR) gba/port.h gba/gba_hw.h gba/link.h \
-             gba/crt0.s gba/gba.ld gba/mb_image.s $(GBA_MB) \
+             gba/crt0.s gba/gba.ld gba/mb_image.s $(GBA_MB) $(BUILD_TAG_FILE) \
              $(wildcard $(GBA_ASSETS) gba/splash_logo.h gba/gbp_logo.h) | $(BUILD)
 	@command -v $(ARMCC) >/dev/null 2>&1 || { \
 	    echo "error: $(ARMCC) not found."; \
@@ -138,7 +169,7 @@ $(GBA_ELF): $(GBA_SRC) $(CORE_HDR) gba/port.h gba/gba_hw.h gba/link.h \
 	$(ARMCC) $(ARMFLAGS) $(ARMLDFLAGS) gba/crt0.s gba/mb_image.s $(GBA_SRC) -o $@
 
 $(GBA_MB_ELF): $(GBA_SRC) $(CORE_HDR) gba/port.h gba/gba_hw.h gba/link.h \
-                gba/crt0.s gba/mb.ld $(wildcard $(GBA_ASSETS)) | $(BUILD)
+                gba/crt0.s gba/mb.ld $(BUILD_TAG_FILE) $(wildcard $(GBA_ASSETS)) | $(BUILD)
 	@for h in $(GBA_ASSETS); do test -f $$h || { \
 	    echo "error: $$h is missing (make assets ROM=...)"; exit 1; }; done
 	$(ARMCC) $(ARMFLAGS) -DTENGEN_MULTIBOOT -Wa,--defsym,MULTIBOOT=1 \

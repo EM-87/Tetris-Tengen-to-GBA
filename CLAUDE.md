@@ -112,12 +112,13 @@ minus those).
 | `make dance-check ROM=...` | yes | after touching the dancers: their choreography against the cartridge's driver |
 | `make clear-check ROM=...` | yes | after touching line clears: the joins a clear breaks |
 | `make assets-check` | no | after touching `extract_assets.py` |
+| `make fuzz` | no | after touching `src/`: every mode played by random hands and the computer, and the lobby and names swap over a lossy link, invariants checked as they go, under ASan+UBSan (`tests/fuzz_core.c`, `tests/fuzz_link.c`; `FUZZ_GAMES`, `FUZZ_RUNS`, `FUZZ_SEED` for longer runs) |
 | `python3 tools/probes/proto_rules.py proto_*.nes` | yes | the prototypes' rules, measured on their dumps |
 
 GitHub Actions (`.github/workflows/tengen-gba-port.yml`) runs everything
 that needs no dump on every push: `make test` with `-Werror` and again under
-ASan+UBSan, `make assets-check`, the core cross-compiled for the GBA, and the
-trace harness's host build. `make gba-check` and the cartridge comparisons
+ASan+UBSan, a short `make fuzz`, `make assets-check`, the core
+cross-compiled for the GBA, and the trace harness's host build. `make gba-check` and the cartridge comparisons
 stay local.
 
 A single check runs on its own: `python3 tools/run_rom.py build/tengen.gba
@@ -522,7 +523,9 @@ cartridge's three settings pages instead of the one (`gbp.c`,
 itself at power-on, the LINK CABLE screen saying WIRELESS (`wireless.c`);
 "EXIT GAME", not "EXIT", on the pause menu (a player took it for closing the
 menu); the high scores erased by L+R+B held at power-on, asked twice with NO
-chosen (`erase_records_prompt`).
+chosen (`erase_records_prompt`); under the chord, a seventh credit, BUILD and
+the commit the ROM was built from (`-DEV` with changes not committed;
+`TENGEN_BUILD` from the Makefile), so a ROM on a flash cart can be named.
 [8, 11, 17, 19, 20, 23, 28, 30]
 
 **Knowingly not shown**: proto_c's title animation (its rows are the ones
@@ -541,6 +544,11 @@ depends on how many times its main loop spun on the title).
 
 **Looks like a bug, is the cartridge's**: the one-pixel gap between the left
 panel's shelves and the rope — the wall tile `$6A` has a blank first column.
+In coop, a piece dealt on top of the partner's still near the entry
+(getNextTetromino asks nothing, main.asm.txt:3688-3725), and blocks coming
+down into a falling piece when the partner's rows collapse (INFERRED: the
+playfield buffer holds only settled cells). `make fuzz` finds both and
+leaves them alone.
 
 ## Open
 
