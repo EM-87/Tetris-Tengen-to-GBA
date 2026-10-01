@@ -144,7 +144,9 @@ partida de otra: la estructura puede haber cambiado.)
 **Game Boy Player**: al encender sale su logo, como en los juegos que lo
 soportaban, y si el juego corre en un Game Boy Player lo reconoce y el mando
 de GameCube vibra al hacer líneas (más con un TETRIS), al subir de nivel y al
-perder. El logo es de Nintendo y no va en el repo: se genera con
+perder. Y en la tele los ajustes vuelven a ser las tres pantallas del
+cartucho, LEVEL, HANDICAP y MUSIC, cada una con su columna de números (START
+pasa de pantalla, B vuelve). El logo es de Nintendo y no va en el repo: se genera con
 `python3 tools/make_gbp_logo.py captura.png` a partir de una captura sin
 pérdidas (240x160) de un juego que lo muestre; sin él no sale ni se busca el
 Player.

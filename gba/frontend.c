@@ -767,6 +767,82 @@ static void draw_field_row(int field, int chosen, const char *label,
     }
 }
 
+/* THE CARTRIDGE'S OWN SHAPE, ON A TELEVISION: one setting a page, LEVEL,
+ * HANDICAP and MUSIC, each a COLUMN with the arrow beside the choice — the
+ * ROM's level screen is ten rows at one column (p1levelSelectArrowPpuAddrs,
+ * $A0B5) and a second ten for player 2 ($A0C9). This port's one page is for
+ * a screen at arm's length; across a room, on a Game Boy Player, few large
+ * well-spaced lines are what read (see NOTES.md, LEVEL SETTINGS). Only
+ * there: gbp_present(). */
+static void put_text(int tx, int ty, const char *text, int bank) {
+    for (int i = 0; text[i]; i++)
+        set_map_tile(tx + i, ty, WITH_BANK(ascii_tile(text[i]), bank));
+}
+
+static void put_number(int tx, int ty, unsigned value, int bank) {
+    char row[4];
+    unsigned n = append_number(row, 0, value);
+    row[n] = '\0';
+    put_text(tx + 2 - (int)n, ty, row, bank);       /* right-aligned in two */
+}
+
+/* One column of `count` numbers from `first`, rows from `ty`, the arrow
+ * beside `chosen` (lit if this is the column the pad moves). */
+static void draw_tv_column(int tx, int ty, unsigned first, unsigned count,
+                            unsigned chosen, bool active) {
+    for (unsigned i = 0; i < count; i++) {
+        unsigned v = first + i;
+        bool on = v == chosen;
+        set_map_tile(tx - 2, ty + (int)i, on
+            ? WITH_BANK(ascii_tile(MENU_ARROW_R), active ? BANK_ARROW : BANK_NOTE)
+            : WITH_BANK(ascii_tile(' '), menu_bank()));
+        put_number(tx, ty + (int)i, v,
+                   on && active ? menu_lit_bank() : menu_bank());
+    }
+}
+
+void draw_tv_page(int page, uint8_t start_level, uint8_t levels,
+                  uint8_t music, uint8_t musics, const uint8_t handicap[2],
+                  bool two_handicaps, int who) {
+    draw_menu_frame();
+    clear_both(MENU_IN_TX, MENU_BODY_TY, MENU_IN_W, MENU_BODY_H);
+    const int mid = MENU_IN_TX + MENU_IN_W / 2;
+    if (page == TV_PAGE_LEVEL) {
+        draw_text_centred(7, "LEVEL", BANK_NOTE);
+        if (levels <= 10) {
+            draw_tv_column(mid - 1, 8, 0, levels, start_level, true);
+        } else {
+            draw_tv_column(mid - 5, 8, 0, 10, start_level, start_level < 10);
+            draw_tv_column(mid + 3, 8, 10, (unsigned)levels - 10, start_level,
+                           start_level >= 10);
+        }
+    } else if (page == TV_PAGE_HANDICAP) {
+        draw_text_centred(7, "HANDICAP", BANK_NOTE);
+        if (two_handicaps) {
+            put_text(mid - 6, 9, "1P", menu_bank());
+            put_text(mid + 3, 9, "2P", menu_bank());
+            draw_tv_column(mid - 6, 11, 0, TENGEN_HANDICAP_MAX + 1,
+                           handicap[0], who == 0);
+            draw_tv_column(mid + 3, 11, 0, TENGEN_HANDICAP_MAX + 1,
+                           handicap[1], who == 1);
+        } else {
+            draw_tv_column(mid - 1, 10, 0, TENGEN_HANDICAP_MAX + 1,
+                           handicap[0], true);
+        }
+    } else {
+        draw_text_centred(7, "MUSIC", BANK_NOTE);
+        int tx = mid - 5;
+        for (unsigned i = 0; i < musics; i++) {
+            bool on = i == music;
+            set_map_tile(tx - 2, 9 + (int)i, on
+                ? WITH_BANK(ascii_tile(MENU_ARROW_R), BANK_ARROW)
+                : WITH_BANK(ascii_tile(' '), menu_bank()));
+            put_text(tx, 9 + (int)i, kMusicNames[i],
+                     on ? menu_lit_bank() : menu_bank());
+        }
+    }
+}
+
 void draw_level_settings(int chosen, uint8_t start_level, uint8_t music,
                                  const uint8_t handicap[2], bool two_player,
                                  int handicap_who) {

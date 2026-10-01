@@ -1767,6 +1767,14 @@ void splash_show(void);
 /* THE GAME BOY PLAYER (gbp.c): found by its logo at power-on, then the
  * serial port is its, for the rumble. */
 bool gbp_show_logo(void);
+/* LEVEL SETTINGS as the cartridge's three pages, on a Player (frontend.c). */
+#define TV_PAGE_LEVEL    0
+#define TV_PAGE_HANDICAP 1
+#define TV_PAGE_MUSIC    2
+#define TV_PAGE_COUNT    3
+void draw_tv_page(int page, uint8_t start_level, uint8_t levels,
+                  uint8_t music, uint8_t musics, const uint8_t handicap[2],
+                  bool two_handicaps, int who);
 bool gbp_present(void);
 void gbp_start(void);
 void gbp_release(void);

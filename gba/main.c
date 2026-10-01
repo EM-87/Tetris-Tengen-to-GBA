@@ -88,6 +88,8 @@ int main(void) {
     uint8_t game_mode = GAME_1P;
     /* Which of the three settings the cursor is on. */
     int menu_field = MENU_FIELD_LEVEL;
+    /* ...and which of the three pages, on a Game Boy Player (draw_tv_page). */
+    int tv_page = TV_PAGE_LEVEL;
     int link_wait_frames = 0;
     /* The Single-Pak send that starts by itself; see the LINK CABLE screen. */
 #define AUTO_SEND_FRAMES 45
@@ -463,6 +465,64 @@ int main(void) {
              * board, so one number is all it can have.) */
             bool two_handicaps = game_mode == GAME_2P ||
                                  (game_mode == GAME_VS && g_pause_unlocked);
+
+            /* ON A GAME BOY PLAYER, THE CARTRIDGE'S THREE PAGES (draw_tv_page):
+             * UP and DOWN move down the column, LEFT and RIGHT pick the
+             * player's column on a race's HANDICAP, START or A turns the
+             * page and plays from the last, B turns it back. The values and
+             * everything they do after are the one page's, below. */
+            bool tv = gbp_present() && !resuming;
+            if (tv) {
+                bool up = (pressed & TENGEN_BTN_UP) != 0;
+                bool down = (pressed & (TENGEN_BTN_DOWN | TENGEN_BTN_SELECT)) != 0;
+                bool moved = up || down;
+                if (tv_page == TV_PAGE_LEVEL && moved) {
+                    uint8_t levels = start_level_choices();
+                    start_level = (uint8_t)((start_level +
+                                              (up ? levels - 1 : 1)) % levels);
+                } else if (tv_page == TV_PAGE_HANDICAP) {
+                    if (two_handicaps &&
+                        (pressed & (TENGEN_BTN_LEFT | TENGEN_BTN_RIGHT))) {
+                        handicap_who ^= 1;
+                        moved = true;
+                    }
+                    if (up || down) {
+                        int who = two_handicaps ? handicap_who : 0;
+                        handicap[who] = (uint8_t)((handicap[who] +
+                                                   (up ? TENGEN_HANDICAP_MAX : 1)) %
+                                                  (TENGEN_HANDICAP_MAX + 1));
+                    }
+                } else if (tv_page == TV_PAGE_MUSIC && moved) {
+                    g_music = (uint8_t)((g_music + (up ? music_choices() - 1 : 1))
+                                         % music_choices());
+                }
+                if (chord && unlock_cheats()) {
+                    g_music = MUSIC_KOROBEINIKI;
+                    tv_page = TV_PAGE_MUSIC;
+                    moved = true;
+                } else if (moved) {
+                    cursor_blip();
+                }
+                /* Each page silent but the tunes', where the cursor plays
+                 * them as the cartridge's music screen does (:4694-4696). */
+                front_music(tv_page == TV_PAGE_MUSIC ? g_music : FRONT_SILENCE);
+                bool turn = (pressed & MENU_CONFIRM) && tv_page + 1 < TV_PAGE_COUNT;
+                bool turn_back = (pressed & TENGEN_BTN_B) && tv_page > TV_PAGE_LEVEL;
+                if (turn || turn_back) {
+                    tv_page += turn ? 1 : -1;
+                    screen_blip();
+                    vsync();
+                    audio_frame();
+                    clear_screen();
+                    continue;
+                }
+                /* The last page's START and the first page's B go on to
+                 * what the one page does with them, below. */
+                if (pressed & (MENU_CONFIRM | TENGEN_BTN_B)) tv_page = TV_PAGE_LEVEL;
+                pressed &= (uint8_t)(MENU_CONFIRM | TENGEN_BTN_B);
+                chord = false;
+            }
+
             bool pick_side = (pressed & TENGEN_BTN_SELECT) && two_handicaps &&
                               menu_field == MENU_FIELD_HANDICAP;
             if (pick_side) handicap_who ^= 1;
@@ -515,7 +575,7 @@ int main(void) {
              * not changed, so this also settles the music on arrival — which
              * is what stops the title theme here, and what keeps the screen
              * SILENT while NO MUSIC is the choice. */
-            front_music(g_music);
+            if (!tv) front_music(g_music);
 
             if (pressed & TENGEN_BTN_B) {
                 /* The cartridge has no back button at all — its menus are a
@@ -650,10 +710,13 @@ int main(void) {
             vsync();
             /* Only a race has two handicaps, and against the computer only
              * behind the chord: see two_handicaps. */
-            draw_level_settings(menu_field, start_level, g_music, handicap,
-                                 game_mode == GAME_2P ||
-                                 (game_mode == GAME_VS && g_pause_unlocked),
-                                 handicap_who);
+            if (tv)
+                draw_tv_page(tv_page, start_level, start_level_choices(),
+                             g_music, music_choices(), handicap,
+                             two_handicaps, handicap_who);
+            else
+                draw_level_settings(menu_field, start_level, g_music, handicap,
+                                     two_handicaps, handicap_who);
             audio_frame();
             continue;
         }

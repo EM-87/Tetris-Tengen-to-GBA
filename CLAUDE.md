@@ -104,7 +104,7 @@ minus those).
 | --- | --- | --- |
 | `make test` | no | always — the rules, in milliseconds |
 | `make gba` | headers | to build `build/tengen.gba` |
-| `make gba-check` | headers | before calling any change done: 65 checks on the running ROM in mGBA, eighteen of them on two consoles with a cable |
+| `make gba-check` | headers | before calling any change done: 66 checks on the running ROM in mGBA, eighteen of them on two consoles with a cable |
 | `make trace ROM=... [MODE=coop\|versus\|with\|demo]` | yes | after touching `tengen_step` or `tengen_ai.c`: the port against the cartridge, iteration by iteration. The 1P and coop scripts never complete a row; `MODE="with --pad1"` plays player 1 with the port's computer and clears plenty; add `--handicap N` to any mode |
 | `make tune-check ROM=...` | yes | after touching audio: the four tunes against the cartridge, note by note |
 | `make dance-check ROM=...` | yes | after touching the dancers: their choreography against the cartridge's driver |
@@ -249,7 +249,11 @@ story behind each; the item number is in brackets.
   off — a clear, longer for more rows, the level and the top-out
   (`rumble_step`). The cable takes the port in `link_init` and gives it
   back in `link_shutdown`. The result survives a soft reset with the
-  splash's word. Run only against a stand-in (`gbp_check`, `FakePlayer`):
+  splash's word. On a Player, LEVEL SETTINGS is the cartridge's three
+  pages, LEVEL, HANDICAP and MUSIC, each a column with the arrow beside
+  the choice (`draw_tv_page`, `tv_page` in main.c; `tv_menu_check`): the
+  shape for a television across a room that the one page gave up for a
+  screen at arm's length (NOTES.md, LEVEL SETTINGS). Run only against a stand-in (`gbp_check`, `FakePlayer`):
   the mGBA the checks use does not emulate a Player.
 - **The logo at power-on skips itself after a soft reset** by a word in
   external WRAM that crt0 does not clear (`g_splash_seen`). The checks skip
@@ -475,7 +479,9 @@ on the battery through a power cycle, as Tetris DX does (`suspend.c`); the
 publisher's logo on white at power-on (`splash.c`, from an image you supply
 through `tools/make_splash.py`, gitignored like the cartridge's art); every
 colour through one table for the GBA's LCD (`kLcdGamma`, the identity
-today); the Game Boy Player's logo at power-on and its rumble (`gbp.c`);
+today); the Game Boy Player's logo at power-on, its rumble, and on it the
+cartridge's three settings pages instead of the one (`gbp.c`,
+`draw_tv_page`);
 "EXIT GAME", not "EXIT", on the pause menu (a player took it for closing the
 menu); the high scores erased by L+R+B held at power-on, asked twice with NO
 chosen (`erase_records_prompt`).
@@ -539,8 +545,6 @@ And what has run only in an emulator:
 
 Ideas not started:
 
-- **The classic three-page menus on a Game Boy Player** (LEVEL, HANDICAP,
-  MUSIC with their columns of numbers), now that a Player can be found.
 - **Wireless adapter** — only with one to test on.
 
 A new idea starts in the cartridge (`tools/nes_console.py`,

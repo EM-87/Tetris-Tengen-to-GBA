@@ -1623,7 +1623,9 @@ def gbp_check(rom_path):
 
     # A game, four rows ready to go, a piece dropped on them: the clear
     # turns the motor on, and it goes off again.
-    for wait in (10, 12, 60):                 # title, GAME SELECT, LEVEL
+    # Title, GAME SELECT, and on a Player the settings' three pages
+    # (tv_menu_check).
+    for wait in (10, 12, 12, 12, 60):
         player.frame([KEYS["START"]])
         for _ in range(wait):
             player.frame()
@@ -1659,4 +1661,128 @@ def gbp_check(rom_path):
     if failures:
         return 1
     print("OK: el Game Boy Player se reconoce, saluda y vibra.")
+    return tv_menu_check(rom_path)
+
+
+def tv_menu_check(rom_path, shots=None):
+    """ON A GAME BOY PLAYER, LEVEL SETTINGS IS THE CARTRIDGE'S THREE PAGES.
+
+    Found a Player (FakePlayer), the settings come one to a page — LEVEL,
+    HANDICAP, MUSIC — each a column with the arrow beside the choice (the
+    ROM's own shape, for a television across a room): DOWN moves down the
+    column, START turns the page, B turns it back, and START on the last one
+    plays, with what the pages chose. On a plain GBA it stays one page.
+    `shots`, a directory, keeps a picture of each page.
+    """
+    from . import harness
+    import os as _os
+    png = _os.path.join(_os.path.dirname(rom_path), "gbp_logo.png")
+    root = _os.path.join(_os.path.dirname(rom_path), "..")
+    if not (_os.path.exists(png) and
+            _os.path.exists(_os.path.join(root, "gba", "gbp_logo.h"))):
+        print("SALTADO: sin el logo no hay Game Boy Player que encontrar")
+        return 0
+    from PIL import Image
+    base, why = game_state_address(rom_path)
+    if base is None:
+        print(f"SALTADO: {why}")
+        return 0
+    off = game_offsets(rom_path)
+    failures = []
+
+    def boot():
+        harness.SHOW_SPLASH[0] = True
+        try:
+            core, screen = load(rom_path)
+        finally:
+            harness.SHOW_SPLASH[0] = False
+        player = FakePlayer(core, Image.open(png).convert("RGB").tobytes())
+        player.screen = screen
+        for _ in range(400):
+            player.frame()
+        return core, screen, player
+
+    def text(core):
+        return " ".join(" ".join(tilemap_text(core, r).split()) for r in range(7, 18))
+
+    def snap(screen, name):
+        if shots:
+            screen.to_pil().convert("RGB").resize((480, 320)).save(
+                _os.path.join(shots, name))
+
+    core, screen, player = boot()
+
+    def tap(k, wait=12):
+        player.frame([KEYS[k]])
+        for _ in range(wait):
+            player.frame()
+
+    tap("START", 10)                       # title -> GAME SELECT (1 PLAYER)
+    tap("START", 12)                       # -> LEVEL SETTINGS, page one
+    t = text(core)
+    if "LEVEL" not in t or "> 0" not in t or "HANDICAP" in t:
+        failures.append(f"la primera pagina no es LEVEL en columna: {t[:80]!r}")
+    for _ in range(3):
+        tap("DOWN")
+    snap(screen, "tv_level.png")
+    tap("START")
+    t = text(core)
+    if "HANDICAP" not in t or "> 0" not in t:
+        failures.append(f"la segunda pagina no es HANDICAP: {t[:80]!r}")
+    tap("DOWN")
+    snap(screen, "tv_handicap.png")
+    tap("B")
+    if "LEVEL" not in text(core) or "> 3" not in text(core):
+        failures.append("B no vuelve a LEVEL con el 3 elegido")
+    tap("START")
+    tap("START")
+    t = text(core)
+    if "MUSIC" not in t or "LOGINSKA" not in t:
+        failures.append(f"la tercera pagina no es MUSIC: {t[:80]!r}")
+    snap(screen, "tv_music.png")
+    tap("START", 60)
+    level = core.memory.u8[base + off["level"]]
+    if not core.memory.u8[base + off["active"]]:
+        failures.append("START en MUSIC no empieza la partida")
+    elif level != 3:
+        failures.append(f"la partida no empieza en el nivel elegido ({level})")
+    else:
+        print("  LEVEL, HANDICAP y MUSIC, cada uno su pagina en columna; B "
+              "vuelve, START pasa y en MUSIC juega, en el nivel elegido")
+
+    # A race against the computer behind the chord: two handicap columns,
+    # and XE's twenty levels in two columns of ten.
+    core, screen, player = boot()
+    tap("START", 10)
+    tap("L", 0); player.frame([KEYS["L"], KEYS["R"]]); tap("R", 12)
+    for _ in range(3):
+        tap("DOWN")                        # 1P -> 2P -> COOP -> VERSUS
+    tap("START", 12)
+    snap(screen, "tv_level_xe.png")
+    if "19" not in text(core):
+        failures.append("con el acorde, LEVEL no ensena los veinte niveles")
+    tap("START")
+    tap("RIGHT")
+    tap("DOWN")
+    t = text(core)
+    snap(screen, "tv_handicap_vs.png")
+    if "1P" not in t or "2P" not in t:
+        failures.append(f"en VERSUS con el acorde no hay dos columnas: {t[:80]!r}")
+    else:
+        print("  con el acorde: veinte niveles en dos columnas, y en VERSUS un "
+              "handicap por columna")
+
+    # And without a Player, the one page.
+    core2, screen2 = load(rom_path)
+    run(core2, 20); press_start(core2); run(core2, 10)
+    press_start(core2); run(core2, 12)
+    if "MUSIC" not in " ".join(tilemap_text(core2, r) for r in range(8, 18)):
+        failures.append("sin Player ya no es la pagina unica")
+
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: en un Game Boy Player los ajustes son las tres paginas del "
+          "cartucho.")
     return 0
