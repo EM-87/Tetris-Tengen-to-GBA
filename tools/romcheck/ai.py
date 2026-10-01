@@ -56,10 +56,18 @@ def computer_check(rom_path):
 
     # VERSUS: two boards. The computer plays its own; ours stays as it was
     # apart from the piece gravity drops on it.
-    core, screen = start(3, WATCH)
-    comp = board(core, 1)
-    cols = {x for row in comp for x in range(1, TENGEN_PF_WIDTH - 1) if row[x]}
-    cells = sum(1 for row in comp for x in range(1, TENGEN_PF_WIDTH - 1) if row[x])
+    # Watched as it goes, not read once at the end: a computer that has just
+    # cleared a row has little left on its board, and when that happens
+    # depends on the deal, which moves with how long the boot took (the
+    # seed advances once per main-loop turn).
+    core, screen = start(3, 0)
+    cols, cells = set(), 0
+    for _ in range(WATCH // 50):
+        run(core, 50)
+        comp = board(core, 1)
+        cols |= {x for row in comp for x in range(1, TENGEN_PF_WIDTH - 1) if row[x]}
+        cells = max(cells, sum(1 for row in comp
+                               for x in range(1, TENGEN_PF_WIDTH - 1) if row[x]))
     if cells < 8:
         failures.append(f"en VERSUS el ordenador solo asento {cells} celdas: no juega")
     elif len(cols) < 3:

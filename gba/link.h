@@ -213,4 +213,30 @@ typedef enum {
 void link_probe(void);
 LinkPeer link_peer(void);
 
+/* ----------------------------------------------------------------------- *
+ * The Wireless Adapter (wireless.c): the same lobby and lockstep over the
+ * air. Found at power-on; from then on link_init, link_pump and the rest
+ * run the adapter instead of the cable. See the note at the top of
+ * wireless.c.
+ * ----------------------------------------------------------------------- */
+
+bool wireless_detect(void);     /* at power-on: is an adapter answering? */
+bool wireless_present(void);
+void wireless_open(void);       /* link_init's, over the air */
+void wireless_close(void);      /* link_shutdown's */
+bool wireless_on(void);
+bool wireless_linked(void);     /* the two consoles have found each other */
+bool wireless_host(void);       /* ...and this one hosts: the master */
+bool wireless_hosting(void);    /* waiting, as host, for somebody to join */
+void wireless_frame(void);      /* once a frame, from link_pump */
+void wireless_match_begin(void);
+void wireless_lobby_begin(void);
+
+/* What wireless.c needs of link.c: the word the lobby has loaded, a
+ * transfer to queue as if the cable had made it, and "the other console
+ * was heard". */
+uint16_t link_tx_word(void);
+void link_push_pair(uint16_t master, uint16_t slave);
+void link_heard(void);
+
 #endif /* LINK_H */

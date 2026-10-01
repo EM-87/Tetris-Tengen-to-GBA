@@ -79,12 +79,14 @@ running ROM; only the side panels need reflowing).
   `main.c` the state machine. Plus `nes6502.c` + `nes_audio.c` (the
   cartridge's sound engine, run), `handtunes.c` (the two hand-entered tunes)
   `link.c` (the cable), `suspend.c` (the paused game on the battery),
-  `splash.c` (the logos at power-on) and `gbp.c` (the Game Boy Player). A symbol is shared only if another file names it
+  `splash.c` (the logos at power-on), `gbp.c` (the Game Boy Player) and
+  `wireless.c` (the Wireless Adapter). A symbol is shared only if another file names it
   in code; everything else is `static`.
 - **`tools/`** — `extract_assets.py` (all the art, from a dump);
   `run_rom.py` (the command `make gba-check` runs) with its checks in
   `tools/romcheck/`, one module per family and `harness.py` for what they
-  share; `run_link.py` (two cores and a cable); `nes_cpu.py` /
+  share; `run_link.py` (two cores and a cable); `run_wireless.py` (two cores, two
+  stand-in Wireless Adapters and the air between them); `nes_cpu.py` /
   `nes_console.py` (the cartridge, run in Python); `render_nes.py` (the
   cartridge's screens as a NES draws them); `probes/` (comparisons against
   the cartridge); `trace_match.py` + `trace_core.c` (`make trace`).
@@ -104,7 +106,7 @@ minus those).
 | --- | --- | --- |
 | `make test` | no | always — the rules, in milliseconds |
 | `make gba` | headers | to build `build/tengen.gba` |
-| `make gba-check` | headers | before calling any change done: 66 checks on the running ROM in mGBA, eighteen of them on two consoles with a cable |
+| `make gba-check` | headers | before calling any change done: 66 checks on the running ROM in mGBA, eighteen of them on two consoles with a cable, and then the Wireless Adapter's (`run_wireless.py`) |
 | `make trace ROM=... [MODE=coop\|versus\|with\|demo]` | yes | after touching `tengen_step` or `tengen_ai.c`: the port against the cartridge, iteration by iteration. The 1P and coop scripts never complete a row; `MODE="with --pad1"` plays player 1 with the port's computer and clears plenty; add `--handicap N` to any mode |
 | `make tune-check ROM=...` | yes | after touching audio: the four tunes against the cartridge, note by note |
 | `make dance-check ROM=...` | yes | after touching the dancers: their choreography against the cartridge's driver |
@@ -255,6 +257,24 @@ story behind each; the item number is in brackets.
   shape for a television across a room that the one page gave up for a
   screen at arm's length (NOTES.md, LEVEL SETTINGS). Run only against a stand-in (`gbp_check`, `FakePlayer`):
   the mGBA the checks use does not emulate a Player.
+- **The Wireless Adapter is the cable's understudy** (`wireless.c`): asked
+  once at power-on (`wireless_detect`, the NINTENDO login; not on the
+  Single-Pak copy), and if it answers, `link_init`, `link_pump` and the rest
+  run it instead of the cable, so the lobby, the lockstep and the records
+  swap above link.c do not change. Each console searches for a room a
+  random while and hosts one if it finds none (the host is the master);
+  the lobby and the swap are stop-and-wait over a sequence number, each
+  answered number one "transfer" (`link_push_pair`) the same on both; the
+  match is lockstep by frame with WL_DELAY frames of input delay, each
+  packet carrying the frames the other side has not played yet, from the
+  oldest (a window that started at the newest lost a frame for good and the
+  guest never played one). Every wait is on the scanline counter and no
+  interrupt is used. Written from GBATEK and gba-link-connection, and run
+  only against `FakeAdapter` (`run_wireless.py`), which is the same
+  documentation as a model: INFERRED until two real adapters agree. Booting
+  takes a little longer for the login, so the seed and the deal move — a
+  check that read a board once at the end failed for that (`--computer`
+  watches it now).
 - **The logo at power-on skips itself after a soft reset** by a word in
   external WRAM that crt0 does not clear (`g_splash_seen`). The checks skip
   it the same way, writing that word after every reset
@@ -481,7 +501,8 @@ through `tools/make_splash.py`, gitignored like the cartridge's art); every
 colour through one table for the GBA's LCD (`kLcdGamma`, the identity
 today); the Game Boy Player's logo at power-on, its rumble, and on it the
 cartridge's three settings pages instead of the one (`gbp.c`,
-`draw_tv_page`);
+`draw_tv_page`); 2 PLAYER and COOPERATIVE over the Wireless Adapter, found by
+itself at power-on, the LINK CABLE screen saying WIRELESS (`wireless.c`);
 "EXIT GAME", not "EXIT", on the pause menu (a player took it for closing the
 menu); the high scores erased by L+R+B held at power-on, asked twice with NO
 chosen (`erase_records_prompt`).
@@ -538,14 +559,12 @@ And what has run only in an emulator:
   the keypad is INFERRED.
 - **The Game Boy Player** has run only against `FakePlayer`: the logo,
   the 030Fh answer, GBATEK's handshake and the rumble.
+- **The Wireless Adapter** has run only against `FakeAdapter`: the login,
+  the commands and their handshake, the rooms, the data and both modes.
 - **The paused game through a power cycle and the logo** have run only in
   mGBA (`suspend_check`). On a flash cart the save memory has to reach the
   card for the game to survive: the EZ-Flash IV and the SuperCard each do
   that their own way, as they do for the high scores.
-
-Ideas not started:
-
-- **Wireless adapter** — only with one to test on.
 
 A new idea starts in the cartridge (`tools/nes_console.py`,
 `tools/render_nes.py`), not in memory of how Tetris goes.

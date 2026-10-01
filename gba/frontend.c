@@ -598,7 +598,8 @@ static void draw_guest_dancer(int elapsed) {
  * measure put YOU ARE PLAYER 2 on a master whose partner had left. */
 void draw_link_wait(const TengenLobby *lobby, int elapsed) {
     draw_menu_frame();
-    draw_text_centred(8, "LINK CABLE", menu_bank());
+    /* Over the air (wireless.c) the same screen, its own words. */
+    draw_text_centred(8, wireless_on() ? "WIRELESS" : "LINK CABLE", menu_bank());
 
     clear_both(MENU_IN_TX, 10, MENU_IN_W, 7);
     if (!lobby->linked) {
@@ -626,7 +627,12 @@ void draw_link_wait(const TengenLobby *lobby, int elapsed) {
                 draw_text_centred(14, "PICK 2 PLAYER THERE TOO", BANK_NOTE);
                 break;
             default:
-                if (link_is_master()) {
+                if (wireless_on()) {
+                    /* Looking for a room, or holding one open, by turns. */
+                    draw_text_centred(10, "LOOKING FOR OTHER GBA", menu_bank());
+                    draw_text_centred(12, "B TO GO BACK", menu_bank());
+                    draw_text_centred(14, "PICK 2 PLAYER THERE TOO", BANK_NOTE);
+                } else if (link_is_master()) {
                     draw_text_centred(10, "SWITCH THE OTHER GBA ON", menu_bank());
                     draw_text_centred(12, "B TO GO BACK", menu_bank());
                     draw_text_centred(14, "IT NEEDS NO CARTRIDGE", BANK_NOTE);

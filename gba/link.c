@@ -123,7 +123,32 @@ static inline void load_send(void) {
 
 static inline void tx(uint16_t word) {
     g_tx_word = word;
+    if (wireless_on()) return;              /* the port is the adapter's */
     if (!(REG_SIOCNT & SIO_START)) load_send();
+}
+
+/* ----------------------------------------------------------------------- *
+ * For wireless.c: the air makes the same transfers the cable would, and
+ * puts them in the same queue.
+ * ----------------------------------------------------------------------- */
+
+uint16_t link_tx_word(void) {
+    return g_tx_word;
+}
+
+void link_push_pair(uint16_t master, uint16_t slave) {
+    uint8_t head = g_rx_head;
+    uint8_t next = (uint8_t)((head + 1u) % RX_QUEUE);
+    if (next != g_rx_tail) {
+        g_rx[head].master = master;
+        g_rx[head].slave = slave;
+        g_rx_head = next;
+    }
+    g_starved = 0;
+}
+
+void link_heard(void) {
+    g_starved = 0;
 }
 
 /* THROUGH NORMAL MODE AND BACK: a real change of mode for the serial
@@ -245,6 +270,20 @@ void link_serial_service(void) {
 }
 
 void link_init(void) {
+    if (wireless_present()) {
+        /* Over the air: no interrupt, no multiplayer mode; the adapter is
+         * run from link_pump, once a frame (wireless.c). */
+        g_rx_head = 0;
+        g_rx_tail = 0;
+        g_starved = 0xFFFF;
+        g_tx_frame = 0;
+        g_auto_tx = false;
+        g_peer_empty = 0;
+        g_tx_word = 0;
+        wireless_open();
+        g_armed = true;
+        return;
+    }
     gbp_release();           /* the port is the cable's now, not the Player's */
     /* RCNT bits 14-15 pick between the serial modes and the general-purpose
      * ones; zero leaves SIOCNT in charge. NOT through general purpose on the
@@ -297,6 +336,12 @@ void link_init(void) {
  * with 0, which the lobby reads as "not in the lobby" (tag NONE), and its SO
  * stays where the other console expects it. */
 void link_shutdown(void) {
+    if (wireless_on()) {
+        wireless_close();
+        g_auto_tx = false;
+        g_armed = false;
+        return;
+    }
     REG_IME = 0;
     REG_SIOCNT &= (uint16_t)~SIO_IRQ;
     REG_IE &= (uint16_t)~IRQ_SERIAL;
@@ -316,7 +361,7 @@ void link_shutdown(void) {
  * and the LINK CABLE screen on the other end says to wait for its player
  * (link_peer) rather than to switch it on. */
 void link_rest(void) {
-    if (gbp_owns_serial()) return;
+    if (gbp_owns_serial() || wireless_present()) return;
     if (REG_RCNT & 0xC000) REG_RCNT = 0x0000;
     REG_SIOCNT = SIO_NORMAL_SO_HIGH;
     REG_SIOCNT = SIO_MODE_MULTI | SIO_BAUD;
@@ -338,6 +383,7 @@ void link_rest(void) {
  * is harmless: SD is low too, nobody transfers, and the slave becomes one
  * when the master arrives. */
 void link_sample_role(void) {
+    if (wireless_on()) return;
     uint16_t cnt = REG_SIOCNT;
     if (cnt & SIO_START) return;
     bool master = (cnt & SIO_SI) == 0;
@@ -353,6 +399,7 @@ void link_sample_role(void) {
  * hardware's own answer, checked against the slot this console's word
  * landed in — and the settled SI pin before that. */
 bool link_is_master(void) {
+    if (wireless_on()) return wireless_host();
     if (g_id_known) return g_id == 0;
     return g_si_master;
 }
@@ -367,6 +414,11 @@ bool link_connected(void) {
  * a port that is stuck, not a slow transfer. Both as gba-link-connection
  * does them. */
 void link_pump(void) {
+    /* Over the air both consoles have their part to play every frame. */
+    if (wireless_on()) {
+        wireless_frame();
+        return;
+    }
     if (!g_armed || !link_is_master()) return;
     uint16_t cnt = REG_SIOCNT;
     if (cnt & SIO_START) {                 /* one is still in flight */
@@ -461,7 +513,8 @@ void link_lobby_step(TengenLobby *lobby) {
      * found each other again — a port stuck somewhere this cannot see is
      * one explanation (INFERRED; the emulator's cable does not do it). Every
      * LINK_QUIET_RESTART frames is nothing like the storms of old. */
-    if (!master && !lobby->linked && g_starved >= LINK_QUIET_RESTART &&
+    if (!wireless_on() && !master && !lobby->linked &&
+        g_starved >= LINK_QUIET_RESTART &&
         ++g_quiet_frames >= LINK_QUIET_RESTART) {
         g_quiet_frames = 0;
         REG_IME = 0;
@@ -515,8 +568,9 @@ void link_play_begin(void) {
      * transfer of the match carries real buttons rather than the lobby's
      * last GO. */
     tx(tengen_link_pack(link_read_buttons(), 0));
-    g_auto_tx = true;
+    g_auto_tx = !wireless_on();   /* over the air, wireless.c makes them */
     REG_IME = IME_ON;
+    if (wireless_on()) wireless_match_begin();
 }
 
 void link_play_end(void) {
@@ -546,6 +600,7 @@ void link_name_start(TengenNameSwap *swap) {
     LinkFrame f;
     while (link_pop(&f)) { }
     name_send(swap);
+    if (wireless_on()) wireless_lobby_begin();
 }
 
 void link_name_step(TengenNameSwap *swap) {
@@ -749,6 +804,7 @@ LinkSendResult link_multiboot_send(const uint8_t *image, uint32_t len,
 static uint8_t g_probe_clock;
 
 void link_probe(void) {
+    if (wireless_on()) return;      /* no cable to ask */
     if (++g_probe_clock % LINK_PROBE_EVERY) return;
     if (!g_armed || !link_is_master()) {
         g_peer_empty = 0;
@@ -782,6 +838,9 @@ void link_probe(void) {
 }
 
 LinkPeer link_peer(void) {
+    if (wireless_on())
+        return wireless_linked() && link_connected() ? LINK_PEER_SOMEONE
+                                                     : LINK_PEER_NOBODY;
     if (g_peer_empty) return LINK_PEER_EMPTY_GBA;
     return link_connected() ? LINK_PEER_SOMEONE : LINK_PEER_NOBODY;
 }
@@ -801,7 +860,7 @@ LinkPeer link_peer(void) {
 static uint8_t g_beacon_clock;
 
 void link_beacon(void) {
-    if (g_armed) return;
+    if (g_armed || wireless_present()) return;
     if (++g_beacon_clock % LINK_BEACON_EVERY) return;
     uint16_t cnt = REG_SIOCNT;
     if ((cnt & 0x3000) != SIO_MODE_MULTI) return;   /* not at rest */

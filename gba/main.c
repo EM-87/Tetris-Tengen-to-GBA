@@ -16,8 +16,14 @@ int main(void) {
     /* Read before anything waits for the buttons to be let go (the splash
      * does): see erase_records_prompt. */
     bool erase_asked = erase_chord_held();
-    /* ...and the cable answers from the start, wherever the player is: see
-     * link_rest. */
+    /* A Wireless Adapter in the port, asked once (wireless.c): if one
+     * answers, 2 PLAYER and COOPERATIVE go over the air. Not on the
+     * Single-Pak copy, which came over a cable. */
+#ifndef TENGEN_MULTIBOOT
+    wireless_detect();
+#endif
+    /* ...and otherwise the cable answers from the start, wherever the
+     * player is: see link_rest. */
     link_rest();
     /* The publisher's logo, at power-on only; see splash.c. */
     splash_show();
@@ -775,7 +781,8 @@ int main(void) {
             }
             bool auto_send = auto_send_wait >= AUTO_SEND_FRAMES &&
                              !auto_send_refused;
-            if (!lobby.linked && ((pressed & TENGEN_BTN_SELECT) || auto_send)) {
+            if (!lobby.linked && !wireless_on() &&
+                ((pressed & TENGEN_BTN_SELECT) || auto_send)) {
                 const uint8_t *img = single_pak_image();
                 uint32_t img_len = single_pak_length();
                 screen_blip();
