@@ -255,7 +255,14 @@ static bool g_wl_present;
  * rest (link_rest). The reset's general-purpose flutter is a one-off. */
 bool wireless_detect(void) {
     g_wl_present = wl_start();
-    if (g_wl_present) wl_command(CMD_BYE, 0, 0, 0, 0);
+    if (g_wl_present) {
+        wl_command(CMD_BYE, 0, 0, 0, 0);
+    } else {
+        /* Nobody answered: the port as the cable expects to find it, the
+         * general-purpose bits the reset left behind cleared too. */
+        WL_RCNT = 0;
+        WL_SIOCNT = 0;
+    }
     return g_wl_present;
 }
 
@@ -285,6 +292,8 @@ static uint16_t g_rand = 0x1D2B;
 static bool g_paired;
 static int g_quiet;              /* linked frames with nothing heard */
 static int g_off_wait;           /* frames before the next login try */
+static int g_login_fails;        /* logins in a row nobody answered */
+#define WL_GONE_LOGINS 3         /* ...and unpaired, the adapter is gone */
 #define WL_LOST_FRAMES 90        /* well inside LINK_GIVEUP_FRAMES */
 #define WL_RETRY_FRAMES 30       /* a login that failed is tried again */
 
@@ -362,7 +371,19 @@ static void wl_session_step(void) {
             /* No adapter answering: try again, now and then — a login that
              * fails costs most of a frame in waits. */
             if (g_off_wait > 0) { g_off_wait--; return; }
-            if (!wl_start()) { g_off_wait = WL_RETRY_FRAMES; return; }
+            if (!wl_start()) {
+                g_off_wait = WL_RETRY_FRAMES;
+                /* Pulled out before anybody was found over it: the cable
+                 * may have the port back (main.c, the LINK CABLE screen).
+                 * A pair keeps trying — the match waits for its partner. */
+                if (++g_login_fails >= WL_GONE_LOGINS && !g_paired) {
+                    g_wl_present = false;
+                    WL_RCNT = 0;
+                    WL_SIOCNT = 0;
+                }
+                return;
+            }
+            g_login_fails = 0;
             if (g_paired && g_host) wl_host_begin();
             else wl_search_begin();
             return;
@@ -657,6 +678,7 @@ void wireless_open(void) {
     g_host = false;
     g_paired = false;
     g_off_wait = 0;
+    g_login_fails = 0;
     wl_transport_reset();
 }
 

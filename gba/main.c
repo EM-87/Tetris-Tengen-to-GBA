@@ -100,6 +100,12 @@ int main(void) {
     /* The Single-Pak send that starts by itself; see the LINK CABLE screen. */
 #define AUTO_SEND_FRAMES 45
     int auto_send_wait = 0;
+#ifndef TENGEN_MULTIBOOT
+    /* The adapter asked for again from the cable's screen; see there. */
+#define RADIO_FIRST_TRY 180
+#define RADIO_RETRY 300
+    int radio_wait = 0;
+#endif
     bool auto_send_refused = false;
     uint8_t held_last = 0;
     bool sweeping = false;   /* true while the line-clear sweep owns the OAM */
@@ -757,6 +763,40 @@ int main(void) {
                 oam_hide_all();
                 continue;
             }
+
+#ifndef TENGEN_MULTIBOOT
+            /* THE ADAPTER, PLUGGED IN AFTER POWER-ON. It is asked for at
+             * power-on (wireless_detect), and a player who plugs it in later
+             * finds the cable's screen. So the cable's screen asks too —
+             * only when nobody is on the cable at all (link_peer): the
+             * login takes the port through general purpose, which a
+             * console of ours on the other end would hear as a flutter, and
+             * one in its BIOS is found by the probe. Every few seconds,
+             * while nobody comes; found, the screen is the WIRELESS one. */
+            /* (Not on a Game Boy Player, whose port the cable borrows.) */
+            if (!lobby.linked && !wireless_on() && !gbp_present() &&
+                link_peer() == LINK_PEER_NOBODY) {
+                if (++radio_wait >= RADIO_FIRST_TRY) {
+                    radio_wait = RADIO_FIRST_TRY - RADIO_RETRY;
+                    link_shutdown();
+                    wireless_detect();
+                    link_rest();
+                    link_init();     /* over the air, if it answered */
+                    tengen_lobby_forget(&lobby, link_is_master());
+                }
+            } else {
+                radio_wait = 0;
+            }
+            /* ...and the other way: one that stops answering before anybody
+             * was found over it (wireless.c gives up on it) hands the
+             * screen back to the cable. */
+            if (wireless_on() && !wireless_present() && !lobby.linked) {
+                link_shutdown();
+                link_rest();
+                link_init();
+                tengen_lobby_forget(&lobby, link_is_master());
+            }
+#endif
 
             /* SINGLE-PAK: SELECT, while nobody has answered, sends the game
              * to a console with no cartridge (link_multiboot_send) — from

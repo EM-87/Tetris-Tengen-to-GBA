@@ -735,13 +735,77 @@ def _title_face(core):
     return tuple(run_rom.tilemap_text(core, r) for r in (4, 6, 8))
 
 
+def plug_check(rom):
+    """THE ADAPTER PLUGGED IN AFTER POWER-ON, AND PULLED OUT BEFORE A MATCH.
+
+    Two consoles switched on with their adapters out go to 2 PLAYER: the
+    cable's screen, nobody on it. The adapters go in, and the cable's screen
+    asks for one now and then (main.c, RADIO_FIRST_TRY): both turn WIRELESS
+    and find each other. And a console looking over the air whose adapter
+    is pulled out goes back to the cable's screen (WL_GONE_LOGINS)."""
+    random.seed(6)
+    cores, air, fakes, both, tap = _pair(rom)
+    for f in fakes:
+        f.unplugged = True
+    both(60)
+    for w in (0, 1):
+        tap("START", who=w)
+        tap("DOWN", who=w)
+        tap("START", who=w)
+    both(60)
+    if not all("LINK CABLE" in _rows(c) for c in cores):
+        print("FALLA: sin adaptador al encender, 2 PLAYER no es el cable")
+        return 1
+    for f in fakes:
+        f.replug()
+    host = None
+    for t in range(80):
+        both(20)
+        host = next((i for i, c in enumerate(cores)
+                     if "HANDICAP" in _rows(c)), None)
+        if host is not None:
+            break
+    if host is None:
+        print(f"FALLA: enchufado despues, no se encuentran por el aire: "
+              f"{[' '.join(_rows(c).split())[:50] for c in cores]}")
+        return 1
+    print(f"  adaptadores enchufados con el juego en marcha: WIRELESS solo, y "
+          f"se encuentran en {t * 20 + 20} frames")
+
+    random.seed(8)
+    cores, air, fakes, both, tap = _pair(rom)
+    both(60)
+    tap("START", who=0)
+    tap("DOWN", who=0)
+    tap("START", who=0)
+    both(60)
+    if "WIRELESS" not in _rows(cores[0]):
+        print("FALLA: con adaptador, 2 PLAYER no es el inalambrico")
+        return 1
+    fakes[0].unplug()
+    back = None
+    for t in range(40):
+        both(10)
+        if "LINK CABLE" in _rows(cores[0]):
+            back = t * 10 + 10
+            break
+    if back is None:
+        print(f"FALLA: sin el adaptador, la pantalla no vuelve al cable: "
+              f"{' '.join(_rows(cores[0]).split())[:50]!r}")
+        return 1
+    print(f"  adaptador fuera antes de encontrar a nadie: vuelve a LINK CABLE "
+          f"en {back} frames")
+    return 0
+
+
 def main():
     if len(sys.argv) not in (2, 3):
         sys.exit("usage: run_wireless.py build/tengen.gba [lost.png]")
     rom = sys.argv[1]
     code = (plain_check(rom) or together_check(rom) or _play(rom, False) or
             _play(rom, True) or drop_check(rom) or
-            gone_check(rom) or exit_check(rom))
+            gone_check(rom) or exit_check(rom) or
+            plug_check(rom))
     if not code:
         print("OK: dos GBA con adaptador inalambrico (el de prueba) se "
               "encuentran y juegan la misma partida.")

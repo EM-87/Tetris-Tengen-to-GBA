@@ -262,8 +262,13 @@ story behind each; the item number is in brackets.
   screen at arm's length (NOTES.md, LEVEL SETTINGS). Run only against a stand-in (`gbp_check`, `FakePlayer`):
   the mGBA the checks use does not emulate a Player.
 - **The Wireless Adapter is the cable's understudy** (`wireless.c`): asked
-  once at power-on (`wireless_detect`, the NINTENDO login; not on the
-  Single-Pak copy), and if it answers, `link_init`, `link_pump` and the rest
+  for at power-on (`wireless_detect`, the NINTENDO login; not on the
+  Single-Pak copy) and again from the LINK CABLE screen every few seconds
+  while NOBODY is on the cable (`RADIO_FIRST_TRY`, main.c — the login takes
+  the port through general purpose, which a console of ours would hear,
+  and not on a Player), so one plugged in late is found; one that stops
+  answering before anybody was found over it (`WL_GONE_LOGINS`) gives the
+  screen back to the cable (`plug_check`). If it answers, `link_init`, `link_pump` and the rest
   run it instead of the cable, so the lobby, the lockstep and the records
   swap above link.c do not change. Each console searches for a room a
   random while and hosts one if it finds none (the host is the master);
@@ -520,7 +525,8 @@ colour through one table for the GBA's LCD (`kLcdGamma`, the identity
 today); the Game Boy Player's logo at power-on, its rumble, and on it the
 cartridge's three settings pages instead of the one (`gbp.c`,
 `draw_tv_page`); 2 PLAYER and COOPERATIVE over the Wireless Adapter, found by
-itself at power-on, the LINK CABLE screen saying WIRELESS (`wireless.c`);
+itself at power-on or plugged in later, the LINK CABLE screen saying
+WIRELESS (`wireless.c`);
 "EXIT GAME", not "EXIT", on the pause menu (a player took it for closing the
 menu); the high scores erased by L+R+B held at power-on, asked twice with NO
 chosen (`erase_records_prompt`); under the chord, a seventh credit, BUILD and
