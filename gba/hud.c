@@ -818,14 +818,26 @@ static void mend_shelf_joins(void) {
         join[r * 2] = first;
         join[r * 2 + 1] = wall[r * 2 + 1];
     }
+    /* The wall is a column the full height of the screen, so it is found
+     * on the top and bottom rows and only its column is walked: scanning the
+     * whole map put the repaint that ends a pause past the vertical blank
+     * (`--vblank`, line 5 of the next frame). */
     vu16 *map = MEM_SCREENBLOCK(SCREENBLOCK);
-    for (int ty = 0; ty < SCREEN_TH; ty++)
-        for (int tx = 1; tx < MAP_W; tx++) {
+    uint32_t cols = 0;
+    for (int tx = 1; tx < SCREEN_TW; tx++)
+        if ((map[tx] & 0x3FF) == TILE_WALL_LEFT ||
+            (map[(SCREEN_TH - 1) * MAP_W + tx] & 0x3FF) == TILE_WALL_LEFT)
+            cols |= 1u << tx;
+    for (int tx = 1; cols; tx++) {
+        if (!(cols & (1u << tx))) continue;
+        cols &= ~(1u << tx);
+        for (int ty = 0; ty < SCREEN_TH; ty++) {
             uint16_t e = map[ty * MAP_W + tx];
             if ((e & 0x3FF) == TILE_WALL_LEFT &&
                 (map[ty * MAP_W + tx - 1] & 0x3FF) == TILE_SHELF)
                 map[ty * MAP_W + tx] = (uint16_t)((e & ~0x3FFu) | SHELF_JOIN_TILE);
         }
+    }
 }
 
 void draw_static_screen(void) {
