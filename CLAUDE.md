@@ -268,8 +268,18 @@ story behind each; the item number is in brackets.
   match is lockstep by frame with WL_DELAY frames of input delay, each
   packet carrying the frames the other side has not played yet, from the
   oldest (a window that started at the newest lost a frame for good and the
-  guest never played one). Every wait is on the scanline counter and no
-  interrupt is used. Written from GBATEK and gba-link-connection, and run
+  guest never played one). A console that leaves the match first keeps
+  sending its frames (the TAIL, `g_tail`, bit 29 once both have left)
+  until the other is heard from the records: with the input delayed the two
+  do not reach the last frame together, and the one left behind ended a
+  piece short — another score, another table. Once paired, the two keep
+  their roles until `link_shutdown`: nothing heard for WL_LOST_FRAMES and
+  both start over, the host straight to hosting, the client only searching,
+  the transport as it stood; the match waits with LINK ISSUES meanwhile,
+  and gone for good it ends under SIGNAL LOST, not CABLE LOST (decided as
+  it is lost: the port is put away before the window is drawn). Not on the
+  Single-Pak copy, which is stubs (it had no room). Every wait is on the
+  scanline counter and no interrupt is used. Written from GBATEK and gba-link-connection, and run
   only against `FakeAdapter` (`run_wireless.py`), which is the same
   documentation as a model: INFERRED until two real adapters agree. Booting
   takes a little longer for the login, so the seed and the deal move — a
@@ -560,7 +570,9 @@ And what has run only in an emulator:
 - **The Game Boy Player** has run only against `FakePlayer`: the logo,
   the 030Fh answer, GBATEK's handshake and the rumble.
 - **The Wireless Adapter** has run only against `FakeAdapter`: the login,
-  the commands and their handshake, the rooms, the data and both modes.
+  the commands and their handshake, the rooms, the data, both modes, an
+  adapter pulled out and put back on either side, one gone for good, and
+  the records swap.
 - **The paused game through a power cycle and the logo** have run only in
   mGBA (`suspend_check`). On a flash cart the save memory has to reach the
   card for the game to survive: the EZ-Flash IV and the SuperCard each do

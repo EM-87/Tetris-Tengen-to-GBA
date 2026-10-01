@@ -81,6 +81,7 @@ class FakeAdapter(mgba.gba.GBASIODriver):
         self.si = False             # the adapter's SI to the GBA
         self.acking = False         # a command transfer awaits its handshake
         self.logins = 0
+        self.unplugged = False
         self.commands = []          # every command id, in order
         self.reset_link()
 
@@ -233,16 +234,20 @@ class FakeAdapter(mgba.gba.GBASIODriver):
             return ans
         return 0
 
-    def _set_si(self, on):
-        self.si = on
-        io = self.core._native.memory.io
-        sio = self.core._native.sio
-        if on:
-            io[REG_SIOCNT >> 1] |= SIO_SI
-            sio.siocnt |= SIO_SI
-        else:
-            io[REG_SIOCNT >> 1] &= ~SIO_SI
-            sio.siocnt &= ~SIO_SI
+    def unplug(self):
+        """Pulled out: gone from the air at once, and the port reads what a
+        port with nothing on it reads — all ones, SI pulled high — so every
+        handshake times out."""
+        self.drop()
+        self.unplugged = True
+
+    def replug(self):
+        """Back in, as out of the box: it wants the login first."""
+        self.unplugged = False
+        self.state = "login"
+        self.prev_lo = 0
+        self.acking = False
+        self.si = False
 
     def writeRegister(self, address, value):
         if address != REG_SIOCNT:
@@ -250,6 +255,13 @@ class FakeAdapter(mgba.gba.GBASIODriver):
         if (value & 0x3000) != 0x1000:              # not 32-bit normal
             return value & ~SIO_SI
         so_high = bool(value & SIO_SO)
+        if self.unplugged:
+            if (value & SIO_START) and (value & 1):
+                io = self.core._native.memory.io
+                io[IO_SIODATA_LO] = 0xFFFF
+                io[IO_SIODATA_HI] = 0xFFFF
+                value &= ~SIO_START
+            return value | SIO_SI
         if (value & SIO_START) and (value & 1):     # internal clock: go
             io = self.core._native.memory.io
             out = io[IO_SIODATA_LO] | (io[IO_SIODATA_HI] << 16)
@@ -464,12 +476,202 @@ def together_check(rom):
     return 1
 
 
+def _into_match(cores, both, tap):
+    """Both to 2 PLAYER, one after the other, and the host's START: the
+    host's index, or None if they never find each other."""
+    both(60)
+    for who in (0, 1):
+        tap("START", who=who)
+        tap("DOWN", who=who)
+        tap("START", who=who)
+        both(30)
+    host = None
+    for _ in range(60):
+        both(20)
+        host = next((i for i, c in enumerate(cores)
+                     if "HANDICAP" in _rows(c)), None)
+        if host is not None:
+            break
+    if host is None:
+        return None
+    tap("START", who=host)
+    both(120, [[KEYS["DOWN"]], [KEYS["DOWN"]]])
+    return host
+
+
+def gone_check(rom):
+    """AN ADAPTER THAT NEVER COMES BACK: the match gives up as it does on a
+    cable, and the window says SIGNAL LOST — there is no cable to lose."""
+    import run_rom
+    random.seed(9)
+    cores, air, fakes, both, tap = _pair(rom)
+    lost, why = symbol(rom, "g_link_lost")
+    if lost is None:
+        print(f"SALTADO: {why}")
+        return 0
+    host = _into_match(cores, both, tap)
+    if host is None:
+        print("FALLA: no se encuentran por el aire")
+        return 1
+    fakes[1 - host].unplug()
+    both(800)
+    texts = [" ".join(run_rom.tilemap_text(c, r) for r in range(0, 20))
+             for c in cores]
+    bad = [i for i, c in enumerate(cores)
+           if not c.memory.u8[lost[0]] or "SIGNAL LOST" not in texts[i]]
+    if bad:
+        print(f"FALLA: sin adaptador para siempre, la(s) consola(s) {bad} no "
+              f"dan la partida por perdida con SIGNAL LOST")
+        return 1
+    if len(sys.argv) > 2:
+        _KEEP[-1][1][host].to_pil().convert("RGB").resize((480, 320)).save(
+            sys.argv[2])
+    print("  sin adaptador para siempre: las dos acaban con SIGNAL LOST")
+    return 0
+
+
+def drop_check(rom):
+    """AN ADAPTER PULLED OUT MID-MATCH, AND THE MATCH TO THE END.
+
+    The guest's adapter and then the host's go out for a few seconds each:
+    both consoles wait with LINK ISSUES, find each other again in the same
+    roles, and the match carries on, still the same game on both. Then
+    both boards are buried, the game ends, each player types a name, and
+    the names cross the air (the records swap) as they do the cable."""
+    import run_rom
+    from run_link import TENGEN_PF_WIDTH, TENGEN_PF_HEIGHT, CELL_WALL, \
+        LEADER_INITIALS
+    random.seed(5)
+    cores, air, fakes, both, tap = _pair(rom)
+    sym, why = symbol(rom, "g_session")
+    waiting, _ = symbol(rom, "g_link_waiting")
+    lost, _ = symbol(rom, "g_link_lost")
+    if sym is None or waiting is None or lost is None:
+        print(f"SALTADO: {why}")
+        return 0
+    addr, size = sym
+    game_size = size - 4
+    off = run_rom.game_offsets(rom)
+    failures = []
+
+    host = _into_match(cores, both, tap)
+    if host is None:
+        print("FALLA: no se encuentran por el aire")
+        return 1
+
+    def frame_of(core):
+        return core.memory.u8[addr + game_size + 1]
+
+    def same():
+        a = read_bytes(cores[0], addr, size)
+        b = read_bytes(cores[1], addr, size)
+        return a[game_size + 1] != b[game_size + 1] or a[:game_size] == b[:game_size]
+
+    for who, name in ((1 - host, "la invitada"), (host, "la anfitriona")):
+        fakes[who].unplug()
+        saw_wait = False
+        for _ in range(200):
+            both(1)
+            saw_wait = saw_wait or all(c.memory.u8[waiting[0]] for c in cores)
+        fakes[who].replug()
+        before = frame_of(cores[0])
+        back = None
+        diverged = False
+        for f in range(500):
+            both(1, [[KEYS["DOWN"]], []])
+            diverged = diverged or not same()
+            if back is None and (frame_of(cores[0]) - before) % 256 > 30:
+                back = f
+        if not saw_wait:
+            failures.append(f"sin el adaptador de {name} las dos no esperan "
+                            f"con LINK ISSUES")
+        if any(c.memory.u8[lost[0]] for c in cores):
+            failures.append(f"sin el adaptador de {name} se da la partida "
+                            f"por perdida")
+            break
+        if back is None:
+            failures.append(f"vuelto el adaptador de {name}, la partida no "
+                            f"sigue")
+            break
+        if diverged:
+            failures.append(f"tras volver el adaptador de {name} las dos ya "
+                            f"no juegan la misma partida")
+            break
+        print(f"  sin el adaptador de {name}: las dos esperan; vuelto, se "
+              f"reencuentran y la partida sigue a los {back} frames")
+    if failures:
+        for f in failures:
+            print(f"FALLA: {f}")
+        return 1
+
+    # The end of the match, planted on the frame both stand at (the input
+    # is delayed, so they need not be on the same one at any moment).
+    SCORES = (60000, 45000)
+    field = addr + off["field"]
+    PF = TENGEN_PF_HEIGHT * TENGEN_PF_WIDTH
+    for _ in range(100):
+        both(1)
+        if frame_of(cores[0]) == frame_of(cores[1]) and same():
+            break
+    for core in cores:
+        for who, score in enumerate(SCORES):
+            at = addr + off["score"] + who * off["stride"]
+            for k in range(4):
+                core.memory.u8[at + k] = (score >> (8 * k)) & 0xFF
+        for board in (0, 1):
+            for r in range(TENGEN_PF_HEIGHT):
+                for c in range(TENGEN_PF_WIDTH):
+                    core.memory.u8[field + board * PF + r * TENGEN_PF_WIDTH + c] = (
+                        CELL_WALL if c in (0, TENGEN_PF_WIDTH - 1)
+                        else (0 if c == 5 else 0x01))
+    both(300)
+    tap("START")
+    both(40)
+    blind = [i for i, c in enumerate(cores)
+             if "HIGH SCORES" not in run_rom.tilemap_text(c, 2, 0, 30)]
+    if blind:
+        print(f"FALLA: la(s) consola(s) {blind} no llegan a la tabla")
+        return 1
+
+    def letters(who, steps):
+        for _ in range(LEADER_INITIALS):
+            for _ in range(steps):
+                both(3, [[KEYS["UP"]] if who == i else [] for i in range(2)])
+                both(5)
+            both(3, [[KEYS["A"]] if who == i else [] for i in range(2)])
+            both(6)
+
+    letters(host, 1)          # BBB
+    letters(1 - host, 3)      # DDD
+    both(240)
+    pages = [[run_rom.tilemap_text(c, run_rom.LEADER_FIRST_TY + r, 0, 30)
+              for r in range(15)] for c in cores]
+    if pages[0] != pages[1]:
+        failures.append("las dos tablas no son iguales: el final de la "
+                        "partida no fue el mismo en las dos")
+    for i, core in enumerate(cores):
+        page = " ".join(run_rom.tilemap_text(core, run_rom.LEADER_FIRST_TY + r,
+                                             0, 30) for r in range(15))
+        own, rival = ("BBB", "DDD") if i == host else ("DDD", "BBB")
+        if own not in page or rival not in page:
+            failures.append(f"la consola {i} no tiene {own} y {rival} en su "
+                            f"tabla: {' '.join(page.split())[:80]!r}")
+    if failures:
+        for f in failures:
+            print(f"FALLA: {f}")
+        return 1
+    print("  al acabar, cada nombre cruza el aire, y las dos tablas salen "
+          "iguales")
+    return 0
+
+
 def main():
-    if len(sys.argv) != 2:
-        sys.exit("usage: run_wireless.py build/tengen.gba")
+    if len(sys.argv) not in (2, 3):
+        sys.exit("usage: run_wireless.py build/tengen.gba [lost.png]")
     rom = sys.argv[1]
     code = (plain_check(rom) or together_check(rom) or _play(rom, False) or
-            _play(rom, True))
+            _play(rom, True) or drop_check(rom) or
+            gone_check(rom))
     if not code:
         print("OK: dos GBA con adaptador inalambrico (el de prueba) se "
               "encuentran y juegan la misma partida.")

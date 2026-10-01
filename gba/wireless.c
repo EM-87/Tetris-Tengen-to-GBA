@@ -40,6 +40,10 @@
  *     frame counter in both words — so the match code cannot tell. */
 #include "port.h"
 
+/* Not on the Single-Pak copy, which came over a cable and has no room to
+ * spare: there the adapter is never there (stubs at the bottom). */
+#ifndef TENGEN_MULTIBOOT
+
 #define WL_SIOCNT  (*(vu16 *)0x04000128)
 #define WL_SIODATA (*(vu32 *)0x04000120)
 #define WL_RCNT    (*(vu16 *)0x04000134)
@@ -272,6 +276,17 @@ static bool g_host;              /* this console hosts: the cable's master */
 static int g_timer;              /* frames in the state */
 static int g_limit;              /* ...and how many it gets */
 static uint16_t g_rand = 0x1D2B;
+/* THE PAIR OUTLIVES THE RADIO. Once two consoles have found each other
+ * they keep their roles until link_shutdown: if either side goes quiet
+ * (an adapter knocked out, a console carried out of range) both start
+ * over, the host straight to hosting and the client only to searching,
+ * and the transport carries on from where it stood — the match waits
+ * meanwhile with LINK ISSUES, as for a cable. */
+static bool g_paired;
+static int g_quiet;              /* linked frames with nothing heard */
+static int g_off_wait;           /* frames before the next login try */
+#define WL_LOST_FRAMES 90        /* well inside LINK_GIVEUP_FRAMES */
+#define WL_RETRY_FRAMES 30       /* a login that failed is tried again */
 
 static int wl_random(int lo, int hi) {
     g_rand = (uint16_t)(g_rand * 25173u + 13849u + REG_VCOUNT);
@@ -288,6 +303,8 @@ static void wl_search_begin(void) {
     wl_go(WL_SEARCH);
     g_limit = wl_random(60, 150);
 }
+
+static void wl_host_begin(void);
 
 static void wl_host_begin(void) {
     /* Game ID, "TENGEN TETRIS", "PLAYER", the way LinkRawWireless lays
@@ -321,6 +338,17 @@ static void wl_host_begin(void) {
 
 static void wl_transport_reset(void);
 
+/* Linked: a first time, from scratch; again, the transport as it was. */
+static void wl_linked(bool host) {
+    if (!g_paired) {
+        g_host = host;
+        wl_transport_reset();
+    }
+    g_paired = true;
+    g_quiet = 0;
+    wl_go(WL_LINKED);
+}
+
 /* Once a frame until linked. */
 static void wl_session_step(void) {
     uint32_t r[28];
@@ -328,8 +356,12 @@ static void wl_session_step(void) {
     g_timer++;
     switch (g_state) {
         case WL_OFF:
-            if (!wl_start()) return;          /* no adapter answering: retry */
-            wl_search_begin();
+            /* No adapter answering: try again, now and then — a login that
+             * fails costs most of a frame in waits. */
+            if (g_off_wait > 0) { g_off_wait--; return; }
+            if (!wl_start()) { g_off_wait = WL_RETRY_FRAMES; return; }
+            if (g_paired && g_host) wl_host_begin();
+            else wl_search_begin();
             return;
         case WL_SEARCH:
             if (g_timer % 10) return;
@@ -350,7 +382,9 @@ static void wl_session_step(void) {
             }
             if (g_timer >= g_limit) {
                 if (wl_command(CMD_READ_END, 0, 0, 0, 0) < 0) { g_state = WL_OFF; return; }
-                wl_host_begin();
+                /* A client that has lost its host only looks for it. */
+                if (g_paired) wl_search_begin();
+                else wl_host_begin();
             }
             return;
         case WL_CONNECTING:
@@ -365,9 +399,7 @@ static void wl_session_step(void) {
                 g_state = WL_OFF;
                 return;
             }
-            g_host = false;
-            wl_transport_reset();
-            wl_go(WL_LINKED);
+            wl_linked(false);
             return;
         case WL_HOSTING:
             n = wl_command(CMD_POLL_CONNS, 0, 0, r, 4);
@@ -375,13 +407,12 @@ static void wl_session_step(void) {
             if (n > 0) {
                 /* Two players is a full room: close it, keep the client. */
                 wl_command(CMD_END_HOST, 0, 0, r, 4);
-                g_host = true;
-                wl_transport_reset();
-                wl_go(WL_LINKED);
+                wl_linked(true);
                 return;
             }
-            /* Nobody came: start over, looking first this time. */
-            if (g_timer >= g_limit) g_state = WL_OFF;
+            /* Nobody came: start over, looking first this time — unless
+             * this is a host waiting for its client to come back. */
+            if (g_timer >= g_limit && !g_paired) g_state = WL_OFF;
             return;
         case WL_LINKED:
             return;
@@ -396,13 +427,22 @@ static void wl_session_step(void) {
  * kind's own fields. LOBBY: sequence in bits 16-21, the word in 0-15.
  * MATCH: in bits 16-23 the first frame carried, in 24-25 how many (1-3),
  * in 0-7 the sender's own count of frames played (so the other side knows
- * which of its frames to send next); the words follow, two to a word. */
+ * which of its frames to send next), bit 29 if it has left the match
+ * (g_tail); the words follow, two to a word. */
 #define PK_LOBBY 1u
 #define PK_MATCH 2u
+#define PK_LEFT  (1u << 29)        /* MATCH: sent from the tail, see g_tail */
 #define WL_DELAY 3                 /* frames of input delay in a match */
 #define WL_RING  64
 
 static bool g_match;               /* the transport's mode */
+/* THE MATCH'S TAIL. The two consoles do not leave a match on the same
+ * frame of their own: the input is delayed, and the one that reached the
+ * last frame first went on to the records with the other still a few
+ * frames short of it — frames only the first could send. So a console
+ * that leaves a match keeps sending its frames, from where the other has
+ * played, until the other is heard from the records too. */
+static bool g_tail;
 /* The lobby's stop-and-wait. */
 static uint8_t g_seq;              /* host: the number in flight */
 static uint16_t g_seq_word;        /* host: its word */
@@ -419,6 +459,7 @@ static uint32_t g_remote_played;   /* the other side's, last heard */
 
 static void wl_transport_reset(void) {
     g_match = false;
+    g_tail = false;
     g_seq = 1;
     g_seq_word = link_tx_word();
     g_seq_answered = false;
@@ -442,9 +483,8 @@ void wireless_match_begin(void) {
 
 /* link_name_start and the lobby: transfers again. */
 void wireless_lobby_begin(void) {
+    g_tail = g_match;          /* the ring and the counts stay for it */
     g_match = false;
-    for (int i = 0; i < WL_RING; i++) g_remote_have[i] = 0;
-    g_own_next = g_played = g_remote_played = 0;
     g_seq++;
     g_seq &= 0x3F;
     if (!g_seq) g_seq = 1;
@@ -480,9 +520,12 @@ static void wl_take_match(const uint32_t *w, int n) {
 
 static void wl_take(const uint32_t *w, int n) {
     if (n < 1) return;
+    g_quiet = 0;
     uint32_t kind = w[0] >> 30;
     if (kind == PK_MATCH) {
         wl_take_match(w, n);
+        /* Both left, each still sending the other its tail: done. */
+        if (w[0] & PK_LEFT) g_tail = false;
         /* A client still in the lobby when the host's match begins: the
          * host's GO has been answered, and a match word from it is the
          * lobby's signal to go (tengen_lobby_apply, saw_go). */
@@ -490,13 +533,14 @@ static void wl_take(const uint32_t *w, int n) {
          * a client gone to the match, which answers lobby words no more —
          * its first move is the echo (tengen_lobby_apply, the master at
          * GO), as on the cable. */
-        if (!g_match && n >= 2) {
+        if (!g_match && !g_tail && n >= 2) {
             if (g_host) link_push_pair(g_seq_word, (uint16_t)w[1]);
             else link_push_pair((uint16_t)w[1], link_tx_word());
         }
         return;
     }
     if (kind != PK_LOBBY || g_match) return;
+    g_tail = false;                    /* the other has left the match too */
     uint8_t seq = (uint8_t)((w[0] >> 16) & 0x3F);
     uint16_t word = (uint16_t)w[0];
     link_heard();
@@ -514,7 +558,7 @@ static void wl_take(const uint32_t *w, int n) {
 
 /* What goes out this frame. */
 static int wl_packet(uint32_t *p) {
-    if (!g_match) {
+    if (!g_match && !g_tail) {
         if (g_host) {
             if (g_seq_answered) {
                 g_seq = (uint8_t)((g_seq + 1) & 0x3F);
@@ -537,7 +581,7 @@ static int wl_packet(uint32_t *p) {
     if (count > 3) count = 3;
     if (count < 0) count = 0;
     p[0] = (PK_MATCH << 30) | ((uint32_t)(count & 3) << 24) |
-           ((from & 0xFF) << 16) | (g_played & 0xFF);
+           ((from & 0xFF) << 16) | (g_played & 0xFF) | (g_tail ? PK_LEFT : 0);
     p[1] = p[2] = 0;
     for (int i = 0; i < count; i++) {
         uint32_t w = g_own[(from + (uint32_t)i) % WL_RING];
@@ -595,6 +639,8 @@ void wireless_open(void) {
     g_wl_on = true;
     g_state = WL_OFF;
     g_host = false;
+    g_paired = false;
+    g_off_wait = 0;
     wl_transport_reset();
 }
 
@@ -629,11 +675,30 @@ void wireless_frame(void) {
         return;
     }
     if (g_match) wl_play();
-    if (!wl_exchange()) {
-        /* The adapter stopped answering: start the session over. The
-         * match above waits with LINK ISSUES meanwhile, as for a cable. */
+    /* The adapter stopped answering, or the other console has not been
+     * heard for a while: start the session over, in the same roles. The
+     * match above waits with LINK ISSUES meanwhile, as for a cable. */
+    if (!wl_exchange() || ++g_quiet > WL_LOST_FRAMES) {
+        wl_command(CMD_BYE, 0, 0, 0, 0);
         g_state = WL_OFF;
+        g_off_wait = 0;
         return;
     }
     if (g_match) wl_play();
 }
+
+#else  /* TENGEN_MULTIBOOT */
+
+bool wireless_detect(void) { return false; }
+bool wireless_present(void) { return false; }
+void wireless_open(void) {}
+void wireless_close(void) {}
+bool wireless_on(void) { return false; }
+bool wireless_linked(void) { return false; }
+bool wireless_host(void) { return false; }
+bool wireless_hosting(void) { return false; }
+void wireless_frame(void) {}
+void wireless_match_begin(void) {}
+void wireless_lobby_begin(void) {}
+
+#endif

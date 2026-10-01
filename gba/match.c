@@ -479,8 +479,12 @@ static void clear_pmenu_layers(int w) {
 /* CABLE LOST, in the pause menu's own window and by its own machinery (what
  * the box covers is kept and put back): the one thing on the screen when the
  * cable is gone for good, on both consoles, where a player looks. */
+static bool g_lost_over_air;   /* link_give_up: the adapter, not a cable */
+
 static void draw_cable_lost_box(void) {
-    const char *lines[] = { "CABLE LOST", "PRESS START", "TO LEAVE" };
+    /* Over the air there is no cable to have lost (wireless.c). */
+    const char *lines[] = { g_lost_over_air ? "SIGNAL LOST" : "CABLE LOST",
+                            "PRESS START", "TO LEAVE" };
     int w = pmenu_width(lines, 3);
     if (!g_pmenu_drawn_w) pmenu_save_under();
     else if (w < g_pmenu_drawn_w) pmenu_restore_strips(g_pmenu_drawn_w, w);
@@ -774,6 +778,8 @@ static void link_give_up(void) {
     }
     g_link_lost = true;
     g_link_waiting = false;
+    /* Asked now: the port is put away before the window is drawn. */
+    g_lost_over_air = wireless_on();
 }
 
 bool link_play_frame(uint8_t pressed, bool *quit) {
