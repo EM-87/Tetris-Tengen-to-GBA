@@ -799,6 +799,9 @@ static void spawn_piece(TengenGame *game, TengenPlayerSlot slot) {
      * checks `menuGameMode` and skips the whole routine for 2P/coop/vs, which
      * is why only the 1P screen has a stats panel. The count saturates rather
      * than wrapping. */
+    if (p->piece.current > TT_NONE && p->piece.current < TENGEN_TETROMINO_COUNT &&
+        p->piece_total[p->piece.current] < 0xFFFF)
+        p->piece_total[p->piece.current]++;
     if (!game->two_player && !game->coop &&
         p->piece.current > TT_NONE && p->piece.current < TENGEN_TETROMINO_COUNT) {
         if (p->piece_stats[p->piece.current] < TENGEN_PIECE_STAT_MAX) {

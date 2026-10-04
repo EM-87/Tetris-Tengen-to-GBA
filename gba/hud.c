@@ -1721,6 +1721,20 @@ static void draw_stats(const TengenPlayerState *p, int base_tx) {
     int floor_ty = skin < 0 ? STATS_ICON_TY - 1 : STATS_ICON_TY + 1;
     int bar_rows = floor_ty - STATS_TOP_TY + 1;
 
+    /* UNDER THE CHORD THE CHART STOPS RUNNING OFF THE TOP. The cartridge's
+     * is absolute, eight pieces a row, and its counts stop at 144 — the
+     * eighteen rows its panel is tall; the port's box is shorter, so a long
+     * game ends with every bar against the ceiling and nothing left to
+     * compare. With the chord the bars read the port's own count
+     * (piece_total: every mode, no cap) and stay absolute while the tallest
+     * fits; once it would not, all seven are scaled to it, so the tallest
+     * touches the top and the rest stand in proportion. A piece dealt at all
+     * keeps at least one step. */
+    uint32_t room = (uint32_t)bar_rows * 8, top = 0;
+    if (g_pause_unlocked)
+        for (int i = 0; i < SCREEN_1P_STATS_PIECES; i++)
+            if (p->piece_total[TT_I + i] > top) top = p->piece_total[TT_I + i];
+
     for (int i = 0; i < SCREEN_1P_STATS_PIECES; i++) {
         int tx = base_tx + i;
         if (skin < 0) {
@@ -1733,7 +1747,14 @@ static void draw_stats(const TengenPlayerState *p, int base_tx) {
                                 WITH_BANK(kStatsIcons[1][i], icon_bank));
         }
 
-        uint16_t n = p->piece_stats[TT_I + i];
+        uint32_t n = p->piece_stats[TT_I + i];
+        if (g_pause_unlocked) {
+            n = p->piece_total[TT_I + i];
+            if (top > room) {
+                uint32_t scaled = n * room / top;
+                n = (n && !scaled) ? 1 : scaled;
+            }
+        }
         int full = n / 8;
         int part = n % 8;
         if (full > bar_rows) { full = bar_rows; part = 0; }

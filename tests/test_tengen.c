@@ -3553,6 +3553,40 @@ static void test_locking_stores_tile_ids_not_piece_ids(void) {
     }
 }
 
+static void test_the_port_counts_every_piece_past_the_cap(void) {
+    /* piece_total: the cartridge's count stops at 144 and only 1P keeps it;
+     * the port's own goes on, in every mode, and agrees with it until then. */
+    for (int mode = 0; mode < 3; mode++) {
+        TengenGame g;
+        tengen_new_game(&g, 0x4D2, 19, mode != 0, mode == 2, false);
+        long dealt = 0;
+        for (long f = 0; f < 400000 && dealt < 1200; f++) {
+            TengenTetromino before = g.player[0].piece.current;
+            uint8_t held = (f & 1) ? TENGEN_BTN_DOWN : 0;
+            TengenStepResult r = tengen_step(&g, TENGEN_PLAYER_1, held);
+            /* The board emptied after every lock, so the game never ends: a
+             * restart would be a new game, and a new game counts from zero. */
+            if (r.piece_locked)
+                for (int y = 0; y < TENGEN_PF_HEIGHT; y++)
+                    for (int x = mode == 2 ? 0 : 1;
+                         x < (mode == 2 ? TENGEN_PF_WIDTH : TENGEN_PF_WIDTH - 1); x++)
+                        g.field[0].cell[y][x] = 0;
+            if (g.player[0].piece.current != before &&
+                g.player[0].piece.current != TT_NONE) dealt++;
+        }
+        long total = 0, capped = 0;
+        for (int piece = TT_I; piece <= TT_Z; piece++) {
+            total += g.player[0].piece_total[piece];
+            if (g.player[0].piece_stats[piece] == TENGEN_PIECE_STAT_MAX) capped++;
+            if (mode == 0 && g.player[0].piece_total[piece] < TENGEN_PIECE_STAT_MAX)
+                CHECK(g.player[0].piece_total[piece] == g.player[0].piece_stats[piece]);
+        }
+        CHECK(total > 7 * TENGEN_PIECE_STAT_MAX);
+        if (mode == 0) CHECK(capped > 0);
+        else CHECK(capped == 0);
+    }
+}
+
 static void test_piece_stats_count_dealt_pieces_in_1p_only(void) {
     /* main.asm.txt:3730-3797: counted as the piece is dealt, and the whole
      * routine is skipped outside 1P. */
@@ -3843,6 +3877,7 @@ int main(void) {
     test_level_never_passes_the_rom_cap();
     test_locking_stores_tile_ids_not_piece_ids();
     test_piece_stats_count_dealt_pieces_in_1p_only();
+    test_the_port_counts_every_piece_past_the_cap();
     test_no_piece_ever_locks_in_mid_air();
     test_locked_cells_never_overwrite_the_walls();
 

@@ -188,6 +188,12 @@ typedef struct {
      * ($0053-$0059) and drives the 1P screen's bar chart from them. Counted
      * on spawn, capped, and only tracked in 1P — see tengen_core.c. */
     uint8_t piece_stats[TENGEN_TETROMINO_COUNT];
+    /* ...and the port's own count of the same thing, which the cartridge
+     * does not keep: every piece dealt, in every mode, never capped at 144
+     * (saturates at 65535). The rules never read it; the histogram does,
+     * under the chord, to scale its bars to the tallest once one of them
+     * would run off the top (gba/hud.c). */
+    uint16_t piece_total[TENGEN_TETROMINO_COUNT];
 
     /* Line-clear animation state, mirroring lineClearTimerP1/2 ($01CE/$01CF).
      * While the timer runs the game is held still and the completed rows are
