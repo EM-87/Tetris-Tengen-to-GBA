@@ -1089,7 +1089,7 @@ int main(void) {
              * player has already cut the show short: that path silences the
              * music on purpose and starting a looping tune into the last few
              * frames of a wind-down would be a stutter, not music. */
-            if (g_dancer_elapsed == LEVELUP_INTRO_FRAMES &&
+            if (g_dancer_elapsed == LEVELUP_LOOP_FRAMES &&
                 g_dancer_timer < DANCER_TIMER_TAIL) {
                 nes_audio_play(NES_MUSIC_LEVELUP);
             }

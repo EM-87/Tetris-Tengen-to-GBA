@@ -127,7 +127,9 @@ static void rumble_step(TengenStepResult step) {
     if (step.topped_out) gbp_rumble(45);
 }
 
-static void announce_step(TengenStepResult step) {
+/* `level_tune` is whether the LEVEL-UP'S MUSIC plays this step, which is not
+ * always this player's level-up: see link_play_frame. */
+static void announce(TengenStepResult step, bool level_tune) {
     rumble_step(step);
     if (step.piece_locked) nes_audio_play(NES_SOUND_DROP);
     /* ONE call per event, and the level-up is one event. A clear that also
@@ -136,14 +138,14 @@ static void announce_step(TengenStepResult step) {
      * and the engine restarts a track every time it is handed one, so the
      * intro began, was cut off a few hundred cycles later and began again.
      * That is what a doubled tune sounds like. */
-    if (step.lines_collapsed && !step.leveled_up)
+    if (step.lines_collapsed && !level_tune)
         nes_audio_play(NES_SOUND_LINECLEAR);
     /* A PROTOTYPE'S LEVEL-UP IS JUST A CLEAR. Measured on the dumps: none of
      * them asks its sound queue for anything new when the level goes up —
      * no jingle — and proto_c and proto_d do not even play the line's own
      * sound on that clear. See levelup_clear_sound. Nothing else of the
      * release's level-up follows either: no show, no music change. */
-    if (step.leveled_up && g_session.game.proto_rules && !g_linked) {
+    if (level_tune && g_session.game.proto_rules && !g_linked) {
         if (levelup_clear_sound()) nes_audio_play(NES_SOUND_LINECLEAR);
         /* MUSIC MIX still turns over on a level — it is the port's, and a
          * level is its unit — and with no interlude to restart the tune
@@ -154,7 +156,7 @@ static void announce_step(TengenStepResult step) {
         }
         return;
     }
-    if (step.leveled_up) {
+    if (level_tune) {
         /* The cartridge's level-up music takes over; a hand-entered tune stands
          * down and start_music() puts it back when the dancers finish. */
         handtune_stop();
@@ -180,6 +182,14 @@ static void announce_step(TengenStepResult step) {
          * ($019A/$01A2) never start, where the release goes to 3 with the
          * piece frozen. See proto_rules. */
         if (!g_linked && !g_session.game.proto_rules) {
+            /* THE TUNE STOPS FOR THE SHOW. showLevelBonus ends with
+             * MUSIC_SILENCE (main.asm.txt:1953), queued right behind the
+             * intro in the same frame: the intro is class 8 and survives it,
+             * the match's tune is class 7 and does not. Without it the intro
+             * took over only the channels it uses, and the tune's triangle
+             * went on underneath — two tunes at once at every level-up, the
+             * bass line of one under the jingle of the other. */
+            nes_audio_play(NES_MUSIC_SILENCE);
             g_dancer_active = true;
             g_dancer_timer = DANCER_TIMER_START;
             bonus_begin();
@@ -215,6 +225,10 @@ static void announce_step(TengenStepResult step) {
         nes_audio_play(NES_MUSIC_SILENCE);
         nes_audio_play(NES_MUSIC_GAMEOVER);
     }
+}
+
+static void announce_step(TengenStepResult step) {
+    announce(step, step.leveled_up);
 }
 
 /* One frame of the computer's input, for whichever player it is. It
@@ -843,7 +857,17 @@ bool link_play_frame(uint8_t pressed, bool *quit) {
         /* ...and a board put back on its feet is a new board: everything on
          * it, and every counter beside it, has to be drawn again. */
         if (out[0].restarted || out[1].restarted) g_repaint = true;
-        announce_step(out[g_view]);
+        /* THE LEVEL-UP'S MUSIC IS THE MATCH'S, NOT THE PLAYER'S. The
+         * cartridge has one sound engine for both players, so either one's
+         * level-up plays the intro, and here each console used to play it
+         * only for its own player. In coop the level is shared: the console
+         * whose player had not made the clear went on with its tune while
+         * the other stopped KOROBEINIKI or KATIUSKA for the intro and started
+         * it again from the top, or turned MUSIC MIX over to the next one —
+         * and from there the two consoles played different music. Both see
+         * both results on the same step, so both do the same thing. The
+         * clears, drops and rumble stay this console's player's. */
+        announce(out[g_view], out[0].leveled_up || out[1].leveled_up);
         stepped++;
     }
 

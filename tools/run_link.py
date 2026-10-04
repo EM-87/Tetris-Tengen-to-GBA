@@ -1513,7 +1513,8 @@ def pause_check(rom):
     if failures:
         return 1
     print("OK: el menu de pausa va por cable y hace lo mismo en las dos consolas.")
-    if menu_list_check(rom) or levelup_music_check(rom):
+    if (menu_list_check(rom) or levelup_music_check(rom) or
+            coop_levelup_music_check(rom)):
         return 1
     return late_check(rom)
 
@@ -1610,6 +1611,69 @@ def levelup_music_check(rom):
         print("FALLA: tras subir de nivel por cable la musica no vuelve")
         return 1
     print(f"  tras la fanfarria la cancion vuelve ({top} canales)")
+    return 0
+
+
+def coop_levelup_music_check(rom):
+    """EN COOP LA SUBIDA DE NIVEL ES DE LAS DOS CONSOLAS, Y LA MUSICA TAMBIEN.
+
+    El nivel de coop es uno, y el cartucho tiene un solo motor de sonido para
+    los dos jugadores: suba quien suba, suena la fanfarria. Aqui cada consola
+    la tocaba solo para su jugador, asi que la del que no habia hecho la
+    linea seguia con su cancion mientras la otra paraba Korobeiniki o Katiuska
+    y la volvia a empezar, o pasaba MUSIC MIX a la siguiente: desde ahi cada
+    consola tocaba una musica distinta ("la musica se desacompaso"). Aqui, con
+    MUSIC MIX, sube de nivel el jugador del ESCLAVO, y las dos tienen que
+    pasar a la misma cancion.
+    """
+    sym, why = symbol(rom, "g_session")
+    mix, why2 = symbol(rom, "g_mix_step")
+    if sym is None or mix is None:
+        print(f"SALTADO: {why or why2}")
+        return 0
+    import run_rom
+    from romcheck.harness import fill_rows
+    off = run_rom.game_offsets(rom)
+    base = sym[0]
+    cores, cable, both, tap = _pair(rom)
+    both(8)
+    tap("START")
+    both(4, [[KEYS["L"], KEYS["R"]], []])           # el acorde del maestro
+    both(10, [[], []])
+    tap("DOWN"); tap("DOWN"); tap("START")          # COOPERATIVE
+    both(50)
+    tap("DOWN", who=0); tap("DOWN", who=0)
+    for _ in range(7):
+        tap("RIGHT", who=0)                         # MUSIC MIX
+    tap("START", who=0)
+    both(80)
+    before = [c.memory.u8[mix[0]] for c in cores]
+    for core in cores:                              # lo mismo en las dos
+        for p in range(2):
+            at = base + off["lines"] + p * off["stride"]
+            core.memory.u32[at] = 29
+        fill_rows(core, base + off["field"], (19,))
+    level = cores[0].memory.u8[base + off["level"]]
+    for _ in range(80):                             # solo el esclavo baja
+        both(8, [[], [KEYS["DOWN"]]])
+        both(2, [[], []])
+        if cores[0].memory.u8[base + off["level"]] != level:
+            break
+    else:
+        print("FALLA: el jugador del esclavo no llego a subir de nivel")
+        return 1
+    both(30)
+    after = [c.memory.u8[mix[0]] for c in cores]
+    if after[0] != after[1]:
+        print(f"FALLA: tras subir de nivel el esclavo, MUSIC MIX va por la "
+              f"cancion {after[0]} en el maestro y {after[1]} en el esclavo")
+        return 1
+    if after == before:
+        print(f"FALLA: la subida de nivel no paso MUSIC MIX a la siguiente "
+              f"({before} -> {after})")
+        return 1
+    print(f"  sube el jugador del esclavo y MUSIC MIX pasa de {before[0]} a "
+          f"{after[0]} en las dos")
     return 0
 
 

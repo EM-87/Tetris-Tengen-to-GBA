@@ -298,6 +298,7 @@ gba-check: $(GBA_ROM)
 	python3 tools/run_rom.py $(GBA_ROM) --sleep
 	python3 tools/run_rom.py $(GBA_ROM) --sweep
 	python3 tools/run_rom.py $(GBA_ROM) --proto-pause
+	python3 tools/run_rom.py $(GBA_ROM) --levelup-tune
 	python3 tools/run_rom.py $(GBA_ROM) --vblank
 	python3 tools/run_rom.py $(GBA_ROM) --idleblink
 	python3 tools/run_rom.py $(GBA_ROM) --fireworks

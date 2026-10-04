@@ -418,6 +418,18 @@
  * and the loop takes over where the cartridge takes it over. See
  * NES_MUSIC_LEVELUP_INTRO. */
 #define LEVELUP_INTRO_FRAMES 144
+/* ...AND WHEN THE LOOP COMES IN, which is not when the intro ends. The
+ * cartridge's show (showLevelBonus, main.asm.txt:1926) starts its counter at
+ * 0, not at 5, and counts it on frameCounterLow's sixteen-frame clock: four
+ * ticks to 4, one frame to 5 (@p1FallTimerEqualTo4), eight more to $0D,
+ * and L8D6B plays the loop on the next frame — k + 177 frames after the
+ * intro, k the clock's phase (1-16). MEASURED on the cartridge
+ * (nes_console): intro requested at frame 205, its last APU write at 329,
+ * the loop at 392. So there is a second of quiet between the two, and the
+ * port, which took the loop at 145, ran it into the intro's tail. The port's
+ * show clock starts with the show, so its phase is sixteen: the loop is
+ * asked for 193 frames after the intro, on the show's frame 192. */
+#define LEVELUP_LOOP_FRAMES 192
 #define DANCER_TIMER_WINDDOWN 0xF4    /* L9035 compares against this */
 #define DANCER_TIMER_TAIL 0xF5        /* ...and forces at least this */
 

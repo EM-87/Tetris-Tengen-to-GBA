@@ -7,7 +7,7 @@ from .harness import (
     APU_REGS, AUDIO_ALIGN_SEARCH, AUDIO_GOLDEN_SKIP, EFFECT_WATCH_FRAMES,
     GOLDEN_PATH, KEYS, MUSIC_ROW, REG_SOUND1CNT_H,
     REG_SOUND1CNT_X, REG_SOUND2CNT_L, REG_SOUND3CNT_H, REG_SOUNDCNT_X,
-    game_offsets, game_state_address, load, press_start,
+    fill_rows, game_offsets, game_state_address, load, press_start,
     run, sound_state, start_game, tilemap_text,
     to_music_page,
 )
@@ -680,4 +680,97 @@ def proto_pause_check(rom_path):
     if failures:
         return 1
     print("OK: solo la pausa de proto_a deja sonar la musica.")
+    return 0
+
+
+def levelup_tune_check(rom_path):
+    """A SOLO LEVEL-UP SILENCES THE MATCH'S TUNE, AND THE LOOP WAITS.
+
+    showLevelBonus queues MUSIC_SILENCE right behind the intro
+    (main.asm.txt:1953): the intro is class 8 and survives it, the tune is
+    class 7 and stops. The port did not, and the tune's triangle went on
+    under the jingle — two tunes at once at every level-up. And L8D6B plays
+    the cossacks' loop twelve ticks of the sixteen-frame clock later (193
+    frames on the port's show clock, LEVELUP_LOOP_FRAMES), not when the intro
+    lets go: the port took it at 145, into the intro's tail.
+
+    Measured, not trusted: the engine's requests are read where they go in
+    (nes6502_call into setMusicOrSoundEffect, $CFB1), and the APU's channel
+    enables from the intro on are compared between a game with LOGINSKA and
+    one with NO MUSIC, each aligned on its own intro. With the silence they
+    are the same; without it, LOGINSKA's channels are still on.
+    """
+    import subprocess
+    elf = rom_path[:-4] + ".elf"
+    try:
+        out = subprocess.check_output(
+            [os.environ.get("NM", "arm-none-eabi-nm"), elf]).decode()
+    except (OSError, subprocess.CalledProcessError) as exc:
+        print(f"SALTADO: no pude leer {elf}: {exc}")
+        return 0
+    sym = {l.split()[2]: int(l.split()[0], 16) & ~1
+           for l in out.splitlines() if len(l.split()) == 3}
+    call = next((a for n, a in sym.items() if n.startswith("nes6502_call")), None)
+    cpu, why = game_state_address(rom_path, "g_cpu")
+    base, why2 = game_state_address(rom_path)
+    if call is None or cpu is None or base is None:
+        print(f"SALTADO: {why or why2 or 'el ELF no exporta nes6502_call'}")
+        return 0
+    off = game_offsets(rom_path)
+    SET_TRACK, INTRO, SILENCE, LOOP = 0xCFB1, 0x0B, 0x08, 0x0D
+
+    def play(tune):
+        core, screen = load(rom_path)   # `screen` must stay alive; see load()
+        probe, _ = nes6502_probe(rom_path, core)
+        apu = cpu + probe[0]
+        start_game(core, tune=tune)
+        run(core, 50)
+        core.memory.u32[base + off["lines"]] = 29      # one row from 30
+        fill_rows(core, base + off["field"], [19])
+        core.set_keys(KEYS["DOWN"])
+        f0, asked, enables = core.frame_counter, [], []
+        while core.frame_counter < f0 + 420:
+            core.step()
+            # nes6502_call is ARM, in IWRAM: the PC reads eight ahead. Its
+            # arguments after the machine are the address and A.
+            if (core.cpu.pc & ~1) == call + 8:
+                g = core.cpu.gprs
+                if g[1] == SET_TRACK:
+                    asked.append((core.frame_counter - f0, g[2]))
+            if core.frame_counter - f0 == 60:
+                core.set_keys()
+            if len(enables) < core.frame_counter - f0:
+                enables.append(core.memory.u8[apu + 0x15])
+        del core, screen
+        return asked, enables
+
+    failures = []
+    runs = {}
+    for tune, name in ((0, "NO MUSIC"), (1, "LOGINSKA")):
+        asked, enables = play(tune)
+        intro = next((f for f, t in asked if t == INTRO), None)
+        if intro is None:
+            failures.append(f"{name}: no hubo subida de nivel (sin intro)")
+            continue
+        same_frame = [t for f, t in asked if f == intro]
+        if SILENCE not in same_frame[same_frame.index(INTRO):]:
+            failures.append(f"{name}: la intro no va seguida del silencio en su "
+                            f"frame (pedidos {[hex(t) for t in same_frame]})")
+        loop = next((f for f, t in asked if t == LOOP), None)
+        if loop is None or loop - intro != 193:
+            failures.append(f"{name}: el bucle de los cosacos llega "
+                            f"{None if loop is None else loop - intro} frames "
+                            "despues de la intro, no 193")
+        runs[name] = enables[intro + 2:intro + 190]
+    if len(runs) == 2 and runs["NO MUSIC"] != runs["LOGINSKA"]:
+        diff = sum(1 for a, b in zip(runs["NO MUSIC"], runs["LOGINSKA"]) if a != b)
+        failures.append(f"con LOGINSKA la APU no suena como sin musica durante la "
+                         f"intro: {diff} frames con otros canales encendidos")
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("  intro y silencio en el mismo frame, el bucle 193 frames despues, y "
+          "durante la intro LOGINSKA ya no suena")
+    print("OK: la subida de nivel en solitario calla la cancion de la partida.")
     return 0

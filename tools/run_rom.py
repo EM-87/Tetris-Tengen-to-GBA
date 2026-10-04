@@ -97,6 +97,8 @@ def main():
                      help="check the computer reads its partner under the chord")
     ap.add_argument("--aiframe", action="store_true",
                      help="check the port's computer plans inside each frame")
+    ap.add_argument("--levelup-tune", action="store_true",
+                     help="check a solo level-up silences the tune and times the loop")
     ap.add_argument("--vblank", action="store_true",
                      help="check each frame's drawing ends inside the vertical blank")
     ap.add_argument("--fireworks", action="store_true",
@@ -194,6 +196,8 @@ def main():
         sys.exit(sleep_check(args.rom))
     if args.sweep:
         sys.exit(sweep_check(args.rom))
+    if args.levelup_tune:
+        sys.exit(levelup_tune_check(args.rom))
     if args.vblank:
         sys.exit(vblank_check(args.rom))
     if args.fireworks:
