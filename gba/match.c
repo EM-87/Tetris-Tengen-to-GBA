@@ -1186,13 +1186,17 @@ void draw_match(bool *sweeping) {
         else draw_pause_box();
     }
 
-    /* Under the chord: the jingle for a new record, and the tempo. */
+    /* And the sound engine afterwards, out of the blank, where it costs
+     * nothing but CPU time. */
+    audio_frame();
+
+    /* Under the chord: the jingle for a new record, and the tempo for the
+     * NEXT frame's audio_frame. After it, not before: anything here before
+     * audio_frame is drawing time as far as the vertical blank is concerned,
+     * and scanning the board put the frame that leaves a pause at line 226
+     * of 227 (`--vblank`). A frame late is not something an ear hears. */
     record_watch();
     if (g_pause_unlocked && !g_session.game.paused && !g_link_waiting &&
         !g_link_lost && g_session.game.player[g_view].game_active)
         g_tempo_quarters = stack_tempo();
-
-    /* And the sound engine afterwards, out of the blank, where it costs
-     * nothing but CPU time. */
-    audio_frame();
 }
