@@ -963,3 +963,73 @@ def braid_check(rom_path):
         return 1
     print("OK: la greca conserva su sentido en los dos modos.")
     return 0
+
+
+def stats_relative_check(rom_path):
+    """UNDER THE CHORD THE STATS STOP RUNNING OFF THE TOP.
+
+    The cartridge's histogram is absolute — eight pieces a row — and the
+    port's box is nine rows tall, so in a long game every bar ends against
+    the ceiling. With the chord the bars read the port's own uncapped count
+    (piece_total) and, once the tallest would not fit, all seven are scaled
+    to it. Planted counts, read back from the histogram's tile map: without
+    the chord three bars are at the ceiling; with it only the tallest is, and
+    the rest are its fraction of the box (72 steps of fill), floored.
+    """
+    off = game_offsets(rom_path)
+    base, why = game_state_address(rom_path)
+    if base is None:
+        print(f"SALTADO: {why}")
+        return 0
+    counts = [300, 150, 75, 40, 10, 0, 120]        # I T O J L S Z
+    ROOM, SB, TX, TOP, FLOOR = 72, 31, 22, 9, 17
+
+    def heights(chord):
+        core, screen = load(rom_path)   # `screen` must stay alive; see load()
+        run(core, 8)
+        press_start(core); run(core, 10)
+        if chord:
+            core.set_keys(KEYS["L"], KEYS["R"]); run(core, 4)
+            core.set_keys(); run(core, 12)
+        press_start(core); run(core, 10)
+        press_start(core); run(core, 30)
+
+        def plant():
+            for i, n in enumerate(counts):
+                core.memory.u8[base + off["stats"] + 1 + i] = min(n, 144)
+                core.memory.u16[base + off["total"] + 2 * (1 + i)] = n
+        plant()
+        core.set_keys(KEYS["SELECT"]); run(core, 4)  # HUD STATS
+        core.set_keys(); run(core, 20)
+        plant()                                     # the frames dealt a piece
+        run(core, 3)
+        out = []
+        for i in range(len(counts)):
+            steps = 0
+            for ty in range(TOP, FLOOR + 1):
+                t = core.memory.u16[0x06000000 + SB * 0x800 +
+                                    (ty * 32 + TX + i) * 2] & 0x3FF
+                if 0x21 <= t <= 0x28:
+                    steps += t - 0x20
+            out.append(steps)
+        return out
+
+    failures = []
+    plain = heights(False)
+    want = [min(n, ROOM) for n in counts]
+    if plain != want:
+        failures.append(f"sin el acorde las barras no son las del cartucho: "
+                        f"{plain}, deberian ser {want}")
+    chord = heights(True)
+    top = max(counts)
+    want = [max(1, n * ROOM // top) if n else 0 for n in counts]
+    if chord != want:
+        failures.append(f"con el acorde las barras no se escalan a la mas alta: "
+                        f"{chord}, deberian ser {want}")
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print(f"  sin el acorde {plain}, con el acorde {chord}")
+    print("OK: con el acorde las barras de STATS se escalan a la mas alta.")
+    return 0

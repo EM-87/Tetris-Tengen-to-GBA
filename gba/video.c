@@ -74,7 +74,7 @@ uint16_t ascii_tile(char c) {
  * translation unit could not. (`retain` too, once; this toolchain ignores it
  * with a warning, and the image is byte for byte the same without it.) */
 __attribute__((used))
-const uint16_t kGameProbe[18] = {
+const uint16_t kGameProbe[19] = {
     (uint16_t)offsetof(TengenGame, field),
     (uint16_t)offsetof(TengenGame, player),
     (uint16_t)sizeof(TengenPlayerState),
@@ -96,6 +96,9 @@ const uint16_t kGameProbe[18] = {
      * release's. */
     (uint16_t)offsetof(TengenGame, piece_id_cells),
     (uint16_t)offsetof(TengenGame, proto_rules),
+    /* ...and the port's own piece count, which the histogram reads under
+     * the chord (`--statsrel`). */
+    (uint16_t)offsetof(TengenPlayerState, piece_total),
 };
 
 TengenLink g_session;
