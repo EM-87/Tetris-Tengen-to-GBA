@@ -257,6 +257,7 @@ typedef struct {
 static Voice g_lead, g_bass;
 static const Tune *g_tune;
 static bool g_playing;
+static uint16_t g_duck;      /* frames left silent; see handtune_duck */
 
 /* HOW LOUD, AND IT IS THE CARTRIDGE'S ANSWER RATHER THAN A GUESS.
  *
@@ -357,11 +358,13 @@ void handtune_start(uint8_t tune) {
     g_tune = &kTunes[tune];
     voice_reset(&g_lead);
     voice_reset(&g_bass);
+    g_duck = 0;
     g_playing = true;
 }
 
 void handtune_stop(void) {
     g_tune = 0;
+    g_duck = 0;
     if (!g_playing) return;
     g_playing = false;
     release_channels();
@@ -389,8 +392,25 @@ uint8_t handtune_current(void) {
 
 bool handtune_playing(void) { return g_playing; }
 
+void handtune_duck(uint16_t frames) {
+    if (!g_playing) return;
+    release_channels();
+    g_duck = frames;
+}
+
 void handtune_frame(void) {
     if (!g_playing) return;
+    if (g_duck) {
+        /* The voices go on counting and write nothing; a note still held
+         * when the duck ends is sounded again (see voice_step). */
+        voice_step(&g_lead, g_tune->melody, false);
+        voice_step(&g_bass, g_tune->bass, true);
+        if (--g_duck == 0) {
+            g_lead.restart = true;
+            g_bass.restart = true;
+        }
+        return;
+    }
 
     int lead = voice_step(&g_lead, g_tune->melody, false);
     if (lead == NOTE_RELEASE || lead == REST) {

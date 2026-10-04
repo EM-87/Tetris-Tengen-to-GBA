@@ -1396,7 +1396,12 @@ void leader_rival_initials(const uint8_t in[LEADER_INITIALS]) {
 }
 
 /* A fresh match: nothing is owed and nothing is owned. */
+uint32_t g_record_bar;   /* the table's top as the match began; see record_watch */
+bool g_record_sung;      /* ...and the jingle for passing it has been played */
+
 void leader_new_match(void) {
+    g_record_bar = g_leader[0].score;
+    g_record_sung = false;
     g_leader_row = -1;
     g_leader_queued = 0;
     g_leader_rivals_n = 0;
@@ -2297,6 +2302,16 @@ void draw_panel(void) {
 }
 
 void draw_field(void) {
+    /* UNDER THE CHORD A PAUSE HIDES THE BOARD, as Tetris DX's does, so a
+     * pause is a rest and not a long look at the stack. Not when the board
+     * up is the RIVAL'S — a paused race under the chord shows the other one
+     * (field_view), and that is what the pause is for there. */
+    if (g_session.game.paused && g_pause_unlocked && field_view() == g_view) {
+        for (int row = 0; row < TENGEN_PF_HEIGHT; row++)
+            for (int col = 0; col < field_cols(); col++)
+                set_map_tile(field_tx() + col, FIELD_TY + row, WITH_BANK(0, 0));
+        return;
+    }
     /* THE COOP BOARD IS field[0] FOR BOTH PLAYERS — the core shares it the
      * way the cartridge does (tengen_core.c, `game->coop ? 0 : slot`) — and
      * the guest views slot 1, so indexing by view showed the guest the

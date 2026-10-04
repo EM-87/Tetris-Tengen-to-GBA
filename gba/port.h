@@ -1944,6 +1944,9 @@ extern uint8_t g_mix_step;
 uint8_t mix_tune(void);
 uint8_t music_choices(void);
 void audio_frame(void);
+extern uint32_t g_record_bar;
+extern bool g_record_sung;
+extern uint8_t g_tempo_quarters;   /* this frame's extra music steps, in quarters */
 void stop_music_class(uint8_t klass);
 void stop_music(void);
 void start_music(uint8_t music);

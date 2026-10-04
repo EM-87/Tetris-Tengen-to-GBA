@@ -1090,6 +1090,47 @@ bool solo_play_frame(uint8_t buttons, uint8_t pressed, bool *quit) {
  * tile and sprite then landed while the screen was being scanned out, so a
  * falling piece could be drawn half in its old position and half in its new
  * one. So: vsync, then draw, then the audio in the time that is left. */
+/* UNDER THE CHORD, A NEW RECORD IS HEARD. The first frame this console's
+ * player's score passes the top of the table as the match began
+ * (g_record_bar), the engine's unused level-up jingle plays — once a match.
+ * The cartridge's tune is back in step after it on its own (it plays on
+ * underneath, measured); a hand-entered one is ducked for the jingle's
+ * length with its clock running, so over a cable the two consoles' music
+ * stays together. An empty table (a score of 0 at the top) is no record. */
+static void record_watch(void) {
+    if (!g_pause_unlocked || g_record_sung || !g_record_bar || g_demo ||
+        g_session.game.paused)
+        return;
+    if (g_session.game.player[g_view].score <= g_record_bar) return;
+    g_record_sung = true;
+    nes_audio_play(NES_MUSIC_UNUSED_LEVELUP);
+    handtune_duck(NES_UNUSED_LEVELUP_FRAMES);
+}
+
+/* THE TEMPO BY THE STACK, under the chord: how high the settled cells on
+ * this console's board reach decides how much faster the music runs, in
+ * quarters of an extra step a frame (audio_frame). Twenty rows: below
+ * twelve, the cartridge's tempo; from twelve, a quarter faster; from fifteen,
+ * a half. The falling piece is not counted, so it does not flicker with the
+ * piece passing a threshold on its way down. */
+#define TEMPO_ROWS_QUARTER 12
+#define TEMPO_ROWS_HALF    15
+static uint8_t stack_tempo(void) {
+    const TengenGame *g = &g_session.game;
+    const TengenPlayfield *f = &g->field[g->coop ? 0 : g_view];
+    int c0 = g->coop ? 0 : 1, c1 = g->coop ? TENGEN_PF_WIDTH : TENGEN_PF_WIDTH - 1;
+    for (int row = 0; row < TENGEN_PF_HEIGHT; row++)
+        for (int col = c0; col < c1; col++)
+            /* Columns, not values: $0F is the wall's AND a settled block's
+             * (the handicap's, or one whose joins a clear broke). */
+            if (f->cell[row][col]) {
+                int height = TENGEN_PF_HEIGHT - row;
+                return height >= TEMPO_ROWS_HALF ? 2 :
+                       height >= TEMPO_ROWS_QUARTER ? 1 : 0;
+            }
+    return 0;
+}
+
 void draw_match(bool *sweeping) {
     vsync();
     if (g_repaint) {
@@ -1144,6 +1185,12 @@ void draw_match(bool *sweeping) {
         if (pause_menu_on()) draw_pause_menu();
         else draw_pause_box();
     }
+
+    /* Under the chord: the jingle for a new record, and the tempo. */
+    record_watch();
+    if (g_pause_unlocked && !g_session.game.paused && !g_link_waiting &&
+        !g_link_lost && g_session.game.player[g_view].game_active)
+        g_tempo_quarters = stack_tempo();
 
     /* And the sound engine afterwards, out of the blank, where it costs
      * nothing but CPU time. */

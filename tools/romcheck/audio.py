@@ -774,3 +774,125 @@ def levelup_tune_check(rom_path):
           "durante la intro LOGINSKA ya no suena")
     print("OK: la subida de nivel en solitario calla la cancion de la partida.")
     return 0
+
+
+def chord_extras_check(rom_path):
+    """THREE THINGS THE CHORD ADDS TO A MATCH, each measured where it happens.
+
+    - THE TEMPO RISES WITH THE STACK: the cartridge's engine is stepped once a
+      frame, and under the chord a quarter more from twelve rows, a half more
+      from fifteen (stack_tempo, audio_frame). Counted as calls into the
+      engine's update ($CFCA) over 120 frames.
+    - A NEW RECORD PLAYS THE UNUSED JINGLE ($0C), once, the frame the score
+      passes the top of the table (record_watch). Read where the request goes
+      in ($CFB1).
+    - A PAUSE HIDES THE BOARD (draw_field), but not the rival's that a paused
+      race shows under the chord. Read off the tile map.
+
+    Without the chord, none of the three.
+    """
+    import subprocess
+    from .harness import CELL_BLOCK, PF_W, map_row_text
+    elf = rom_path[:-4] + ".elf"
+    try:
+        out = subprocess.check_output(
+            [os.environ.get("NM", "arm-none-eabi-nm"), elf]).decode()
+    except (OSError, subprocess.CalledProcessError) as exc:
+        print(f"SALTADO: no pude leer {elf}: {exc}")
+        return 0
+    call = next((int(l.split()[0], 16) & ~1 for l in out.splitlines()
+                 if len(l.split()) == 3 and l.split()[2].startswith("nes6502_call")),
+                None)
+    base, why = game_state_address(rom_path)
+    bar, why2 = game_state_address(rom_path, "g_record_bar")
+    if call is None or base is None or bar is None:
+        print(f"SALTADO: {why or why2 or 'el ELF no exporta nes6502_call'}")
+        return 0
+    off = game_offsets(rom_path)
+    PF = 20 * PF_W
+
+    def start(chord, entry=0):
+        core, screen = load(rom_path)   # `screen` must stay alive; see load()
+        run(core, 8)
+        press_start(core); run(core, 10)
+        if chord:
+            core.set_keys(KEYS["L"], KEYS["R"]); run(core, 4)
+            core.set_keys(); run(core, 12)
+        for _ in range(entry):
+            core.set_keys(KEYS["DOWN"]); run(core, 4)
+            core.set_keys(); run(core, 10)
+        press_start(core); run(core, 10)
+        press_start(core); run(core, 40)
+        return core, screen
+
+    def watch(core, frames):
+        """Calls into the engine: (frame, address, A)."""
+        seen, f0 = [], core.frame_counter
+        while core.frame_counter < f0 + frames:
+            core.step()
+            if (core.cpu.pc & ~1) == call + 8:
+                g = core.cpu.gprs
+                seen.append((core.frame_counter - f0, g[1], g[2]))
+        return seen
+
+    def stack(core, board, height):
+        for row in range(20 - height, 20):
+            core.memory.u8[base + off["field"] + board * PF + row * PF_W + 1] = CELL_BLOCK
+
+    failures = []
+
+    # The tempo.
+    for chord, height, want in ((False, 16, 120), (True, 0, 120),
+                                (True, 13, 150), (True, 16, 180)):
+        core, screen = start(chord)
+        stack(core, 0, height)
+        steps = sum(1 for _, a, _ in watch(core, 120) if a == 0xCFCA)
+        if abs(steps - want) > 2:
+            failures.append(f"acorde={chord}, pila de {height}: {steps} pasos del "
+                            f"motor en 120 frames, no {want}")
+        else:
+            print(f"  acorde={int(chord)} pila {height:2d}: {steps} pasos del motor en 120 frames")
+        del core, screen
+
+    # The record.
+    for chord in (False, True):
+        core, screen = start(chord)
+        top = core.memory.u32[bar]
+        core.memory.u32[base + off["score"]] = top + 1
+        jingles = sum(1 for _, a, t in watch(core, 90) if a == 0xCFB1 and t == 0x0C)
+        want = 1 if chord else 0
+        if jingles != want:
+            failures.append(f"acorde={chord}: al pasar el record ({top}) la fanfarria "
+                            f"$0C sono {jingles} veces, no {want}")
+        else:
+            print(f"  acorde={int(chord)}: pasar el record de {top} -> fanfarria {jingles} vez/veces")
+        del core, screen
+
+    # The pause.
+    def shown_cells(core):
+        # Only where the blocks were planted: the plaque and the pause menu
+        # stand in the middle of the board and are tiles too.
+        return sum(map_row_text(core, r)[0:5].count("#") for r in range(14, 20))
+    for chord, entry, board, want_hidden, name in (
+            (False, 0, 0, False, "1 PLAYER sin acorde"),
+            (True, 0, 0, True, "1 PLAYER con acorde"),
+            (True, 3, 1, False, "VERSUS con acorde (el tablero de la maquina)")):
+        core, screen = start(chord, entry)
+        for row in range(14, 20):
+            for col in range(1, 6):
+                core.memory.u8[base + off["field"] + board * PF + row * PF_W + col] = CELL_BLOCK
+        press_start(core); run(core, 12)
+        cells = shown_cells(core)
+        if (cells == 0) != want_hidden:
+            failures.append(f"{name}: en pausa se ven {cells} celdas del tablero")
+        else:
+            print(f"  {name}: en pausa se ven {cells} celdas")
+        del core, screen
+
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: bajo el acorde, el tempo sube con la pila, el record suena y la "
+          "pausa esconde el tablero.")
+    return 0

@@ -70,6 +70,11 @@ uint8_t handtune_current(void);
 /* One frame of the sequencer. Safe to call when stopped (it does nothing). */
 void handtune_frame(void);
 
+/* Silent for `frames` frames with the clock still running, so the tune comes
+ * back where it would have been — a jingle of the engine's over it, without
+ * the two consoles of a linked match falling out of step. */
+void handtune_duck(uint16_t frames);
+
 bool handtune_playing(void);
 
 #endif /* HANDTUNES_H */

@@ -106,7 +106,7 @@ minus those).
 | --- | --- | --- |
 | `make test` | no | always — the rules, in milliseconds |
 | `make gba` | headers | to build `build/tengen.gba` |
-| `make gba-check` | headers | before calling any change done: 69 checks on the running ROM in mGBA, eighteen of them on two consoles with a cable, and then the Wireless Adapter's (`run_wireless.py`) |
+| `make gba-check` | headers | before calling any change done: 70 checks on the running ROM in mGBA, eighteen of them on two consoles with a cable, and then the Wireless Adapter's (`run_wireless.py`) |
 | `make trace ROM=... [MODE=coop\|versus\|with\|demo]` | yes | after touching `tengen_step` or `tengen_ai.c`: the port against the cartridge, iteration by iteration. The 1P and coop scripts never complete a row; `MODE="with --pad1"` plays player 1 with the port's computer and clears plenty; add `--handicap N` to any mode |
 | `make tune-check ROM=...` | yes | after touching audio: the four tunes against the cartridge, note by note |
 | `make dance-check ROM=...` | yes | after touching the dancers: their choreography against the cartridge's driver |
@@ -507,6 +507,13 @@ story behind each; the item number is in brackets.
   the core's own pace walked frame by frame (`ai_reachable`): fall timer,
   fractional gravity by row, the driver's shift and turn clock, the left
   kick; a guess at any of it is a placement it aims at and misses.
+- **The music's extra steps are spent in `audio_frame`**: a match frame sets
+  `g_tempo_quarters` right before it, and the call clears it, so the show, the
+  menus and the game-over tune never speed up. The extra step is the whole
+  `nes_audio_frame` (engine AND apply), because what the engine wrote is
+  applied by comparing frame to frame. A hand-entered tune under a jingle is
+  DUCKED (`handtune_duck`: silent, clock running), never suspended: over a
+  cable a suspended tune falls behind the other console's.
 - **The NES pulse sweep is emulated** (`gba/nes_audio.c`, PulseSweep): the
   line clear is a rising sweep on pulse 2, and without it it was one low
   note. A period byte written replaces that byte of the SWEPT period, so the
@@ -556,7 +563,13 @@ cable): a coop deal waits for room instead of coming up inside the
 partner's piece, a falling piece is lifted out of the partner's collapsed
 rows, and the left panel's shelves meet the rope (`mend_shelf_joins`); the
 STATS bars, under the chord, scaled to the tallest once one would run off the
-top of the box (`piece_total`, the port's uncapped count; `--statsrel`); a handicap of its own
+top of the box (`piece_total`, the port's uncapped count; `--statsrel`); and
+under the chord three touches of Tetris DX's (`--chordfx`): the music a
+quarter faster from a stack of twelve rows and a half from fifteen
+(`stack_tempo`, an extra step of the engine in `audio_frame`), the board
+hidden while paused (not the rival's a paused race shows), and the engine's
+unused level-up jingle ($0C) the first time a score passes the top of the
+table (`record_watch`); a handicap of its own
 for the computer in VERSUS COMPUTER under the chord; the pause menu over the
 cable, there if the MASTER found the chord and driven by both players'
 presses through lockstep (`link_match_begin`); a linked match that waits

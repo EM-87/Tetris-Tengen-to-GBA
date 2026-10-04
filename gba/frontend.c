@@ -89,9 +89,33 @@ uint8_t music_choices(void) {
 /* One frame of sound, both engines. The cartridge's runs on every frame
  * whatever is playing, because the EFFECTS are always its; the hand-entered
  * tune does nothing unless it is the one chosen. */
+/* THE TEMPO, UNDER THE CHORD, rises with the stack, as Tetris DX's does.
+ * A match frame sets g_tempo_quarters just before it calls this (draw_match),
+ * and it is spent here, so nothing but play is ever sped up: the show, the
+ * menus and the game-over tune never set it. Quarters of an extra step a
+ * frame — one more turn of the cartridge's engine, and of a hand-entered
+ * tune, every fourth frame for each quarter — so the music runs faster
+ * without changing key: the engine counts its notes in frames. The whole of
+ * nes_audio_frame runs again, not just the engine, because it applies what
+ * the engine wrote by comparing frame to frame. */
+uint8_t g_tempo_quarters;
+static uint8_t g_tempo_acc;
+
 void audio_frame(void) {
+    uint8_t q = g_tempo_quarters;
+    g_tempo_quarters = 0;
     nes_audio_frame();
     handtune_frame();
+    if (q) {
+        g_tempo_acc = (uint8_t)(g_tempo_acc + q);
+        if (g_tempo_acc >= 4) {
+            g_tempo_acc = (uint8_t)(g_tempo_acc - 4);
+            nes_audio_frame();
+            handtune_frame();
+        }
+    } else {
+        g_tempo_acc = 0;
+    }
     nes_audio_effect_frame();
 }
 

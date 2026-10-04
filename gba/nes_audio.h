@@ -65,6 +65,14 @@
  * level turned over on the middle of the piece, which is what "it is not
  * the same tune, it is the composition" is. */
 #define NES_MUSIC_LEVELUP_INTRO 0x0B
+/* MUSIC_UNUSED_LEVELUP: a level-up jingle the engine carries and the
+ * cartridge never asks for (constants.asm.txt:47; TCRF). Measured on the
+ * cartridge's own engine, queued in the middle of LOGINSKA: 212 frames on
+ * both pulses and the triangle, and the tune is back in step after it, as if
+ * it had played on underneath. The port plays it, under the chord, when a
+ * player's score passes the top of the table (record_watch, match.c). */
+#define NES_MUSIC_UNUSED_LEVELUP 0x0C
+#define NES_UNUSED_LEVELUP_FRAMES 212
 #define NES_MUSIC_LEVELUP      0x0D
 #define NES_SOUND_DROP         0x0E
 /* The cartridge's own sound engine can play these and the cartridge never
