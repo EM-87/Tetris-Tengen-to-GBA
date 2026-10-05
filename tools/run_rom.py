@@ -97,6 +97,8 @@ def main():
                      help="check the computer reads its partner under the chord")
     ap.add_argument("--aiframe", action="store_true",
                      help="check the port's computer plans inside each frame")
+    ap.add_argument("--titlescores", action="store_true",
+                     help="check SELECT on the title shows the high scores")
     ap.add_argument("--chordfx", action="store_true",
                      help="check tempo by stack, the record jingle and the hidden pause")
     ap.add_argument("--statsrel", action="store_true",
@@ -200,6 +202,8 @@ def main():
         sys.exit(sleep_check(args.rom))
     if args.sweep:
         sys.exit(sweep_check(args.rom))
+    if args.titlescores:
+        sys.exit(title_scores_check(args.rom))
     if args.chordfx:
         sys.exit(chord_extras_check(args.rom))
     if args.statsrel:

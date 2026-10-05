@@ -1174,3 +1174,50 @@ def fireworks_check(rom_path):
     print(f"  {seen} frames con sprites en el titulo, ninguno fuera del marco")
     print("OK: los fuegos artificiales no asoman por los ladrillos.")
     return 0
+
+
+def title_scores_check(rom_path):
+    """SELECT ON THE TITLE SHOWS THE HIGH SCORES.
+
+    There was no way to look at the table but to lose a game. From the title
+    SELECT puts the page up as a game over leaves it, with no row to type
+    into, and a button takes it back to the title, as after a game. START
+    still goes to GAME SELECT.
+    """
+    from .harness import LEADER_HEAD_TY
+    failures = []
+    core, screen = load(rom_path)   # `screen` must stay alive; see load()
+    run(core, 60)
+
+    def title_map():
+        # The whole map, raw: the title's own tiles are art, not text.
+        return [core.memory.u16[SCREENBLOCK_ADDR + i * 2] for i in range(32 * 20)]
+    title = title_map()
+
+    def tap(key):
+        core.set_keys(KEYS[key]); run(core, 4); core.set_keys(); run(core, 20)
+
+    tap("SELECT")
+    head = tilemap_text(core, LEADER_HEAD_TY)
+    row_sym, _ = game_state_address(rom_path, "g_leader_row")
+    typing = core.memory.s32[row_sym] if row_sym is not None else -1
+    if "HIGH SCORES" not in head:
+        failures.append(f"SELECT en el titulo no pone la tabla: {head!r}")
+    elif typing != -1:
+        failures.append(f"la tabla desde el titulo espera letras (fila {typing})")
+    else:
+        print("  SELECT en el titulo: HIGH SCORES, sin nada que escribir")
+    tap("B")
+    if title_map() != title or "HIGH SCORES" in tilemap_text(core, LEADER_HEAD_TY):
+        failures.append("B en la tabla no vuelve al titulo")
+    else:
+        print("  B vuelve al titulo")
+    tap("START")
+    if "GAME SELECT" not in " ".join(tilemap_text(core, r) for r in range(6, 12)):
+        failures.append("START en el titulo ya no lleva a GAME SELECT")
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: SELECT en el titulo ensena los records, y se vuelve.")
+    return 0

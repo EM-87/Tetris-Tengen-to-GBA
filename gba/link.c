@@ -620,6 +620,31 @@ void link_name_step(TengenNameSwap *swap) {
     if (!swap->complete && !swap->failed) link_pump();
 }
 
+/* THE RECORDS A COPY MADE, across as the lobby finishes (TengenRecordSync).
+ * The lobby's own transport carries on underneath: the send register is
+ * already the main loop's, and over the air the lobby's stop-and-wait is
+ * already running, so nothing is restarted — a restart on one console and
+ * not yet on the other is exactly the gap a lobby word would fall into. */
+void link_records_start(TengenRecordSync *sync, bool storage,
+                        const TengenRecord *mine, int n) {
+    tengen_records_start(sync, storage, mine, n);
+    tx(tengen_records_word(sync));
+}
+
+void link_records_step(TengenRecordSync *sync) {
+    if (sync->complete || sync->failed) return;
+    bool master = link_is_master();
+    link_tick();
+    LinkFrame f;
+    if (link_pop(&f)) {
+        tengen_records_apply(sync, true, master ? f.slave : f.master);
+        tx(tengen_records_word(sync));
+    } else {
+        tengen_records_apply(sync, false, 0);
+    }
+    if (!sync->complete && !sync->failed) link_pump();
+}
+
 /* ----------------------------------------------------------------------- *
  * Single-Pak: sending the game to a console with no cartridge
  *

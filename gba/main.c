@@ -125,6 +125,8 @@ int main(void) {
     int link_wait_frames = 0;
     /* The Single-Pak send that starts by itself; see the LINK CABLE screen. */
 #define AUTO_SEND_FRAMES 45
+    /* How long RECORDS SAVED stays up before the match. */
+#define RECORDS_SAVED_FRAMES 120
     int auto_send_wait = 0;
 #ifndef TENGEN_MULTIBOOT
     /* The adapter asked for again from the cable's screen; see there. */
@@ -308,6 +310,23 @@ int main(void) {
                 draw_title();
                 oam_hide_all();
                 audio_frame();
+                continue;
+            }
+            /* SELECT SHOWS THE HIGH SCORES, which otherwise only a lost
+             * game could. The page as a game over leaves it, with nothing
+             * to type, and back to the title as it goes back after one: a
+             * button or LEADER_HOLD_FRAMES. The table is this title's
+             * build's (leader_use_table). */
+            if (pressed & TENGEN_BTN_SELECT) {
+                g_leader_row = -1;
+                leader_frames = 0;
+                screen = SCREEN_LEADERBOARD;
+                screen_blip();
+                vsync();
+                audio_frame();
+                clear_screen();
+                oam_hide_all();
+                draw_leaderboard();
                 continue;
             }
             if (pressed & MENU_ADVANCE) {
@@ -945,6 +964,50 @@ int main(void) {
             }
 
             if (lobby.ready) {
+                /* THE RECORDS A COPY MADE GO ACROSS FIRST (TengenRecordSync):
+                 * a Single-Pak copy, which has no save, hands the rows it put
+                 * on its tables to a console that has one, every time they
+                 * link. Short when there is nothing to send. If any were
+                 * kept, both consoles say so for two seconds, keeping the
+                 * link turning meanwhile (over the air, a second and a half
+                 * of silence is a lost partner). */
+                {
+                    TengenRecordSync sync;
+                    TengenRecord mine[TENGEN_RECORDS_MAX];
+#ifdef TENGEN_MULTIBOOT
+                    const bool storage = false;
+#else
+                    const bool storage = true;
+#endif
+                    int n = storage ? 0 : leader_unsent(mine, TENGEN_RECORDS_MAX);
+                    int kept = 0;
+                    link_records_start(&sync, storage, mine, n);
+                    while (!sync.complete && !sync.failed) {
+                        link_records_step(&sync);
+                        if (sync.theirs_ready && sync.out_held) {
+                            kept = leader_merge(sync.theirs, sync.theirs_n);
+                            tengen_records_saved(&sync, (uint8_t)kept);
+                        }
+                        vsync();
+                        audio_frame();
+                    }
+                    if (!storage && sync.complete && sync.partner_storage) {
+                        leader_mark_sent();
+                        kept = sync.saved;
+                    }
+                    if (sync.complete && kept > 0) {
+                        draw_records_saved(kept, storage);
+                        nes_audio_play(NES_SOUND_MENU_SELECT);
+                        for (int wait = 0; wait < RECORDS_SAVED_FRAMES; wait++) {
+                            link_tick();
+                            LinkFrame f;
+                            while (link_pop(&f)) { }
+                            link_pump();
+                            vsync();
+                            audio_frame();
+                        }
+                    }
+                }
                 /* The game the lobby agreed on, which on a Single-Pak slave
                  * is the one the master chose (and on any other console the
                  * one this one chose too). */

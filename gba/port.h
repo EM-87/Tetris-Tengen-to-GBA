@@ -1920,6 +1920,11 @@ void leader_submit(void);
 int  leader_rival_row(void);                        /* -1: nobody's */
 void draw_rival_leader_rows(void);                  /* all of theirs, one per game */
 void leader_own_initials(uint8_t out[LEADER_INITIALS]);
+/* The records a Single-Pak copy made, and their way to a save
+ * (TengenRecordSync; hud.c). */
+int leader_unsent(TengenRecord *out, int max);
+void leader_mark_sent(void);
+int leader_merge(const TengenRecord *rows, int n);
 void leader_rival_initials(const uint8_t in[LEADER_INITIALS]);
 bool leader_type(uint8_t held, uint8_t pressed);
 extern int g_idle_frame;
@@ -1959,6 +1964,7 @@ void restart_title_sprites(void);
 void draw_title_sprites(void);
 void draw_game_select(uint8_t choice);
 void draw_link_wait(const TengenLobby *lobby, int elapsed);
+void draw_records_saved(int kept, bool from_copy);
 void draw_link_sending(bool wrong_end);   /* Single-Pak; see frontend.c */
 void draw_air_sending(int stage, uint32_t done, uint32_t total);
 /* The Single-Pak slave's image, inside the cartridge (gba/mb_image.s). */

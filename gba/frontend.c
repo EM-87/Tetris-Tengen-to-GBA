@@ -698,6 +698,25 @@ void draw_link_wait(const TengenLobby *lobby, int elapsed) {
     draw_guest_dancer(elapsed);
 }
 
+/* THE RECORDS A COPY MADE HAVE A HOME: said on both consoles, on the
+ * cable's own screen, for the two seconds before the match. `from_copy` is
+ * the cartridge's side of it. */
+void draw_records_saved(int kept, bool from_copy) {
+    draw_menu_frame();
+    draw_text_centred(8, wireless_on() ? "WIRELESS" : "LINK CABLE", menu_bank());
+    clear_both(MENU_IN_TX, 10, MENU_IN_W, 7);
+    oam_hide_all();
+    char line[28];
+    int at = 0;
+    if (kept >= 10) line[at++] = (char)('0' + kept / 10);
+    line[at++] = (char)('0' + kept % 10);
+    const char *rest = from_copy ? " FROM THE OTHER GBA" : " ON THE CARTRIDGE";
+    while (*rest && at < (int)sizeof line - 1) line[at++] = *rest++;
+    line[at] = 0;
+    draw_text_centred(11, kept == 1 ? "RECORD SAVED" : "RECORDS SAVED", BANK_NOTE);
+    draw_text_centred(13, line, menu_bank());
+}
+
 /* ERASING THE HIGH SCORES, the way the games of the day offered it: a
  * chord held while switching on (L+R+B — not SELECT, which with L and R is
  * the sleep), a warning, and the question asked TWICE with NO already

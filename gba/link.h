@@ -176,6 +176,13 @@ void link_name_start(TengenNameSwap *swap);
 /* One frame of it. Call once a frame until `complete` or `failed`. */
 void link_name_step(TengenNameSwap *swap);
 
+/* THE RECORDS A COPY MADE (TengenRecordSync): between the lobby's GO and
+ * the match. One step a frame until `complete` or `failed`; the caller merges
+ * `theirs` when `theirs_ready` and says so with tengen_records_saved. */
+void link_records_start(TengenRecordSync *sync, bool storage,
+                        const TengenRecord *mine, int n);
+void link_records_step(TengenRecordSync *sync);
+
 /* SINGLE-PAK: sends `image` (a multiboot image, `len` a multiple of 16) to
  * a console on the other end that has no cartridge and is waiting in its
  * BIOS. One attempt; call again on LINK_SEND_NOBODY or _RETRY, and

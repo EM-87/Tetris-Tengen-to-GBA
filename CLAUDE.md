@@ -356,6 +356,14 @@ story behind each; the item number is in brackets.
   down the loop). Anything that asks "is a paused game on the plaque?"
   has to ask about `quit_match` too: the battery's copy survived EXIT
   until it did (`pausemenu_check`).
+- **A copy's records cross between GO and the match** (`TengenRecordSync`,
+  tag 10): a byte stream both ways with a receipt in every word. So the
+  lobby takes a RECORDS word after GO as the other having left, on both
+  ends, exactly as it takes a match word; and the exchange takes a match
+  word as the other having finished. The copy marks its own rows
+  (`g_unsent`, hud.c) and forgets them only once a console with a save has
+  answered how many it kept. A row already on the table to the letter is not
+  put in twice: two copies that played each other carry both games.
 - **A real cable is not the emulated one.** What two SPs taught us, one
   rule each; `run_link.py`'s cable models every one of them, and each has a
   check that the build before it fails:
@@ -569,7 +577,10 @@ quarter faster from a stack of twelve rows and a half from fifteen
 (`stack_tempo`, an extra step of the engine in `audio_frame`), the board
 hidden while paused (not the rival's a paused race shows), and the engine's
 unused level-up jingle ($0C) the first time a score passes the top of the
-table (`record_watch`); a handicap of its own
+table (`record_watch`); SELECT on the title shows the HIGH SCORES page,
+which otherwise only a lost game did (`--titlescores`); a Single-Pak copy's
+records handed to a console with a save every time they link, with RECORDS
+SAVED on both (`TengenRecordSync`, `records_dump_check`); a handicap of its own
 for the computer in VERSUS COMPUTER under the chord; the pause menu over the
 cable, there if the MASTER found the chord and driven by both players'
 presses through lockstep (`link_match_begin`); a linked match that waits

@@ -2399,7 +2399,87 @@ def singlepak_check(rom):
     if failures:
         return 1
     print("OK: la imagen de Single-Pak juega contra el cartucho.")
-    return mb_send_check(rom)
+    return mb_send_check(rom) or records_dump_check(rom)
+
+
+def records_dump_check(rom):
+    """LOS RECORDS DE UNA COPIA PASAN AL CARTUCHO AL ENLAZAR.
+
+    Una copia de Single-Pak no tiene memoria de guardado: lo que pone en sus
+    tablas se pierde al apagarla. Lo que puso y aun no ha entregado lo
+    lleva marcado (g_unsent), y al enlazar con una consola que si guarda
+    (TengenRecordSync, entre el GO del lobby y la partida) se lo pasa; la que
+    guarda lo mete en su tabla y en su guardado, y las dos dicen RECORDS
+    SAVED dos segundos antes de empezar. Aqui la copia trae un record
+    plantado, y despues: esta en la tabla del cartucho con sus letras, en su
+    guardado, la copia ya no lo tiene pendiente, las dos lo dijeron, y la
+    partida empieza igual en las dos.
+    """
+    mb = os.path.splitext(rom)[0] + "_mb.mb"
+    tables_m, why = symbol(rom, "g_tables")
+    tables_s, why2 = symbol(mb, "g_tables")
+    unsent_s, why3 = symbol(mb, "g_unsent")
+    if not os.path.exists(mb) or tables_m is None or tables_s is None or unsent_s is None:
+        print(f"SALTADO: {why or why2 or why3 or 'no encuentro ' + mb}")
+        return 0
+    import run_rom
+    entry = tables_s[1] // unsent_s[1]           # bytes per row
+    SCORE, LINES, LETTERS = 123456, 77, (3, 12, 26)
+    cores, cable, both, tap = _pair(rom, slow=True, slave_rom=mb)
+    both(1000)
+    if _screen_of(cores[1]) != "cable":
+        print(f"FALLA: la copia no arranca en el lobby ({_screen_of(cores[1])})")
+        return 1
+    copy = cores[1]
+    copy.memory.u32[tables_s[0]] = SCORE           # table 0, row 0
+    copy.memory.u16[tables_s[0] + 4] = LINES
+    for c, v in enumerate(LETTERS):
+        copy.memory.u8[tables_s[0] + 6 + c] = v
+    copy.memory.u8[unsent_s[0]] = 1
+    tap("START", who=0); tap("DOWN", who=0); tap("START", who=0)
+    both(90)
+    tap("START", who=0)
+    said = [False, False]
+    for _ in range(240):
+        both(1)
+        for i, core in enumerate(cores):
+            if "SAVED" in run_rom.tilemap_text(core, 11):
+                said[i] = True
+    failures = []
+    row = tables_m[0]
+    got = (cores[0].memory.u32[row], cores[0].memory.u16[row + 4],
+           tuple(cores[0].memory.u8[row + 6 + c] for c in range(3)))
+    if got != (SCORE, LINES, LETTERS):
+        failures.append(f"el cartucho no tiene el record de la copia arriba: {got}")
+    pending = [copy.memory.u8[unsent_s[0] + i] for i in range(unsent_s[1])]
+    if any(pending):
+        failures.append("la copia sigue teniendo records sin entregar")
+    if not all(said):
+        failures.append(f"RECORDS SAVED en cartucho/copia: {said}")
+    sram = bytes(cores[0].memory.u8[0x0E000000 + i] for i in range(64))
+    score_bytes = SCORE.to_bytes(4, "little")
+    if score_bytes not in sram:
+        failures.append("el record no llego al guardado del cartucho")
+    both(120)
+    if not _same_match(rom, cores) and not _same_match_mb(rom, mb, cores):
+        failures.append("despues, las dos no juegan la misma partida")
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print(f"  la copia entrega {SCORE} / {LINES} lineas; el cartucho lo guarda y "
+          "las dos dicen RECORDS SAVED")
+    print("OK: los records de una copia se guardan en el cartucho al enlazar.")
+    return 0
+
+
+def _same_match_mb(rom, mb, cores):
+    m, _ = symbol(rom, "g_session")
+    s, _ = symbol(mb, "g_session")
+    size = m[1] - 4
+    a = read_bytes(cores[0], m[0], size)
+    b = read_bytes(cores[1], s[0], size)
+    return a != bytes(size) and a == b
 
 
 class FakeMultibootBios:

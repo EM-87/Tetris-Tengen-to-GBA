@@ -8,6 +8,8 @@
  */
 #include "port.h"
 
+#include <string.h>
+
 
 /* COOP'S EIGHT, in TWO columns, which is the other half of the same table.
  *
@@ -1105,6 +1107,12 @@ static char leader_letter(uint8_t index) {
 static LeaderEntry g_tables[LEADER_TABLES][LEADER_ENTRIES];
 static int g_table;
 #define g_leader (g_tables[g_table])
+/* THE ROWS A COPY HAS NOT HANDED ON YET. A Single-Pak copy has no save
+ * (sram_write goes nowhere there), so a row it puts on a table is marked
+ * here, moves with its row as rows are pushed down, falls off with it, and
+ * goes across the next time the copy links up with a console that has a
+ * save (TengenRecordSync, main.c). Never set on a cartridge. */
+static bool g_unsent[LEADER_TABLES][LEADER_ENTRIES];
 
 /* Which entry is being typed into, and which of its three letters — the
  * cartridge's $74/$75 (one per player) and the $40/$80 flags it marks the
@@ -1279,7 +1287,15 @@ static int leader_insert(uint32_t score, uint32_t lines) {
     while (row > 0 && score > g_leader[row - 1].score) row--;
     if (row >= LEADER_ENTRIES) return -1;
 
-    for (int i = LEADER_ENTRIES - 1; i > row; i--) g_leader[i] = g_leader[i - 1];
+    for (int i = LEADER_ENTRIES - 1; i > row; i--) {
+        g_leader[i] = g_leader[i - 1];
+        g_unsent[g_table][i] = g_unsent[g_table][i - 1];
+    }
+#ifdef TENGEN_MULTIBOOT
+    g_unsent[g_table][row] = true;
+#else
+    g_unsent[g_table][row] = false;
+#endif
     g_leader[row].score = score;
     /* main.asm.txt:364-377: a line count that has reached its thousands digit
      * is stored as "999" — the column is three wide and the ROM says so. */
@@ -1287,6 +1303,62 @@ static int leader_insert(uint32_t score, uint32_t lines) {
     for (int c = 0; c < LEADER_INITIALS; c++) g_leader[row].initials[c] = 1; /* 'A' */
     g_high_score = g_leader[0].score;
     return row;
+}
+
+/* The copy's rows that have not gone across yet, oldest table first; how
+ * many (at most `max`). */
+int leader_unsent(TengenRecord *out, int max) {
+    int n = 0;
+    for (int t = 0; t < LEADER_TABLES; t++)
+        for (int i = 0; i < LEADER_ENTRIES && n < max; i++) {
+            if (!g_unsent[t][i]) continue;
+            const LeaderEntry *e = &g_tables[t][i];
+            out[n].table = (uint8_t)t;
+            out[n].score = e->score;
+            out[n].lines = e->lines;
+            for (int c = 0; c < LEADER_INITIALS; c++) out[n].initials[c] = e->initials[c];
+            n++;
+        }
+    return n;
+}
+
+/* ...and they have: a console with a save has them now. */
+void leader_mark_sent(void) {
+    for (int t = 0; t < LEADER_TABLES; t++)
+        for (int i = 0; i < LEADER_ENTRIES; i++) g_unsent[t][i] = false;
+}
+
+/* A COPY'S ROWS ONTO THIS CONSOLE'S TABLES, and into its save; how many made
+ * them. Each goes into the table it came from, by the cartridge's own rule
+ * (leader_insert), its letters with it. A row that is already there to the
+ * letter is not put in twice: two copies that played each other both carry
+ * both games, and the second to link up would give them again. Checked
+ * before anything is believed, as leader_load checks the save. */
+int leader_merge(const TengenRecord *rows, int n) {
+    int keep_table = g_table, kept = 0;
+    for (int r = 0; r < n; r++) {
+        const TengenRecord *in = &rows[r];
+        if (in->table >= LEADER_TABLES || in->score > 999999 || in->lines > 999)
+            continue;
+        bool letters_ok = true;
+        for (int c = 0; c < LEADER_INITIALS; c++)
+            if (in->initials[c] >= LEADER_LETTERS) letters_ok = false;
+        if (!letters_ok) continue;
+        g_table = in->table;
+        bool there = false;
+        for (int i = 0; i < LEADER_ENTRIES && !there; i++)
+            there = g_leader[i].score == in->score && g_leader[i].lines == in->lines &&
+                    !memcmp(g_leader[i].initials, in->initials, LEADER_INITIALS);
+        if (there) continue;
+        int row = leader_insert(in->score, in->lines);
+        if (row < 0) continue;
+        for (int c = 0; c < LEADER_INITIALS; c++) g_leader[row].initials[c] = in->initials[c];
+        kept++;
+    }
+    g_table = keep_table;
+    g_high_score = g_leader[0].score;
+    if (kept) leader_save();
+    return kept;
 }
 
 /* THE PAGE WEARS bgPalette1, which is the menu's: initializeLeaderboard ends
