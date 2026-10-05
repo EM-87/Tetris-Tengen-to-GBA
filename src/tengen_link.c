@@ -263,7 +263,8 @@ void tengen_lobby_apply(TengenLobby *lobby, bool master, bool got,
         /* THE SLAVE MAY BE IN THE MATCH ALREADY: at GO, a match word in its
          * slot is the last echo, arrived as the first move. */
         if (lobby->stage == TENGEN_LOBBY_GO &&
-            tengen_link_is_match_word(slave_word)) {
+            (tengen_link_is_match_word(slave_word) ||
+             tag_of(slave_word) == TENGEN_LOBBY_RECORDS)) {
             lobby->ready = true;
             return;
         }
@@ -320,7 +321,9 @@ void tengen_lobby_apply(TengenLobby *lobby, bool master, bool got,
      * sends the master back to HELLO. */
     /* ...and the master may be: having seen one GO, a match word from it
      * means it took this console's echo and went. */
-    if (lobby->saw_go && tengen_link_is_match_word(master_word)) {
+    /* ...or the records exchange that follows GO (TengenRecordSync). */
+    if (lobby->saw_go && (tengen_link_is_match_word(master_word) ||
+                          tag_of(master_word) == TENGEN_LOBBY_RECORDS)) {
         lobby->ready = true;
         return;
     }
@@ -497,4 +500,128 @@ uint32_t tengen_gbp_reply(uint32_t received, bool rumble) {
     }
     if ((received & 0xFFFFu) == 0x494Eu) return 0x494EB6B1u;
     return 0x40000000u | (rumble ? TENGEN_GBP_RUMBLE_ON : TENGEN_GBP_RUMBLE_OFF);
+}
+
+/* ----------------------------------------------------------------------- *
+ * The records a copy made (TengenRecordSync)
+ * ----------------------------------------------------------------------- */
+#define REC_SEQ   0x100u
+#define REC_ACK   0x200u
+#define REC_HAVE  0x400u
+
+static void put_record(uint8_t *at, const TengenRecord *r) {
+    at[0] = r->table;
+    at[1] = (uint8_t)(r->score >> 16);
+    at[2] = (uint8_t)(r->score >> 8);
+    at[3] = (uint8_t)r->score;
+    at[4] = (uint8_t)(r->lines >> 8);
+    at[5] = (uint8_t)r->lines;
+    for (int c = 0; c < 3; c++) at[6 + c] = r->initials[c];
+}
+
+static void get_record(const uint8_t *at, TengenRecord *r) {
+    r->table = at[0];
+    r->score = ((uint32_t)at[1] << 16) | ((uint32_t)at[2] << 8) | at[3];
+    r->lines = (uint16_t)((at[4] << 8) | at[5]);
+    for (int c = 0; c < 3; c++) r->initials[c] = at[6 + c];
+}
+
+void tengen_records_start(TengenRecordSync *sync, bool storage,
+                          const TengenRecord *mine, int n) {
+    memset(sync, 0, sizeof(*sync));
+    sync->storage = storage;
+    if (storage) {
+        sync->out[0] = 1;
+        sync->out_len = 2;
+        sync->out_held = true;          /* `k` once the other's are merged */
+        return;
+    }
+    if (n < 0) n = 0;
+    if (n > TENGEN_RECORDS_MAX) n = TENGEN_RECORDS_MAX;
+    sync->out[0] = 0;
+    sync->out[1] = (uint8_t)n;
+    for (int i = 0; i < n; i++)
+        put_record(&sync->out[2 + i * TENGEN_RECORD_BYTES], &mine[i]);
+    sync->out_len = (uint8_t)(2 + n * TENGEN_RECORD_BYTES);
+}
+
+/* How many bytes of `out` may go: all of them, bar a held `k`. */
+static uint8_t records_sendable(const TengenRecordSync *sync) {
+    return sync->out_held ? 1 : sync->out_len;
+}
+
+uint16_t tengen_records_word(const TengenRecordSync *sync) {
+    uint16_t word = (uint16_t)(TENGEN_LOBBY_RECORDS << TENGEN_LOBBY_TAG_SHIFT);
+    if (sync->out_pos < records_sendable(sync)) {
+        word |= REC_HAVE | sync->out[sync->out_pos];
+        if (sync->out_pos & 1) word |= REC_SEQ;
+    }
+    /* The receipt: the sequence bit of the last byte taken, 1 before any. */
+    if (sync->in_pos == 0 || ((sync->in_pos - 1) & 1)) word |= REC_ACK;
+    return word;
+}
+
+bool tengen_records_done(const TengenRecordSync *sync) {
+    return sync->out_pos == sync->out_len && sync->in_len &&
+           sync->in_pos == sync->in_len;
+}
+
+void tengen_records_saved(TengenRecordSync *sync, uint8_t kept) {
+    if (!sync->storage || !sync->out_held) return;
+    sync->out[1] = kept;
+    sync->out_held = false;
+}
+
+static void records_take(TengenRecordSync *sync, uint8_t byte) {
+    if (sync->in_len && sync->in_pos >= sync->in_len) return;
+    sync->in[sync->in_pos++] = byte;
+    if (sync->in_pos == 1) {
+        sync->partner_storage = (byte & 1) != 0;
+        if (sync->partner_storage) sync->in_len = 2;
+        /* Two consoles with saves have nothing to give each other. */
+        if (sync->partner_storage) tengen_records_saved(sync, 0);
+    } else if (sync->in_pos == 2 && !sync->partner_storage) {
+        uint8_t n = byte > TENGEN_RECORDS_MAX ? TENGEN_RECORDS_MAX : byte;
+        sync->in_len = (uint8_t)(2 + n * TENGEN_RECORD_BYTES);
+    }
+    if (!sync->in_len || sync->in_pos < sync->in_len) return;
+    /* All of it. */
+    if (sync->partner_storage) {
+        sync->saved = sync->in[1];
+    } else {
+        sync->theirs_n = (uint8_t)((sync->in_len - 2) / TENGEN_RECORD_BYTES);
+        for (int i = 0; i < sync->theirs_n; i++)
+            get_record(&sync->in[2 + i * TENGEN_RECORD_BYTES], &sync->theirs[i]);
+        if (sync->storage) sync->theirs_ready = true;
+        else sync->theirs_n = 0;        /* nowhere to keep them */
+        /* ...and a console without a save answers nothing to it. */
+    }
+}
+
+void tengen_records_apply(TengenRecordSync *sync, bool got, uint16_t word) {
+    if (sync->complete || sync->failed) return;
+    if (!got || (!tengen_link_is_match_word(word) &&
+                 tag_of(word) != TENGEN_LOBBY_RECORDS)) {
+        /* Nothing, or a word from before this (a GO the master is still
+         * sending while it waits for its echo): not an answer. */
+        if (++sync->idle >= TENGEN_RECORDS_TIMEOUT) sync->failed = true;
+        return;
+    }
+    if (tengen_link_is_match_word(word)) {
+        /* The other one finished, which it can only do with everything
+         * across both ways: this one has all of it too. */
+        sync->complete = true;
+        return;
+    }
+    sync->idle = 0;
+    /* Its receipt for the byte in flight. */
+    if (sync->out_pos < records_sendable(sync) &&
+        (((word & REC_ACK) != 0) == ((sync->out_pos & 1) != 0)))
+        sync->out_pos++;
+    /* Its byte, if it is the next one. */
+    if ((word & REC_HAVE) &&
+        (((word & REC_SEQ) != 0) == ((sync->in_pos & 1) != 0)))
+        records_take(sync, (uint8_t)(word & 0xFF));
+    if (tengen_records_done(sync) && ++sync->linger > TENGEN_RECORDS_LINGER)
+        sync->complete = true;
 }

@@ -134,7 +134,9 @@ typedef enum {
      * Master: bit 11 set if it is offering one, bits 0-10 the skin's
      * fingerprint. Slave's echo: bit 0 set if it HAS that skin. See
      * tengen_lobby_skins. */
-    TENGEN_LOBBY_SKIN    = 9
+    TENGEN_LOBBY_SKIN    = 9,
+    /* THE RECORDS A COPY MADE, right after GO: see TengenRecordSync. */
+    TENGEN_LOBBY_RECORDS = 10
 } TengenLobbyTag;
 
 /* A skin's fingerprint is eleven bits of a hash of its own art, which is what
@@ -346,5 +348,80 @@ static inline bool tengen_name_have(const TengenNameSwap *swap) {
 #define TENGEN_GBP_RUMBLE_ON  0x26u
 #define TENGEN_GBP_RUMBLE_OFF 0x04u
 uint32_t tengen_gbp_reply(uint32_t received, bool rumble);
+
+/* ----------------------------------------------------------------------- *
+ * The records a copy made, across to a cartridge that can keep them
+ *
+ * A SINGLE-PAK COPY HAS NO SAVE. Two copies can play each other for an hour
+ * with no cartridge anywhere — one copy sends the game on, the batteries of
+ * a flash cart's console last five minutes and a copy's an hour — and every
+ * record made that way was gone at the power switch. So the copy keeps the
+ * rows it put on its tables in memory, and the next time it links up with a
+ * console that has a save, they go across and that console keeps them.
+ *
+ * WHEN: as the lobby finishes, before the first piece, on every link.
+ * Both consoles run one of these; it is short when there is nothing to send.
+ *
+ * WHAT: each console sends ONE message, a byte at a time. A console without
+ * a save sends [0, n, n records of 9 bytes]; one with a save sends [1, k],
+ * its first byte at once and `k` — how many of the other's records made its
+ * tables — only once it has the other's message and has merged it
+ * (tengen_records_saved). Two with saves answer k = 0 to each other at once;
+ * two without send to nobody, and nothing is kept.
+ *
+ * HOW: both directions at once, each word carrying one byte of this
+ * console's message and the receipt for the other's, alternating bit: byte
+ * i goes out with sequence bit i & 1 until the receipt for it comes back,
+ * and the receipt is the sequence bit of the last byte taken (1 before the
+ * first). A lost or repeated transfer costs a turn, never a byte, and the
+ * order the link keeps is all it needs. Payload: bits 0-7 the byte, 8 its
+ * sequence bit, 9 the receipt, 10 set when there is a byte at all.
+ *
+ * THE END: each console lingers once it has everything, as the names swap
+ * does and for the same reason (the other may still be waiting for the
+ * receipt), and takes a match word in the other's slot as the other having
+ * finished: it can only have finished with everything across both ways.
+ * ----------------------------------------------------------------------- */
+#define TENGEN_RECORDS_MAX 15
+#define TENGEN_RECORD_BYTES 9
+#define TENGEN_RECORDS_MSG (2 + TENGEN_RECORDS_MAX * TENGEN_RECORD_BYTES)
+#define TENGEN_RECORDS_TIMEOUT 300
+#define TENGEN_RECORDS_LINGER 8
+
+typedef struct {
+    uint8_t table;          /* which build's table: 0 the release's */
+    uint32_t score;         /* 0..999999 */
+    uint16_t lines;         /* 0..999 */
+    uint8_t initials[3];    /* letters as the table keeps them, 0..26 */
+} TengenRecord;
+
+typedef struct {
+    uint8_t out[TENGEN_RECORDS_MSG];
+    uint8_t out_len, out_pos;
+    bool out_held;          /* a save's `k` waits for the merge */
+    uint8_t in[TENGEN_RECORDS_MSG];
+    uint8_t in_pos, in_len; /* in_len 0: not known yet */
+    bool storage;           /* this console has a save */
+    bool partner_storage;   /* ...and the other one (known once in_pos > 0) */
+    /* For a console with a save: the other's records, once all in, for the
+     * caller to merge (tengen_records_saved says how many it kept). */
+    TengenRecord theirs[TENGEN_RECORDS_MAX];
+    uint8_t theirs_n;
+    bool theirs_ready;
+    /* For a console without one: how many of its records the other kept. */
+    uint8_t saved;
+    uint8_t linger;
+    bool complete, failed;
+    uint16_t idle;
+} TengenRecordSync;
+
+void tengen_records_start(TengenRecordSync *sync, bool storage,
+                          const TengenRecord *mine, int n);
+uint16_t tengen_records_word(const TengenRecordSync *sync);
+void tengen_records_apply(TengenRecordSync *sync, bool got, uint16_t word);
+/* A console with a save has merged `theirs`: `kept` of them made its tables. */
+void tengen_records_saved(TengenRecordSync *sync, uint8_t kept);
+/* Everything is across: the message both ways, receipts included. */
+bool tengen_records_done(const TengenRecordSync *sync);
 
 #endif /* TENGEN_LINK_H */

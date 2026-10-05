@@ -1555,6 +1555,125 @@ static void test_the_rivals_name_crosses_the_cable(void) {
     CHECK(!a.failed && !b.failed);
 }
 
+/* ----------------------------------------------------------------------- *
+ * The records a copy made (TengenRecordSync)
+ * ----------------------------------------------------------------------- */
+
+/* One transfer of it, and the merge a console with a save does as soon as
+ * the other's records are in: it keeps those scoring over `bar`. */
+static void records_transfer(TengenRecordSync *a, TengenRecordSync *b,
+                             bool carries, uint32_t bar) {
+    uint16_t aw = tengen_records_word(a);
+    uint16_t bw = tengen_records_word(b);
+    tengen_records_apply(a, carries, bw);
+    tengen_records_apply(b, carries, aw);
+    TengenRecordSync *both[2] = { a, b };
+    for (int i = 0; i < 2; i++)
+        if (both[i]->theirs_ready && both[i]->out_held) {
+            uint8_t kept = 0;
+            for (int r = 0; r < both[i]->theirs_n; r++)
+                if (both[i]->theirs[r].score > bar) kept++;
+            tengen_records_saved(both[i], kept);
+        }
+}
+
+static void fill_records(TengenRecord *r, int n) {
+    for (int i = 0; i < n; i++) {
+        r[i].table = (uint8_t)(i % 3);
+        r[i].score = 999999u - (uint32_t)i * 41235u;
+        r[i].lines = (uint16_t)(999 - i * 37);
+        r[i].initials[0] = (uint8_t)(i % 27);
+        r[i].initials[1] = (uint8_t)((i * 5) % 27);
+        r[i].initials[2] = 26;
+    }
+}
+
+static void test_a_copys_records_cross_to_the_cartridge(void) {
+    /* The copy (no save) has three; the cartridge keeps the two over the bar
+     * and says so, and the copy learns how many. Lost transfers, both
+     * orders of who is which end: it is symmetric. */
+    TengenRecord mine[TENGEN_RECORDS_MAX];
+    for (int lossy = 0; lossy < 2; lossy++)
+        for (int n = 0; n <= TENGEN_RECORDS_MAX; n += 3) {
+            TengenRecordSync copy, cart;
+            fill_records(mine, n);
+            tengen_records_start(&copy, false, mine, n);
+            tengen_records_start(&cart, true, NULL, 0);
+            int turns = 0;
+            while (!(copy.complete && cart.complete) && turns < 3000) {
+                records_transfer(&copy, &cart, !lossy || (turns % 3) == 0,
+                                 900000);
+                turns++;
+            }
+            CHECK(copy.complete && cart.complete);
+            CHECK(!copy.failed && !cart.failed);
+            CHECK(copy.partner_storage && !cart.partner_storage);
+            CHECK(cart.theirs_n == n);
+            uint8_t want = 0;
+            for (int i = 0; i < n; i++) {
+                CHECK(cart.theirs[i].table == mine[i].table);
+                CHECK(cart.theirs[i].score == mine[i].score);
+                CHECK(cart.theirs[i].lines == mine[i].lines);
+                for (int c = 0; c < 3; c++)
+                    CHECK(cart.theirs[i].initials[c] == mine[i].initials[c]);
+                if (mine[i].score > 900000) want++;
+            }
+            CHECK(copy.saved == want);
+        }
+}
+
+static void test_two_saves_or_two_copies_send_nothing(void) {
+    TengenRecord mine[4];
+    fill_records(mine, 4);
+    TengenRecordSync a, b;
+    /* Two cartridges: each says it has a save and answers 0 at once. */
+    tengen_records_start(&a, true, NULL, 0);
+    tengen_records_start(&b, true, NULL, 0);
+    for (int i = 0; i < 40; i++) records_transfer(&a, &b, true, 0);
+    CHECK(a.complete && b.complete);
+    CHECK(!a.theirs_ready && !b.theirs_ready);
+    /* Two copies: they send, and neither keeps anything or says it did. */
+    tengen_records_start(&a, false, mine, 4);
+    tengen_records_start(&b, false, mine, 4);
+    for (int i = 0; i < 200; i++) records_transfer(&a, &b, true, 0);
+    CHECK(a.complete && b.complete);
+    CHECK(!a.partner_storage && !b.partner_storage);
+    CHECK(a.saved == 0 && b.saved == 0 && a.theirs_n == 0 && b.theirs_n == 0);
+}
+
+static void test_the_records_end_when_the_other_is_playing(void) {
+    /* A match word in the other's slot: it finished, so this one did too.
+     * Nothing at all for long enough: it gives up, and the match goes on. */
+    TengenRecordSync s;
+    tengen_records_start(&s, true, NULL, 0);
+    tengen_records_apply(&s, true, tengen_link_pack(0, 0));
+    CHECK(s.complete);
+    tengen_records_start(&s, true, NULL, 0);
+    for (int i = 0; i < TENGEN_RECORDS_TIMEOUT; i++) tengen_records_apply(&s, false, 0);
+    CHECK(s.failed && !s.complete);
+}
+
+static void test_the_lobby_takes_the_records_as_leaving(void) {
+    /* Right after GO the other console is in the records exchange, not the
+     * match: its first word there has to read as "it left", on both ends,
+     * or the lobby would take it for a stranger and go back to HELLO. */
+    TengenRecordSync s;
+    tengen_records_start(&s, true, NULL, 0);
+    uint16_t rec = tengen_records_word(&s);
+    TengenLobby m, sl;
+    tengen_lobby_start(&m, 0x1234, 3, 0);
+    m.stage = TENGEN_LOBBY_GO;
+    m.linked = true;
+    tengen_lobby_apply(&m, true, true, tengen_lobby_word(&m, true), rec);
+    CHECK(m.ready);
+    tengen_lobby_start(&sl, 0, 0, 0);
+    sl.saw_go = true;
+    sl.linked = true;
+    sl.stage = TENGEN_LOBBY_GO;
+    tengen_lobby_apply(&sl, false, true, rec, tengen_lobby_word(&sl, false));
+    CHECK(sl.ready);
+}
+
 static void test_the_records_swap_rides_out_lost_transfers(void) {
     /* A dropped word costs one turn of the wheel, not a stall: each console
      * sends its three letters round and round rather than waiting for an
@@ -3832,6 +3951,10 @@ int main(void) {
     test_a_lobby_hands_straight_over_to_a_matching_pair_of_games();
     test_the_rivals_name_crosses_the_cable();
     test_the_records_swap_rides_out_lost_transfers();
+    test_a_copys_records_cross_to_the_cartridge();
+    test_two_saves_or_two_copies_send_nothing();
+    test_the_records_end_when_the_other_is_playing();
+    test_the_lobby_takes_the_records_as_leaving();
     test_a_records_swap_with_nobody_there_gives_up();
     test_no_records_word_can_look_like_an_absent_console();
     test_the_wire_word_survives_a_round_trip();

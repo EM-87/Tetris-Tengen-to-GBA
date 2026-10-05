@@ -16,6 +16,9 @@
  *          while the other never will; and they do link, given time.
  *   NAMES  a name that arrives is the one that was typed, and both
  *          consoles get each other's or neither does.
+ *   RECORDS a copy's records that a console with a save takes are the ones
+ *          sent, byte for byte; a copy never hears "kept" unless they were
+ *          merged (it would forget them); and both finish, given time.
  *
  *     fuzz_link [runs] [seed]
  */
@@ -136,6 +139,79 @@ static bool names_run(int run) {
     return true;
 }
 
+#define RECORD_TURNS 6000
+
+static bool records_run(int run) {
+    TengenRecordSync s[2];
+    TengenRecord mine[2][TENGEN_RECORDS_MAX];
+    bool storage[2] = { rnd() & 1, rnd() & 1 };
+    int n[2];
+    for (int c = 0; c < 2; c++) {
+        n[c] = (int)(rnd() % (TENGEN_RECORDS_MAX + 1));
+        for (int i = 0; i < n[c]; i++) {
+            mine[c][i].table = (uint8_t)(rnd() % 5);
+            mine[c][i].score = rnd() % 1000000;
+            mine[c][i].lines = (uint16_t)(rnd() % 1000);
+            for (int k = 0; k < 3; k++)
+                mine[c][i].initials[k] = (uint8_t)(rnd() % LEADER_LETTERS);
+        }
+        tengen_records_start(&s[c], storage[c], mine[c], n[c]);
+    }
+    bool merged[2] = { false, false };
+    uint8_t kept[2] = { 0, 0 };
+    unsigned loss = rnd() % 50;
+    bool one_sided = rnd() & 1;
+    for (long t = 0; t < RECORD_TURNS; t++) {
+        bool on[2] = { !s[0].complete && !s[0].failed, !s[1].complete && !s[1].failed };
+        if (!on[0] && !on[1]) break;
+        /* One that has finished is in the match: match words. */
+        uint16_t w[2];
+        for (int c = 0; c < 2; c++)
+            w[c] = on[c] ? tengen_records_word(&s[c]) : tengen_link_pack(0, (uint8_t)t);
+        bool got0 = (rnd() % 100) >= loss;
+        bool got1 = one_sided ? (rnd() % 100) >= loss : got0;
+        if (on[0]) tengen_records_apply(&s[0], got0, w[1]);
+        if (on[1]) tengen_records_apply(&s[1], got1, w[0]);
+        for (int c = 0; c < 2; c++)
+            if (s[c].theirs_ready && !merged[c]) {
+                merged[c] = true;
+                kept[c] = (uint8_t)(rnd() % (s[c].theirs_n + 1));
+                tengen_records_saved(&s[c], kept[c]);
+            }
+    }
+    for (int c = 0; c < 2; c++) {
+        int o = c ^ 1;
+        if (s[c].theirs_ready) {
+            if (s[c].theirs_n != n[o] || !storage[c] || storage[o]) {
+                printf("FAIL records %d: took %d records, %d were sent\n",
+                       run, s[c].theirs_n, n[o]);
+                return false;
+            }
+            for (int i = 0; i < n[o]; i++)
+                if (memcmp(&s[c].theirs[i].initials, mine[o][i].initials, 3) ||
+                    s[c].theirs[i].score != mine[o][i].score ||
+                    s[c].theirs[i].lines != mine[o][i].lines ||
+                    s[c].theirs[i].table != mine[o][i].table) {
+                    printf("FAIL records %d: record %d arrived wrong\n", run, i);
+                    return false;
+                }
+        }
+        /* A copy that finished believing a save has them: it did merge. */
+        if (!storage[c] && s[c].complete && s[c].partner_storage &&
+            (!merged[o] || s[c].saved != kept[o])) {
+            printf("FAIL records %d (loss %u%%): the copy heard %d kept, "
+                   "merged=%d kept=%d\n", run, loss, s[c].saved, merged[o], kept[o]);
+            return false;
+        }
+        if (!s[c].complete) {
+            printf("FAIL records %d (loss %u%%%s): console %d never finished\n",
+                   run, loss, one_sided ? ", one-sided" : "", c);
+            return false;
+        }
+    }
+    return true;
+}
+
 int main(int argc, char **argv) {
     int runs = argc > 1 ? atoi(argv[1]) : 20000;
     g_rs = argc > 2 ? strtoull(argv[2], NULL, 0) : 0x9E3779B97F4A7C15ULL;
@@ -144,8 +220,9 @@ int main(int argc, char **argv) {
     for (int r = 0; r < runs && fails < 20; r++) {
         if (!lobby_run(r)) fails++;
         if (!names_run(r)) fails++;
+        if (!records_run(r)) fails++;
     }
-    printf("fuzz_link: %d lobbies and %d name swaps over a lossy link, "
-           "%d failures\n", runs, runs, fails);
+    printf("fuzz_link: %d lobbies, %d name swaps and %d records dumps over a "
+           "lossy link, %d failures\n", runs, runs, runs, fails);
     return fails != 0;
 }
