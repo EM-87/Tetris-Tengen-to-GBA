@@ -956,11 +956,14 @@ def leaving_title_check(rom_path):
         core.set_keys()
         run(core, settle)
 
-    tap(KEYS["SELECT"])
+    # ...EXCEPT ON THE TITLE, where the port takes SELECT for the HIGH SCORES
+    # page instead (a player asked: there was no other way to see them; see
+    # title_scores_check). START advances, as on the cartridge.
+    tap(KEYS["START"])
     if "GAME SELECT" not in tilemap_text(core, 8):
-        failures.append("SELECT no avanza desde el titulo")
+        failures.append("START no avanza desde el titulo")
     else:
-        print("  SELECT avanza desde el titulo, como START")
+        print("  START avanza desde el titulo (SELECT ensena los records)")
 
     # THE LIST IS ONE BLUE AND THE CURSOR IS THE ARROW. Measured off the
     # cartridge: every entry on its GAME SELECT is (48,50,236), chosen or not,

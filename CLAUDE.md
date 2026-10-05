@@ -578,7 +578,8 @@ quarter faster from a stack of twelve rows and a half from fifteen
 hidden while paused (not the rival's a paused race shows), and the engine's
 unused level-up jingle ($0C) the first time a score passes the top of the
 table (`record_watch`); SELECT on the title shows the HIGH SCORES page,
-which otherwise only a lost game did (`--titlescores`); a Single-Pak copy's
+which otherwise only a lost game did — the cartridge takes it as START there
+($9FA4) — (`--titlescores`); a Single-Pak copy's
 records handed to a console with a save every time they link, with RECORDS
 SAVED on both (`TengenRecordSync`, `records_dump_check`); a handicap of its own
 for the computer in VERSUS COMPUTER under the chord; the pause menu over the
