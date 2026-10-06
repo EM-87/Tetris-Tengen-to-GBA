@@ -422,6 +422,15 @@ TengenAiWeights tengen_ai_weights[2] = {
 #ifndef AI_TUCKS
 #define AI_TUCKS 1
 #endif
+/* THE INNER LOOPS' OWN HOME, if the platform has a faster one: empty here,
+ * and the GBA build puts them in internal WRAM as ARM code (Makefile), where
+ * they run several times faster than Thumb from the cartridge — which is
+ * thinking time, and thinking time is lines: the sooner the plan, the more
+ * placements are still in reach (see the slice a frame below). A hint, not
+ * a dependency: the core still builds with any C99 compiler. */
+#ifndef TENGEN_AI_HOT
+#define TENGEN_AI_HOT
+#endif
 #define AI_DEAD     (-0x3FFFFFFF)
 #define AI_UNREACHABLE (-100000000)
 /* A re-plan's thumb on the scale for the target already in hand, so a
@@ -438,10 +447,15 @@ typedef struct {
     uint16_t full;
 } AiBoard;
 
+/* Sixteen bits at most, counted in parallel rather than one at a time: the
+ * board's terms count three rows of bits on each of twenty rows for every
+ * placement weighed. */
 static int ai_popcount(uint32_t v) {
-    int n = 0;
-    while (v) { v &= v - 1; n++; }
-    return n;
+    v &= 0xFFFF;
+    v = v - ((v >> 1) & 0x5555u);
+    v = (v & 0x3333u) + ((v >> 2) & 0x3333u);
+    v = (v + (v >> 4)) & 0x0F0Fu;
+    return (int)((v + (v >> 8)) & 0x1Fu);
 }
 
 static uint16_t ai_shift(uint16_t bits, int left) {
@@ -485,7 +499,7 @@ static void ai_board(const TengenGame *g, TengenPlayerSlot slot, AiBoard *b) {
 
 /* Does the shape at left column `l`, top row `t` hit anything? Rows above
  * the field are open; below it and outside the playable columns are not. */
-static bool ai_hits(const AiBoard *b, const uint16_t sh[4], int l, int t) {
+TENGEN_AI_HOT static bool ai_hits(const AiBoard *b, const uint16_t sh[4], int l, int t) {
     for (int r = 0; r < 4; r++) {
         if (!sh[r]) continue;
         uint16_t cols = ai_shift(sh[r], l);
@@ -498,14 +512,14 @@ static bool ai_hits(const AiBoard *b, const uint16_t sh[4], int l, int t) {
     return false;
 }
 
-static int ai_drop(const AiBoard *b, const uint16_t sh[4], int l, int t) {
+TENGEN_AI_HOT static int ai_drop(const AiBoard *b, const uint16_t sh[4], int l, int t) {
     while (!ai_hits(b, sh, l, t + 1)) t++;
     return t;
 }
 
 /* Puts it there and takes the full rows away; how many, or -1 if any of it
  * is above the field (a top-out). */
-static int ai_place(AiBoard *b, const uint16_t sh[4], int l, int t) {
+TENGEN_AI_HOT static int ai_place(AiBoard *b, const uint16_t sh[4], int l, int t) {
     for (int r = 0; r < 4; r++) {
         if (!sh[r]) continue;
         if (t + r < 0 || t + r >= AI_H) return -1;
@@ -522,7 +536,7 @@ static int ai_place(AiBoard *b, const uint16_t sh[4], int l, int t) {
 
 /* The board's four El-Tetris terms (landing height and rows cleared are the
  * placement's, added by the caller). */
-static int32_t ai_board_terms(const AiBoard *b, const TengenAiWeights *w) {
+TENGEN_AI_HOT static int32_t ai_board_terms(const AiBoard *b, const TengenAiWeights *w) {
     int row_trans = 0, col_trans = 0, holes = 0, wells = 0;
     uint16_t covered = 0, prev = 0;
     uint8_t run[16] = { 0 };
@@ -565,7 +579,7 @@ static int ai_shape_rows(const uint16_t sh[4], int *top) {
 
 /* Score of the shape dropped at `l` from row `t` on `b` (which is changed),
  * El-Tetris in full; AI_DEAD for a top-out. */
-static int32_t ai_score_drop(AiBoard *b, const uint16_t sh[4], int l, int t,
+TENGEN_AI_HOT static int32_t ai_score_drop(AiBoard *b, const uint16_t sh[4], int l, int t,
                              const TengenAiWeights *w,
                              int *cleared_out) {
     /* A shape that does not fit where it would start from — a piece lying
@@ -647,7 +661,7 @@ typedef struct {
  * stepped over in one go, so a slow fall costs its rows, not its frames.
  * Returns whether it came where it was sent. */
 #define AI_NO_TUCK (-128)
-static bool ai_walk(const AiBoard *obstacles, TengenTetromino piece,
+TENGEN_AI_HOT static bool ai_walk(const AiBoard *obstacles, TengenTetromino piece,
                     uint8_t o0, int l0, int t0, uint8_t o1, int l1,
                     int tuck_row, int tuck_l, const AiPace *pace,
                     int *rest_l, int *rest_t) {
@@ -666,10 +680,25 @@ static bool ai_walk(const AiBoard *obstacles, TengenTetromino piece,
         int want = tuck && (t >= tuck_row || ai_hits(obstacles, sh, l, t + 1))
                    ? tuck_l : l1;
         if (!tuck && l == l1 && o == o1) { *rest_l = l; return true; }
-        if (l == want && o == o1 && timer > 1) {
-            /* Nothing to press before the next row: straight to it. */
-            uint8_t skip = (uint8_t)(timer - 1);
-            timer = 1;
+        /* Frames on which nothing can happen — no shift due (or none
+         * wanted), no turn, the timer short of zero — are stepped over in one
+         * go, to the next frame on which something can. Nothing changes on
+         * them but the clock and the timer, so the walk is the same walk;
+         * it just costs its events (shifts, turns, rows), not its frames: a
+         * piece held up at the top of a slow fall cost a thousand turns of
+         * this loop, and on the GBA a slice that walked one ran for most of
+         * a frame. */
+        if (timer > 1) {
+            int skip = timer - 1;
+            if (l != want) {
+                int to_shift = (8 - (clock & 0x07)) & 0x07;
+                if (to_shift < skip) skip = to_shift;
+            }
+            if (o != o1) {
+                int to_turn = (16 - (clock & 0x0F)) & 0x0F;
+                if (to_turn < skip) skip = to_turn;
+            }
+            timer = (uint8_t)(timer - skip);
             clock = (uint8_t)(clock + skip);
             f += skip;
         }
@@ -918,6 +947,17 @@ static void ai_pick(TengenAi *ai, const AiView *v) {
                       v->next < TENGEN_TETROMINO_COUNT) ? 2 : 3;
 }
 
+/* MORE TIME, IF THE CALLER HAS IT: a slice that has spent its budget asks
+ * `s_more` (set by tengen_ai_think_while) for another unit before it stops,
+ * so a caller with spare time thinks on in one call, the board read once.
+ * The core knows nothing of what the time is; the caller does. */
+static bool (*s_more)(void);
+static bool ai_left(int *budget) {
+    if (*budget > 0) return true;
+    if (s_more && s_more()) { *budget = 1; return true; }
+    return false;
+}
+
 /* CANDIDATE `k` ONE PIECE AHEAD, a slice at a time: its own terms, and the
  * best of NEXT's every orientation and column dropped on the board it
  * leaves. `*inner` is where the replies have got to; true once they are
@@ -939,7 +979,7 @@ static bool ai_ahead(TengenAi *ai, const AiView *v, int k, uint8_t *inner,
     int height2 = 2 * AI_H - (2 * (land + top) + rows - 1);
     int32_t first = v->w->landing * height2 / 2 + v->w->cleared * cleared +
                     ai_trespass(v, sh, l);
-    while (*budget > 0 && *inner < 4 * 16) {
+    while (*inner < 4 * 16 && ai_left(budget)) {
         uint8_t o2 = (uint8_t)(*inner / 16);
         int l2 = *inner % 16 - 3;
         (*inner)++;
@@ -967,7 +1007,7 @@ static void ai_smart_think(TengenAi *ai, const TengenGame *g,
     AiView v;
     if (!ai_view(g, slot, ai, &v)) { ai->plan_stage = 3; return; }
 
-    while (budget > 0 && ai->plan_stage == 1) {
+    while (ai->plan_stage == 1 && ai_left(&budget)) {
         if (ai->plan_cursor >= ai->plan_count) {
             /* Every placement of the piece in hand is in: aim at the best
              * reachable one now, and pick the few to look ahead from. */
@@ -1001,7 +1041,7 @@ static void ai_smart_think(TengenAi *ai, const TengenGame *g,
         ai->plan_cand_score[k] = score;
     }
 
-    while (budget > 0 && ai->plan_stage == 2) {
+    while (ai->plan_stage == 2 && ai_left(&budget)) {
         if (ai->plan_cursor >= ai->plan_top_count) {
             /* THE PLAN IS MADE, in the frames it always took: what time is
              * left before the piece gets there goes on slides (`deep`). */
@@ -1030,7 +1070,7 @@ static void ai_smart_think(TengenAi *ai, const TengenGame *g,
      * only if no straight drop gets there. In reach is the walk's to say,
      * slide and all: on a fast fall the piece locks before the shift comes,
      * and the slide is simply not one. */
-    while (budget > 0 && ai->plan_stage == 4) {
+    while (ai->plan_stage == 4 && ai_left(&budget)) {
         /* A slide found: one piece ahead as well, and it takes the plan
          * only if it beats the plan's own total and is still in reach. */
         if (ai->plan_tuck_n >= 0) {
@@ -1109,8 +1149,23 @@ static void ai_smart_think(TengenAi *ai, const TengenGame *g,
 
 }
 
+bool tengen_ai_think_some(TengenAi *ai, const TengenGame *game,
+                          TengenPlayerSlot slot, int budget) {
+    if (!ai->smart || ai->plan_stage == 0 || ai->plan_stage == 3) return false;
+    ai_smart_think(ai, game, slot, budget);
+    return ai->plan_stage != 0 && ai->plan_stage != 3;
+}
+
+void tengen_ai_think_while(TengenAi *ai, const TengenGame *game,
+                           TengenPlayerSlot slot, bool (*more)(void)) {
+    if (!more()) return;
+    s_more = more;
+    (void)tengen_ai_think_some(ai, game, slot, 1);
+    s_more = 0;
+}
+
 void tengen_ai_think(TengenAi *ai, const TengenGame *game, TengenPlayerSlot slot) {
-    if (ai->smart) ai_smart_think(ai, game, slot, TENGEN_AI_SMART_BUDGET);
+    (void)tengen_ai_think_some(ai, game, slot, TENGEN_AI_SMART_BUDGET);
 }
 
 void tengen_ai_reset(TengenAi *ai) {
@@ -1262,7 +1317,7 @@ uint8_t tengen_ai_buttons(TengenAi *ai, const TengenGame *game,
         ai->clock = frame_counter;
         ai_replan_check(ai, game, slot);
         if (ai->adaptive) ai_adapt(ai, game, slot);
-        ai_smart_think(ai, game, slot, TENGEN_AI_SMART_BUDGET);
+        (void)tengen_ai_think_some(ai, game, slot, TENGEN_AI_SMART_BUDGET);
         if (!ai->plan_have) {
             if (ai->since_spawn < 0xFF) ai->since_spawn++;
             return 0;

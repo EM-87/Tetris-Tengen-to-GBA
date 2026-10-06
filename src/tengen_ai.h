@@ -24,10 +24,10 @@
 #include "tengen_core.h"
 
 /* The port's planner: how many placements one piece can have (four
- * orientations, thirteen left columns, and with `deep` the slides under a
- * ledge besides) and how many of the best of them it looks one piece further
+ * orientations, fifteen left columns at most: sixty; and with `deep` up to
+ * twelve slides under a ledge besides, more than any board offers) and how many of the best of them it looks one piece further
  * ahead from. */
-#define TENGEN_AI_SMART_MAX  96
+#define TENGEN_AI_SMART_MAX  72
 #define TENGEN_AI_SMART_KEEP 6
 
 /* THE PORT'S COMPUTER'S WEIGHTS (`smart`), times a thousand: the landing
@@ -179,6 +179,15 @@ void tengen_ai_reset(TengenAi *ai);
  * tengen_ai_buttons already does each frame. Exposed for a caller that wants
  * to plan without pressing anything (the tests). */
 void tengen_ai_think(TengenAi *ai, const TengenGame *game, TengenPlayerSlot slot);
+/* ...and a slice of `budget`, for a caller with time to spare in its frame
+ * (gba/match.c, ai_think_spare): true while there is still something to
+ * think about for this piece. */
+bool tengen_ai_think_some(TengenAi *ai, const TengenGame *game,
+                          TengenPlayerSlot slot, int budget);
+/* ...or for as long as `more` says there is time, a unit at a time, the
+ * board read once. */
+void tengen_ai_think_while(TengenAi *ai, const TengenGame *game,
+                           TengenPlayerSlot slot, bool (*more)(void));
 
 /* Picks a column and an orientation for `slot`'s CURRENT piece. The ROM calls
  * this once per spawn, out of getNextTetromino (main.asm.txt:3735, 3749). */

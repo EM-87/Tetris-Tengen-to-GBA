@@ -149,6 +149,15 @@ BUILD_TAG := $(if $(BUILD_TAG),$(BUILD_TAG),LOCAL)$(shell git diff --quiet HEAD 
 BUILD_TAG_FILE := $(BUILD)/build_tag
 $(shell mkdir -p $(BUILD); echo '$(BUILD_TAG)' | cmp -s - $(BUILD_TAG_FILE) || echo '$(BUILD_TAG)' > $(BUILD_TAG_FILE))
 ARMFLAGS += -DTENGEN_BUILD='"$(BUILD_TAG)"'
+# THE COMPUTER'S INNER LOOPS IN INTERNAL WRAM, AS ARM (TENGEN_AI_HOT in
+# src/tengen_ai.c): the collision, the drop, the placement and the board's
+# terms, a kilobyte or so, which every placement it weighs runs dozens of
+# times. Thumb from the 16-bit cartridge bus they took most of a frame for
+# the slice the planner gets; see `--aiframe`. noinline, or link-time
+# optimisation copies them back into their callers in ROM. The cartridge's
+# build only: ARM is bigger than Thumb and the code lives in the image, and
+# the Single-Pak copy has no room left (its own computer is as it was).
+AI_HOT_FLAGS := '-DTENGEN_AI_HOT=__attribute__((section(".iwram"),long_call,target("arm"),noinline))'
 
 # Graphics headers built from a cartridge dump by `make assets`. They are not
 # in version control (the artwork is the original game's), so the ROM target
@@ -191,7 +200,7 @@ $(GBA_ELF): $(GBA_SRC) $(CORE_HDR) gba/port.h gba/gba_hw.h gba/link.h \
 	    echo "not committed here. Generate them once with:"; \
 	    echo "    make assets ROM=/path/to/tetris.nes"; \
 	    exit 1; }; done
-	$(ARMCC) $(ARMFLAGS) $(ARMLDFLAGS) gba/crt0.s gba/mb_image.s $(GBA_SRC) -o $@
+	$(ARMCC) $(ARMFLAGS) $(AI_HOT_FLAGS) $(ARMLDFLAGS) gba/crt0.s gba/mb_image.s $(GBA_SRC) -o $@
 
 $(GBA_MB_ELF): $(GBA_SRC) $(CORE_HDR) gba/port.h gba/gba_hw.h gba/link.h \
                 gba/crt0.s gba/mb.ld $(BUILD_TAG_FILE) $(wildcard $(GBA_ASSETS)) | $(BUILD)

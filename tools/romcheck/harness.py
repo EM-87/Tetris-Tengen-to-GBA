@@ -343,6 +343,7 @@ _LAYOUT_DEFAULT = {
     "raised": "PAUSEXIT?R",
     "ai_target_x": 6, "ai_target_o": 7, "ai_settle": 8, "ai_soft_drop": 9,
     "ai_coop_aware": 10, "ai_smart": 12, "ai_plan_have": 420,
+    "ai_plan_stage": 0,
 }
 
 
@@ -364,7 +365,7 @@ def check_layout(rom_path):
         base = 0x08000000 if addr >= 0x08000000 else 0x02000000
         data = open(rom_path, "rb").read()
         v = [int.from_bytes(data[addr - base + 2 * i:addr - base + 2 * i + 2], "little")
-             for i in range(23)]
+             for i in range(24)]
         at = raised - base
         text = data[at:data.index(b"\0", at)].decode("ascii")
         keys = ("question", "percent", "raised_base", "arrow_tail", "arrow_head",
@@ -372,7 +373,7 @@ def check_layout(rom_path):
                 "skin_tables", "mode_tables", "save_data", "save_table_bytes",
                 "save_entry_bytes", "save_name", "save_mode", "save_mode_sums",
                 "ai_target_x", "ai_target_o", "ai_settle", "ai_soft_drop",
-                "ai_coop_aware", "ai_smart", "ai_plan_have")
+                "ai_coop_aware", "ai_smart", "ai_plan_have", "ai_plan_stage")
         layout = dict(zip(keys, v))
         layout["raised"] = text
         _LAYOUT_CACHE[rom_path] = layout

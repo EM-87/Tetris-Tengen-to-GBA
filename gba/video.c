@@ -114,7 +114,7 @@ const uint16_t kGameProbe[19] = {
  * missed made a check read the wrong thing and say nothing
  * (romcheck/harness.py, check_layout). The order is the reader's. */
 __attribute__((used))
-const uint16_t kCheckProbe[23] = {
+const uint16_t kCheckProbe[24] = {
     TILES_GAME_QUESTION, TILES_GAME_PERCENT,
     PMENU_RAISED_BASE, T_ARROW_TAIL, T_ARROW_HEAD,
     SCREEN_LEADER_HEAD_TY, SCREEN_LEADER_FIRST_TY, LEADER_ENTRIES,
@@ -130,6 +130,7 @@ const uint16_t kCheckProbe[23] = {
     (uint16_t)offsetof(TengenAi, coop_aware),
     (uint16_t)offsetof(TengenAi, smart),
     (uint16_t)offsetof(TengenAi, plan_have),
+    (uint16_t)offsetof(TengenAi, plan_stage),
 };
 __attribute__((used))
 const char kCheckRaised[] = PMENU_RAISED_CHARS;

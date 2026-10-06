@@ -1187,8 +1187,47 @@ static uint8_t stack_tempo(void) {
     return 0;
 }
 
+/* WHAT IS LEFT OF THE FRAME GOES ON THINKING (WITH COMPUTER under the
+ * chord: `deep`). The computer plans a fixed slice a frame inside
+ * tengen_ai_buttons, sized for the heaviest turn there is; most turns end
+ * well before the next vertical blank, and the rest of that time was spent
+ * waiting in vsync. Spent on the plan instead, the choice is made sooner,
+ * and sooner is what it lacked: placements a piece could reach at spawn are
+ * out of reach a few rows down. So at the end of the turn it thinks on, a
+ * unit at a time and the board read once (tengen_ai_think_while), while the
+ * scanline is short of AI_SPARE_LINE and the frame has not turned over; the
+ * turn still ends in its own frame (`--aiframe`), and a heavy frame simply
+ * thinks less. MEASURED on the ROM, with the inner loops in internal WRAM
+ * (TENGEN_AI_HOT): a piece's first plan done in 17 frames (median; 90% in
+ * 20) where it took 63 (107). And what that is worth, on the host
+ * (`ai_tune spare`, the same 3.7 times the thinking a frame, 512 games a
+ * kind of partner): 4.27 +- 0.37 lines a game more, every kind of partner
+ * better, 6% to 27%. */
+#define AI_SPARE_LINE  136
+static uint32_t g_turn_vblank;
+static bool ai_time_left(void) {
+    uint16_t line = REG_VCOUNT;
+    if (g_vblank_count != g_turn_vblank) return false;   /* the frame is gone */
+    return line >= 160 || line < AI_SPARE_LINE;
+}
+static void ai_think_spare(void) {
+#ifdef TENGEN_MULTIBOOT
+    /* NOT ON THE SINGLE-PAK COPY: its image and the 6502's 64KB fill the
+     * 256KB of external WRAM to within a few bytes, and this was the few.
+     * A copy plays WITH COMPUTER on the slice a frame alone. */
+    return;
+#endif
+    if (!g_ai_active || !g_ai.smart || !g_ai.deep || g_session.game.paused ||
+        g_ai_slot != TENGEN_PLAYER_2 ||
+        !g_session.game.player[TENGEN_PLAYER_2].game_active)
+        return;
+    tengen_ai_think_while(&g_ai, &g_session.game, TENGEN_PLAYER_2, ai_time_left);
+}
+
 void draw_match(bool *sweeping) {
+    ai_think_spare();
     vsync();
+    g_turn_vblank = g_vblank_count;
     if (g_repaint) {
         /* THE WINDOW WENT AND THE WORDS STAYED. draw_static_screen puts the
          * board and the HUD back, which covers everything the pause menu drew
