@@ -360,7 +360,11 @@ story behind each; the item number is in brackets.
   goes there too (INFERRED: the cart's code at the top of the ROM). The
   Single-Pak copy's `_restart` is in external WRAM, where it already is.
   It leaves the serial port alone for the same reason sio_reset does, and
-  drops the paused game kept on the battery. **On an EZ-Flash IV it never
+  drops the paused game kept on the battery. A Single-Pak copy survives it
+  for the same reason — no BIOS, so nobody has to send the game again
+  (`clone_reset_check`, run_link.py); a reset from OUTSIDE the game (the
+  Game Boy Player's own, from the GameCube) goes through the BIOS, and a
+  copy cannot survive that, INFERRED (not run on a Player). **On an EZ-Flash IV it never
   runs:** with a probe that turned the screen magenta as the very first
   thing the restart did (build c81cb67), the screen went black and never
   magenta — so the cart takes A+B+START+SELECT for itself (INFERRED: its

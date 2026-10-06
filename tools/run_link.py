@@ -2402,7 +2402,7 @@ def singlepak_check(rom):
     if failures:
         return 1
     print("OK: la imagen de Single-Pak juega contra el cartucho.")
-    return mb_send_check(rom) or records_dump_check(rom)
+    return mb_send_check(rom) or records_dump_check(rom) or clone_reset_check(rom)
 
 
 def records_dump_check(rom):
@@ -2499,6 +2499,72 @@ def records_dump_check(rom):
     print(f"  la copia entrega {SCORE} / {LINES} lineas, y {COOP_SCORE} en "
           "COOPERATIVE; el cartucho los guarda y las dos dicen RECORDS SAVED")
     print("OK: los records de una copia se guardan en el cartucho al enlazar.")
+    return 0
+
+
+def clone_reset_check(rom):
+    """UNA COPIA SE REINICIA Y SIGUE VIVA.
+
+    El reinicio del juego (A+B+START+SELECT, soft_reset_check en video.c) no
+    pasa por la BIOS: salta al principio del programa (_restart, crt0.s),
+    que en la copia de Single-Pak esta en la RAM externa, con todo el juego.
+    Una consola sin cartucho que pasara por la BIOS se quedaria esperando
+    a que alguien le volviera a mandar el juego. Aqui la copia arranca,
+    llega al lobby, se reinicia sola, tiene que volver al lobby con su
+    codigo intacto, y despues enlazar con el cartucho y jugar la misma
+    partida byte a byte.
+    """
+    mb = os.path.splitext(rom)[0] + "_mb.mb"
+    if not os.path.exists(mb):
+        print(f"SALTADO: no encuentro {mb}")
+        return 0
+    image = open(mb, "rb").read()
+    cores, cable, both, tap = _pair(rom, slow=True, slave_rom=mb)
+    both(1000)
+    copy = cores[1]
+    failures = []
+    if _screen_of(copy) != "cable":
+        print(f"FALLA: la copia no arranca en el lobby ({_screen_of(copy)})")
+        return 1
+    # The program's own frame count, which the start of the program clears:
+    # proof the reset happened, and not a lobby that never noticed the keys.
+    vbl, _ = symbol(mb, "g_vblank_count")
+    before = copy.memory.u32[vbl[0]]
+    reset = [KEYS["A"], KEYS["B"], KEYS["START"], KEYS["SELECT"]]
+    both(6, [[], reset])
+    both(400, [[], []])
+    after = copy.memory.u32[vbl[0]]
+    if not after < before:
+        failures.append(f"A+B+START+SELECT no reinicio la copia (cuenta de "
+                        f"frames {before} -> {after})")
+    # The code itself, the first half of the image: nothing writes there.
+    half = len(image) // 2
+    now = bytes(copy.memory.u8[0x02000000 + i] for i in range(half))
+    if now != image[:half]:
+        diff = sum(1 for a, b in zip(now, image[:half]) if a != b)
+        failures.append(f"despues del reinicio el codigo de la copia cambio "
+                        f"({diff} bytes)")
+    if _screen_of(copy) != "cable":
+        failures.append(f"la copia no vuelve al lobby tras reiniciarse "
+                        f"({_screen_of(copy)})")
+    else:
+        print("  A+B+START+SELECT en la copia: vuelve al lobby, sin BIOS, "
+              "con el juego entero en memoria")
+    if not failures:
+        tap("START", who=0); tap("DOWN", who=0); tap("START", who=0)
+        both(90)
+        tap("START", who=0)
+        both(360)
+        if not _same_match_mb(rom, mb, cores):
+            failures.append("despues del reinicio, la copia y el cartucho no "
+                            "juegan la misma partida")
+        else:
+            print("  y despues enlaza con el cartucho y juegan la misma partida")
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: una copia de Single-Pak se reinicia sin perderse.")
     return 0
 
 
