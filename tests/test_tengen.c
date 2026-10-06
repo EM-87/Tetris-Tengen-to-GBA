@@ -2862,6 +2862,96 @@ static void test_the_ports_computer_gets_where_it_aims(void) {
     CHECK(t.on_target * 100 >= t.pieces * 95);
 }
 
+/* A coop board for the port's computer as player 2 with an I: three rows
+ * full but for a well two deep at column 8, on the computer's own half, and
+ * player 1's O wherever the caller puts it (x < 0: no piece). */
+static void smart_coop_board(TengenGame *g, TengenAi *ai, int partner_x, int partner_y) {
+    tengen_new_game(g, 0x5151, 0, true, true, false);
+    for (int y = 0; y < TENGEN_PF_HEIGHT; y++)
+        for (int x = 0; x < TENGEN_PF_WIDTH; x++)
+            g->field[0].cell[y][x] = (y >= (x == 8 ? 19 : 17)) ? 15 : 0;
+    TengenPlayerState *me = &g->player[TENGEN_PLAYER_2], *q = &g->player[TENGEN_PLAYER_1];
+    me->piece.current = TT_I; me->piece.next = TT_O;
+    me->piece.orientation = 0; me->piece.x = TENGEN_SPAWN_X[1]; me->piece.y = TENGEN_SPAWN_Y;
+    me->fall_timer = 50;
+    if (partner_x < 0) {
+        q->piece.current = TT_NONE;
+    } else {
+        q->piece.current = TT_O; q->piece.orientation = 0;
+        q->piece.x = (int8_t)partner_x; q->piece.y = (int8_t)partner_y;
+    }
+    tengen_ai_reset(ai);
+    ai->smart = true;
+    ai->coop_aware = true;
+    tengen_ai_choose(ai, g, TENGEN_PLAYER_2);
+    for (int f = 0; f < 60 && ai->plan_stage != 3; f++)
+        tengen_ai_think(ai, g, TENGEN_PLAYER_2);
+}
+
+static void test_the_ports_computer_comes_back_when_the_way_clears(void) {
+    /* Reported from play: a person's piece crossing its path made it change
+     * its mind, and when the way was clear again it did not change it back.
+     * Here the well is the place (no partner: it goes there); with player
+     * 1's O over it, in the I's way and about to land in it, it picks
+     * elsewhere; then the O goes off to the far side, the I still at the
+     * top, and a few frames later it is going for the well again. */
+    TengenGame g;
+    TengenAi ai;
+    smart_coop_board(&g, &ai, -1, 0);
+    uint8_t well_x = ai.target_x, well_o = ai.target_orientation;
+    /* Player 1's O over the well, in the I's way and landing in it. */
+    smart_coop_board(&g, &ai, 9, TENGEN_SPAWN_Y + 2);
+    CHECK(ai.plan_have);
+    CHECK(ai.target_x != well_x || ai.target_orientation != well_o);
+    /* The way clears: the O goes off to the far left, lower down. */
+    g.player[TENGEN_PLAYER_1].piece.x = 2;
+    g.player[TENGEN_PLAYER_1].piece.y = 12;
+    for (uint8_t f = 1; f < 40; f++)
+        tengen_ai_buttons(&ai, &g, TENGEN_PLAYER_2, f);
+    CHECK(ai.target_x == well_x && ai.target_orientation == well_o);
+}
+
+static void test_the_ports_computer_keeps_a_persons_pace(void) {
+    /* `adaptive`: a partner who drops pieces gets a computer that drops
+     * its own; one who lets them fall does not; four lines ahead, it drops
+     * to catch up; six behind, it does not, however quick the partner. */
+    for (int quick = 0; quick < 2; quick++) {
+        TengenGame g;
+        TengenAi ai;
+        smart_coop_board(&g, &ai, -1, 0);
+        ai.adaptive = true;
+        TengenPlayerState *q = &g.player[TENGEN_PLAYER_1];
+        uint8_t fpr = tengen_frames_per_row(0, TENGEN_SPAWN_Y, true, false);
+        uint8_t frame = 0;
+        for (int piece = 0; piece < 6; piece++) {
+            q->piece.current = (piece & 1) ? TT_T : TT_L;
+            q->piece.x = 3;
+            q->piece.y = TENGEN_SPAWN_Y;
+            for (int f = 0; f < 120; f++) {
+                if (quick ? (f % 2 == 1) : (f % fpr == fpr - 1)) q->piece.y++;
+                tengen_ai_buttons(&ai, &g, TENGEN_PLAYER_2, frame++);
+            }
+        }
+        CHECK(ai.drop_auto == (quick != 0));
+    }
+    TengenGame g;
+    TengenAi ai;
+    smart_coop_board(&g, &ai, -1, 0);
+    ai.adaptive = true;
+    g.player[TENGEN_PLAYER_1].piece.current = TT_T;
+    g.player[TENGEN_PLAYER_1].lines = 9;
+    g.player[TENGEN_PLAYER_2].lines = 5;
+    tengen_ai_buttons(&ai, &g, TENGEN_PLAYER_2, 1);
+    CHECK(ai.drop_auto);                  /* four behind: catch up */
+    ai.pace_fast = true;
+    ai.pace_samples = 9;
+    ai.pace_theirs = 200;
+    g.player[TENGEN_PLAYER_1].lines = 3;
+    g.player[TENGEN_PLAYER_2].lines = 9;
+    tengen_ai_buttons(&ai, &g, TENGEN_PLAYER_2, 2);
+    CHECK(!ai.drop_auto);                 /* six ahead: easy does it */
+}
+
 static void test_coop_is_one_twelve_wide_board_over_the_cable(void) {
     /* COOPERATIVE is the third mode the cartridge offers and the only one
      * where the two players share a field: initPlayer1orCoopPlayfield leaves
@@ -3982,6 +4072,8 @@ int main(void) {
     test_reading_the_partner_makes_the_shared_board_last();
     test_the_ports_computer_outplays_the_cartridges();
     test_the_ports_computer_gets_where_it_aims();
+    test_the_ports_computer_comes_back_when_the_way_clears();
+    test_the_ports_computer_keeps_a_persons_pace();
     test_mended_coop_deal_waits_for_room();
     test_mended_collapse_lifts_the_falling_piece();
     test_either_player_can_pause_a_linked_game();

@@ -507,6 +507,17 @@ story behind each; the item number is in brackets.
   Measure a computer at THAT pace (`make ai-bench` does): the port's own
   looked like a giant with the soft drop on and lost to the cartridge's at
   level 18 without it.
+- **The port's computer re-plans on a shared board** (`ai_replan_check`):
+  when the partner's piece changes column, turn or kind, and every eight
+  frames while a placement was out of reach only because that piece stood in
+  the way (`plan_blocked`), keeping its target meanwhile with a little
+  preference for it (W_KEEP). Planned once per piece, a person crossing its
+  path sent it the long way round for good
+  (`test_the_ports_computer_comes_back_when_the_way_clears`). Under the
+  chord it is also `adaptive`: it soft-drops when the partner's (or rival's)
+  pieces come down half again faster than gravity, or when four lines
+  behind, and never when six ahead — always once over its column, so its
+  reachability still holds.
 - **The port's computer thinks a slice a frame** (`TENGEN_AI_SMART_BUDGET`,
   the first look at each placement charged double) and is a few frames
   behind the deal before it has a target. A bigger slice spills the main
@@ -602,7 +613,8 @@ cartridge's three settings pages instead of the one (`gbp.c`,
 itself at power-on or plugged in later, the LINK CABLE screen saying
 WIRELESS, and Single-Pak over it as well (`wireless.c`);
 "EXIT GAME", not "EXIT", on the pause menu (a player took it for closing the
-menu); the high scores erased by L+R+B held at power-on, asked twice with NO
+menu), and its question "SURE?", not "EXIT?" again (an R among the raised
+heading letters, PMENU_RAISED_CHARS, with the arrow's two tiles after them); the high scores erased by L+R+B held at power-on, asked twice with NO
 chosen (`erase_records_prompt`); under the chord, a seventh credit, BUILD and
 the commit the ROM was built from (`-DEV` with changes not committed;
 `TENGEN_BUILD` from the Makefile), so a ROM on a flash cart can be named.

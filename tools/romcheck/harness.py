@@ -497,7 +497,7 @@ def tilemap_text(core, row, first=0, last=30):
     QUESTION = 0xF0    # TILES_GAME_QUESTION in gba/tiles_game.h
     # ...and the pause menu's headings, drawn with copies of their letters one
     # pixel higher (PMENU_RAISED_BASE / PMENU_RAISED_CHARS in gba/port.h).
-    RAISED_BASE, RAISED = 960, "PAUSEXIT?"
+    RAISED_BASE, RAISED = 960, "PAUSEXIT?R"
     # ...and its arrow, moved three pixels closer across two tiles
     # (T_ARROW_TAIL / T_ARROW_HEAD): read as "->".
     ARROW = {RAISED_BASE + len(RAISED): "-", RAISED_BASE + len(RAISED) + 1: ">"}
@@ -724,7 +724,7 @@ PM_HEAD = PMENU_TY + 1       # PAUSE
 PM_MUSIC = PMENU_TY + 2      # ...the tune's name, which IS the music entry
 PM_TUNE = PM_MUSIC
 PM_EXIT = PMENU_TY + 3       # EXIT
-PM_ASK = PMENU_TY + 1        # the question, "EXIT?"
+PM_ASK = PMENU_TY + 1        # the question, "SURE?"
 PM_SURE = PM_ASK
 PM_ANSWER = PMENU_TY + 2     # YES, with NO under it
 # The box's own columns, which is all a check about the box should read: the

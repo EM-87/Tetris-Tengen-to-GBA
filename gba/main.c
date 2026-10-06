@@ -720,6 +720,10 @@ int main(void) {
                  * pace, a better head. A person for a partner never says where
                  * they are going, so `partner_known` stays off. */
                 g_ai.smart = g_pause_unlocked;
+                /* ...with a person's pace and lead to go by (`adaptive`):
+                 * it drops its pieces when the player drops theirs, and to
+                 * catch up when four lines behind. */
+                g_ai.adaptive = g_pause_unlocked;
                 g_ai_last_piece = TT_NONE;
                 g_ai_last_partner = TT_NONE;
                 g_ai_frame = 0;

@@ -318,8 +318,15 @@ static void ai_score(TengenAi *ai, uint8_t *a, int x,
  *   SOLO  cartridge      234   1      1445   5      1483   9
  *   SOLO  port's         263   0      1505   0      2152   0
  *   COOP  cart + cart     78  16        43  16        48  16
- *   COOP  port + port    464   1      1052   9       715  16
- *   COOP+ port + cart    375  10       366  16       225  16
+ *   COOP  port + port    477   0       927  11       982  16
+ *   COOP+ port + cart    371  11       419  16       240  16
+ *
+ * (With re-planning, below: the plan made again when the partner's piece
+ * moves or stood in the way. Before it, 464/1, 1052/9, 715/16 and 375/10,
+ * 366/16, 225/16 — within the noise at 0, better at 18.) With `adaptive`
+ * and a partner that drops its pieces (`ai_bench ... both`): the same
+ * pieces in 157000 frames where they took 226000 at level 0 — it keeps the
+ * partner's pace.
  *
  * At level 0 a solo board does not fill in 30000 frames either way; the
  * difference there is pace. COOP+ is the port's computer with the
@@ -370,6 +377,14 @@ static void ai_score(TengenAi *ai, uint8_t *a, int x,
 #endif
 #define AI_DEAD     (-0x3FFFFFFF)
 #define AI_UNREACHABLE (-100000000)
+/* A re-plan's thumb on the scale for the target already in hand, so a
+ * partner's piece that jiggles does not make this one dither: a little less
+ * than one row of landing height. */
+#ifndef W_KEEP
+#define W_KEEP 3000
+#endif
+/* How often a plan may be made again for the same piece (frames). */
+#define AI_REPLAN_FRAMES 8
 
 typedef struct {
     uint16_t row[AI_H];
@@ -685,6 +700,11 @@ static int32_t ai_trespass(const AiView *v, const uint16_t sh[4], int l) {
     return cost + (int32_t)W_SIDE * past;
 }
 
+static bool ai_is_target(const TengenAi *ai, int l, uint8_t o) {
+    return ai->target_x == (uint8_t)(l + TENGEN_ROM_COL_ORIGIN) &&
+           ai->target_orientation == o;
+}
+
 static void ai_set_target(TengenAi *ai, int l, uint8_t o) {
     ai->target_x = (uint8_t)(l + TENGEN_ROM_COL_ORIGIN);
     ai->target_orientation = o;
@@ -692,14 +712,26 @@ static void ai_set_target(TengenAi *ai, int l, uint8_t o) {
 }
 
 static void ai_smart_start(TengenAi *ai, const TengenGame *g,
-                           TengenPlayerSlot slot) {
+                           TengenPlayerSlot slot, bool keep) {
     AiView v;
     ai->plan_stage = 0;
     ai->plan_count = 0;
     ai->plan_cursor = 0;
     ai->plan_inner = 0;
     ai->plan_top_count = 0;
-    ai->plan_have = false;
+    /* A re-plan of the same piece keeps the target it has until it has a
+     * better one: a piece that stopped to think would be a piece that hung. */
+    ai->plan_keep = keep && ai->plan_have;
+    if (!ai->plan_keep) ai->plan_have = false;
+    ai->plan_blocked = false;
+    ai->plan_age = 0;
+    {
+        const TengenPlayerState *q = &g->player[slot ^ 1];
+        ai->plan_px = q->piece.x;
+        ai->plan_py = q->piece.y;
+        ai->plan_po = q->piece.orientation;
+        ai->plan_pcur = (uint8_t)(q->game_active ? q->piece.current : TT_NONE);
+    }
     if (!ai_view(g, slot, ai, &v)) return;
     /* Every orientation once (the O's four are one, the I's S's and Z's
      * two), at every left column it fits. */
@@ -782,8 +814,15 @@ static void ai_smart_think(TengenAi *ai, const TengenGame *g,
              * reach, the least bad of the rest is still a better aim than
              * none, which is a piece dropped where it spawned. */
             if (AI_REACH && !ai_reachable(&v.obstacles, v.piece, v.o0, v.l0,
-                                          v.t0, o, l, &v.pace))
+                                          v.t0, o, l, &v.pace)) {
                 score += AI_UNREACHABLE;
+                /* Out of reach only because the partner's piece is in the
+                 * way: worth looking again when it has moved on. */
+                if (v.side_dir && ai_reachable(&v.base, v.piece, v.o0, v.l0,
+                                               v.t0, o, l, &v.pace))
+                    ai->plan_blocked = true;
+            }
+            if (ai->plan_keep && ai_is_target(ai, l, o)) score += W_KEEP;
         }
         ai->plan_cand_score[k] = score;
     }
@@ -823,6 +862,8 @@ static void ai_smart_think(TengenAi *ai, const TengenGame *g,
         if (ai->plan_inner < 4 * 16) break;      /* more next frame */
         int32_t total = ai->plan_reply_best == AI_DEAD
                         ? AI_DEAD : first + ai->plan_reply_best;
+        if (total != AI_DEAD && ai->plan_keep && ai_is_target(ai, l, o))
+            total += W_KEEP;
         if (total > ai->plan_best) {
             ai->plan_best = total;
             /* Still reachable from where the piece is NOW? */
@@ -854,7 +895,7 @@ void tengen_ai_choose(TengenAi *ai, const TengenGame *game,
 
     /* The port's own computer plans over the next few frames instead. */
     if (ai->smart) {
-        ai_smart_start(ai, game, slot);
+        ai_smart_start(ai, game, slot, ai->rechoosing);
         return;
     }
 
@@ -911,8 +952,71 @@ void tengen_ai_choose(TengenAi *ai, const TengenGame *game,
 void tengen_ai_rechoose(TengenAi *ai, const TengenGame *game,
                          TengenPlayerSlot slot) {
     uint8_t elapsed = ai->since_spawn;
+    ai->rechoosing = true;
     tengen_ai_choose(ai, game, slot);
+    ai->rechoosing = false;
     ai->since_spawn = elapsed;
+}
+
+/* THE PLAN MADE AGAIN, on a shared board, for the same piece: when the
+ * partner's piece has changed column, turn or kind since the plan began, or
+ * while a placement was out of reach only because that piece stood in the
+ * way. Without it a plan made around the partner stayed made around it
+ * after the partner had gone: the computer took the long way, and never
+ * came back to the place it wanted. */
+static void ai_replan_check(TengenAi *ai, const TengenGame *g,
+                            TengenPlayerSlot slot) {
+    if (!g->coop || !ai->plan_have) return;
+    if (ai->plan_age < 0xFF) ai->plan_age++;
+    if (ai->plan_stage != 3 || ai->plan_age < AI_REPLAN_FRAMES) return;
+    const TengenPlayerState *q = &g->player[slot ^ 1];
+    uint8_t cur = (uint8_t)(q->game_active ? q->piece.current : TT_NONE);
+    bool moved = cur != ai->plan_pcur ||
+                 (cur != TT_NONE && (q->piece.x != ai->plan_px ||
+                                     q->piece.orientation != ai->plan_po));
+    if (moved || ai->plan_blocked) ai_smart_start(ai, g, slot, true);
+}
+
+/* THE PARTNER'S PACE AND LEAD (`adaptive`): how fast its pieces really come
+ * down against gravity alone, sampled a piece at a time and smoothed, and
+ * how many lines it is ahead. Its decision is `drop_auto`. */
+#define PACE_FAST_ON  24      /* x16: half again gravity's pace */
+#define PACE_FAST_OFF 20
+#define LEAD_CATCH_UP 4       /* the partner this many lines ahead: drop */
+#define LEAD_EASE    (-6)     /* ...this many behind: the cartridge's pace */
+static void ai_adapt(TengenAi *ai, const TengenGame *g, TengenPlayerSlot slot) {
+    const TengenPlayerState *p = &g->player[slot];
+    const TengenPlayerState *q = &g->player[slot ^ 1];
+    if (q->game_active && q->piece.current != TT_NONE) {
+        bool fresh = q->piece.current != ai->pace_cur || q->piece.y < ai->pace_y;
+        if (fresh) {
+            if (ai->pace_frames >= 8 && ai->pace_gravity) {
+                uint32_t sample = (uint32_t)ai->pace_rows * 256u * 16u / ai->pace_gravity;
+                if (sample > 16 * 16) sample = 16 * 16;
+                if (!ai->pace_samples) ai->pace_theirs = (uint16_t)sample;
+                else ai->pace_theirs = (uint16_t)((int32_t)ai->pace_theirs +
+                                                  ((int32_t)sample - ai->pace_theirs) / 4);
+                if (ai->pace_samples < 0xFF) ai->pace_samples++;
+            }
+            ai->pace_rows = 0;
+            ai->pace_frames = 0;
+            ai->pace_gravity = 0;
+        } else if (!q->line_clear_timer && !g->paused) {
+            if (q->piece.y > ai->pace_y)
+                ai->pace_rows = (uint16_t)(ai->pace_rows + (q->piece.y - ai->pace_y));
+            uint8_t fpr = tengen_frames_per_row(q->level, q->piece.y, g->coop, g->xe);
+            if (ai->pace_frames < 0xFFFF) ai->pace_frames++;
+            ai->pace_gravity += 256u / (fpr ? fpr : 1);
+        }
+        ai->pace_cur = (uint8_t)q->piece.current;
+        ai->pace_y = q->piece.y;
+    }
+    if (ai->pace_samples >= 2) {
+        if (ai->pace_theirs >= PACE_FAST_ON) ai->pace_fast = true;
+        else if (ai->pace_theirs < PACE_FAST_OFF) ai->pace_fast = false;
+    }
+    int32_t lead = q->game_active ? (int32_t)q->lines - (int32_t)p->lines : 0;
+    ai->drop_auto = (ai->pace_fast || lead >= LEAD_CATCH_UP) && lead > LEAD_EASE;
 }
 
 uint8_t tengen_ai_buttons(TengenAi *ai, const TengenGame *game,
@@ -924,6 +1028,8 @@ uint8_t tengen_ai_buttons(TengenAi *ai, const TengenGame *game,
      * off the pad until it has a target. */
     if (ai->smart) {
         ai->clock = frame_counter;
+        ai_replan_check(ai, game, slot);
+        if (ai->adaptive) ai_adapt(ai, game, slot);
         ai_smart_think(ai, game, slot, TENGEN_AI_SMART_BUDGET);
         if (!ai->plan_have) {
             if (ai->since_spawn < 0xFF) ai->since_spawn++;
@@ -1006,7 +1112,8 @@ uint8_t tengen_ai_buttons(TengenAi *ai, const TengenGame *game,
                      ai->target_x != (uint8_t)p->piece.x) ||
                    (ai->smart && (ai->target_x != (uint8_t)p->piece.x ||
                                   ai->target_orientation != p->piece.orientation));
-    if (ai->soft_drop && !buttons && !waiting && (frame_counter & 0x07) != 0x07)
+    bool drop = ai->soft_drop || (ai->smart && ai->adaptive && ai->drop_auto);
+    if (drop && !buttons && !waiting && (frame_counter & 0x07) != 0x07)
         buttons |= TENGEN_BTN_DOWN;
     return buttons;
 }

@@ -209,7 +209,7 @@ def pausemenu_check(rom_path):
     # held before driving the menu.)
     if not core.memory.u8[base + off["paused"]]:
         tap("START")
-    while "EXIT?" in row(PM_SURE):
+    while "SURE?" in row(PM_SURE):
         tap("DOWN"); tap("A")    # back out of a question it may have opened
     while "EXIT" not in row(PM_EXIT):
         tap("START")
@@ -217,7 +217,7 @@ def pausemenu_check(rom_path):
     while ">" not in row(PM_EXIT):
         tap("DOWN")
     tap("A")
-    if "EXIT?" not in row(PM_SURE):
+    if "SURE?" not in row(PM_SURE):
         failures.append(f"EXIT no pregunta antes de salir: {row(PM_SURE)!r}")
     else:
         print("  EXIT pregunta antes de nada")
@@ -225,13 +225,13 @@ def pausemenu_check(rom_path):
         tap("A")
         if not core.memory.u8[base + off["paused"]]:
             failures.append("decir NO al salir dejo la partida sin pausa")
-        elif "EXIT?" in row(PM_SURE):
+        elif "SURE?" in row(PM_SURE):
             failures.append("decir NO no cierra la pregunta")
         else:
             print("  NO vuelve a la partida")
         # ...and YES leaves STRAIGHT to the title: a game you walked out of
         # has not ended, and its score has no business on the board.
-        while "EXIT?" not in row(PM_SURE):
+        while "SURE?" not in row(PM_SURE):
             while ">" not in row(PM_EXIT):
                 tap("DOWN")
             tap("A")

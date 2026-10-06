@@ -110,6 +110,38 @@ typedef struct {
     bool partner_known;
     uint8_t partner_x, partner_o;
     uint8_t clock;               /* the frame counter tengen_ai_buttons last had */
+
+    /* ...AND ITS MANNERS WITH A PERSON (`adaptive`, set by the caller, read
+     * only with `smart`). Everything below is its working state.
+     *
+     * RE-PLANNING. A plan made while the partner's piece stood in the way is
+     * made again: whenever that piece changes column, turn or kind, and every
+     * few frames while some placement is out of reach only because of it
+     * (`plan_blocked`). The target in hand is kept meanwhile, and a little
+     * preferred (W_KEEP), so it neither stops nor dithers.
+     *
+     * THE PARTNER'S PACE. How fast the partner's piece really comes down,
+     * against what gravity alone would do (`pace_theirs`, sixteenths): a
+     * player who drops their pieces gets a computer that drops its own.
+     *
+     * THE LEAD. A partner (or rival) four lines ahead gets one that drops
+     * too, to catch up; one six behind gets the cartridge's pace back.
+     * `drop_auto` is the decision, taken a frame at a time. */
+    bool adaptive;
+    bool drop_auto;
+    bool plan_blocked;
+    uint8_t plan_age;            /* frames since the plan in hand was started */
+    int8_t plan_px, plan_py;     /* the partner's piece as that plan saw it */
+    uint8_t plan_po, plan_pcur;
+    bool plan_keep;              /* this plan is a re-plan: the target stands */
+    bool rechoosing;             /* tengen_ai_rechoose is calling choose */
+    int8_t pace_y;               /* the partner's piece's row last frame */
+    uint8_t pace_cur;
+    uint16_t pace_rows, pace_frames;   /* this piece's descent so far */
+    uint32_t pace_gravity;       /* ...and what gravity alone gives, x256 */
+    uint16_t pace_theirs;        /* rows per gravity row, x16, smoothed */
+    uint8_t pace_samples;
+    bool pace_fast;
 } TengenAi;
 
 /* A new game. The ROM does not clear this either — its scratch is whatever

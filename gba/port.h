@@ -1689,11 +1689,11 @@ typedef enum {
 #define PMENU_TY ((SCREEN_TH - PMENU_H) / 2)
 
 /* The headings' letters, one pixel higher: see the note above PMENU_H and
- * upload_tiles. Nine tiles in the charblock's free top above the prototype
+ * upload_tiles. Ten tiles in the charblock's free top above the prototype
  * histogram's window (SKIN_STATS_BASE + 56 = 952), and only the letters
  * the two headings use, since nothing else wants them. */
 #define PMENU_RAISED_BASE 960
-#define PMENU_RAISED_CHARS "PAUSEXIT?"
+#define PMENU_RAISED_CHARS "PAUSEXIT?R"   /* ...and the R of SURE? */
 /* THE ARROW, CLOSE UP. $3E's shaft runs the whole width of its tile and the
  * letters start at the edge of theirs, so an arrow in the column before a
  * word is welded to it and one two columns before is a tile away. These two
@@ -1704,8 +1704,11 @@ typedef enum {
  * layer centring put it on. */
 #define PMENU_ARROW_GAP_PX 3
 #define TILE_PX 8
-#define T_ARROW_TAIL (PMENU_RAISED_BASE + 9)
-#define T_ARROW_HEAD (PMENU_RAISED_BASE + 10)
+/* Right after the raised letters, however many there are: an R added for
+ * SURE? once landed on the arrow's tail, and the menu lost its cursor. */
+#define PMENU_RAISED_COUNT ((int)sizeof(PMENU_RAISED_CHARS) - 1)
+#define T_ARROW_TAIL (PMENU_RAISED_BASE + PMENU_RAISED_COUNT)
+#define T_ARROW_HEAD (PMENU_RAISED_BASE + PMENU_RAISED_COUNT + 1)
 
 /* The frame's own tiles, out of the plaque the game over is drawn with. */
 #define T_BOX_TL 0x29

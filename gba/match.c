@@ -518,7 +518,9 @@ static void draw_pause_menu(void) {
     /* THE QUESTION MARK IS WHAT MAKES IT A QUESTION. It is the one glyph here
      * that is not the cartridge's — see ascii_tile. The answers stack, one to
      * a line, so the arrow answers one of them and not the gap between. */
-    const char *ask[] = { "EXIT?", "YES", "NO" };
+    /* "SURE?", not "EXIT?": the entry it answers already says EXIT GAME,
+     * and the question saying it again read as a second menu. */
+    const char *ask[] = { "SURE?", "YES", "NO" };
     /* THE TUNE'S NAME IS THE ENTRY. A label over a value that is itself the
      * choice is a label saying nothing. See PMENU_H. */
     /* "EXIT GAME", not "EXIT": a player took the bare word for closing the
