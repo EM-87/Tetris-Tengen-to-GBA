@@ -2780,7 +2780,10 @@ def peer_check(rom):
             for _ in range(200):
                 both(5)
                 row = run_rom.tilemap_text(cores[0], 14)
-                if " KB OF " in row and " 0 KB" not in row:
+                # "74%", between the frame's own tiles: how far, not how many
+                # kilobytes (the font's '%' is the port's; plant_glyphs).
+                pcts = [w[:-1] for w in row.split() if w.endswith("%")]
+                if pcts and pcts[0].isdigit() and 0 < int(pcts[0]) < 100:
                     pct = True
                     cells = "-" not in run_rom.tilemap_text(cores[0], 12)
                     break

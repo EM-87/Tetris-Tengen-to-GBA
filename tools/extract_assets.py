@@ -827,7 +827,7 @@ def emit_audio_header(base, data, span, source):
 
 
 # ---------------------------------------------------------------------------
-# THE ONE GLYPH THE CARTRIDGE DOES NOT HAVE.
+# THE TWO GLYPHS THE CARTRIDGE DOES NOT HAVE.
 #
 # The game's tile set is ASCII-indexed, which is why the port can print words
 # at all — but only where the cartridge needed a character. It has no
@@ -837,17 +837,19 @@ def emit_audio_header(base, data, span, source):
 # nothing in the ROM ever needed one.
 #
 # The pause menu does: EXIT asks SURE? before it throws a game away, and a
-# question with no question mark is not a question. So this is the one piece of
-# ART in the port that is entered by hand rather than extracted — the tunes in
-# gba/handtunes.c are the others — and it is kept honest the same way: it
-# is declared here rather than smuggled into a generated header, it is built
-# to the ROM font's own metrics (ink in rows 1-7, two-pixel strokes, colour
-# index 1, column 7 clear), and it takes a slot the cartridge left EMPTY
-# rather than overwriting any of its art.
+# question with no question mark is not a question; and the Single-Pak
+# sending's progress is a per cent (below). So these are the only pieces of
+# ART in the port that are entered by hand rather than extracted — the tunes
+# in gba/handtunes.c are the others — and they are kept honest the same way:
+# declared here rather than smuggled into a generated header, built to the
+# ROM font's own metrics (ink in rows 1-7, two-pixel strokes, colour index 1,
+# column 7 clear), and in slots the cartridge left EMPTY rather than over any
+# of its art.
 #
-# $EF-$FF are blank in the release's CHR bank 0. $F0 is the one used; the
-# check below refuses to plant anything on a dump where it is not blank, so a
-# different cartridge cannot lose a tile to this without saying so.
+# $EF-$FF are blank in the release's CHR bank 0. $F0 and $F1 are the ones
+# used; the check below refuses to plant anything on a dump where they are not
+# blank, so a different cartridge cannot lose a tile to this without saying
+# so.
 QUESTION_TILE = 0xF0
 QUESTION_GLYPH = (
     "........",
@@ -859,23 +861,43 @@ QUESTION_GLYPH = (
     "........",
     "...XX...",
 )
+# ...AND THE PER CENT SIGN, for the Single-Pak sending's progress: a player
+# waiting for the game to arrive wants how far, not how many kilobytes. Its
+# own $25 is border art. Seven rows like the digits beside it, the dots two
+# by two and the stroke two pixels wide, as the font's are.
+PERCENT_TILE = 0xF1
+PERCENT_GLYPH = (
+    "........",
+    "XX....X.",
+    "XX...XX.",
+    "....XX..",
+    "...XX...",
+    "..XX....",
+    ".XX..XX.",
+    "XX...XX.",
+)
+PLANTED_GLYPHS = (
+    ("TILES_GAME_QUESTION", QUESTION_TILE, QUESTION_GLYPH, "el signo de interrogacion"),
+    ("TILES_GAME_PERCENT", PERCENT_TILE, PERCENT_GLYPH, "el signo de por ciento"),
+)
 
 
-def plant_question_mark(tiles: bytes) -> bytes:
-    """Writes the '?' above into QUESTION_TILE of a converted tile page."""
+def plant_glyphs(tiles: bytes) -> bytes:
+    """Writes the glyphs above into their tiles of a converted tile page."""
     out = bytearray(tiles)
-    base = QUESTION_TILE * GBA_TILE_BYTES
-    if len(out) < base + GBA_TILE_BYTES:
-        raise SystemExit(f"la pagina de tiles no llega a ${QUESTION_TILE:02X}")
-    if any(out[base:base + GBA_TILE_BYTES]):
-        raise SystemExit(
-            f"el tile ${QUESTION_TILE:02X} no esta vacio en este volcado: "
-            "el signo de interrogacion borraria arte del cartucho")
-    for row, bits in enumerate(QUESTION_GLYPH):
-        for col in range(0, 8, 2):
-            lo = 1 if bits[col] == "X" else 0
-            hi = 1 if bits[col + 1] == "X" else 0
-            out[base + row * 4 + col // 2] = lo | (hi << 4)
+    for _, tile, glyph, what in PLANTED_GLYPHS:
+        base = tile * GBA_TILE_BYTES
+        if len(out) < base + GBA_TILE_BYTES:
+            raise SystemExit(f"la pagina de tiles no llega a ${tile:02X}")
+        if any(out[base:base + GBA_TILE_BYTES]):
+            raise SystemExit(
+                f"el tile ${tile:02X} no esta vacio en este volcado: "
+                f"{what} borraria arte del cartucho")
+        for row, bits in enumerate(glyph):
+            for col in range(0, 8, 2):
+                lo = 1 if bits[col] == "X" else 0
+                hi = 1 if bits[col + 1] == "X" else 0
+                out[base + row * 4 + col // 2] = lo | (hi << 4)
     return bytes(out)
 
 
@@ -3544,12 +3566,12 @@ def main() -> int:
             f"{src} [title]"),
         "dancer_poses.h": emit_dancer_poses_header(
             poses, stage_rows, dancer_x, dancer_y, dancer_attr, f"{src} [dancers]"),
-        # ...and the one glyph that is not the cartridge's, planted in a slot
-        # the cartridge left empty. See plant_question_mark.
+        # ...and the two glyphs that are not the cartridge's, planted in
+        # slots the cartridge left empty. See plant_glyphs.
         "tiles_game.h": emit_tiles_header(
             "kGameTiles", "TILES_GAME",
-            plant_question_mark(convert_tiles(rom.chr_bank(0))), f"{src} [game]",
-            extra=(("TILES_GAME_QUESTION", QUESTION_TILE),)),
+            plant_glyphs(convert_tiles(rom.chr_bank(0))), f"{src} [game]",
+            extra=tuple((name, tile) for name, tile, _, _ in PLANTED_GLYPHS)),
         "tiles_dancers.h": emit_tiles_header(
             "kDancerTiles", "TILES_DANCERS", convert_tiles(rom.chr_bank(1)), f"{src} [dancers]"),
         # CHR bank 3 is the title screen's SPRITE bank: the cathedral overlay

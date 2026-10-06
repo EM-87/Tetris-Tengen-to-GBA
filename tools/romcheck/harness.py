@@ -489,12 +489,14 @@ def tilemap_text(core, row, first=0, last=30):
     credit on the lifted one — reading only the main map would report an empty
     row and every menu check would quietly stop checking anything.
 
-    The one letter the cartridge does not keep at its ASCII code is the
-    question mark: it lives at TILES_GAME_QUESTION (gba/tiles_game.h), so
-    ascii_tile maps '?' there and this maps it back. Without that, "EXIT?"
-    reads as "EXIT" and the pause menu's question looks like its EXIT line.
+    The two characters the cartridge does not keep at their ASCII codes are
+    the question mark and the per cent sign: they live at TILES_GAME_QUESTION
+    and TILES_GAME_PERCENT (gba/tiles_game.h), so ascii_tile maps them there
+    and this maps them back. Without that, "EXIT?" reads as "EXIT" and the
+    pause menu's question looks like its EXIT line.
     """
     QUESTION = 0xF0    # TILES_GAME_QUESTION in gba/tiles_game.h
+    PERCENT = 0xF1     # TILES_GAME_PERCENT
     # ...and the pause menu's headings, drawn with copies of their letters one
     # pixel higher (PMENU_RAISED_BASE / PMENU_RAISED_CHARS in gba/port.h).
     RAISED_BASE, RAISED = 960, "PAUSEXIT?R"
@@ -503,7 +505,7 @@ def tilemap_text(core, row, first=0, last=30):
     ARROW = {RAISED_BASE + len(RAISED): "-", RAISED_BASE + len(RAISED) + 1: ">"}
 
     def readable(t):
-        return (32 <= t < 127 or t == QUESTION or t in ARROW
+        return (32 <= t < 127 or t in (QUESTION, PERCENT) or t in ARROW
                 or RAISED_BASE <= t < RAISED_BASE + len(RAISED))
 
     out = []
@@ -518,6 +520,8 @@ def tilemap_text(core, row, first=0, last=30):
             tile = core.memory.u16[SCREENBLOCK_PANEL_ADDR + off] & 0x3FF
         if tile == QUESTION:
             out.append("?")
+        elif tile == PERCENT:
+            out.append("%")
         elif RAISED_BASE <= tile < RAISED_BASE + len(RAISED):
             out.append(RAISED[tile - RAISED_BASE])
         elif tile in ARROW:

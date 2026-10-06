@@ -49,16 +49,21 @@ const uint8_t kPauseTiles[PAUSE_H][PAUSE_W] = {
 /* The tileset's letters and digits sit at their ASCII codes, which is how the
  * ROM's own nametable spells "HIGH SCORE" and "STATS".
  *
- * WITH ONE EXCEPTION, and it is the only character in the port that is not
- * the cartridge's. ASCII's '?' is $3F and $3F in this set is the settings
+ * WITH TWO EXCEPTIONS, the only characters in the port that are not the
+ * cartridge's. ASCII's '?' is $3F and $3F in this set is the settings
  * screen's LEFT ARROW — Tengen's Tetris never asks the player anything, so it
- * never needed a question mark. The pause menu does (EXIT / SURE?), so
- * tools/extract_assets.py draws one into a slot the cartridge left empty and
- * says where; see plant_question_mark there for the whole of why and how.
- * Mapping it here rather than at the call sites means text_len, the centring
- * and every draw_text go on working on a string with a '?' in it. */
+ * never needed a question mark. The pause menu does (EXIT / SURE?). And '%'
+ * is $25, border art: the Single-Pak sending says how far it has got in per
+ * cent. tools/extract_assets.py draws both into slots the cartridge left
+ * empty and says where; see plant_glyphs there for the whole of why and how.
+ * Mapping them here rather than at the call sites means text_len, the
+ * centring and every draw_text go on working on a string with them in it. */
+#ifndef TILES_GAME_PERCENT
+#error "gba/tiles_game.h has no '%': run make assets ROM=... again (plant_glyphs)"
+#endif
 uint16_t ascii_tile(char c) {
     if (c == '?') return TILES_GAME_QUESTION;
+    if (c == '%') return TILES_GAME_PERCENT;
     return (uint16_t)(unsigned char)c;
 }
 

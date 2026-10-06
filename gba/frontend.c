@@ -1045,7 +1045,9 @@ uint32_t single_pak_length(void) {
 }
 
 /* THE BAR: twenty blocks of the I piece's colours filling a row of their
- * own outlines as the image goes out, and how far it has got in kilobytes.
+ * own outlines as the image goes out, and how far it has got in per cent
+ * (it was kilobytes, "74 KB OF 188 KB", while the font had no '%': a number
+ * nobody waiting for a game needs; see plant_glyphs).
  * (It was the cartridge's solid tile and dashes, which on the SP read as
  * "nnnn------"; and the game's own block tiles are not loaded while a menu
  * is up.) The two tiles are drawn here, pixel by pixel, into slots at the
@@ -1061,7 +1063,7 @@ uint32_t single_pak_length(void) {
 #define SEND_TILE_BASE 1008
 #define SEND_BAR_W  20
 #define SEND_BAR_TY 12
-#define SEND_KB_TY  14
+#define SEND_PCT_TY 14
 static void make_send_tiles(void) {
     vu16 *dst = MEM_CHARBLOCK(CHARBLOCK) + SEND_TILE_BASE * 16;
     for (int tile = 0; tile < 2; tile++) {
@@ -1092,15 +1094,10 @@ void draw_send_progress(uint32_t done, uint32_t total) {
         set_map_tile(tx + i, SEND_BAR_TY,
                      WITH_BANK(SEND_TILE_BASE + (i < filled ? 0 : 1),
                                PAL_PIECE_BANK));
-    /* "74 KB OF 188 KB": the font has no per cent sign. */
-    char row[24];
-    unsigned n = append_number(row, 0, (done * 4 + 512) / 1024);
-    const char *of = " KB OF ";
-    for (int i = 0; of[i]; i++) row[n++] = of[i];
-    n = append_number(row, n, (total * 4 + 512) / 1024);
-    row[n++] = ' ';
-    row[n++] = 'K';
-    row[n++] = 'B';
+    /* "74%", rounded DOWN, so 100% is the whole image and nothing less. */
+    char row[8];
+    unsigned n = append_number(row, 0, total ? (uint32_t)((uint64_t)done * 100 / total) : 0);
+    row[n++] = '%';
     row[n] = '\0';
-    draw_text_centred(SEND_KB_TY, row, BANK_NOTE);
+    draw_text_centred(SEND_PCT_TY, row, BANK_NOTE);
 }

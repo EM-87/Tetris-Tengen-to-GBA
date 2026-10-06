@@ -455,9 +455,11 @@ story behind each; the item number is in brackets.
   rules (`proto_rules`) come with a skin only alone; over the cable a skin is
   paint. On the slave the board's skin is not the title's (`g_board_skin`).
   [31]
-- **Text is ASCII-indexed tiles**, with two exceptions `tilemap_text` maps
-  back: `?` lives at `TILES_GAME_QUESTION`, and the pause menu's raised
-  heading letters at `PMENU_RAISED_BASE`. [28]
+- **Text is ASCII-indexed tiles**, with three exceptions `tilemap_text` maps
+  back: `?` lives at `TILES_GAME_QUESTION` and `%` at `TILES_GAME_PERCENT`
+  (both drawn by hand into empty slots, `plant_glyphs`; headers from before
+  the `%` stop the build with an `#error`: run `make assets` again), and the
+  pause menu's raised heading letters at `PMENU_RAISED_BASE`. [28]
 - **Title sprites.** The fireworks have the NES's behind-the-background bit
   (OBJ priority 2 here), which is how the frame contains them; a burst is
   mapped through the composition by its own centre, never per sprite. The
@@ -611,7 +613,7 @@ cable, there if the MASTER found the chord and driven by both players'
 presses through lockstep (`link_match_begin`); a linked match that waits
 ten seconds for a quiet cable (LINK ISSUES) before giving it up (the CABLE
 LOST window, and out to the title); the XE mod's two
-off-by-one bugs mended (XE only); Single-Pak (SELECT on the LINK CABLE
+off-by-one bugs mended (XE only); Single-Pak (its bar saying how far in per cent, not in kilobytes; SELECT on the LINK CABLE
 screen sends the game to a console with no cartridge); sleep (L+R+SELECT
 anywhere but a match in play — a solo match pauses first and sleeps on its
 plaque, a linked one not at all; A, B, START or SELECT wakes it) and soft
