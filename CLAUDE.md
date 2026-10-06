@@ -72,9 +72,10 @@ running ROM; only the side panels need reflowing).
 - **`src/`** — the rules. `tengen_core.c` (the game), `tengen_ai.c`
   (`computerMove`), `tengen_link.c` (the cable's lockstep, lobby and records
   swap). C99, no GBA headers, tested on the host.
-- **`gba/`** — the GBA layer, five files sharing `gba/port.h`:
+- **`gba/`** — the GBA layer, six files sharing `gba/port.h`:
   `video.c` the hardware (backgrounds, palettes, uploads, keypad, skins, the
-  interrupt handler and `vsync`); `hud.c` what a match looks like; `frontend.c`
+  interrupt handler and `vsync`); `hud.c` what a match looks like;
+  `records.c` the HIGH SCORES tables, their save and the typing; `frontend.c`
   the screens around a match; `match.c` one frame of play and the pause menu;
   `main.c` the state machine. Plus `nes6502.c` + `nes_audio.c` (the
   cartridge's sound engine, run), `handtunes.c` (the two hand-entered tunes)

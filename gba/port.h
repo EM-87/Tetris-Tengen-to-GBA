@@ -1937,6 +1937,9 @@ void leader_use_mode(int skin, int mode);
 /* SELECT's page off the title: LEFT and RIGHT walk the front skin's table
  * and the four modes'. */
 void leader_browse(int skin, int step);
+/* A number with its leading zeros blank, as the cartridge prints them
+ * (hud.c; the HUD's counters and the HIGH SCORES page). */
+void draw_number_blank(int tx, int ty, uint32_t value, int digits, int bank);
 void draw_leader_row(int row);
 void draw_leaderboard(void);
 void draw_leader_table(void);   /* its heading and rows: another table */
