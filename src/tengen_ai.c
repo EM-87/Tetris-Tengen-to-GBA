@@ -353,13 +353,29 @@ static void ai_score(TengenAi *ai, uint8_t *a, int x,
 #endif
 
 /* THE WEIGHTS, one set for a board of its own and one for a shared board
- * (TengenAiWeights). The solo set is El-Tetris's, times a thousand; the coop
- * set started there and was tuned by evolution (tests/ai_tune.c). Mutable,
- * so the tuner can try others; nothing in the game writes them. */
+ * (TengenAiWeights). The solo set is El-Tetris's, times a thousand. Mutable,
+ * so the tuner can try others; nothing in the game writes them.
+ *
+ * THE COOP SET WAS FOUND BY EVOLUTION (tests/ai_tune.c, `make ai-tune`): it
+ * was the solo set with W_SIDE -5000 and W_CROSS -15000. Thirty generations
+ * of the cross-entropy method, sixteen sets a generation each playing 32
+ * games of six kinds on seeds no generation had played, and then the mean
+ * against the old set on 512 more, game for game (`ai_tune check`): with
+ * the cartridge's computer for a partner, at its pace or soft-dropping,
+ * levels 5 to 15, 1.3 to 2.3 lines a game more in all four (14.8 -> 17.0 at
+ * the hardest), about 9% and five standard errors together; with the port's
+ * own for a partner, which says where it is going, no difference outside
+ * the noise. A person is the first kind of partner — never says where they
+ * are going — so that is the set that ships (INFERRED: the cartridge's
+ * computer as a stand-in for a person). What moved: wells weigh 40% less,
+ * holes 18% less and a cleared row 13% more; the shared board's own two
+ * terms stayed about where they were. The first run kept the luckiest
+ * draw on eight fixed deals and was worse on any others (0.96): hence
+ * fresh seeds and the mean. */
 TengenAiWeights tengen_ai_weights[2] = {
     /* landing  cleared  row_tr  col_tr  holes   wells   side    cross */
     { -4500,    3418,   -3218,  -9349,  -7899,  -3386,      0,      0 },
-    { -4500,    3418,   -3218,  -9349,  -7899,  -3386,  -5000, -15000 },
+    { -4500,    3872,   -3380,  -8991,  -6504,  -2036,  -5187, -15590 },
 };
 /* Knobs for tests/ai_bench.c to measure each part by taking it away. */
 #ifndef AI_REACH

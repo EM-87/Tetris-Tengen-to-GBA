@@ -591,7 +591,8 @@ showing the rival's board (not over the cable), with their NEXT, colours and num
 computer reading its coop partner under the chord, and under the same
 chord not the cartridge's computer at all but the port's own in VERSUS and
 WITH COMPUTER (`smart`: El-Tetris's scoring on a bit board, NEXT looked at,
-only what the pad can reach in time; tengen_ai.c); the cartridge's own
+only what the pad can reach in time, and on a shared board weights of its
+own found by evolution, `make ai-tune`; tengen_ai.c); the cartridge's own
 bugs mended under the chord (`TengenGame.mended`, the master's chord over a
 cable): a coop deal waits for room instead of coming up inside the
 partner's piece, a falling piece is lifted out of the partner's collapsed
