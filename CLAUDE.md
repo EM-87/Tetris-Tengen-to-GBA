@@ -172,11 +172,13 @@ story behind each; the item number is in brackets.
   (`gba/mb.ld`, `-DTENGEN_MULTIBOOT`, crt0's multiboot entries under
   MULTIBOOT) and carried inside the cartridge's ROM (`gba/mb_image.s`),
   which is why the ROM is 512 KB. Image plus the 6502's 64 KB must fit in
-  256 KB and the link asserts it — and it is FULL: about 128 bytes to spare
-  (196480 of 196608). Code that only the cartridge needs says so
-  (`#ifdef TENGEN_MULTIBOOT`, or a flag only the cartridge's link line gets,
-  as `AI_HOT_FLAGS` is), and the next thing the copy needs will have to find
-  its own room. The slave boots into the lobby following
+  256 KB and the link asserts it — and it is nearly FULL: about 400 bytes
+  to spare (196208 of 196608). Code the copy can never run says so at the
+  call, where link-time optimisation can see it (`#ifdef TENGEN_MULTIBOOT`):
+  the logos, and the Game Boy Player, found only by its logo — leaving its
+  pages out is what made room for the computer's ARM loops. A `false` from a
+  function in another file is not enough: the link splits the program and
+  does not carry it across. The slave boots into the lobby following
   the master's mode (`tengen_lobby_mode_any`) and never touches save
   memory (a console booted into multiboot can have another game's
   cartridge in). What eleven rounds on two SPs taught, one line each:
@@ -554,8 +556,8 @@ story behind each; the item number is in brackets.
   behind the deal before it has a target. HOW SOON IT DECIDES IS HOW WELL IT
   PLAYS: in WITH COMPUTER it also thinks through whatever the frame has left
   before the vertical blank (`ai_think_spare`, match.c, to AI_SPARE_LINE),
-  and its inner loops run as ARM from internal WRAM (`TENGEN_AI_HOT`, the
-  cartridge's build only — the Single-Pak image has no room for the ARM);
+  and its inner loops run as ARM from internal WRAM (`TENGEN_AI_HOT`, both
+  builds);
   first plans 63 frames -> 17, and 4.3 more lines a game (`ai_tune spare`).
   On the GBA a weighed placement costs about five scanlines and reading the
   board eight, so a planner call that reads the board for two placements is

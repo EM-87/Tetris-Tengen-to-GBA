@@ -535,7 +535,14 @@ int main(void) {
              * player's column on a race's HANDICAP, START or A turns the
              * page and plays from the last, B turns it back. The values and
              * everything they do after are the one page's, below. */
+#ifdef TENGEN_MULTIBOOT
+            /* Never a Player on the copy (gbp_present), and said here as
+             * well, where the link can see it: the pages it would draw are
+             * a kilobyte its image does not have. */
+            const bool tv = false;
+#else
             bool tv = gbp_present() && !resuming;
+#endif
             if (tv) {
                 bool up = (pressed & TENGEN_BTN_UP) != 0;
                 bool down = (pressed & (TENGEN_BTN_DOWN | TENGEN_BTN_SELECT)) != 0;

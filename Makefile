@@ -154,9 +154,10 @@ ARMFLAGS += -DTENGEN_BUILD='"$(BUILD_TAG)"'
 # terms, a kilobyte or so, which every placement it weighs runs dozens of
 # times. Thumb from the 16-bit cartridge bus they took most of a frame for
 # the slice the planner gets; see `--aiframe`. noinline, or link-time
-# optimisation copies them back into their callers in ROM. The cartridge's
-# build only: ARM is bigger than Thumb and the code lives in the image, and
-# the Single-Pak copy has no room left (its own computer is as it was).
+# optimisation copies them back into their callers in ROM. ARM is bigger
+# than Thumb and the code lives in the image, which the Single-Pak copy has
+# little room for: it found it by leaving out the Game Boy Player, which it
+# can never meet (gbp_present, and `tv` in main.c).
 AI_HOT_FLAGS := '-DTENGEN_AI_HOT=__attribute__((section(".iwram"),long_call,target("arm"),noinline))'
 
 # Graphics headers built from a cartridge dump by `make assets`. They are not
@@ -206,7 +207,7 @@ $(GBA_MB_ELF): $(GBA_SRC) $(CORE_HDR) gba/port.h gba/gba_hw.h gba/link.h \
                 gba/crt0.s gba/mb.ld $(BUILD_TAG_FILE) $(wildcard $(GBA_ASSETS)) | $(BUILD)
 	@for h in $(GBA_ASSETS); do test -f $$h || { \
 	    echo "error: $$h is missing (make assets ROM=...)"; exit 1; }; done
-	$(ARMCC) $(ARMFLAGS) -DTENGEN_MULTIBOOT -Wa,--defsym,MULTIBOOT=1 \
+	$(ARMCC) $(ARMFLAGS) $(AI_HOT_FLAGS) -DTENGEN_MULTIBOOT -Wa,--defsym,MULTIBOOT=1 \
 	    -T gba/mb.ld -nostartfiles -Wl,--gc-sections \
 	    gba/crt0.s $(GBA_SRC) -o $@
 

@@ -1211,12 +1211,6 @@ static bool ai_time_left(void) {
     return line >= 160 || line < AI_SPARE_LINE;
 }
 static void ai_think_spare(void) {
-#ifdef TENGEN_MULTIBOOT
-    /* NOT ON THE SINGLE-PAK COPY: its image and the 6502's 64KB fill the
-     * 256KB of external WRAM to within a few bytes, and this was the few.
-     * A copy plays WITH COMPUTER on the slice a frame alone. */
-    return;
-#endif
     if (!g_ai_active || !g_ai.smart || !g_ai.deep || g_session.game.paused ||
         g_ai_slot != TENGEN_PLAYER_2 ||
         !g_session.game.player[TENGEN_PLAYER_2].game_active)

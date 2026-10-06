@@ -36,7 +36,14 @@ static volatile uint16_t g_gbp_rumble;    /* frames of rumble still to go */
 static volatile uint32_t g_gbp_heard;     /* the Player's last word */
 
 bool gbp_present(void) {
+#ifdef TENGEN_MULTIBOOT
+    /* A Player is found only by its logo at power-on, which the Single-Pak
+     * copy never shows: never one here, and the link drops the pages, the
+     * rumble and the handshake from an image that has no room for them. */
+    return false;
+#else
     return g_gbp_word == GBP_SEEN;
+#endif
 }
 
 #if __has_include("gbp_logo.h") && !defined(TENGEN_MULTIBOOT)
