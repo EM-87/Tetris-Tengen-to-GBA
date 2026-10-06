@@ -4,7 +4,7 @@ The computer player, alone and as a partner.
 import os
 
 from .harness import (
-    AI_COOP_AWARE, AI_PLAN_HAVE, AI_SMART, AI_SOFT_DROP, AI_TARGET_X, DEMO_START_FRAME,
+    DEMO_START_FRAME, check_layout,
     KEYS, LEADER_HEAD_TY, TENGEN_PF_HEIGHT, TENGEN_PF_WIDTH,
     game_offsets, game_state_address, load, press_start,
     run, tilemap_text,
@@ -157,6 +157,11 @@ def coop_ai_check(rom_path):
     it is exactly what fills it. Without the chord the computer takes the
     well whatever the partner does; with it, never.
     """
+    # TengenAi's fields, where this build keeps them (kCheckProbe).
+    lay = check_layout(rom_path)
+    AI_SOFT_DROP, AI_COOP_AWARE = lay["ai_soft_drop"], lay["ai_coop_aware"]
+    AI_SMART, AI_PLAN_HAVE = lay["ai_smart"], lay["ai_plan_have"]
+    AI_TARGET_X = lay["ai_target_x"]
     off = game_offsets(rom_path)
     base, why = game_state_address(rom_path)
     if base is None:
@@ -299,6 +304,11 @@ def ai_frame_check(rom_path):
     version, sixteen placements a frame, took two frames on 140 turns of
     3000 in WITH COMPUTER.
     """
+    # TengenAi's fields, where this build keeps them (kCheckProbe).
+    lay = check_layout(rom_path)
+    AI_SOFT_DROP, AI_COOP_AWARE = lay["ai_soft_drop"], lay["ai_coop_aware"]
+    AI_SMART, AI_PLAN_HAVE = lay["ai_smart"], lay["ai_plan_have"]
+    AI_TARGET_X = lay["ai_target_x"]
     import subprocess
     elf = rom_path[:-4] + ".elf"
     try:

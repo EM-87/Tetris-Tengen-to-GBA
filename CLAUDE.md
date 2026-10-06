@@ -536,6 +536,14 @@ story behind each; the item number is in brackets.
   pieces come down half again faster than gravity, or when four lines
   behind, and never when six ahead — always once over its column, so its
   reachability still holds.
+- **The port's computer slides pieces under a ledge only in WITH COMPUTER**
+  (`deep`, ai_walk): after the plan is made, never before it — looked for
+  first, it made the main choice late and lost lines beside a partner that
+  drops. A slide planned on a board that has since grown slides from
+  whatever row the piece rests on; one across the partner's piece is not
+  planned. It does not clear more lines (`ai_tune deep`); it is there to be
+  seen. Its planner's arrays move TengenAi's later fields: checks read them
+  through `kCheckProbe`.
 - **The port's computer thinks a slice a frame** (`TENGEN_AI_SMART_BUDGET`,
   the first look at each placement charged double) and is a few frames
   behind the deal before it has a target. A bigger slice spills the main
@@ -600,7 +608,8 @@ computer reading its coop partner under the chord, and under the same
 chord not the cartridge's computer at all but the port's own in VERSUS and
 WITH COMPUTER (`smart`: El-Tetris's scoring on a bit board, NEXT looked at,
 only what the pad can reach in time, and on a shared board weights of its
-own found by evolution, `make ai-tune`; tengen_ai.c); the cartridge's own
+own found by evolution, `make ai-tune`, and in WITH COMPUTER slides under a
+ledge while the fall leaves time for them, `deep`; tengen_ai.c); the cartridge's own
 bugs mended under the chord (`TengenGame.mended`, the master's chord over a
 cable): a coop deal waits for room instead of coming up inside the
 partner's piece, a falling piece is lifted out of the partner's collapsed
@@ -656,8 +665,9 @@ proto_d as a fourth skin (its title is pixel-identical to proto_c's); a
 prototype's rules over the cable; A+B restarting the whole game in 1P and
 coop (there A and B are the way out); the line counter's clamp at 10000;
 the prototypes' own front-end shape (two modes, their level select, no
-handicap or music); the computer sliding a piece under an overhang (tried
-twice, measured worse); the demo's own game over and HIGH SCORES page (the
+handicap or music); the cartridge's computer sliding a piece under an overhang (tried
+twice, measured worse; the port's own does, in WITH COMPUTER under the
+chord); the demo's own game over and HIGH SCORES page (the
 cartridge's demo plays about 25 minutes, tops out, and shows both; the
 port's holds its GAME OVER three seconds and goes back to the title, and
 writes no score nobody played for); the demo's seed (the cartridge's

@@ -106,6 +106,9 @@ int main(int argc, char **argv) {
          * planner runs under the sanitizers too. */
         ai[0].smart = rnd() & 1;
         ai[1].smart = rnd() & 1;
+        /* ...and its slides under a ledge (`deep`) half of those times. */
+        ai[0].deep = ai[0].smart && (rnd() & 1);
+        ai[1].deep = ai[1].smart && (rnd() & 1);
         TengenTetromino seen[2] = { TT_NONE, TT_NONE };
         uint8_t held[2] = { 0, 0 }, prev[2] = { 0, 0 };
         uint32_t lines_before[2] = { 0, 0 };

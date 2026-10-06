@@ -731,6 +731,11 @@ int main(void) {
                  * it drops its pieces when the player drops theirs, and to
                  * catch up when four lines behind. */
                 g_ai.adaptive = g_pause_unlocked;
+                /* ...and on the shared board, where it is watched, with the
+                 * time a slow fall leaves it: slides under a ledge once the
+                 * plan is made (`deep`). VERSUS keeps its computer as it is:
+                 * nobody sees that board. */
+                g_ai.deep = g_pause_unlocked && GAME_IS_COOP(game_mode);
                 g_ai_last_piece = TT_NONE;
                 g_ai_last_partner = TT_NONE;
                 g_ai_frame = 0;

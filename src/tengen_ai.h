@@ -24,9 +24,10 @@
 #include "tengen_core.h"
 
 /* The port's planner: how many placements one piece can have (four
- * orientations, thirteen left columns) and how many of the best of them it
- * looks one piece further ahead from. */
-#define TENGEN_AI_SMART_MAX  64
+ * orientations, thirteen left columns, and with `deep` the slides under a
+ * ledge besides) and how many of the best of them it looks one piece further
+ * ahead from. */
+#define TENGEN_AI_SMART_MAX  96
 #define TENGEN_AI_SMART_KEEP 6
 
 /* THE PORT'S COMPUTER'S WEIGHTS (`smart`), times a thousand: the landing
@@ -152,6 +153,21 @@ typedef struct {
     uint16_t pace_theirs;        /* rows per gravity row, x16, smoothed */
     uint8_t pace_samples;
     bool pace_fast;
+    /* MORE THOUGHT WHILE THERE IS TIME FOR IT (`deep`, WITH COMPUTER under
+     * the chord): once the plan is made, placements reached by letting the
+     * piece fall to rest and then SLIDING it under a ledge. A slide is a
+     * second target: from row `tuck_row` on (or the row it rests on first),
+     * column `tuck_x`. See ai_walk. */
+    bool deep;
+    bool tuck_on;
+    int8_t tuck_row;
+    uint8_t tuck_x;
+    uint8_t plan_cand_via[TENGEN_AI_SMART_MAX];  /* 0: dropped straight; else the
+                                                   column it falls in, storage */
+    int8_t plan_cand_t[TENGEN_AI_SMART_MAX];     /* ...and the row it slides on */
+    uint8_t plan_straight;       /* how many candidates are straight drops */
+    int8_t plan_tuck_n;          /* the slide being looked ahead from, or -1 */
+    uint8_t plan_tuck_reply;     /* ...and how far its replies have got */
 } TengenAi;
 
 /* A new game. The ROM does not clear this either — its scratch is whatever

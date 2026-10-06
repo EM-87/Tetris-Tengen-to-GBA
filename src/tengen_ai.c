@@ -377,12 +377,42 @@ TengenAiWeights tengen_ai_weights[2] = {
     { -4500,    3418,   -3218,  -9349,  -7899,  -3386,      0,      0 },
     { -4500,    3872,   -3380,  -8991,  -6504,  -2036,  -5187, -15590 },
 };
+/* SLIDES UNDER A LEDGE (`deep`, WITH COMPUTER under the chord). Once the
+ * plan is made — in the frames it always took, so the main choice is never
+ * late for it — the time left before the piece gets there goes on
+ * placements a straight drop cannot reach: the piece falls to rest in an
+ * opening and is slid one to three columns under the ledge beside it. Each
+ * is walked (ai_walk, the slide and the fall timer racing the driver's shift
+ * every eighth frame) and looked at one piece ahead, and takes the plan only
+ * if it beats the plan's own total. So it happens while the fall is slow and
+ * stops by itself as the levels climb: at level 0 there are four shifts
+ * before a resting piece locks, at 8 one, from 15 none.
+ *
+ * MEASURED, and said as it is: it does not clear more lines. `ai_tune deep`,
+ * 512 games a kind of partner at levels 0 to 8, the same games with it and
+ * without: -0.17 +- 0.26 lines a game over the six, none of them outside its
+ * error. It is rare — one piece in six hundred against the cartridge's
+ * computer, whose stacks the scoring keeps flat — and 95% of the slides it
+ * starts land. It is there because a person slides pieces and the computer
+ * playing beside one is watched; it costs no lines and no frame (the slice a
+ * frame is the same). Two things measured and left out: a wider look one
+ * piece ahead while the fall is slow (nothing, and it made the main choice
+ * late), and looking for slides BEFORE the look ahead (worse beside a
+ * partner that drops its pieces: the choice came too late to reach).
+ * Slides that crossed the partner's piece, or were planned on a board that
+ * has grown since, locked halfway in the opening: so not across the
+ * partner's columns, and a resting piece slides at once (ai_walk and the
+ * driver alike). */
+
 /* Knobs for tests/ai_bench.c to measure each part by taking it away. */
 #ifndef AI_REACH
 #define AI_REACH 1
 #endif
 #ifndef AI_LOOKAHEAD
 #define AI_LOOKAHEAD 1
+#endif
+#ifndef AI_TUCKS
+#define AI_TUCKS 1
 #endif
 #define AI_DEAD     (-0x3FFFFFFF)
 #define AI_UNREACHABLE (-100000000)
@@ -599,16 +629,42 @@ typedef struct {
     bool coop, xe, kick;
 } AiPace;
 
-static bool ai_reachable(const AiBoard *obstacles, TengenTetromino piece,
-                         uint8_t o0, int l0, int t0, uint8_t o1, int l1,
-                         const AiPace *pace) {
+/* The walk itself, as tengen_ai_buttons will press it: towards (o1, l1),
+ * and from row `tuck_row` on towards column `tuck_l` instead (a SLIDE: no
+ * slide when tuck_row is AI_NO_TUCK). With no slide it stops as soon as the
+ * piece is over its column, turned (`*rest_t` is then -99); with one it
+ * walks on until the piece comes to rest, which is where the core locks it,
+ * and says where (`*rest_l`, `*rest_t`). Frames on which nothing can happen
+ * but the timer — the piece where it wants to be, waiting to fall — are
+ * stepped over in one go, so a slow fall costs its rows, not its frames.
+ * Returns whether it came where it was sent. */
+#define AI_NO_TUCK (-128)
+static bool ai_walk(const AiBoard *obstacles, TengenTetromino piece,
+                    uint8_t o0, int l0, int t0, uint8_t o1, int l1,
+                    int tuck_row, int tuck_l, const AiPace *pace,
+                    int *rest_l, int *rest_t) {
     uint16_t sh[4];
     uint8_t o = o0;
     int l = l0, t = t0;
     uint8_t timer = pace->timer, clock = pace->clock;
+    bool tuck = tuck_row != AI_NO_TUCK;
+    *rest_l = l; *rest_t = -99;
     ai_shape(piece, o, sh);
-    for (int f = 0; f < 600; f++, clock++) {
-        if (l == l1 && o == o1) return true;
+    for (int f = 0; f < 1200; f++, clock++) {
+        /* The slide starts on its row, or on any row the piece comes to rest
+         * on first: a slide planned on a board that has grown since would
+         * otherwise wait for a row it never reaches, and lock in the
+         * opening (tengen_ai_buttons does the same). */
+        int want = tuck && (t >= tuck_row || ai_hits(obstacles, sh, l, t + 1))
+                   ? tuck_l : l1;
+        if (!tuck && l == l1 && o == o1) { *rest_l = l; return true; }
+        if (l == want && o == o1 && timer > 1) {
+            /* Nothing to press before the next row: straight to it. */
+            uint8_t skip = (uint8_t)(timer - 1);
+            timer = 1;
+            clock = (uint8_t)(clock + skip);
+            f += skip;
+        }
         bool fall = false;
         if (timer > 0) timer--;
         if (timer == 0) {
@@ -617,8 +673,8 @@ static bool ai_reachable(const AiBoard *obstacles, TengenTetromino piece,
                                           (int8_t)(t + TENGEN_ROM_ROW_ORIGIN),
                                           pace->coop, pace->xe);
         }
-        if ((clock & 0x07) == 0 && l != l1) {
-            int d = l1 > l ? 1 : -1;
+        if ((clock & 0x07) == 0 && l != want) {
+            int d = want > l ? 1 : -1;
             if (!ai_hits(obstacles, sh, l + d, t)) l += d;
         }
         if ((clock & 0x0F) == 0 && o != o1) {
@@ -633,12 +689,22 @@ static bool ai_reachable(const AiBoard *obstacles, TengenTetromino piece,
             }
         }
         if (fall) {
-            if (ai_hits(obstacles, sh, l, t + 1))
-                return l == l1 && o == o1;      /* came to rest */
+            if (ai_hits(obstacles, sh, l, t + 1)) {     /* came to rest */
+                *rest_l = l; *rest_t = t;
+                return l == (tuck ? tuck_l : l1) && o == o1;
+            }
             t++;
         }
     }
     return false;
+}
+
+static bool ai_reachable(const AiBoard *obstacles, TengenTetromino piece,
+                         uint8_t o0, int l0, int t0, uint8_t o1, int l1,
+                         const AiPace *pace) {
+    int rl, rt;
+    return ai_walk(obstacles, piece, o0, l0, t0, o1, l1, AI_NO_TUCK, 0, pace,
+                   &rl, &rt);
 }
 
 /* The working boards for this frame's slice: the settled board, what is in
@@ -712,15 +778,50 @@ static int32_t ai_trespass(const AiView *v, const uint16_t sh[4], int l) {
     return cost + v->w->side * past;
 }
 
-static bool ai_is_target(const TengenAi *ai, int l, uint8_t o) {
-    return ai->target_x == (uint8_t)(l + TENGEN_ROM_COL_ORIGIN) &&
-           ai->target_orientation == o;
+/* A candidate's target: its column and turn, and for a slide the column it
+ * falls in first (`via`, 0 for none) and the row it slides on. */
+static bool ai_is_cand_target(const TengenAi *ai, int k) {
+    uint8_t via = ai->plan_cand_via[k];
+    int l = ai->plan_cand_l[k] - 3;
+    if (ai->target_orientation != ai->plan_cand_o[k]) return false;
+    if (!via) return !ai->tuck_on &&
+                     ai->target_x == (uint8_t)(l + TENGEN_ROM_COL_ORIGIN);
+    return ai->tuck_on && ai->tuck_row == ai->plan_cand_t[k] &&
+           ai->target_x == (uint8_t)(via - 4 + TENGEN_ROM_COL_ORIGIN) &&
+           ai->tuck_x == (uint8_t)(l + TENGEN_ROM_COL_ORIGIN);
 }
 
-static void ai_set_target(TengenAi *ai, int l, uint8_t o) {
-    ai->target_x = (uint8_t)(l + TENGEN_ROM_COL_ORIGIN);
-    ai->target_orientation = o;
+static void ai_set_cand_target(TengenAi *ai, int k) {
+    uint8_t via = ai->plan_cand_via[k];
+    int l = ai->plan_cand_l[k] - 3;
+    ai->target_orientation = ai->plan_cand_o[k];
+    ai->tuck_on = via != 0;
+    if (via) {
+        ai->target_x = (uint8_t)(via - 4 + TENGEN_ROM_COL_ORIGIN);
+        ai->tuck_x = (uint8_t)(l + TENGEN_ROM_COL_ORIGIN);
+        ai->tuck_row = ai->plan_cand_t[k];
+    } else {
+        ai->target_x = (uint8_t)(l + TENGEN_ROM_COL_ORIGIN);
+    }
     ai->plan_have = true;
+}
+
+/* Can candidate `k` still be got to from where the piece is now? */
+static bool ai_cand_reachable(const TengenAi *ai, const AiView *v,
+                              const AiBoard *obstacles, int k) {
+    uint8_t via = ai->plan_cand_via[k];
+    int l = ai->plan_cand_l[k] - 3;
+    uint8_t o = ai->plan_cand_o[k];
+    if (!via) return ai_reachable(obstacles, v->piece, v->o0, v->l0, v->t0, o, l,
+                                  &v->pace);
+    int rl, rt;
+    return ai_walk(obstacles, v->piece, v->o0, v->l0, v->t0, o, via - 4,
+                   ai->plan_cand_t[k], l, &v->pace, &rl, &rt);
+}
+
+/* The row a candidate is dropped from: the spawn's, or a slide's own. */
+static int ai_cand_from(const TengenAi *ai, const AiView *v, int k) {
+    return ai->plan_cand_via[k] ? ai->plan_cand_t[k] : v->t0;
 }
 
 static void ai_smart_start(TengenAi *ai, const TengenGame *g,
@@ -734,7 +835,7 @@ static void ai_smart_start(TengenAi *ai, const TengenGame *g,
     /* A re-plan of the same piece keeps the target it has until it has a
      * better one: a piece that stopped to think would be a piece that hung. */
     ai->plan_keep = keep && ai->plan_have;
-    if (!ai->plan_keep) ai->plan_have = false;
+    if (!ai->plan_keep) { ai->plan_have = false; ai->tuck_on = false; }
     ai->plan_blocked = false;
     ai->plan_age = 0;
     {
@@ -763,17 +864,98 @@ static void ai_smart_start(TengenAi *ai, const TengenGame *g,
                 continue;
             ai->plan_cand_l[ai->plan_count] = (uint8_t)(l + 3);
             ai->plan_cand_o[ai->plan_count] = o;
+            ai->plan_cand_via[ai->plan_count] = 0;
+            ai->plan_cand_t[ai->plan_count] = 0;
             ai->plan_count++;
         }
     }
+    ai->plan_straight = ai->plan_count;
+    ai->plan_tuck_n = -1;
     ai->plan_best = AI_DEAD;
     ai->plan_stage = 1;
+}
+
+/* Every candidate scored: aim at the best (in reach, if any is), and pick
+ * the few to look one piece ahead from. */
+static void ai_pick(TengenAi *ai, const AiView *v) {
+    int best = -1;
+    for (int k = 0; k < ai->plan_count; k++) {
+        if (ai->plan_cand_score[k] == AI_DEAD) continue;
+        if (best < 0 || ai->plan_cand_score[k] > ai->plan_cand_score[best])
+            best = k;
+    }
+    if (best >= 0) {
+        ai_set_cand_target(ai, best);
+        ai->plan_best = AI_DEAD;
+    }
+    ai->plan_top_count = 0;
+    for (int pick = 0; pick < TENGEN_AI_SMART_KEEP; pick++) {
+        int top = -1;
+        for (int k = 0; k < ai->plan_count; k++) {
+            if (ai->plan_cand_score[k] == AI_DEAD) continue;
+            bool taken = false;
+            for (int j = 0; j < ai->plan_top_count; j++)
+                if (ai->plan_top[j] == k) taken = true;
+            if (taken) continue;
+            if (top < 0 || ai->plan_cand_score[k] > ai->plan_cand_score[top])
+                top = k;
+        }
+        if (top < 0) break;
+        ai->plan_top[ai->plan_top_count++] = (uint8_t)top;
+    }
+    ai->plan_cursor = 0;
+    ai->plan_inner = 0;
+    ai->plan_reply_best = AI_DEAD;
+    ai->plan_stage = (AI_LOOKAHEAD && ai->plan_top_count && v->next > TT_NONE &&
+                      v->next < TENGEN_TETROMINO_COUNT) ? 2 : 3;
+}
+
+/* CANDIDATE `k` ONE PIECE AHEAD, a slice at a time: its own terms, and the
+ * best of NEXT's every orientation and column dropped on the board it
+ * leaves. `*inner` is where the replies have got to; true once they are
+ * all in, with the sum in `*total` (AI_DEAD if there is none). */
+static bool ai_ahead(TengenAi *ai, const AiView *v, int k, uint8_t *inner,
+                     int *budget, int32_t *total) {
+    int l = ai->plan_cand_l[k] - 3;
+    uint8_t o = ai->plan_cand_o[k];
+    uint16_t sh[4];
+    ai_shape(v->piece, o, sh);
+    AiBoard after = v->scored;
+    int from = ai_cand_from(ai, v, k);
+    *total = AI_DEAD;
+    if (ai_hits(&after, sh, l, from)) return true;
+    int land = ai_drop(&after, sh, l, from);
+    int top, rows = ai_shape_rows(sh, &top);
+    int cleared = ai_place(&after, sh, l, land);
+    if (cleared < 0) return true;
+    int height2 = 2 * AI_H - (2 * (land + top) + rows - 1);
+    int32_t first = v->w->landing * height2 / 2 + v->w->cleared * cleared +
+                    ai_trespass(v, sh, l);
+    while (*budget > 0 && *inner < 4 * 16) {
+        uint8_t o2 = (uint8_t)(*inner / 16);
+        int l2 = *inner % 16 - 3;
+        (*inner)++;
+        uint16_t sh2[4];
+        ai_shape(v->next, o2, sh2);
+        if (ai_hits(&after, sh2, l2, -2)) continue;
+        (*budget)--;
+        AiBoard b2 = after;
+        int32_t s2 = ai_score_drop(&b2, sh2, l2, -2, v->w, 0);
+        if (s2 > ai->plan_reply_best) ai->plan_reply_best = s2;
+    }
+    if (*inner < 4 * 16) return false;         /* more next frame */
+    if (ai->plan_reply_best != AI_DEAD) *total = first + ai->plan_reply_best;
+    if (*total != AI_DEAD && ai->plan_keep && ai_is_cand_target(ai, k))
+        *total += W_KEEP;
+    return true;
 }
 
 /* One slice: up to `budget` placements scored. */
 static void ai_smart_think(TengenAi *ai, const TengenGame *g,
                            TengenPlayerSlot slot, int budget) {
     if (ai->plan_stage == 0 || ai->plan_stage == 3) return;
+    /* Stages: 1 every straight drop, 2 the best of them one piece ahead,
+     * 4 the slides (`deep`), 3 done. */
     AiView v;
     if (!ai_view(g, slot, ai, &v)) { ai->plan_stage = 3; return; }
 
@@ -781,35 +963,7 @@ static void ai_smart_think(TengenAi *ai, const TengenGame *g,
         if (ai->plan_cursor >= ai->plan_count) {
             /* Every placement of the piece in hand is in: aim at the best
              * reachable one now, and pick the few to look ahead from. */
-            int best = -1;
-            for (int k = 0; k < ai->plan_count; k++) {
-                if (ai->plan_cand_score[k] == AI_DEAD) continue;
-                if (best < 0 || ai->plan_cand_score[k] > ai->plan_cand_score[best])
-                    best = k;
-            }
-            if (best >= 0) {
-                ai_set_target(ai, ai->plan_cand_l[best] - 3, ai->plan_cand_o[best]);
-                ai->plan_best = AI_DEAD;
-            }
-            for (int pick = 0; pick < TENGEN_AI_SMART_KEEP; pick++) {
-                int top = -1;
-                for (int k = 0; k < ai->plan_count; k++) {
-                    if (ai->plan_cand_score[k] == AI_DEAD) continue;
-                    bool taken = false;
-                    for (int j = 0; j < ai->plan_top_count; j++)
-                        if (ai->plan_top[j] == k) taken = true;
-                    if (taken) continue;
-                    if (top < 0 || ai->plan_cand_score[k] > ai->plan_cand_score[top])
-                        top = k;
-                }
-                if (top < 0) break;
-                ai->plan_top[ai->plan_top_count++] = (uint8_t)top;
-            }
-            ai->plan_cursor = 0;
-            ai->plan_inner = 0;
-            ai->plan_reply_best = AI_DEAD;
-            ai->plan_stage = (AI_LOOKAHEAD && ai->plan_top_count && v.next > TT_NONE &&
-                              v.next < TENGEN_TETROMINO_COUNT) ? 2 : 3;
+            ai_pick(ai, &v);
             break;
         }
         int k = ai->plan_cursor++;
@@ -834,59 +988,117 @@ static void ai_smart_think(TengenAi *ai, const TengenGame *g,
                                                v.t0, o, l, &v.pace))
                     ai->plan_blocked = true;
             }
-            if (ai->plan_keep && ai_is_target(ai, l, o)) score += W_KEEP;
+            if (ai->plan_keep && ai_is_cand_target(ai, k)) score += W_KEEP;
         }
         ai->plan_cand_score[k] = score;
     }
 
     while (budget > 0 && ai->plan_stage == 2) {
-        if (ai->plan_cursor >= ai->plan_top_count) { ai->plan_stage = 3; break; }
-        int k = ai->plan_top[ai->plan_cursor];
-        int l = ai->plan_cand_l[k] - 3;
-        uint8_t o = ai->plan_cand_o[k];
-        uint16_t sh[4];
-        ai_shape(v.piece, o, sh);
-        /* The board this one leaves, and its first piece's own terms. */
-        AiBoard after = v.scored;
-        int cleared = 0;
-        if (ai_hits(&after, sh, l, v.t0)) { ai->plan_cursor++; ai->plan_inner = 0; continue; }
-        int land = ai_drop(&after, sh, l, v.t0);
-        int top, rows = ai_shape_rows(sh, &top);
-        cleared = ai_place(&after, sh, l, land);
-        if (cleared < 0) { ai->plan_cursor++; ai->plan_inner = 0; continue; }
-        int height2 = 2 * AI_H - (2 * (land + top) + rows - 1);
-        int32_t first = v.w->landing * height2 / 2 +
-                        v.w->cleared * cleared +
-                        ai_trespass(&v, sh, l);
-        /* NEXT, every orientation and column, dropped from the top. */
-        while (budget > 0 && ai->plan_inner < 4 * 16) {
-            uint8_t o2 = (uint8_t)(ai->plan_inner / 16);
-            int l2 = ai->plan_inner % 16 - 3;
-            ai->plan_inner++;
-            uint16_t sh2[4];
-            ai_shape(v.next, o2, sh2);
-            if (ai_hits(&after, sh2, l2, -2)) continue;
-            budget--;
-            AiBoard b2 = after;
-            int32_t s2 = ai_score_drop(&b2, sh2, l2, -2, v.w, 0);
-            if (s2 > ai->plan_reply_best) ai->plan_reply_best = s2;
+        if (ai->plan_cursor >= ai->plan_top_count) {
+            /* THE PLAN IS MADE, in the frames it always took: what time is
+             * left before the piece gets there goes on slides (`deep`). */
+            ai->plan_stage = ai->deep && AI_TUCKS ? 4 : 3;
+            ai->plan_cursor = 0;
+            ai->plan_inner = 0;
+            break;
         }
-        if (ai->plan_inner < 4 * 16) break;      /* more next frame */
-        int32_t total = ai->plan_reply_best == AI_DEAD
-                        ? AI_DEAD : first + ai->plan_reply_best;
-        if (total != AI_DEAD && ai->plan_keep && ai_is_target(ai, l, o))
-            total += W_KEEP;
+        int k = ai->plan_top[ai->plan_cursor];
+        int32_t total;
+        if (!ai_ahead(ai, &v, k, &ai->plan_inner, &budget, &total)) break;
         if (total > ai->plan_best) {
             ai->plan_best = total;
             /* Still reachable from where the piece is NOW? */
-            if (ai_reachable(&v.obstacles, v.piece, v.o0, v.l0, v.t0, o, l,
-                             &v.pace))
-                ai_set_target(ai, l, o);
+            if (ai_cand_reachable(ai, &v, &v.obstacles, k))
+                ai_set_cand_target(ai, k);
         }
         ai->plan_cursor++;
         ai->plan_inner = 0;
         ai->plan_reply_best = AI_DEAD;
     }
+
+    /* SLIDES UNDER A LEDGE (`deep`). From each straight drop in reach: fall
+     * to rest, then one to three columns either way along that row, if the
+     * row is open that far, to wherever the piece falls from there — kept
+     * only if no straight drop gets there. In reach is the walk's to say,
+     * slide and all: on a fast fall the piece locks before the shift comes,
+     * and the slide is simply not one. */
+    while (budget > 0 && ai->plan_stage == 4) {
+        /* A slide found: one piece ahead as well, and it takes the plan
+         * only if it beats the plan's own total and is still in reach. */
+        if (ai->plan_tuck_n >= 0) {
+            int n = ai->plan_tuck_n;
+            int32_t total;
+            if (!ai_ahead(ai, &v, n, &ai->plan_tuck_reply, &budget, &total)) break;
+            if (total != AI_DEAD && total > ai->plan_best &&
+                ai_cand_reachable(ai, &v, &v.obstacles, n)) {
+                ai->plan_best = total;
+                ai_set_cand_target(ai, n);
+            }
+            ai->plan_tuck_n = -1;
+            ai->plan_reply_best = AI_DEAD;
+            continue;
+        }
+        if (ai->plan_cursor >= ai->plan_straight) { ai->plan_stage = 3; break; }
+        int k = ai->plan_cursor;
+        int d = ai->plan_inner < 3 ? ai->plan_inner - 3 : ai->plan_inner - 2;
+        if (++ai->plan_inner >= 6) { ai->plan_inner = 0; ai->plan_cursor++; }
+        if (ai->plan_cand_score[k] <= AI_UNREACHABLE / 2) continue;
+        if (ai->plan_count >= TENGEN_AI_SMART_MAX) continue;
+        int l = ai->plan_cand_l[k] - 3;
+        uint8_t o = ai->plan_cand_o[k];
+        uint16_t sh[4];
+        ai_shape(v.piece, o, sh);
+        budget--;
+        int row = ai_drop(&v.obstacles, sh, l, v.t0);
+        int lf = l + d;
+        bool open = true;
+        for (int c = l; c != lf && open; ) {
+            c += d > 0 ? 1 : -1;
+            if (ai_hits(&v.obstacles, sh, c, row)) open = false;
+        }
+        if (!open) continue;
+        /* The walk takes the partner's piece to stand still; a slide is the
+         * long way down, and a partner's piece that comes into its path
+         * while it waits leaves it locked halfway, in the opening. So not
+         * across any column that piece is in or landing in. */
+        if (v.side_dir) {
+            uint16_t path = 0, theirs = v.partner_cols;
+            for (int c = l < lf ? l : lf; c <= (l < lf ? lf : l); c++)
+                for (int r = 0; r < 4; r++) path |= ai_shift(sh[r], c);
+            for (int y = 0; y < AI_H; y++)
+                theirs |= (uint16_t)(v.obstacles.row[y] & ~v.base.row[y]);
+            if (path & theirs) continue;
+        }
+        int tf = ai_drop(&v.obstacles, sh, lf, row);
+        /* Where a straight drop in that column would stop; the slide is
+         * worth something only if it gets deeper. */
+        if (!ai_hits(&v.obstacles, sh, lf, v.t0) &&
+            ai_drop(&v.obstacles, sh, lf, v.t0) >= tf)
+            continue;
+        bool dup = false;
+        for (int j = ai->plan_straight; j < ai->plan_count && !dup; j++)
+            dup = ai->plan_cand_o[j] == o && ai->plan_cand_l[j] == (uint8_t)(lf + 3) &&
+                  ai_drop(&v.obstacles, sh, lf, ai->plan_cand_t[j]) == tf;
+        if (dup) continue;
+        budget -= 2;
+        int rl, rt;
+        if (!ai_walk(&v.obstacles, v.piece, v.o0, v.l0, v.t0, o, l, row, lf,
+                     &v.pace, &rl, &rt) || rt != tf)
+            continue;
+        AiBoard b = v.scored;
+        int32_t score = ai_score_drop(&b, sh, lf, row, v.w, 0);
+        if (score == AI_DEAD) continue;
+        int n = ai->plan_count++;
+        ai->plan_cand_l[n] = (uint8_t)(lf + 3);
+        ai->plan_cand_o[n] = o;
+        ai->plan_cand_via[n] = (uint8_t)(l + 4);
+        ai->plan_cand_t[n] = (int8_t)row;
+        ai->plan_cand_score[n] = score + ai_trespass(&v, sh, lf);
+        ai->plan_tuck_n = (int8_t)n;
+        ai->plan_tuck_reply = 0;
+        ai->plan_reply_best = AI_DEAD;
+    }
+
 }
 
 void tengen_ai_think(TengenAi *ai, const TengenGame *game, TengenPlayerSlot slot) {
@@ -1056,12 +1268,31 @@ uint8_t tengen_ai_buttons(TengenAi *ai, const TengenGame *game,
     }
     if (ai->since_spawn < 0xFF) ai->since_spawn++;
 
+    /* A SLIDE is a second column, from its row on (`deep`; see ai_walk,
+     * which walks exactly this). */
+    uint8_t target_x = ai->target_x;
+    if (ai->tuck_on && p->piece.current > TT_NONE &&
+        p->piece.current < TENGEN_TETROMINO_COUNT) {
+        int t = (int)p->piece.y - TENGEN_ROM_ROW_ORIGIN;
+        bool at_rest = false;
+        if (t < ai->tuck_row) {
+            AiBoard base, now, ahead, obstacles;
+            uint16_t cols, sh[4];
+            ai_board(game, slot, &base);
+            ai_partner(game, slot, ai, &base, &now, &ahead, &cols);
+            ai_or(&obstacles, &base, &now);
+            ai_shape(p->piece.current, p->piece.orientation, sh);
+            at_rest = ai_hits(&obstacles, sh, p->piece.x - TENGEN_ROM_COL_ORIGIN, t + 1);
+        }
+        if (t >= ai->tuck_row || at_rest) target_x = ai->tuck_x;
+    }
+
     /* "shifting occurs every 8 frames; rotation every 16" — the cartridge's
      * own comment, at main.asm.txt:4170. */
     if ((frame_counter & 0x07) == 0) {
-        uint8_t delta = (uint8_t)(ai->target_x - (uint8_t)p->piece.x);
+        uint8_t delta = (uint8_t)(target_x - (uint8_t)p->piece.x);
         if (delta != 0)
-            buttons |= (ai->target_x >= (uint8_t)p->piece.x)
+            buttons |= (target_x >= (uint8_t)p->piece.x)
                 ? TENGEN_BTN_RIGHT : TENGEN_BTN_LEFT;
     }
     if ((frame_counter & 0x0F) == 0) {
@@ -1121,10 +1352,13 @@ uint8_t tengen_ai_buttons(TengenAi *ai, const TengenGame *game,
     /* The port's own computer waits on any board, for its column and its
      * turn both: its plan assumed gravity only on the way across. */
     bool waiting = (ai->coop_aware && game->coop &&
-                     ai->target_x != (uint8_t)p->piece.x) ||
-                   (ai->smart && (ai->target_x != (uint8_t)p->piece.x ||
+                     target_x != (uint8_t)p->piece.x) ||
+                   (ai->smart && (target_x != (uint8_t)p->piece.x ||
                                   ai->target_orientation != p->piece.orientation));
-    bool drop = ai->soft_drop || (ai->smart && ai->adaptive && ai->drop_auto);
+    /* ...and never on the way to a slide: Down on a piece at rest locks it
+     * where it is, before the shift that was the whole point. */
+    bool drop = ai->soft_drop ||
+                (ai->smart && ai->adaptive && ai->drop_auto && !ai->tuck_on);
     if (drop && !buttons && !waiting && (frame_counter & 0x07) != 0x07)
         buttons |= TENGEN_BTN_DOWN;
     return buttons;

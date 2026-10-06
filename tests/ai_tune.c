@@ -32,6 +32,7 @@
  *
  *     ai_tune [generations] [games per scenario] [frames] [validation games]
  *     ai_tune check games frames seed cleared row_trans col_trans holes wells side cross
+ *     ai_tune deep games frames seed
  *
  * The second form plays one set of coop weights against the base on its own
  * seeds, game for game: what a candidate has to pass before it goes in.
@@ -53,10 +54,19 @@
 #define MAX_GAMES 512
 
 typedef struct { int partner; int level; } Scenario;    /* 0 cart, 1 cart fast, 2 port */
-static const Scenario kScen[] = {
+static Scenario kScen[] = {
     { 0, 5 }, { 0, 12 }, { 1, 8 }, { 1, 15 }, { 2, 10 }, { 2, 16 },
 };
+/* `deep` is for slow falls, so it is measured where they are. */
+static const Scenario kDeepScen[] = {
+    { 0, 0 }, { 0, 4 }, { 0, 8 }, { 1, 0 }, { 1, 6 }, { 2, 2 },
+};
 #define NSCEN ((int)(sizeof kScen / sizeof kScen[0]))
+
+/* Which weight set, by index in evaluate_all, plays with `deep` (-1: none),
+ * and this process's own answer. */
+static int g_deep_set = -1;
+static bool g_deep;
 
 static long play(const Scenario *sc, uint16_t seed, long frames) {
     TengenGame game;
@@ -69,6 +79,7 @@ static long play(const Scenario *sc, uint16_t seed, long frames) {
     }
     ai[1].smart = true;                       /* the port's, as player 2 */
     ai[1].adaptive = true;
+    ai[1].deep = g_deep;
     if (sc->partner == 2) { ai[0].smart = true; ai[0].adaptive = true; }
     if (sc->partner == 1) ai[0].soft_drop = true;
     long lines = 0;
@@ -134,6 +145,7 @@ static void evaluate_all(double w[][NW], int n, int games, long frames,
             if (pids[k] == 0) {
                 static Lines r;
                 close(fds[k][0]);
+                g_deep = i + k == g_deep_set;
                 evaluate(w[i + k], games, frames, seed0, r);
                 const char *p = (const char *)r;
                 size_t left = sizeof r;
@@ -213,6 +225,15 @@ int main(int argc, char **argv) {
     const TengenAiWeights *b0 = &tengen_ai_weights[1];
     double base[NW] = { b0->landing, b0->cleared, b0->row_trans, b0->col_trans,
                         b0->holes, b0->wells, b0->side, b0->cross };
+    if (argc == 5 && !strcmp(argv[1], "deep")) {
+        /* The same weights, without `deep` and with it. */
+        int vgames = atoi(argv[2]);
+        if (vgames > MAX_GAMES) vgames = MAX_GAMES;
+        g_deep_set = 1;
+        memcpy(kScen, kDeepScen, sizeof kScen);
+        validate(base, base, vgames, atol(argv[3]), (unsigned)strtoul(argv[4], NULL, 0));
+        return 0;
+    }
     if (argc == 12 && !strcmp(argv[1], "check")) {
         int vgames = atoi(argv[2]);
         if (vgames > MAX_GAMES) vgames = MAX_GAMES;
