@@ -31,6 +31,10 @@
  * same seed for both), by more than its standard error.
  *
  *     ai_tune [generations] [games per scenario] [frames] [validation games]
+ *     ai_tune check games frames seed cleared row_trans col_trans holes wells side cross
+ *
+ * The second form plays one set of coop weights against the base on its own
+ * seeds, game for game: what a candidate has to pass before it goes in.
  */
 #include <math.h>
 #include <stdio.h>
@@ -46,7 +50,7 @@
 #define POP 16
 #define ELITE 4
 #define PAR 4
-#define MAX_GAMES 128
+#define MAX_GAMES 512
 
 typedef struct { int partner; int level; } Scenario;    /* 0 cart, 1 cart fast, 2 port */
 static const Scenario kScen[] = {
@@ -175,7 +179,48 @@ static double gauss(void) {
     return u * sqrt(-2 * log(s) / s);
 }
 
+/* The base against `cand`, the same seeds game for game, scenario by
+ * scenario: lines a game, the difference and its standard error. */
+static void validate(const double base[NW], const double cand_w[NW], int vgames,
+                     long frames, unsigned seed) {
+    double cand[2][NW];
+    static Lines vr[2];
+    memcpy(cand[0], base, sizeof cand[0]);
+    memcpy(cand[1], cand_w, sizeof cand[1]);
+    evaluate_all(cand, 2, vgames, frames, seed, vr);
+    printf("validation, %d games a scenario (lines a game, base -> candidate, diff +- s.e.):\n",
+           vgames);
+    double fit = 0;
+    for (int s = 0; s < NSCEN; s++) {
+        double d = 0, d2 = 0;
+        for (int g = 0; g < vgames; g++) {
+            double x = (double)(vr[1][s][g] - vr[0][s][g]);
+            d += x; d2 += x * x;
+        }
+        double md = d / vgames;
+        double se = vgames > 1 ? sqrt((d2 / vgames - md * md) / (vgames - 1)) : 0;
+        double b = total(vr[0], s, vgames) / vgames, m = total(vr[1], s, vgames) / vgames;
+        fit += m / (b > 0 ? b : 1);
+        printf("  partner %d level %2d: %6.1f -> %6.1f  %+6.1f +- %.1f\n",
+               kScen[s].partner, kScen[s].level, b, m, md, se);
+    }
+    printf("  fitness %.3f\nweights:", fit / NSCEN);
+    for (int i = 0; i < NW; i++) printf(" %s=%ld", kNames[i], lround(cand_w[i]));
+    printf("\n");
+}
+
 int main(int argc, char **argv) {
+    const TengenAiWeights *b0 = &tengen_ai_weights[1];
+    double base[NW] = { b0->landing, b0->cleared, b0->row_trans, b0->col_trans,
+                        b0->holes, b0->wells, b0->side, b0->cross };
+    if (argc == 12 && !strcmp(argv[1], "check")) {
+        int vgames = atoi(argv[2]);
+        if (vgames > MAX_GAMES) vgames = MAX_GAMES;
+        double cand[NW] = { base[0] };
+        for (int i = 1; i < NW; i++) cand[i] = atof(argv[4 + i]);
+        validate(base, cand, vgames, atol(argv[3]), (unsigned)strtoul(argv[4], NULL, 0));
+        return 0;
+    }
     int gens = argc > 1 ? atoi(argv[1]) : 30;
     int games = argc > 2 ? atoi(argv[2]) : 24;
     long frames = argc > 3 ? atol(argv[3]) : 20000;
@@ -183,9 +228,6 @@ int main(int argc, char **argv) {
     if (games > MAX_GAMES) games = MAX_GAMES;
     if (vgames > MAX_GAMES) vgames = MAX_GAMES;
     const unsigned VALID = 0xBEEF;
-    const TengenAiWeights *b0 = &tengen_ai_weights[1];
-    double base[NW] = { b0->landing, b0->cleared, b0->row_trans, b0->col_trans,
-                        b0->holes, b0->wells, b0->side, b0->cross };
     double mean[NW], sigma[NW];
     for (int i = 0; i < NW; i++) { mean[i] = 0; sigma[i] = i == 0 ? 0 : 0.4; }
 
@@ -233,29 +275,8 @@ int main(int argc, char **argv) {
     }
 
     /* Validation: the base against the mean, the same seeds game for game. */
-    double cand[2][NW];
-    static Lines vr[2];
-    memcpy(cand[0], base, sizeof base);
-    for (int i = 0; i < NW; i++) cand[1][i] = base[i] * exp(mean[i]);
-    evaluate_all(cand, 2, vgames, frames, VALID, vr);
-    printf("validation, %d games a scenario (lines a game, base -> mean, diff +- s.e.):\n",
-           vgames);
-    double fit = 0;
-    for (int s = 0; s < NSCEN; s++) {
-        double d = 0, d2 = 0;
-        for (int g = 0; g < vgames; g++) {
-            double x = (double)(vr[1][s][g] - vr[0][s][g]);
-            d += x; d2 += x * x;
-        }
-        double md = d / vgames;
-        double se = vgames > 1 ? sqrt((d2 / vgames - md * md) / (vgames - 1)) : 0;
-        double b = total(vr[0], s, vgames) / vgames, m = total(vr[1], s, vgames) / vgames;
-        fit += m / (b > 0 ? b : 1);
-        printf("  partner %d level %2d: %6.1f -> %6.1f  %+6.1f +- %.1f\n",
-               kScen[s].partner, kScen[s].level, b, m, md, se);
-    }
-    printf("  fitness %.3f\nweights:", fit / NSCEN);
-    for (int i = 0; i < NW; i++) printf(" %s=%ld", kNames[i], lround(cand[1][i]));
-    printf("\n");
+    double cand[NW];
+    for (int i = 0; i < NW; i++) cand[i] = base[i] * exp(mean[i]);
+    validate(base, cand, vgames, frames, VALID);
     return 0;
 }
