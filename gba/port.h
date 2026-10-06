@@ -881,14 +881,36 @@ typedef struct {
  * up is not refused, it is simply the cartridge's own fifteen — which is
  * what a build nobody has played yet should look like. */
 #if SCREEN_PROTO_AVAILABLE && SCREEN_SKIN_PLAY
-#define LEADER_TABLES (1 + SCREEN_PROTO_COUNT)
+#define LEADER_SKIN_TABLES (1 + SCREEN_PROTO_COUNT)
 #else
-#define LEADER_TABLES 1
+#define LEADER_SKIN_TABLES 1
 #endif
 #define SAVE_TABLE_BYTES ((unsigned)LEADER_ENTRIES * SAVE_ENTRY_BYTES)
 #define SAVE_TABLE_OFF(t) (SAVE_DATA_OFF + (unsigned)(t) * SAVE_TABLE_BYTES)
 /* ...and the extra tables' checksums, one byte each, after all the data. */
-#define SAVE_SUMS_OFF SAVE_TABLE_OFF(LEADER_TABLES)
+#define SAVE_SUMS_OFF SAVE_TABLE_OFF(LEADER_SKIN_TABLES)
+
+/* AND THE RELEASE'S IS SPLIT BY MODE. A race, a coop board and a game with
+ * the computer for a partner pay differently from a game alone (coop is two
+ * players' pieces on one board), so 1 PLAYER keeps the tables above and each
+ * of the other four modes has one of its own, in GAME SELECT's order. A
+ * prototype keeps ONE table for whatever is played under its skin: it is a
+ * different game, and its own front end had two modes, not five. Over the
+ * cable a skin is paint (see skin_begin_match), so a linked match always
+ * goes in its mode's table.
+ *
+ * In memory the mode tables follow the skins' (LEADER_TABLES in all); in the
+ * save they live at FIXED places past anything the skins' can reach in any
+ * build, so a build with no prototype art and one with all of it agree on
+ * where each table is, and both leave the paused game at $4000 alone. */
+#define LEADER_MODE_TABLES (GAME_COUNT - 1)    /* GAME_2P.. in their order */
+#define LEADER_TABLES (LEADER_SKIN_TABLES + LEADER_MODE_TABLES)
+#define SAVE_EXTRA_OFF 0x400u
+/* The last name typed on this console (LEADER_INITIALS letters and a check
+ * byte): the next row it makes comes up with it. See leader_record_one. */
+#define SAVE_NAME_OFF SAVE_EXTRA_OFF
+#define SAVE_MODE_OFF(m) (SAVE_EXTRA_OFF + 0x10u + (unsigned)(m) * SAVE_TABLE_BYTES)
+#define SAVE_MODE_SUMS_OFF SAVE_MODE_OFF(LEADER_MODE_TABLES)
 
 /* HOW LONG EACH OF THE TWO PAGES STANDS THERE, and both are the cartridge's
  * own, counted on its own clock — which nobody would guess at, because both
@@ -1909,8 +1931,15 @@ bool erase_chord_held(void);
 void erase_records_prompt(void);
 void leader_reset_table(int table);
 void leader_use_table(int skin);   /* -1 release, 0.. the prototypes */
+/* The table a match goes in: its skin's, split by mode (GAME_*) on the
+ * release's. Also where the record bar is taken from. */
+void leader_use_mode(int skin, int mode);
+/* SELECT's page off the title: LEFT and RIGHT walk the front skin's table
+ * and the four modes'. */
+void leader_browse(int skin, int step);
 void draw_leader_row(int row);
 void draw_leaderboard(void);
+void draw_leader_table(void);   /* its heading and rows: another table */
 /* A match is starting: nothing owed, nothing owned. */
 void leader_new_match(void);
 /* ...and a board has died. The cartridge writes a game down as it ends, not
@@ -1947,6 +1976,7 @@ extern bool g_xe;
 bool unlock_cheats(void);
 uint8_t start_level_choices(void);
 extern const char *const kMusicNames[MUSIC_UNLOCKED_COUNT];
+extern const char *const kGameNames[GAME_COUNT];   /* GAME SELECT's words */
 extern const uint8_t kMixOrder[MIX_COUNT];
 extern uint8_t g_mix_step;
 uint8_t mix_tune(void);

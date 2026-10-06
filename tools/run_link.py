@@ -856,7 +856,7 @@ def coop_check(rom):
         tap("START")
         both(40, [[], []])
         blind = [i for i, core in enumerate(cores)
-                 if "HIGH SCORES" not in run_rom.tilemap_text(core, 2, 0, 30)]
+                 if "-LINES" not in run_rom.tilemap_text(core, 2, 0, 30)]
         if blind:
             failures.append(f"la(s) consola(s) {blind} no llegan a la tabla de "
                              "records tras el game over cooperativo")
@@ -976,7 +976,7 @@ def records_check(rom):
     tap("START")            # off the plaque, onto the table
     both(40, [[], []])
     blind = [i for i, core in enumerate(cores)
-             if "HIGH SCORES" not in run_rom.tilemap_text(core, 2, 0, 30)]
+             if "-LINES" not in run_rom.tilemap_text(core, 2, 0, 30)]
     if blind:
         print(f"SALTADO: la(s) consola(s) {blind} no llegan a la tabla")
         return 0
@@ -1154,7 +1154,7 @@ def restart_check(rom):
     # anything. Now, while the other board is still going, the way out is
     # START and A and B belong to the restart.
     hold(["A"], 1, 20)
-    if "HIGH SCORES" in run_rom.tilemap_text(slave, 2, 0, 30):
+    if "-LINES" in run_rom.tilemap_text(slave, 2, 0, 30):
         failures.append("A solo se lleva a la tabla: el acorde no puede existir")
     elif alive(slave, 1):
         failures.append("A solo reinicio el tablero")
@@ -1216,7 +1216,7 @@ def restart_check(rom):
     both(40, [[], []])
     page = " ".join(run_rom.tilemap_text(slave, run_rom.LEADER_FIRST_TY + i, 0, 30)
                      for i in range(15)).split()
-    if "HIGH SCORES" not in run_rom.tilemap_text(slave, 2, 0, 30):
+    if "-LINES" not in run_rom.tilemap_text(slave, 2, 0, 30):
         failures.append("no se llega a la tabla tras el segundo game over")
     elif str(dead_score) not in page:
         failures.append(f"la partida que acabo antes del reinicio ({dead_score}) "
@@ -2410,9 +2410,11 @@ def records_dump_check(rom):
     lleva marcado (g_unsent), y al enlazar con una consola que si guarda
     (TengenRecordSync, entre el GO del lobby y la partida) se lo pasa; la que
     guarda lo mete en su tabla y en su guardado, y las dos dicen RECORDS
-    SAVED dos segundos antes de empezar. Aqui la copia trae un record
-    plantado, y despues: esta en la tabla del cartucho con sus letras, en su
-    guardado, la copia ya no lo tiene pendiente, las dos lo dijeron, y la
+    SAVED dos segundos antes de empezar. Aqui la copia trae dos records
+    plantados, uno en 1 PLAYER y otro en la tabla de COOPERATIVE (las de los
+    modos cruzan con su numero del cable, 8 en adelante: leader_wire_id), y
+    despues: estan en las mismas tablas del cartucho con sus letras, en su
+    guardado, la copia ya no los tiene pendientes, las dos lo dijeron, y la
     partida empieza igual en las dos.
     """
     mb = os.path.splitext(rom)[0] + "_mb.mb"
@@ -2425,6 +2427,11 @@ def records_dump_check(rom):
     import run_rom
     entry = tables_s[1] // unsent_s[1]           # bytes per row
     SCORE, LINES, LETTERS = 123456, 77, (3, 12, 26)
+    # The modes' tables follow the skins' (LEADER_TABLES, gba/port.h): four
+    # of them, 2 PLAYER first, so COOPERATIVE is the skins' count plus one.
+    tables = unsent_s[1] // 15
+    coop = tables - 4 + 1
+    COOP_SCORE, COOP_LINES, COOP_LETTERS = 65432, 55, (15, 1, 4)
     cores, cable, both, tap = _pair(rom, slow=True, slave_rom=mb)
     both(1000)
     if _screen_of(cores[1]) != "cable":
@@ -2436,6 +2443,12 @@ def records_dump_check(rom):
     for c, v in enumerate(LETTERS):
         copy.memory.u8[tables_s[0] + 6 + c] = v
     copy.memory.u8[unsent_s[0]] = 1
+    at = tables_s[0] + coop * 15 * entry           # its table's row 0
+    copy.memory.u32[at] = COOP_SCORE
+    copy.memory.u16[at + 4] = COOP_LINES
+    for c, v in enumerate(COOP_LETTERS):
+        copy.memory.u8[at + 6 + c] = v
+    copy.memory.u8[unsent_s[0] + coop * 15] = 1
     tap("START", who=0); tap("DOWN", who=0); tap("START", who=0)
     both(90)
     tap("START", who=0)
@@ -2451,6 +2464,12 @@ def records_dump_check(rom):
            tuple(cores[0].memory.u8[row + 6 + c] for c in range(3)))
     if got != (SCORE, LINES, LETTERS):
         failures.append(f"el cartucho no tiene el record de la copia arriba: {got}")
+    row = tables_m[0] + coop * 15 * entry
+    got = (cores[0].memory.u32[row], cores[0].memory.u16[row + 4],
+           tuple(cores[0].memory.u8[row + 6 + c] for c in range(3)))
+    if got != (COOP_SCORE, COOP_LINES, COOP_LETTERS):
+        failures.append(f"la tabla de COOPERATIVE del cartucho no tiene el de la "
+                        f"copia arriba: {got}")
     pending = [copy.memory.u8[unsent_s[0] + i] for i in range(unsent_s[1])]
     if any(pending):
         failures.append("la copia sigue teniendo records sin entregar")
@@ -2460,6 +2479,10 @@ def records_dump_check(rom):
     score_bytes = SCORE.to_bytes(4, "little")
     if score_bytes not in sram:
         failures.append("el record no llego al guardado del cartucho")
+    # SAVE_MODE_OFF(1): the modes' tables at their fixed place, 0x410 on.
+    sram = bytes(cores[0].memory.u8[0x0E000000 + 0x410 + 135 + i] for i in range(9))
+    if sram[:4] != COOP_SCORE.to_bytes(4, "little"):
+        failures.append(f"el de COOPERATIVE no llego a su sitio del guardado: {sram!r}")
     both(120)
     if not _same_match(rom, cores) and not _same_match_mb(rom, mb, cores):
         failures.append("despues, las dos no juegan la misma partida")
@@ -2467,8 +2490,8 @@ def records_dump_check(rom):
         print(f"FALLA: {f}")
     if failures:
         return 1
-    print(f"  la copia entrega {SCORE} / {LINES} lineas; el cartucho lo guarda y "
-          "las dos dicen RECORDS SAVED")
+    print(f"  la copia entrega {SCORE} / {LINES} lineas, y {COOP_SCORE} en "
+          "COOPERATIVE; el cartucho los guarda y las dos dicen RECORDS SAVED")
     print("OK: los records de una copia se guardan en el cartucho al enlazar.")
     return 0
 

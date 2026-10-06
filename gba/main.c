@@ -110,6 +110,9 @@ int main(void) {
 
     Screen screen = SCREEN_TITLE;
     int leader_frames = 0;
+    /* The page came off the title's SELECT, so LEFT and RIGHT walk the
+     * tables (leader_browse); after a game it is that game's table. */
+    bool leader_browsing = false;
     int over_frames = 0;
     uint8_t start_level = 0;
     /* menuPlayer1Handicap / menuPlayer2Handicap ($04F3-$04F4). */
@@ -320,6 +323,10 @@ int main(void) {
             if (pressed & TENGEN_BTN_SELECT) {
                 g_leader_row = -1;
                 leader_frames = 0;
+                leader_browsing = true;
+                /* Opening on the title's own table, 1 PLAYER under its skin:
+                 * the last match's (VERSUS, say) is still the one chosen. */
+                leader_use_table(front_skin());
                 screen = SCREEN_LEADERBOARD;
                 screen_blip();
                 vsync();
@@ -1084,11 +1091,24 @@ int main(void) {
          * initializeTitleScreen (main.asm.txt:2653-2657). */
         if (screen == SCREEN_LEADERBOARD) {
             bool typing = leader_type(buttons, pressed);
+            /* ONE TABLE PER MODE, and the page off the title walks them:
+             * the title's skin's, then 2 PLAYER, COOPERATIVE, VERSUS and
+             * WITH COMPUTER, round, the heading naming each. */
+            bool browsed = false;
+            if (leader_browsing && (pressed & (TENGEN_BTN_LEFT | TENGEN_BTN_RIGHT))) {
+                leader_browse(front_skin(), (pressed & TENGEN_BTN_RIGHT) ? 1 : -1);
+                cursor_blip();
+                leader_frames = 0;
+                browsed = true;
+            }
             if (typing) {
                 leader_frames = 0;
             } else if (++leader_frames >= LEADER_HOLD_FRAMES ||
                         (pressed & (TENGEN_BTN_START | TENGEN_BTN_A |
                                      TENGEN_BTN_B))) {
+                /* ...and the title's HIGH SCORE is its own table's again. */
+                if (leader_browsing) leader_use_table(front_skin());
+                leader_browsing = false;
                 screen = SCREEN_TITLE;
                 restart_title_sprites();
                 g_front_tune = FRONT_NOTHING;
@@ -1101,7 +1121,9 @@ int main(void) {
             vsync();
             /* Only the row being typed into changes, so only it is redrawn —
              * six hundred tiles a frame for a blinking letter would be a
-             * whole vertical blank spent on nothing. */
+             * whole vertical blank spent on nothing. Another table is the
+             * heading and the rows, not the frame round them. */
+            if (browsed) draw_leader_table();
             if (g_leader_row >= 0) draw_leader_row(g_leader_row);
             /* ...and the rival's rows once, on the frame their name lands —
              * ALL of them: one per game, if they restarted with A+B. */

@@ -141,16 +141,18 @@ def leaderboard_check(rom_path):
             seen.update(rows(core))
         return seen
 
+    # The row comes up as BCD, the last name typed (g_last_name): see
+    # mode_tables_check.
     tap("A")                       # first letter: this must NOT take the name
-    tap("UP", 1)                   # so this lands on the SECOND letter
-    if not any(" AB" in t for t in table_over()):
+    tap("UP", 1)                   # so this lands on the SECOND letter: C -> D
+    if not any(" BDD" in t for t in table_over()):
         failures.append("A en la primera letra no paso a la segunda: "
-                         f"{sorted(t for t in table_over() if 'A' in t)!r}")
+                         f"{sorted(t for t in table_over() if 'BD' in t)!r}")
     else:
         tap("START")               # ...and START takes the name from here
         run(core, 20)
         taken = table_over()
-        if not any(" AB" in t for t in taken):
+        if not any(" BDD" in t for t in taken):
             failures.append("START no cerro el nombre")
         else:
             tap("UP", 1)
@@ -299,4 +301,148 @@ def tables_check(rom_path):
     if failures:
         return 1
     print("OK: cada build lleva su propia tabla de records.")
+    return 0
+
+
+def mode_tables_check(rom_path):
+    """ONE TABLE PER MODE, AND THE LAST NAME COMES BACK BY ITSELF.
+
+    The release's 1 PLAYER table is the cartridge's; 2 PLAYER, COOPERATIVE,
+    VERSUS COMPUTER and WITH COMPUTER have one each (LEADER_MODE_TABLES,
+    gba/port.h), at fixed places in the save. A game against the computer
+    must go in its own, under a heading that names it, and leave 1 PLAYER's
+    alone; the title's SELECT page walks them with LEFT and RIGHT; and all of
+    it is still there after the power goes off.
+
+    And the name: a row this console makes comes up with the last name typed
+    on it (g_last_name, SAVE_NAME_OFF), so the second game's row reads BCD
+    before anybody touches the pad, START takes it, and a power cycle keeps
+    it.
+    """
+    base, why = game_state_address(rom_path)
+    if base is None:
+        print(f"SALTADO: {why}")
+        return 0
+    off = game_offsets(rom_path)
+    failures = []
+    core, screen = load(rom_path)   # `screen` must stay alive; see load()
+    _ = screen
+    field_bytes = TENGEN_PF_WIDTH * TENGEN_PF_HEIGHT
+
+    def tap(name, times=1, settle=8):
+        for _ in range(times):
+            core.set_keys(KEYS[name]); run(core, 3); core.set_keys(); run(core, settle)
+
+    def rows():
+        return [tilemap_text(core, LEADER_FIRST_TY + i, 0, 30) for i in range(15)]
+
+    def heading():
+        return tilemap_text(core, LEADER_FIRST_TY - 1, 0, 30)
+
+    def score_of(row):
+        words = row.split()      # the frame's "jk", the rank, the name, ...
+        return int(words[3]) if len(words) >= 4 and words[3].isdigit() else 0
+
+    def play(downs, score):
+        """A game in GAME SELECT's `downs`-th mode, ended with `score` on
+        player 1's board: every board buried, the plaque passed."""
+        run(core, 8)
+        press_start(core)
+        tap("DOWN", downs)
+        press_start(core); run(core, 12)
+        press_start(core); run(core, 30)
+        for i in range(4):
+            core.memory.u8[base + off["score"] + i] = (score >> (8 * i)) & 0xFF
+        for f in range(2):
+            for r in range(TENGEN_PF_HEIGHT):
+                for c in range(TENGEN_PF_WIDTH):
+                    core.memory.u8[base + off["field"] + f * field_bytes +
+                                   r * TENGEN_PF_WIDTH + c] = (
+                        CELL_WALL if c in (0, TENGEN_PF_WIDTH - 1)
+                        else (0 if c == 5 else CELL_BLOCK))
+        run(core, 240)
+        press_start(core); run(core, 30)
+
+    def leave():
+        tap("START"); run(core, 20)     # the name, and then the page
+        press_start(core); run(core, 40)
+
+    def letters_over(frames=40):
+        """Every reading of the top row over a blink of the cursor."""
+        seen = set()
+        for _ in range(frames):
+            core.run_frame()
+            seen.add(rows()[0])
+        return seen
+
+    # 1 PLAYER, 80000, named BCD.
+    run(core, 20)
+    play(0, 80000)
+    if "HIGH SCORES" not in heading():
+        failures.append(f"1 PLAYER no lleva la cabecera del cartucho: {heading()!r}")
+    tap("UP", 1); tap("RIGHT"); tap("UP", 2); tap("RIGHT"); tap("UP", 3)
+    tap("START"); run(core, 20)
+    if " BCD " not in rows()[0]:
+        failures.append(f"el nombre no se escribio: {rows()[0]!r}")
+    press_start(core); run(core, 40)
+
+    # VERSUS COMPUTER, 60000: its own table, and the name already there.
+    play(3, 60000)
+    if "VERSUS COMPUTER" not in heading():
+        failures.append(f"la cabecera no dice VERSUS COMPUTER: {heading()!r}")
+    top = rows()
+    if not 60000 <= score_of(top[0]) < 70000:
+        failures.append(f"el 60000 no abre la tabla de VERSUS: {top[0]!r}")
+    elif score_of(top[1]) != 17000:
+        failures.append(f"la tabla de VERSUS no es la fria bajo el 60000: {top[1]!r}")
+    else:
+        print("  VERSUS COMPUTER escribe en su propia tabla, con su nombre arriba")
+    if not any(" BCD " in t for t in letters_over()):
+        failures.append("la fila nueva no viene con el ultimo nombre (BCD): "
+                        f"{sorted(letters_over())!r}")
+    else:
+        print("  y la fila nueva ya trae el ultimo nombre escrito, BCD")
+    leave()
+
+    # The title's page: 1 PLAYER's still has 80000 alone; RIGHT x3 is VERSUS.
+    def title_page():
+        run(core, 20)
+        tap("SELECT", settle=30)
+
+    def walk_checks(when):
+        first = rows()
+        if not (80000 <= score_of(first[0]) < 90000 and score_of(first[1]) == 17000):
+            failures.append(f"{when}: la tabla de 1 PLAYER no es la suya: "
+                             f"{first[0]!r} / {first[1]!r}")
+        tap("RIGHT", 3, settle=12)
+        vs = rows()
+        if "VERSUS COMPUTER" not in heading() or not 60000 <= score_of(vs[0]) < 70000:
+            failures.append(f"{when}: DERECHA x3 no es la tabla de VERSUS: "
+                             f"{heading()!r} {vs[0]!r}")
+        tap("LEFT", 3, settle=12)
+        if "HIGH SCORES" not in heading():
+            failures.append(f"{when}: IZQUIERDA no vuelve: {heading()!r}")
+
+    title_page()
+    walk_checks("desde el titulo")
+    if not failures:
+        print("  SELECT en el titulo, y DERECHA/IZQUIERDA recorren las tablas")
+    tap("B"); run(core, 30)
+
+    # Off and on again: the tables and the name are on the battery.
+    core.reset()
+    title_page()
+    walk_checks("despues de apagar")
+    tap("B"); run(core, 30)
+    play(0, 90000)
+    if not any(" BCD " in t for t in letters_over()):
+        failures.append("despues de apagar, la fila nueva no trae BCD: "
+                         f"{sorted(letters_over())!r}")
+    else:
+        print("  apagada y encendida: las tablas y el nombre siguen ahi")
+
+    if failures:
+        return _report(failures)
+    print("OK: una tabla por modo, recorridas desde el titulo, y el ultimo "
+          "nombre vuelve solo.")
     return 0

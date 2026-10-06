@@ -867,7 +867,7 @@ def gameover_check(rom_path):
         # The cartridge's road out of a game runs through its HIGH SCORES
         # page and only then back to the title (main.asm.txt:2643-2675).
         press_start(core); run(core, 40)
-        if "HIGH SCORES" not in tilemap_text(core, LEADER_HEAD_TY, 0, 30):
+        if "-LINES" not in tilemap_text(core, LEADER_HEAD_TY, 0, 30):
             failures.append(f"{name}: START no lleva a la tabla de records "
                              "tras el game over")
             continue
@@ -900,7 +900,7 @@ def gameover_check(rom_path):
                 dead_at = tick * 30
             continue
         if to_table is None:
-            if "HIGH SCORES" in tilemap_text(core, LEADER_HEAD_TY, 0, 30):
+            if "-LINES" in tilemap_text(core, LEADER_HEAD_TY, 0, 30):
                 to_table = tick * 30 - dead_at
             continue
         if title_face(core) == face:
@@ -1135,8 +1135,10 @@ def vblank_check(rom_path):
     ve como que falta la parte de arriba de lo ultimo que se dibujo (asi se
     perdio una vez el titulo del menu de pausa). --onscreen caza el sintoma;
     esto mide el margen, en los frames mas pesados que hay: el menu de pausa
-    cambiando de ancho y de caja, quitar la pausa (que repinta la pantalla
-    entera) y una limpieza de cuatro filas.
+    cambiando de ancho y de caja, quitar la pausa (en solitario y en una
+    carrera con el acorde, que la pausa cambia al tablero del rival y
+    repintaba la pantalla entera: linea 222; ahora solo repone la caja, ver
+    --unpause) y una limpieza de cuatro filas.
     """
     elf = os.path.splitext(rom_path)[0] + ".elf"
     try:
@@ -1183,7 +1185,19 @@ def vblank_check(rom_path):
     got = []
     for keys in (["DOWN"], ["A"], ["B"], ["A"], ["START"]):
         got += tap_measure(core, keys)
-    results["la pregunta EXIT?, volver, y quitar la pausa"] = got
+    results["la pregunta SURE?, volver, y quitar la pausa"] = got
+    del core, screen
+
+    core, screen = load(rom_path)
+    run(core, 8)
+    press_start(core)
+    for _ in range(3):                        # VERSUS COMPUTER
+        core.set_keys(KEYS["DOWN"]); run(core, 4); core.set_keys(); run(core, 6)
+    core.set_keys(KEYS["L"], KEYS["R"]); run(core, 4); core.set_keys(); run(core, 12)
+    press_start(core); run(core, 12)
+    press_start(core); run(core, 30)
+    got = tap_measure(core, ["START"]) + tap_measure(core, ["START"])
+    results["una carrera con el acorde: el tablero del rival, y volver"] = got
     del core, screen
 
     core, screen = load(rom_path)
@@ -1210,6 +1224,93 @@ def vblank_check(rom_path):
     if failures:
         return 1
     print("OK: el dibujado de cada frame termina dentro del blanco vertical.")
+    return 0
+
+
+def unpause_check(rom_path):
+    """QUITAR LA PAUSA DEJA LA PANTALLA COMO UN REPINTADO ENTERO.
+
+    Al salir de una pausa solo se repone lo que tapaba la caja (la placa, o
+    el menu al ancho al que se dibujo: g_unpause_patch, match.c); el resto lo
+    redibuja cada frame, tambien el tablero oculto bajo el acorde y el del
+    rival que muestra una carrera. Aqui se sale de la pausa dos veces desde
+    el mismo estado guardado, una por el parche y otra con g_repaint forzado,
+    y las dos pantallas (pixeles y los 64KB de mapas y tiles) tienen que ser
+    la misma: algo que la pausa cambio y nadie repone se veria como basura
+    donde estuvo la caja.
+    """
+    repaint, why = game_state_address(rom_path, "g_repaint")
+    if repaint is None:
+        print(f"SALTADO: {why}")
+        return 0
+
+    def tap(core, key, after):
+        core.set_keys(KEYS[key]); run(core, 4); core.set_keys(); run(core, after)
+
+    def vram(core):
+        return bytes(core.memory.u8[0x06000000 + i] for i in range(0x10000))
+
+    def leave(core, screen, forced):
+        if forced:
+            core.memory.u8[repaint] = 1
+        tap(core, "START", 3)
+        return pixels(screen), vram(core)
+
+    def start(core, downs, chord):
+        run(core, 8)
+        press_start(core)
+        for _ in range(downs):          # 1 PLAYER, 2 PLAYER, COOPERATIVE,
+            tap(core, "DOWN", 6)        # VERSUS COMPUTER, WITH COMPUTER
+        if chord:
+            core.set_keys(KEYS["L"], KEYS["R"]); run(core, 4)
+            core.set_keys(); run(core, 12)
+        press_start(core); run(core, 12)
+        press_start(core); run(core, 30)
+        # A few pieces down, so the boards are not two empty wells.
+        for i in range(6):
+            core.set_keys(KEYS["DOWN"]); run(core, 20); core.set_keys(); run(core, 2)
+            tap(core, "LEFT" if i % 2 else "RIGHT", 2)
+
+    failures = []
+    # (what, mode, chord, SELECTs for the other HUD, keys while paused)
+    cases = (
+        ("1P, la placa", 0, False, 0, ()),
+        ("1P acorde, el menu", 0, True, 0, ()),
+        ("1P acorde, otra cancion", 0, True, 0, ("RIGHT",)),
+        ("1P acorde, la pregunta SURE?", 0, True, 0, ("DOWN", "A")),
+        ("VERSUS acorde, el tablero del rival", 3, True, 0, ()),
+        ("VERSUS acorde, HUD STATS", 3, True, 1, ("RIGHT",)),
+        ("WITH acorde, el menu", 4, True, 0, ()),
+    )
+    for what, downs, chord, selects, keys in cases:
+        core, screen = load(rom_path)   # `screen` must stay alive; see load()
+        start(core, downs, chord)
+        for _ in range(selects):
+            tap(core, "SELECT", 10)
+        tap(core, "START", 20)
+        for k in keys:
+            tap(core, k, 20)
+        paused = pixels(screen)
+        state = core.save_raw_state()
+        patched = leave(core, screen, False)
+        core.load_raw_state(state)
+        whole = leave(core, screen, True)
+        moved = sum(a != b for ra, rb in zip(paused, whole[0]) for a, b in zip(ra, rb))
+        px = sum(a != b for ra, rb in zip(patched[0], whole[0]) for a, b in zip(ra, rb))
+        vr = sum(a != b for a, b in zip(patched[1], whole[1]))
+        if moved == 0:
+            failures.append(f"{what}: la pausa no cambio nada en pantalla")
+        elif px or vr:
+            failures.append(f"{what}: {px} pixeles y {vr} bytes de VRAM distintos "
+                            f"de un repintado entero")
+        else:
+            print(f"  {what}: identica ({moved} pixeles cambiados por la pausa)")
+        del core, screen
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: quitar la pausa deja la pantalla que deja un repintado entero.")
     return 0
 
 

@@ -29,6 +29,16 @@
 #define TENGEN_AI_SMART_MAX  64
 #define TENGEN_AI_SMART_KEEP 6
 
+/* THE PORT'S COMPUTER'S WEIGHTS (`smart`), times a thousand: the landing
+ * height, rows cleared, row and column transitions, holes and wells of
+ * El-Tetris, and on a shared board the cost of a column on the partner's
+ * side and of one the partner's piece is landing in. [0] a board of its own,
+ * [1] a shared one. See tengen_ai.c and tests/ai_tune.c. */
+typedef struct {
+    int32_t landing, cleared, row_trans, col_trans, holes, wells, side, cross;
+} TengenAiWeights;
+extern TengenAiWeights tengen_ai_weights[2];
+
 /* The ROM's scratch, kept between calls because the ROM keeps it.
  *
  * `computerScratchB` is six bytes: [0] and [1] the two candidates' columns,

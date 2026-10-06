@@ -71,6 +71,18 @@ $(BUILD)/ai_bench: src/tengen_core.c src/tengen_ai.c $(CORE_HDR) tests/ai_bench.
 ai-bench: $(BUILD)/ai_bench
 	./$(BUILD)/ai_bench $(BENCH_GAMES) $(BENCH_FRAMES) $(BENCH_LEVEL)
 
+# THE COOP WEIGHTS, LOOKED FOR BY EVOLUTION (tests/ai_tune.c): generations,
+# games a scenario, frames a game, validation games. Four processes; the
+# defaults take about a quarter of an hour. What it prints is a candidate,
+# not a result: it goes in tengen_ai_weights[1] only if its validation beats
+# the base by more than the standard error.
+TUNE_ARGS ?= 30 32 20000 128
+.PHONY: ai-tune
+$(BUILD)/ai_tune: src/tengen_core.c src/tengen_ai.c $(CORE_HDR) tests/ai_tune.c | $(BUILD)
+	$(CC) -std=c99 -D_DEFAULT_SOURCE -Wall -Wextra -O2 src/tengen_core.c src/tengen_ai.c tests/ai_tune.c -lm -o $@
+ai-tune: $(BUILD)/ai_tune
+	./$(BUILD)/ai_tune $(TUNE_ARGS)
+
 # ---------------------------------------------------------------------------
 # GBA cross-build
 #
@@ -303,6 +315,7 @@ gba-check: $(GBA_ROM)
 	python3 tools/run_rom.py $(GBA_ROM) --chordfx
 	python3 tools/run_rom.py $(GBA_ROM) --titlescores
 	python3 tools/run_rom.py $(GBA_ROM) --vblank
+	python3 tools/run_rom.py $(GBA_ROM) --unpause
 	python3 tools/run_rom.py $(GBA_ROM) --idleblink
 	python3 tools/run_rom.py $(GBA_ROM) --fireworks
 	python3 tools/run_rom.py $(GBA_ROM) --demo
@@ -310,6 +323,7 @@ gba-check: $(GBA_ROM)
 	python3 tools/run_rom.py $(GBA_ROM) --points
 	python3 tools/run_rom.py $(GBA_ROM) --leaderboard
 	python3 tools/run_rom.py $(GBA_ROM) --tables
+	python3 tools/run_rom.py $(GBA_ROM) --modetables
 	python3 tools/run_rom.py $(GBA_ROM) --coophud
 	python3 tools/run_rom.py $(GBA_ROM) --pausemenu
 	python3 tools/run_rom.py $(GBA_ROM) --quit-audio

@@ -769,7 +769,7 @@ def drop_check(rom):
     tap("START")
     both(40)
     blind = [i for i, c in enumerate(cores)
-             if "HIGH SCORES" not in run_rom.tilemap_text(c, 2, 0, 30)]
+             if "-LINES" not in run_rom.tilemap_text(c, 2, 0, 30)]
     if blind:
         print(f"FALLA: la(s) consola(s) {blind} no llegan a la tabla")
         return 1

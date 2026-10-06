@@ -352,22 +352,15 @@ static void ai_score(TengenAi *ai, uint8_t *a, int x,
 #define TENGEN_AI_SMART_BUDGET 8
 #endif
 
-/* El-Tetris's weights, times a thousand. */
-#define W_LANDING   (-4500)
-#define W_CLEARED     3418
-#define W_ROW_TRANS (-3218)
-#define W_COL_TRANS (-9349)
-#define W_HOLES     (-7899)
-#define W_WELLS     (-3386)
-/* The port's: a column on the partner's side of a shared board. */
-#ifndef W_SIDE
-#define W_SIDE      (-5000)
-#endif
-/* ...and one under where the partner's falling piece is going to land:
- * whichever of the two gets there second lands on the other. */
-#ifndef W_CROSS
-#define W_CROSS     (-15000)
-#endif
+/* THE WEIGHTS, one set for a board of its own and one for a shared board
+ * (TengenAiWeights). The solo set is El-Tetris's, times a thousand; the coop
+ * set started there and was tuned by evolution (tests/ai_tune.c). Mutable,
+ * so the tuner can try others; nothing in the game writes them. */
+TengenAiWeights tengen_ai_weights[2] = {
+    /* landing  cleared  row_tr  col_tr  holes   wells   side    cross */
+    { -4500,    3418,   -3218,  -9349,  -7899,  -3386,      0,      0 },
+    { -4500,    3418,   -3218,  -9349,  -7899,  -3386,  -5000, -15000 },
+};
 /* Knobs for tests/ai_bench.c to measure each part by taking it away. */
 #ifndef AI_REACH
 #define AI_REACH 1
@@ -475,7 +468,7 @@ static int ai_place(AiBoard *b, const uint16_t sh[4], int l, int t) {
 
 /* The board's four El-Tetris terms (landing height and rows cleared are the
  * placement's, added by the caller). */
-static int32_t ai_board_terms(const AiBoard *b) {
+static int32_t ai_board_terms(const AiBoard *b, const TengenAiWeights *w) {
     int row_trans = 0, col_trans = 0, holes = 0, wells = 0;
     uint16_t covered = 0, prev = 0;
     uint8_t run[16] = { 0 };
@@ -504,8 +497,8 @@ static int32_t ai_board_terms(const AiBoard *b) {
         in_well = well;
     }
     col_trans += ai_popcount((uint16_t)~prev & b->full);   /* the floor */
-    return (int32_t)W_ROW_TRANS * row_trans + (int32_t)W_COL_TRANS * col_trans +
-           (int32_t)W_HOLES * holes + (int32_t)W_WELLS * wells;
+    return w->row_trans * row_trans + w->col_trans * col_trans +
+           w->holes * holes + w->wells * wells;
 }
 
 static int ai_shape_rows(const uint16_t sh[4], int *top) {
@@ -519,6 +512,7 @@ static int ai_shape_rows(const uint16_t sh[4], int *top) {
 /* Score of the shape dropped at `l` from row `t` on `b` (which is changed),
  * El-Tetris in full; AI_DEAD for a top-out. */
 static int32_t ai_score_drop(AiBoard *b, const uint16_t sh[4], int l, int t,
+                             const TengenAiWeights *w,
                              int *cleared_out) {
     /* A shape that does not fit where it would start from — a piece lying
      * near the floor, asked about standing up — cannot be put there. */
@@ -530,8 +524,8 @@ static int32_t ai_score_drop(AiBoard *b, const uint16_t sh[4], int l, int t,
     if (cleared_out) *cleared_out = cleared;
     /* The middle of the piece, counted up from the floor, in halves. */
     int height2 = 2 * AI_H - (2 * (land + top) + rows - 1);
-    return (int32_t)W_LANDING * height2 / 2 + (int32_t)W_CLEARED * cleared +
-           ai_board_terms(b);
+    return w->landing * height2 / 2 + w->cleared * cleared +
+           ai_board_terms(b, w);
 }
 
 /* The partner's piece, if it has one: where it is (`now`) and where it will
@@ -643,6 +637,7 @@ typedef struct {
     int side_mid;                /* coop: the column past which it is "theirs" */
     int side_dir;                /* +1: mine is the left; -1: the right */
     uint16_t partner_cols;       /* coop: the columns its piece is landing in */
+    const TengenAiWeights *w;    /* this board's weights */
 } AiView;
 
 static bool ai_view(const TengenGame *g, TengenPlayerSlot slot,
@@ -669,6 +664,7 @@ static bool ai_view(const TengenGame *g, TengenPlayerSlot slot,
     v->pace.coop = g->coop;
     v->pace.xe = g->xe;
     v->pace.kick = !g->proto_rules;
+    v->w = &tengen_ai_weights[g->coop ? 1 : 0];
     v->side_mid = 0;
     v->side_dir = 0;
     if (g->coop && g->player[slot ^ 1].game_active &&
@@ -686,8 +682,8 @@ static int32_t ai_trespass(const AiView *v, const uint16_t sh[4], int l) {
     if (!v->side_dir) return 0;
     uint16_t mine = 0;
     for (int r = 0; r < 4; r++) mine |= ai_shift(sh[r], l);
-    int32_t cost = (int32_t)W_CROSS * ai_popcount(mine & v->partner_cols);
-    if (!W_SIDE) return cost;
+    int32_t cost = v->w->cross * ai_popcount(mine & v->partner_cols);
+    if (!v->w->side) return cost;
     int lo = 99, hi = -99;
     for (int r = 0; r < 4; r++)
         for (int c = 0; c < 4; c++)
@@ -697,7 +693,7 @@ static int32_t ai_trespass(const AiView *v, const uint16_t sh[4], int l) {
             }
     int past = v->side_dir > 0 ? (hi >= v->side_mid ? hi - v->side_mid + 1 : 0)
                                : (lo < v->side_mid ? v->side_mid - lo : 0);
-    return cost + (int32_t)W_SIDE * past;
+    return cost + v->w->side * past;
 }
 
 static bool ai_is_target(const TengenAi *ai, int l, uint8_t o) {
@@ -807,7 +803,7 @@ static void ai_smart_think(TengenAi *ai, const TengenGame *g,
         ai_shape(v.piece, o, sh);
         budget -= 2;                 /* a score and a walk: two of the rest */
         AiBoard b = v.scored;
-        int32_t score = ai_score_drop(&b, sh, l, v.t0, 0);
+        int32_t score = ai_score_drop(&b, sh, l, v.t0, v.w, 0);
         if (score != AI_DEAD) {
             score += ai_trespass(&v, sh, l);
             /* Out of reach is not out of the running: if nothing is in
@@ -843,8 +839,8 @@ static void ai_smart_think(TengenAi *ai, const TengenGame *g,
         cleared = ai_place(&after, sh, l, land);
         if (cleared < 0) { ai->plan_cursor++; ai->plan_inner = 0; continue; }
         int height2 = 2 * AI_H - (2 * (land + top) + rows - 1);
-        int32_t first = (int32_t)W_LANDING * height2 / 2 +
-                        (int32_t)W_CLEARED * cleared +
+        int32_t first = v.w->landing * height2 / 2 +
+                        v.w->cleared * cleared +
                         ai_trespass(&v, sh, l);
         /* NEXT, every orientation and column, dropped from the top. */
         while (budget > 0 && ai->plan_inner < 4 * 16) {
@@ -856,7 +852,7 @@ static void ai_smart_think(TengenAi *ai, const TengenGame *g,
             if (ai_hits(&after, sh2, l2, -2)) continue;
             budget--;
             AiBoard b2 = after;
-            int32_t s2 = ai_score_drop(&b2, sh2, l2, -2, 0);
+            int32_t s2 = ai_score_drop(&b2, sh2, l2, -2, v.w, 0);
             if (s2 > ai->plan_reply_best) ai->plan_reply_best = s2;
         }
         if (ai->plan_inner < 4 * 16) break;      /* more next frame */

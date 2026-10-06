@@ -106,13 +106,14 @@ minus those).
 | --- | --- | --- |
 | `make test` | no | always — the rules, in milliseconds |
 | `make gba` | headers | to build `build/tengen.gba` |
-| `make gba-check` | headers | before calling any change done: 70 checks on the running ROM in mGBA, eighteen of them on two consoles with a cable, and then the Wireless Adapter's (`run_wireless.py`) |
+| `make gba-check` | headers | before calling any change done: 72 checks on the running ROM in mGBA, eighteen of them on two consoles with a cable, and then the Wireless Adapter's (`run_wireless.py`) |
 | `make trace ROM=... [MODE=coop\|versus\|with\|demo]` | yes | after touching `tengen_step` or `tengen_ai.c`: the port against the cartridge, iteration by iteration. The 1P and coop scripts never complete a row; `MODE="with --pad1"` plays player 1 with the port's computer and clears plenty; add `--handicap N` to any mode |
 | `make tune-check ROM=...` | yes | after touching audio: the four tunes against the cartridge, note by note |
 | `make dance-check ROM=...` | yes | after touching the dancers: their choreography against the cartridge's driver |
 | `make clear-check ROM=...` | yes | after touching line clears: the joins a clear breaks |
 | `make assets-check` | no | after touching `extract_assets.py` |
 | `make ai-bench [BENCH_LEVEL=18]` | no | after touching `tengen_ai.c`: the cartridge's computer against the port's own, alone and in coop, lines and games lost (`tests/ai_bench.c`) |
+| `make ai-tune [TUNE_ARGS="30 32 20000 128"]` | no | to look for better coop weights for the port's computer (`tests/ai_tune.c`, the cross-entropy method on fresh seeds each generation, then validated game for game on seeds it never saw); a quarter of an hour on four cores |
 | `make fuzz` | no | after touching `src/`: every mode played by random hands and the computer, and the lobby and names swap over a lossy link, invariants checked as they go, under ASan+UBSan (`tests/fuzz_core.c`, `tests/fuzz_link.c`; `FUZZ_GAMES`, `FUZZ_RUNS`, `FUZZ_SEED` for longer runs) |
 | `python3 tools/probes/proto_rules.py proto_*.nes` | yes | the prototypes' rules, measured on their dumps |
 
@@ -362,7 +363,9 @@ story behind each; the item number is in brackets.
   ends, exactly as it takes a match word; and the exchange takes a match
   word as the other having finished. The copy marks its own rows
   (`g_unsent`, hud.c) and forgets them only once a console with a save has
-  answered how many it kept. A row already on the table to the letter is not
+  answered how many it kept. A row says its table by a number of the wire's
+  (`leader_wire_id`: the skins' 0-3 as ever, the modes' 8 and up), never by
+  its place in memory, which moves with the build's count of skins. A row already on the table to the letter is not
   put in twice: two copies that played each other carry both games.
 - **A real cable is not the emulated one.** What two SPs taught us, one
   rule each; `run_link.py`'s cable models every one of them, and each has a
@@ -494,8 +497,13 @@ story behind each; the item number is in brackets.
   shows the other board, and its NEXT, colours and panels go with it — but
   not over the cable, where the other board is on the other console.
 - **A game is written to the table as it ENDS** (L81DD at the top-out), so an
-  A+B restart keeps it. Each build has its own table; a linked match uses the
-  release's. [25]
+  A+B restart keeps it. Each build has its own table, and the release one per
+  mode (`LEADER_MODE_TABLES`, chosen in `skin_begin_match` from the board:
+  alone, a race or shared, a cable or the computer); a linked match uses its
+  mode's whatever the skin. The mode tables live at FIXED places in the save
+  (`SAVE_EXTRA_OFF`), not after the skins', whose count depends on the build.
+  A check that waits for the page reads `-LINES` in its heading, which every
+  table has: `HIGH SCORES` is 1 PLAYER's only. [25]
 - **The frame a clear's timer reaches zero also deals.** mainLoop animates
   both players before either plays, so the rows come down and the next
   piece comes up together (29 frames after the lock; 1 in the prototypes).
@@ -544,7 +552,12 @@ story behind each; the item number is in brackets.
 - **Drawing must end inside the vertical blank.** `--vblank` reads the
   scanline where `draw_match` finishes: a full repaint is the heaviest frame
   (line ~220 of 227). Anything that repaints often — the pause box changing
-  width did — puts back only what it uncovered instead.
+  width did — puts back only what it uncovered instead. Leaving a pause
+  does too (`g_unpause_patch`: the box, or the plaque, from what was saved
+  under it; line 222 down to ~205), and `--unpause` holds the screen it
+  leaves to a full repaint's, pixel for pixel, the race's swapped board
+  included. Something a pause changes and nothing redraws every frame would
+  break that check, not the eye.
 - **The fall timer ticks before the moves.** L8320 decrements and reloads it,
   then shifts and turns, then drops; a shift the coop partner refuses adds
   its +2 to the timer just reloaded.
@@ -615,7 +628,12 @@ WIRELESS, and Single-Pak over it as well (`wireless.c`);
 "EXIT GAME", not "EXIT", on the pause menu (a player took it for closing the
 menu), and its question "SURE?", not "EXIT?" again (an R among the raised
 heading letters, PMENU_RAISED_CHARS, with the arrow's two tiles after them); the high scores erased by L+R+B held at power-on, asked twice with NO
-chosen (`erase_records_prompt`); under the chord, a seventh credit, BUILD and
+chosen (`erase_records_prompt`); a high scores table per mode on the release
+(1 PLAYER's is the cartridge's; 2 PLAYER, COOPERATIVE, VERSUS and WITH
+COMPUTER one each, the mode's name in the heading where HIGH SCORES was),
+which LEFT and RIGHT walk on the title's SELECT page (`--modetables`); the
+last name typed on a console already in the next row it makes, START to
+take it, B putting back that and not A (`g_last_name`, on the battery); under the chord, a seventh credit, BUILD and
 the commit the ROM was built from (`-DEV` with changes not committed;
 `TENGEN_BUILD` from the Makefile), so a ROM on a flash cart can be named.
 [8, 11, 17, 19, 20, 23, 28, 30]

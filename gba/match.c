@@ -468,6 +468,49 @@ static void pmenu_restore_strips(int from, int to) {
     }
 }
 
+/* ...AND PUT BACK WHOLE WHEN THE PAUSE ENDS: the box's own columns, on all
+ * four layers, from what was saved as it went up. That is all a pause
+ * changed on the screen, and a repaint of the whole static screen to undo it
+ * was the heaviest frame the game had — the one that left a pause finished
+ * drawing at line 222 of 227, five lines from the next picture. */
+static void pmenu_restore_box(int w) {
+    int tx0 = (SCREEN_TW - PMENU_W_MAX) / 2;
+    int a = (SCREEN_TW - w) / 2;
+    for (int l = 0; l < 4; l++) {
+        vu16 *map = MEM_SCREENBLOCK(kPmenuLayers[l]);
+        for (int y = 0; y < PMENU_H; y++)
+            for (int tx = a; tx < a + w; tx++)
+                map[(PMENU_TY + y) * MAP_W + tx] = g_pmenu_under[l][y][tx - tx0];
+    }
+}
+
+/* The same for the cartridge's own plaque (no chord, no menu): it is on the
+ * main background only. */
+static uint16_t g_plaque_under[PAUSE_H][PAUSE_W];
+static bool g_plaque_drawn;
+
+static void plaque_draw(void) {
+    if (!g_plaque_drawn) {
+        vu16 *map = MEM_SCREENBLOCK(SCREENBLOCK);
+        for (int y = 0; y < PAUSE_H; y++)
+            for (int x = 0; x < PAUSE_W; x++)
+                g_plaque_under[y][x] = map[(PAUSE_TY + y) * MAP_W + PAUSE_TX + x];
+        g_plaque_drawn = true;
+    }
+    draw_pause_box();
+}
+
+static void plaque_restore(void) {
+    vu16 *map = MEM_SCREENBLOCK(SCREENBLOCK);
+    for (int y = 0; y < PAUSE_H; y++)
+        for (int x = 0; x < PAUSE_W; x++)
+            map[(PAUSE_TY + y) * MAP_W + PAUSE_TX + x] = g_plaque_under[y][x];
+}
+
+/* The pause is over and only its box needs taking down (see
+ * pmenu_restore_box); g_repaint, the whole static screen, wins over it. */
+static bool g_unpause_patch;
+
 /* WHAT THE BOX LEAVES BEHIND WHEN IT GOES. The frame and the rows that centre
  * exactly are on the main background, and a repaint of the static screen
  * covers those; the rest of the menu is on the offset and counter layers,
@@ -569,10 +612,11 @@ static bool pause_menu_input(uint8_t pressed, bool *leaving) {
      * remember rather than read. It is handed STRAIGHT ON to the core, which
      * is what actually unpauses; the question is dropped on the way out, so
      * the next pause opens on the column and not on a half-answered
-     * "EXIT?". A takes a choice, B backs out of one. */
+     * "EXIT?". A takes a choice, B backs out of one. What comes off the
+     * screen is pause_toggled's to decide, as the core unpauses: a repaint
+     * forced here put the frame that leaves the menu at line 222 of 227. */
     if (pressed & TENGEN_BTN_START) {
         g_pause_confirm = false;
-        g_repaint = true;
         return false;
     }
 
@@ -1019,7 +1063,17 @@ static void pause_toggled(bool was_paused) {
      * mid-frame; six hundred tiles written into VRAM while the screen
      * is being scanned out is a visible tear. Flag it and let
      * draw_match do it inside the blank with everything else. */
-    if (was_paused) g_repaint = true;
+    /* ...AND ONLY WHAT THE BOX COVERED (g_unpause_patch): the whole repaint
+     * was the heaviest frame there is, line 222 of 227 (`--vblank`). The rest
+     * of what a pause changes is drawn every frame anyway — the board hidden
+     * under the chord, and a race's swap to the rival's board, NEXT, colours
+     * and panels (field_view) — so it comes back by itself, and `--unpause`
+     * holds the screen to the one a whole repaint leaves. A box never drawn
+     * has nothing kept under it: that one repaints. */
+    if (was_paused) {
+        if (!g_pmenu_drawn_w && !g_plaque_drawn) g_repaint = true;
+        else g_unpause_patch = true;
+    }
 }
 
 /* A GAME PUT BACK FROM THE BATTERY (suspend.c) comes back paused: the
@@ -1147,8 +1201,16 @@ void draw_match(bool *sweeping) {
          * drawn, at the width it was drawn. */
         if (g_pmenu_drawn_w) clear_pmenu_layers(g_pmenu_drawn_w);
         g_pmenu_drawn_w = 0;
+        g_plaque_drawn = false;
+        g_unpause_patch = false;
         draw_static_screen();
         g_repaint = false;
+    } else if (g_unpause_patch) {
+        if (g_pmenu_drawn_w) pmenu_restore_box(g_pmenu_drawn_w);
+        if (g_plaque_drawn) plaque_restore();
+        g_pmenu_drawn_w = 0;
+        g_plaque_drawn = false;
+        g_unpause_patch = false;
     }
     refresh_palettes();
     /* THE SWEEP'S ONE TIDY-UP, BEFORE THE PANEL: the frame it finishes, the
@@ -1185,7 +1247,7 @@ void draw_match(bool *sweeping) {
         draw_cable_lost_box();
     } else if (g_session.game.paused) {
         if (pause_menu_on()) draw_pause_menu();
-        else draw_pause_box();
+        else plaque_draw();
     }
 
     /* And the sound engine afterwards, out of the blank, where it costs

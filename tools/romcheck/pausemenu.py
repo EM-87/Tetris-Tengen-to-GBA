@@ -236,7 +236,7 @@ def pausemenu_check(rom_path):
                 tap("DOWN")
             tap("A")
         tap("LEFT"); tap("A"); run(core, 60)
-        if "HIGH SCORES" in tilemap_text(core, LEADER_HEAD_TY, 0, 30):
+        if "-LINES" in tilemap_text(core, LEADER_HEAD_TY, 0, 30):
             failures.append("salir a la fuerza pasa por la tabla de records")
         elif "EXIT" in row(PM_EXIT) or "PAUSE" in row(PM_HEAD):
             failures.append("decir SI no sale de la partida")

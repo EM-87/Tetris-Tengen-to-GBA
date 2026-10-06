@@ -83,7 +83,7 @@ def computer_check(rom_path):
     shared = board(core2, 0)
     other = sum(1 for row in board(core2, 1) for v in row if v)
     wide = sum(1 for row in shared if row[0] or row[TENGEN_PF_WIDTH - 1])
-    if "HIGH SCORES" in tilemap_text(core2, LEADER_HEAD_TY, 0, 30):
+    if "-LINES" in tilemap_text(core2, LEADER_HEAD_TY, 0, 30):
         failures.append("la partida de WITH COMPUTER ya habia terminado cuando "
                          "se miro el tablero: no prueba nada")
     elif other:

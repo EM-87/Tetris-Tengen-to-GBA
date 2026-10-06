@@ -772,11 +772,17 @@ void skin_begin_match(bool linked, int cable_skin) {
     (void)cable_skin;
     g_board_skin = -1;
 #endif
-    /* ...and this match's scores go in this build's table. A prototype is a
-     * different game — see LEADER_TABLES — but over the cable it is the
-     * release in other clothes, and the records swap needs both consoles on
-     * the same page. */
-    leader_use_table(linked ? -1 : play_skin());
+    /* ...and this match's scores go in this build's table, and on the
+     * release's in this MODE's. A prototype is a different game — see
+     * LEADER_TABLES — but over the cable it is the release in other clothes,
+     * and the records swap needs both consoles on the same page. The board
+     * says the mode: one alone (the demo's too), a race or a shared one, and
+     * a second console or the computer on the other side. */
+    const TengenGame *g = &g_session.game;
+    int mode = !g->two_player ? GAME_1P
+             : g->coop ? (linked ? GAME_COOP : GAME_WITH)
+                       : (linked ? GAME_2P : GAME_VS);
+    leader_use_mode(linked ? -1 : play_skin(), mode);
     g_session.game.piece_id_cells = g_board_skin >= 0;
     /* ...and their RULES with their paint, alone: the level every ten lines,
      * no wall kick, and rows that go the frame they complete. See

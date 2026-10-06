@@ -174,7 +174,7 @@ void start_music(uint8_t music) {
     nes_audio_play(NES_MUSIC_SILENCE);
     nes_audio_play(track);
 }
-static const char *const kGameNames[GAME_COUNT] = {
+const char *const kGameNames[GAME_COUNT] = {
     "1 PLAYER", "2 PLAYER", "COOPERATIVE", "VERSUS COMPUTER", "WITH COMPUTER"
 };
 

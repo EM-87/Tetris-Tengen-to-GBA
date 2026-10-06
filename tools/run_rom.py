@@ -107,6 +107,10 @@ def main():
                      help="check a solo level-up silences the tune and times the loop")
     ap.add_argument("--vblank", action="store_true",
                      help="check each frame's drawing ends inside the vertical blank")
+    ap.add_argument("--modetables", action="store_true",
+                     help="check one high score table per mode, and the last name kept")
+    ap.add_argument("--unpause", action="store_true",
+                     help="check leaving a pause leaves the screen a full repaint would")
     ap.add_argument("--fireworks", action="store_true",
                      help="check no title sprite shows over the brick columns")
     ap.add_argument("--idleblink", action="store_true",
@@ -212,6 +216,10 @@ def main():
         sys.exit(levelup_tune_check(args.rom))
     if args.vblank:
         sys.exit(vblank_check(args.rom))
+    if args.unpause:
+        sys.exit(unpause_check(args.rom))
+    if args.modetables:
+        sys.exit(mode_tables_check(args.rom))
     if args.fireworks:
         sys.exit(fireworks_check(args.rom))
     if args.idleblink:

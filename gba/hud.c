@@ -1100,13 +1100,25 @@ static char leader_letter(uint8_t index) {
     return index == 0 ? ' ' : (char)('A' + index - 1);
 }
 
-/* The tables, and which one is in play. Table 0 is the release's and the
- * rest are the prototypes', in skin order; see LEADER_TABLES. Everything
- * below still says `g_leader`, because everything below is about ONE table
- * and which one it is is decided in exactly one place. */
+/* The tables, and which one is in play. Table 0 is the release's 1 PLAYER,
+ * then the prototypes', in skin order, then the release's other four modes;
+ * see LEADER_TABLES. Everything below still says `g_leader`, because
+ * everything below is about ONE table and which one it is is decided in
+ * exactly one place (leader_select). */
 static LeaderEntry g_tables[LEADER_TABLES][LEADER_ENTRIES];
 static int g_table;
 #define g_leader (g_tables[g_table])
+/* THE LAST NAME TYPED ON THIS CONSOLE, which every row it makes after comes
+ * up with: a player who plays on writes it once (SAVE_NAME_OFF). AAA, the
+ * cartridge's own blank, until somebody types one. A console types for one
+ * player — over the cable the other's rows are theirs to name — so there is
+ * one. */
+static uint8_t g_last_name[LEADER_INITIALS] = { 1, 1, 1 };
+/* The save's layout holds: four skins at most below SAVE_EXTRA_OFF (proto_d
+ * is not one; see Decisions in CLAUDE.md), and everything below the paused
+ * game at $4000 (suspend.c). */
+typedef char save_skins_fit[SAVE_TABLE_OFF(4) + 3 <= SAVE_EXTRA_OFF ? 1 : -1];
+typedef char save_modes_fit[SAVE_MODE_SUMS_OFF + LEADER_MODE_TABLES <= 0x4000 ? 1 : -1];
 /* THE ROWS A COPY HAS NOT HANDED ON YET. A Single-Pak copy has no save
  * (sram_write goes nowhere there), so a row it puts on a table is marked
  * here, moves with its row as rows are pushed down, falls off with it, and
@@ -1125,6 +1137,9 @@ static uint8_t g_leader_blink;
  * back. Three is the whole name, so it cannot overflow. */
 static uint8_t g_leader_undo[LEADER_INITIALS];
 static int g_leader_undo_n;
+/* ...and what the row came up with, which is what B puts back: the last name
+ * typed here (g_last_name), or AAA. */
+static uint8_t g_leader_was[LEADER_INITIALS];
 
 /* THE TABLE IS SAVED, which is the one thing the cartridge wanted and could
  * not have. Its `reset` tests a four-byte magic at $04F7 — 'L','O','G','G' —
@@ -1159,15 +1174,63 @@ static uint8_t leader_checksum_of(int table) {
 }
 
 /* Where a table's checksum byte lives: the release's is the one the save
- * always had, and the rest are past all the data. See LEADER_TABLES. */
+ * always had, the prototypes' are past all their data, and the modes' past
+ * theirs. See LEADER_TABLES. */
 static unsigned leader_sum_off(int table) {
-    return table == 0 ? SAVE_SUM_OFF : SAVE_SUMS_OFF + (unsigned)(table - 1);
+    if (table == 0) return SAVE_SUM_OFF;
+    if (table < LEADER_SKIN_TABLES) return SAVE_SUMS_OFF + (unsigned)(table - 1);
+    return SAVE_MODE_SUMS_OFF + (unsigned)(table - LEADER_SKIN_TABLES);
+}
+
+/* ...and where its fifteen entries do. */
+static unsigned leader_data_off(int table) {
+    return table < LEADER_SKIN_TABLES ? SAVE_TABLE_OFF(table)
+                                      : SAVE_MODE_OFF(table - LEADER_SKIN_TABLES);
+}
+
+/* A table's number ON THE WIRE (TengenRecord.table), which is not its place
+ * in memory: the skins' keep the numbers they always had and the modes' are
+ * 8 and up, so a copy from a build with another count of skins never puts a
+ * mode's row in a prototype's table, and an older build simply refuses the
+ * numbers it does not know (leader_merge). */
+#define LEADER_WIRE_MODES 8
+static uint8_t leader_wire_id(int table) {
+    return (uint8_t)(table < LEADER_SKIN_TABLES
+                         ? table : LEADER_WIRE_MODES + table - LEADER_SKIN_TABLES);
+}
+static int leader_from_wire(uint8_t id) {
+    if (id < LEADER_SKIN_TABLES) return id;
+    if (id >= LEADER_WIRE_MODES && id < LEADER_WIRE_MODES + LEADER_MODE_TABLES)
+        return LEADER_SKIN_TABLES + id - LEADER_WIRE_MODES;
+    return -1;
+}
+
+/* The last name's check byte: anything but three letters and this is no
+ * name, and AAA stands. */
+static uint8_t leader_name_check(const uint8_t *n) {
+    return (uint8_t)(0x5A + n[0] * 3 + n[1] * 5 + n[2] * 7);
+}
+
+static void leader_save_name(void) {
+    for (int c = 0; c < LEADER_INITIALS; c++)
+        sram_write(SAVE_NAME_OFF + (unsigned)c, g_last_name[c]);
+    sram_write(SAVE_NAME_OFF + LEADER_INITIALS, leader_name_check(g_last_name));
+}
+
+static void leader_load_name(void) {
+    uint8_t n[LEADER_INITIALS];
+    for (int c = 0; c < LEADER_INITIALS; c++) {
+        n[c] = sram_read(SAVE_NAME_OFF + (unsigned)c);
+        if (n[c] >= LEADER_LETTERS) return;
+    }
+    if (sram_read(SAVE_NAME_OFF + LEADER_INITIALS) != leader_name_check(n)) return;
+    memcpy(g_last_name, n, LEADER_INITIALS);
 }
 
 static void leader_save_table(int table) {
     for (int i = 0; i < LEADER_ENTRIES; i++) {
         const LeaderEntry *e = &g_tables[table][i];
-        unsigned at = SAVE_TABLE_OFF(table) + (unsigned)i * SAVE_ENTRY_BYTES;
+        unsigned at = leader_data_off(table) + (unsigned)i * SAVE_ENTRY_BYTES;
         for (int b = 0; b < 4; b++)
             sram_write(at + (unsigned)b, (unsigned char)(e->score >> (8 * b)));
         sram_write(at + 4, (unsigned char)(e->lines & 0xFF));
@@ -1195,7 +1258,7 @@ static void leader_save(void) {
 static bool leader_load_table(int table) {
     LeaderEntry got[LEADER_ENTRIES];
     for (int i = 0; i < LEADER_ENTRIES; i++) {
-        unsigned at = SAVE_TABLE_OFF(table) + (unsigned)i * SAVE_ENTRY_BYTES;
+        unsigned at = leader_data_off(table) + (unsigned)i * SAVE_ENTRY_BYTES;
         uint32_t score = 0;
         for (int b = 0; b < 4; b++)
             score |= (uint32_t)sram_read(at + (unsigned)b) << (8 * b);
@@ -1224,14 +1287,16 @@ static bool leader_load_table(int table) {
 }
 
 bool leader_load(void) {
+    /* The name stands on its own check byte, with or without a table. */
+    leader_load_name();
     for (int i = 0; i < SAVE_MAGIC_LEN; i++)
         if (sram_read((unsigned)i) != (unsigned char)kSaveMagic[i]) return false;
 
     /* THE RELEASE'S TABLE DECIDES WHETHER THERE IS A SAVE AT ALL — it is the
-     * one that has always been at these offsets. The prototypes' are read
-     * beside it and each simply keeps the cartridge's fifteen if its own
-     * bytes do not add up, which is what a build nobody has played looks
-     * like on a console that was saving before they existed. */
+     * one that has always been at these offsets. The prototypes' and the
+     * modes' are read beside it and each simply keeps the cartridge's fifteen
+     * if its own bytes do not add up, which is what a build nobody has played
+     * looks like on a console that was saving before they existed. */
     if (!leader_load_table(0)) return false;
     for (int t = 1; t < LEADER_TABLES; t++)
         if (!leader_load_table(t)) leader_reset_table(t);
@@ -1263,6 +1328,24 @@ void leader_reset(void) {
 void leader_erase_all(void) {
     leader_reset();
     leader_save();
+    /* ...and the last name typed with them: a console wiped for somebody
+     * else does not offer them the last owner's initials. */
+    memset(g_last_name, 1, LEADER_INITIALS);      /* AAA */
+    leader_save_name();
+}
+
+/* The one place a table is chosen, and with it the HIGH SCORE the HUD and
+ * the menus print and the bar a new record is sung for (record_watch). */
+static void leader_select(int table) {
+    if (table < 0 || table >= LEADER_TABLES) table = 0;
+    g_table = table;
+    g_high_score = g_leader[0].score;
+    g_record_bar = g_leader[0].score;
+}
+
+static int leader_skin_table(int skin) {
+    int table = skin + 1;
+    return table < 0 || table >= LEADER_SKIN_TABLES ? 0 : table;
 }
 
 /* WHICH BUILD'S TABLE IS IN PLAY, by the skin: -1 is the release and 0 and up
@@ -1270,10 +1353,26 @@ void leader_erase_all(void) {
  * not read every frame, because switching is also what refreshes the HIGH
  * SCORE the HUD and the menus print. */
 void leader_use_table(int skin) {
-    int table = skin + 1;
-    if (table < 0 || table >= LEADER_TABLES) table = 0;
-    g_table = table;
-    g_high_score = g_leader[0].score;
+    leader_select(leader_skin_table(skin));
+}
+
+/* ...and a match's: the release's split by mode, a prototype's whatever the
+ * mode (see LEADER_MODE_TABLES). */
+void leader_use_mode(int skin, int mode) {
+    int table = leader_skin_table(skin);
+    if (table == 0 && mode > GAME_1P && mode < GAME_COUNT)
+        table = LEADER_SKIN_TABLES + mode - 1;
+    leader_select(table);
+}
+
+/* The page's LEFT and RIGHT: the title's skin's table, then the four modes',
+ * round. */
+void leader_browse(int skin, int step) {
+    int ring[1 + LEADER_MODE_TABLES], n = 0, at = 0;
+    ring[n++] = leader_skin_table(skin);
+    for (int m = 0; m < LEADER_MODE_TABLES; m++) ring[n++] = LEADER_SKIN_TABLES + m;
+    for (int i = 0; i < n; i++) if (ring[i] == g_table) at = i;
+    leader_select(ring[(at + step + n) % n]);
 }
 
 /* L81FF (main.asm.txt:342-378): walk the table from the BOTTOM up while the
@@ -1313,7 +1412,7 @@ int leader_unsent(TengenRecord *out, int max) {
         for (int i = 0; i < LEADER_ENTRIES && n < max; i++) {
             if (!g_unsent[t][i]) continue;
             const LeaderEntry *e = &g_tables[t][i];
-            out[n].table = (uint8_t)t;
+            out[n].table = leader_wire_id(t);
             out[n].score = e->score;
             out[n].lines = e->lines;
             for (int c = 0; c < LEADER_INITIALS; c++) out[n].initials[c] = e->initials[c];
@@ -1338,13 +1437,14 @@ int leader_merge(const TengenRecord *rows, int n) {
     int keep_table = g_table, kept = 0;
     for (int r = 0; r < n; r++) {
         const TengenRecord *in = &rows[r];
-        if (in->table >= LEADER_TABLES || in->score > 999999 || in->lines > 999)
+        int table = leader_from_wire(in->table);
+        if (table < 0 || in->score > 999999 || in->lines > 999)
             continue;
         bool letters_ok = true;
         for (int c = 0; c < LEADER_INITIALS; c++)
             if (in->initials[c] >= LEADER_LETTERS) letters_ok = false;
         if (!letters_ok) continue;
-        g_table = in->table;
+        g_table = table;
         bool there = false;
         for (int i = 0; i < LEADER_ENTRIES && !there; i++)
             there = g_leader[i].score == in->score && g_leader[i].lines == in->lines &&
@@ -1392,6 +1492,36 @@ void draw_leader_row(int row) {
                        leader_bank(SCREEN_LEADER_LINES_TX, ty));
 }
 
+/* WHICH TABLE THIS IS, in the heading: a mode's name in place of the
+ * cartridge's HIGH SCORES, right up against its "-LINES", in its colour —
+ * 1 PLAYER's table (and a prototype's) keeps the cartridge's words. The
+ * heading's own row is put back first, so walking the tables never leaves a
+ * longer name's head behind a shorter one. */
+static void draw_leader_heading(void) {
+    const int ty = SCREEN_LEADER_HEAD_TY;
+    const uint8_t *row = &kScreenLeaderTiles[ty * SCREEN_LEADER_W];
+    int dash = -1;
+    for (int tx = 0; tx < SCREEN_LEADER_W; tx++) {
+        set_map_tile(tx, ty, WITH_BANK(row[tx], leader_bank(tx, ty)));
+        if (dash < 0 && row[tx] == ascii_tile('-')) dash = tx;
+    }
+    if (g_table < LEADER_SKIN_TABLES || dash < 11) return;
+    const char *name = kGameNames[g_table - LEADER_SKIN_TABLES + 1];
+    int bank = leader_bank(dash - 1, ty);
+    int len = (int)strlen(name), first = dash - len;
+    if (first < 2) first = 2;               /* inside the frame, whatever */
+    for (int tx = 2; tx < dash; tx++)
+        set_map_tile(tx, ty, WITH_BANK(ascii_tile(' '), bank));
+    for (int i = 0; first + i < dash; i++)
+        set_map_tile(first + i, ty, WITH_BANK(ascii_tile(name[i]), bank));
+}
+
+/* The heading and the fifteen rows: what changes between two tables. */
+void draw_leader_table(void) {
+    draw_leader_heading();
+    for (int row = 0; row < LEADER_ENTRIES; row++) draw_leader_row(row);
+}
+
 void draw_leaderboard(void) {
     /* ...AND SO DOES THE HIGH SCORES PAGE, which was the visible half of this:
      * it never asked for a skin either way, so after a skinned game it came up
@@ -1405,7 +1535,7 @@ void draw_leaderboard(void) {
             set_map_tile(tx, ty, WITH_BANK(kScreenLeaderTiles[i],
                                             leader_bank(tx, ty)));
         }
-    for (int row = 0; row < LEADER_ENTRIES; row++) draw_leader_row(row);
+    draw_leader_table();
 }
 
 /* WHOSE SCORES GO ON THE BOARD, AND WHEN. L81DD (main.asm.txt:315-339) is
@@ -1450,10 +1580,12 @@ void leader_own_initials(uint8_t out[LEADER_INITIALS]) {
     /* A player with no row here still has a name to send, because the row
      * they have is on the OTHER console's table — the two are two consoles'
      * own histories and a score can make one and miss the other. What goes
-     * across then is what an untyped row carries. See TengenNameSwap. */
+     * across then is the name this console last typed (g_last_name), which
+     * is AAA, what an untyped row carries, until somebody types one. See
+     * TengenNameSwap. */
     for (int c = 0; c < LEADER_INITIALS; c++)
         out[c] = g_leader_own_row >= 0 ? g_leader[g_leader_own_row].initials[c]
-                                        : 1 /* 'A' */;
+                                        : g_last_name[c];
 }
 
 void leader_rival_initials(const uint8_t in[LEADER_INITIALS]) {
@@ -1472,7 +1604,8 @@ uint32_t g_record_bar;   /* the table's top as the match began; see record_watch
 bool g_record_sung;      /* ...and the jingle for passing it has been played */
 
 void leader_new_match(void) {
-    g_record_bar = g_leader[0].score;
+    /* The bar itself is the match's table's top, taken as skin_begin_match
+     * chooses that table (leader_use_mode), which is after this. */
     g_record_sung = false;
     g_leader_row = -1;
     g_leader_queued = 0;
@@ -1506,6 +1639,9 @@ static void leader_record_one(int slot) {
             g_leader_rivals[g_leader_rivals_n++] = row;
         return;
     }
+    /* ...with the last name typed here already in it, so a player who plays
+     * on takes it with START. */
+    memcpy(g_leader[row].initials, g_last_name, LEADER_INITIALS);
     g_leader_own_row = row;
     if (g_leader_queued < LEADER_QUEUE_MAX)
         g_leader_queue[g_leader_queued++] = row;
@@ -1526,6 +1662,7 @@ void leader_submit(void) {
         g_leader_row = g_leader_queue[0];
         g_leader_blink = 0;
         g_leader_undo_n = 0;
+        memcpy(g_leader_was, g_leader[g_leader_row].initials, LEADER_INITIALS);
     } else {
         g_leader_row = -1;
     }
@@ -1568,7 +1705,8 @@ static void leader_letter_step(int delta) {
  *   UP / DOWN     the letter
  *   LEFT / RIGHT  which letter, and SELECT walks the three round
  *   A / START     take the name
- *   B             undo the last letter changed: back to A, cursor onto it
+ *   B             undo the last letter changed: back to what the row came
+ *                 up with (the last name typed here, or A), cursor onto it
  *
  * ...and B with nothing to undo is an ALARM rather than nothing happening,
  * because a button that is silent is a button you cannot tell from a broken
@@ -1608,7 +1746,7 @@ bool leader_type(uint8_t held, uint8_t pressed) {
             nes_audio_play(NES_SOUND_ALARM);
         } else {
             int p = g_leader_undo[--g_leader_undo_n];
-            g_leader[g_leader_row].initials[p] = 1;   /* 'A' */
+            g_leader[g_leader_row].initials[p] = g_leader_was[p];
             g_leader_cursor = p;
             screen_blip();
         }
@@ -1635,8 +1773,18 @@ bool leader_type(uint8_t held, uint8_t pressed) {
         for (int q = 1; q < g_leader_queued; q++)
             g_leader_queue[q - 1] = g_leader_queue[q];
         int finished = g_leader_row;
-        if (--g_leader_queued > 0) g_leader_row = g_leader_queue[0];
-        else g_leader_row = -1;
+        /* ...and it is the name the next row comes up with, power cycles
+         * included — the next in this queue as well, which is the same
+         * player's (a console types for one). */
+        memcpy(g_last_name, g_leader[finished].initials, LEADER_INITIALS);
+        leader_save_name();
+        if (--g_leader_queued > 0) {
+            g_leader_row = g_leader_queue[0];
+            memcpy(g_leader[g_leader_row].initials, g_last_name, LEADER_INITIALS);
+            memcpy(g_leader_was, g_last_name, LEADER_INITIALS);
+        } else {
+            g_leader_row = -1;
+        }
         /* A name is not a name until it is finished, so this is where it is
          * written down — and THE ROW IS REDRAWN ONE LAST TIME, unblinking.
          * Without that the letter under the cursor kept whichever half of the
