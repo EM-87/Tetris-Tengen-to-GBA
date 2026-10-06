@@ -28,6 +28,19 @@ def selftest(rom_path):
     core, screen = load(rom_path)
     failures = []
 
+    # THE NUMBERS THE CHECKS READ THE ROM BY come out of the ROM itself
+    # (kCheckProbe, check_layout); the few still written out as constants
+    # here must agree with it, or every check that uses them reads the wrong
+    # row and passes.
+    from .harness import check_layout, _LAYOUT_DEFAULT, LEADER_FIRST_TY
+    lay = check_layout(rom_path)
+    if lay is _LAYOUT_DEFAULT:
+        failures.append("el ELF no exporta kCheckProbe: los checks leerian a ciegas")
+    for name, have in (("leader_head_ty", LEADER_HEAD_TY),
+                       ("leader_first_ty", LEADER_FIRST_TY)):
+        if lay[name] != have:
+            failures.append(f"harness.py dice {name}={have}, la ROM {lay[name]}")
+
     # The title screen must come up first and must not be blank. Boot takes
     # a few frames (the sound engine's 64KB code view is laid out before
     # anything is drawn) and the title's own tile swap hides behind one black

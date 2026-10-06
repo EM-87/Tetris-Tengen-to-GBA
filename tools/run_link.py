@@ -2432,8 +2432,9 @@ def records_dump_check(rom):
     SCORE, LINES, LETTERS = 123456, 77, (3, 12, 26)
     # The modes' tables follow the skins' (LEADER_TABLES, gba/port.h): four
     # of them, 2 PLAYER first, so COOPERATIVE is the skins' count plus one.
-    tables = unsent_s[1] // 15
-    coop = tables - 4 + 1
+    lay = run_rom.check_layout(rom)
+    coop = lay["skin_tables"] + 1
+    entries = lay["leader_entries"]
     COOP_SCORE, COOP_LINES, COOP_LETTERS = 65432, 55, (15, 1, 4)
     cores, cable, both, tap = _pair(rom, slow=True, slave_rom=mb)
     both(1000)
@@ -2446,12 +2447,12 @@ def records_dump_check(rom):
     for c, v in enumerate(LETTERS):
         copy.memory.u8[tables_s[0] + 6 + c] = v
     copy.memory.u8[unsent_s[0]] = 1
-    at = tables_s[0] + coop * 15 * entry           # its table's row 0
+    at = tables_s[0] + coop * entries * entry      # its table's row 0
     copy.memory.u32[at] = COOP_SCORE
     copy.memory.u16[at + 4] = COOP_LINES
     for c, v in enumerate(COOP_LETTERS):
         copy.memory.u8[at + 6 + c] = v
-    copy.memory.u8[unsent_s[0] + coop * 15] = 1
+    copy.memory.u8[unsent_s[0] + coop * entries] = 1
     tap("START", who=0); tap("DOWN", who=0); tap("START", who=0)
     both(90)
     tap("START", who=0)
@@ -2467,7 +2468,7 @@ def records_dump_check(rom):
            tuple(cores[0].memory.u8[row + 6 + c] for c in range(3)))
     if got != (SCORE, LINES, LETTERS):
         failures.append(f"el cartucho no tiene el record de la copia arriba: {got}")
-    row = tables_m[0] + coop * 15 * entry
+    row = tables_m[0] + coop * entries * entry
     got = (cores[0].memory.u32[row], cores[0].memory.u16[row + 4],
            tuple(cores[0].memory.u8[row + 6 + c] for c in range(3)))
     if got != (COOP_SCORE, COOP_LINES, COOP_LETTERS):
@@ -2482,8 +2483,10 @@ def records_dump_check(rom):
     score_bytes = SCORE.to_bytes(4, "little")
     if score_bytes not in sram:
         failures.append("el record no llego al guardado del cartucho")
-    # SAVE_MODE_OFF(1): the modes' tables at their fixed place, 0x410 on.
-    sram = bytes(cores[0].memory.u8[0x0E000000 + 0x410 + 135 + i] for i in range(9))
+    # SAVE_MODE_OFF(1): the modes' tables at their fixed place (kCheckProbe).
+    lay = run_rom.check_layout(rom)
+    at = 0x0E000000 + lay["save_mode"] + lay["save_table_bytes"]
+    sram = bytes(cores[0].memory.u8[at + i] for i in range(9))
     if sram[:4] != COOP_SCORE.to_bytes(4, "little"):
         failures.append(f"el de COOPERATIVE no llego a su sitio del guardado: {sram!r}")
     both(120)

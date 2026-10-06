@@ -333,6 +333,48 @@ CODE_UNDO = "LEFT DOWN RIGHT UP LEFT DOWN RIGHT B A".split()
 _GAME_PROBE_CACHE = {}
 
 
+_LAYOUT_CACHE = {}
+_LAYOUT_DEFAULT = {
+    "question": 0xF0, "percent": 0xF1, "raised_base": 960, "arrow_tail": 970,
+    "arrow_head": 971, "leader_head_ty": 2, "leader_first_ty": 3,
+    "leader_entries": 15, "skin_tables": 4, "mode_tables": 4,
+    "save_data": 5, "save_table_bytes": 135, "save_entry_bytes": 9,
+    "save_name": 0x400, "save_mode": 0x410, "save_mode_sums": 0x41C + 4 * 135,
+    "raised": "PAUSEXIT?R",
+}
+
+
+def check_layout(rom_path):
+    """The port's own numbers the checks read the screen and the save by:
+    kCheckProbe and kCheckRaised (gba/video.c), read out of the ROM FILE at
+    the address the ELF gives them, so nothing has to boot. They used to be
+    written out here by hand; a change in C that this missed made a check
+    read the wrong tile and say nothing. Without an ELF (an old build) the
+    numbers below, which were right when this was written."""
+    if not rom_path:
+        return _LAYOUT_DEFAULT
+    if rom_path not in _LAYOUT_CACHE:
+        addr, _ = game_state_address(rom_path, "kCheckProbe")
+        raised, _ = game_state_address(rom_path, "kCheckRaised")
+        if addr is None or raised is None:
+            _LAYOUT_CACHE[rom_path] = _LAYOUT_DEFAULT
+            return _LAYOUT_DEFAULT
+        base = 0x08000000 if addr >= 0x08000000 else 0x02000000
+        data = open(rom_path, "rb").read()
+        v = [int.from_bytes(data[addr - base + 2 * i:addr - base + 2 * i + 2], "little")
+             for i in range(16)]
+        at = raised - base
+        text = data[at:data.index(b"\0", at)].decode("ascii")
+        keys = ("question", "percent", "raised_base", "arrow_tail", "arrow_head",
+                "leader_head_ty", "leader_first_ty", "leader_entries",
+                "skin_tables", "mode_tables", "save_data", "save_table_bytes",
+                "save_entry_bytes", "save_name", "save_mode", "save_mode_sums")
+        layout = dict(zip(keys, v))
+        layout["raised"] = text
+        _LAYOUT_CACHE[rom_path] = layout
+    return _LAYOUT_CACHE[rom_path]
+
+
 def game_offsets(rom_path):
     """Byte offsets into TengenGame, read out of the built ELF."""
     if rom_path not in _GAME_PROBE_CACHE:
@@ -495,14 +537,15 @@ def tilemap_text(core, row, first=0, last=30):
     and this maps them back. Without that, "EXIT?" reads as "EXIT" and the
     pause menu's question looks like its EXIT line.
     """
-    QUESTION = 0xF0    # TILES_GAME_QUESTION in gba/tiles_game.h
-    PERCENT = 0xF1     # TILES_GAME_PERCENT
+    lay = check_layout(getattr(core, "_tengen_rom", None))
+    QUESTION = lay["question"]     # TILES_GAME_QUESTION in gba/tiles_game.h
+    PERCENT = lay["percent"]       # TILES_GAME_PERCENT
     # ...and the pause menu's headings, drawn with copies of their letters one
     # pixel higher (PMENU_RAISED_BASE / PMENU_RAISED_CHARS in gba/port.h).
-    RAISED_BASE, RAISED = 960, "PAUSEXIT?R"
+    RAISED_BASE, RAISED = lay["raised_base"], lay["raised"]
     # ...and its arrow, moved three pixels closer across two tiles
     # (T_ARROW_TAIL / T_ARROW_HEAD): read as "->".
-    ARROW = {RAISED_BASE + len(RAISED): "-", RAISED_BASE + len(RAISED) + 1: ">"}
+    ARROW = {lay["arrow_tail"]: "-", lay["arrow_head"]: ">"}
 
     def readable(t):
         return (32 <= t < 127 or t in (QUESTION, PERCENT) or t in ARROW

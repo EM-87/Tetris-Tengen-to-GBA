@@ -124,6 +124,13 @@ ASan+UBSan, a short `make fuzz`, `make assets-check`, the core
 cross-compiled for the GBA, and the trace harness's host build. `make gba-check` and the cartridge comparisons
 stay local.
 
+The port's own numbers a check reads the ROM by (the planted glyphs, the
+pause menu's raised letters, the HIGH SCORES rows, the save's layout) come
+out of the ROM, `kCheckProbe`/`kCheckRaised` in video.c through
+`check_layout` in harness.py, as TengenGame's offsets come from
+`kGameProbe`: a constant typed again in Python drifts silently. `--selftest`
+fails if the probe is missing or a constant left in harness.py disagrees.
+
 A single check runs on its own: `python3 tools/run_rom.py build/tengen.gba
 --pausemenu` (the flags are listed in `tools/run_rom.py --help`). A new
 check goes in the `tools/romcheck/` module of its family, gets a flag in

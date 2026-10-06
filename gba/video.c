@@ -106,6 +106,25 @@ const uint16_t kGameProbe[19] = {
     (uint16_t)offsetof(TengenPlayerState, piece_total),
 };
 
+/* ...AND THE PORT'S OWN NUMBERS THE CHECKS READ THE SCREEN AND THE SAVE BY:
+ * the tiles text is drawn with outside ASCII (the planted '?' and '%', the
+ * pause menu's raised letters and its arrow), the HIGH SCORES page's rows,
+ * and where the save keeps the tables and the name. These were written out
+ * again in Python and kept in step by hand; a change here that the Python
+ * missed made a check read the wrong thing and say nothing
+ * (romcheck/harness.py, check_layout). The order is the reader's. */
+__attribute__((used))
+const uint16_t kCheckProbe[16] = {
+    TILES_GAME_QUESTION, TILES_GAME_PERCENT,
+    PMENU_RAISED_BASE, T_ARROW_TAIL, T_ARROW_HEAD,
+    SCREEN_LEADER_HEAD_TY, SCREEN_LEADER_FIRST_TY, LEADER_ENTRIES,
+    LEADER_SKIN_TABLES, LEADER_MODE_TABLES,
+    SAVE_DATA_OFF, SAVE_TABLE_BYTES, SAVE_ENTRY_BYTES,
+    SAVE_NAME_OFF, (uint16_t)SAVE_MODE_OFF(0), SAVE_MODE_SUMS_OFF,
+};
+__attribute__((used))
+const char kCheckRaised[] = PMENU_RAISED_CHARS;
+
 TengenLink g_session;
 
 /* The board's geometry, which is the MODE'S: see COOP_FIELD_TX. Read through
