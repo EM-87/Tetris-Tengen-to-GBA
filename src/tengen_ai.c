@@ -399,6 +399,14 @@ TengenAiWeights tengen_ai_weights[2] = {
  * piece ahead while the fall is slow (nothing, and it made the main choice
  * late), and looking for slides BEFORE the look ahead (worse beside a
  * partner that drops its pieces: the choice came too late to reach).
+ *
+ * AND THE PARTNER'S NEXT, measured and left out: each candidate's board
+ * scored for the piece the partner gets next as well, at half weight, lost
+ * 1.63 +- 0.37 lines a game (512 games, all six kinds of partner worse). Most
+ * of that was time — twice the replies make the choice late — but with the
+ * slice a frame raised past anything the GBA can do it was still no better:
+ * where a person puts their next piece is a guess, and a plan bent round a
+ * guess is a worse plan.
  * Slides that crossed the partner's piece, or were planned on a board that
  * has grown since, locked halfway in the opening: so not across the
  * partner's columns, and a resting piece slides at once (ai_walk and the

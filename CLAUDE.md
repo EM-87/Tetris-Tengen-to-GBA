@@ -543,7 +543,8 @@ story behind each; the item number is in brackets.
   whatever row the piece rests on; one across the partner's piece is not
   planned. It does not clear more lines (`ai_tune deep`); it is there to be
   seen. Its planner's arrays move TengenAi's later fields: checks read them
-  through `kCheckProbe`.
+  through `kCheckProbe`. Reading the partner's NEXT as well was measured
+  worse (-1.6 lines a game) and is not there; see tengen_ai.c.
 - **The port's computer thinks a slice a frame** (`TENGEN_AI_SMART_BUDGET`,
   the first look at each placement charged double) and is a few frames
   behind the deal before it has a target. A bigger slice spills the main
