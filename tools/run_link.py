@@ -1231,10 +1231,13 @@ def restart_check(rom):
     for _ in range(LEADER_INITIALS):
         both(3, [[KEYS["A"]], []]); both(6, [[], []])
     # The slave has one row per game to type, in the order they were played,
-    # and the name only crosses once both are done.
-    for _ in range(2 * LEADER_INITIALS):
+    # and the name only crosses once both are done. The second row comes up
+    # with the name just typed in the first (g_last_name), so A takes it.
+    for _ in range(LEADER_INITIALS):
         for _ in range(3):
             both(3, [[], [KEYS["UP"]]]); both(5, [[], []])
+        both(3, [[], [KEYS["A"]]]); both(6, [[], []])
+    for _ in range(LEADER_INITIALS):
         both(3, [[], [KEYS["A"]]]); both(6, [[], []])
     both(150, [[], []])
     mrows = [run_rom.tilemap_text(master, run_rom.LEADER_FIRST_TY + i, 0, 30)
