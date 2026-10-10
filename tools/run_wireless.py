@@ -496,9 +496,9 @@ def _play(rom, coop):
     random.seed(7 if coop else 3)
     cores, air, fakes, both, tap = _pair(rom)
     sym, why = symbol(rom, "g_session")
-    present, _ = symbol(rom, "g_wl_present")
+    present, why_present = symbol(rom, "g_wl_present")
     if sym is None or present is None:
-        print(f"SALTADO: {why}")
+        print(f"SALTADO: {why or why_present}")
         return 0
     addr, size = sym
     game_size = size - 4
@@ -685,10 +685,10 @@ def drop_check(rom):
     random.seed(5)
     cores, air, fakes, both, tap = _pair(rom)
     sym, why = symbol(rom, "g_session")
-    waiting, _ = symbol(rom, "g_link_waiting")
-    lost, _ = symbol(rom, "g_link_lost")
+    waiting, why_waiting = symbol(rom, "g_link_waiting")
+    lost, why_lost = symbol(rom, "g_link_lost")
     if sym is None or waiting is None or lost is None:
-        print(f"SALTADO: {why}")
+        print(f"SALTADO: {why or why_waiting or why_lost}")
         return 0
     addr, size = sym
     game_size = size - 4

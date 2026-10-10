@@ -357,7 +357,13 @@ _KEEP = []
 
 
 def symbol(rom_path, name):
-    """(address, size) of a symbol in the built ROM, out of the ELF."""
+    """(address, size) of a symbol in the built ROM, out of the ELF.
+
+    Link-time optimisation renames some of them to `name.lto_priv.N`, and
+    which ones moves with the code around them: g_wl_present was renamed so,
+    and three wireless checks went quiet (SALTADO) instead of failing. Both
+    spellings count; two of the second kind would be two variables, and that
+    is an error rather than a guess."""
     elf = os.path.splitext(rom_path)[0] + ".elf"
     if not os.path.exists(elf):
         return None, f"no encuentro {elf} (hace falta para leer el estado)"
@@ -366,10 +372,19 @@ def symbol(rom_path, name):
         out = subprocess.check_output([nm, "-S", elf]).decode()
     except (OSError, subprocess.CalledProcessError) as exc:
         return None, f"no pude ejecutar {nm}: {exc}"
+    renamed = []
     for line in out.splitlines():
         parts = line.split()
-        if len(parts) == 4 and parts[3] == name:
+        if len(parts) != 4:
+            continue
+        if parts[3] == name:
             return (int(parts[0], 16), int(parts[1], 16)), None
+        if parts[3].startswith(name + ".lto_priv."):
+            renamed.append((int(parts[0], 16), int(parts[1], 16)))
+    if len(renamed) == 1:
+        return renamed[0], None
+    if renamed:
+        return None, f"el ELF tiene {len(renamed)} {name}.lto_priv: cual?"
     return None, f"el ELF no exporta {name}"
 
 
