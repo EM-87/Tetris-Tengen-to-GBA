@@ -558,25 +558,15 @@ static uint16_t g_credit_timer;
 
 /* One frame of it, and the drawing with it: this is called from a screen that
  * redraws itself every frame, so writing the two rows every time costs nothing
- * and needs no dirty flag. */
-/* ...AND ONE MORE BEHIND THE CHORD: which build this is (TENGEN_BUILD, the
- * commit, from the Makefile), so a ROM on a flash cart can be named without
- * its file. Not a credit, so not where a player who never found the chord
- * would see it. */
-#ifndef TENGEN_BUILD
-#define TENGEN_BUILD "LOCAL"
-#endif
-static const char *const kBuildCredit[2] = { "BUILD", TENGEN_BUILD };
-
+ * and needs no dirty flag. (Under the chord a seventh line once said which
+ * build this was, the commit; it went: the ROM file's name says so.) */
 static void draw_credits(void) {
-    unsigned count = CREDIT_COUNT + (g_pause_unlocked ? 1u : 0u);
-    if (g_credit >= count) g_credit = 0;
+    if (g_credit >= CREDIT_COUNT) g_credit = 0;
     if (++g_credit_timer >= CREDIT_FRAMES) {
         g_credit_timer = 0;
-        g_credit = (uint8_t)((g_credit + 1) % count);
+        g_credit = (uint8_t)((g_credit + 1) % CREDIT_COUNT);
     }
-    const char *const *line = g_credit < CREDIT_COUNT ? kCredits[g_credit]
-                                                     : kBuildCredit;
+    const char *const *line = kCredits[g_credit];
     set_credit_layer(true);
     draw_text_lifted(CREDIT_TY, line[0], BANK_CREDIT);
     draw_text_lifted(CREDIT_TY + 1, line[1], BANK_CREDIT);

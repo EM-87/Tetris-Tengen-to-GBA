@@ -2,6 +2,7 @@
 Everything before a match: the title, its skins and sprites,
 GAME SELECT, the credits, the demo, the cable lobby alone.
 """
+import os
 from .harness import (
     CATHEDRAL_SPRITES, CELL_BLOCK, CREDITS, CREDIT_TY,
     DEMO_START_FRAME, DEMO_WATCH_FRAMES, GAME_SELECT_LONGEST, GAME_SELECT_ROWS,
@@ -445,12 +446,77 @@ def demo_check(rom_path):
     else:
         print(f"  y con la skin puesta arranca igual, en el frame {started}")
 
+    # ...Y BAJO EL ACORDE, CON MUSIC MIX. La demo del cartucho es muda (sus
+    # efectos y nada mas); con el acorde encontrado suena MUSIC MIX, que abre
+    # en Korobeiniki, una de las melodias metidas a mano. g_music es tambien
+    # la eleccion del jugador en LEVEL SETTINGS: al salir de la demo tiene
+    # que volver a ser la suya (NO MUSIC, la de fabrica).
+    music, why = game_state_address(rom_path, "g_music")
+    playing = _symbol_prefix(rom_path, "g_playing")
+    if music is None or playing is None:
+        print(f"SALTADO (musica de la demo): {why or 'el ELF no exporta g_playing'}")
+    else:
+        core, screen = load(rom_path)   # `screen` must stay alive; see load()
+        _ = screen
+        run(core, 20)
+        press_start(core); run(core, 10)                      # GAME SELECT
+        core.set_keys(KEYS["L"], KEYS["R"]); run(core, 4); core.set_keys(); run(core, 12)
+        core.set_keys(KEYS["B"]); run(core, 4); core.set_keys(); run(core, 20)
+        chosen = core.memory.u8[music]
+        started = None
+        for f in range(DEMO_WATCH_FRAMES):
+            core.run_frame()
+            if core.memory.u8[flag]:
+                started = f
+                break
+        if started is None:
+            failures.append("con el acorde la demo no arranca")
+        else:
+            run(core, 60)
+            heard = sum(1 for _ in range(120)
+                        if (core.run_frame() or True) and core.memory.u8[playing])
+            if core.memory.u8[music] == chosen or heard < 100:
+                failures.append(f"con el acorde la demo no suena con MUSIC MIX "
+                                 f"(g_music {chosen} -> {core.memory.u8[music]}, "
+                                 f"melodia sonando {heard} de 120 frames)")
+            else:
+                print("  con el acorde la demo suena con MUSIC MIX (abre en "
+                      "Korobeiniki)")
+            core.set_keys(KEYS["START"]); run(core, 4); core.set_keys(); run(core, 20)
+            if core.memory.u8[music] != chosen:
+                failures.append(f"al salir de la demo la musica del jugador no "
+                                 f"vuelve: {chosen} -> {core.memory.u8[music]}")
+            elif core.memory.u8[playing]:
+                failures.append("al salir de la demo la melodia sigue sonando "
+                                 "en GAME SELECT")
+            else:
+                print("  y al salir, GAME SELECT en silencio y la eleccion del "
+                      "jugador intacta")
+        del core, screen
+
     for f in failures:
         print("FALLA:", f)
     if failures:
         return 1
     print("OK: el titulo se pone a jugar solo y se sale con un boton.")
     return 0
+
+
+def _symbol_prefix(rom_path, prefix):
+    """A static's address by the start of its name: link-time optimisation
+    adds `.lto_priv.N` to some."""
+    import subprocess
+    elf = os.path.splitext(rom_path)[0] + ".elf"
+    try:
+        out = subprocess.check_output(
+            [os.environ.get("NM", "arm-none-eabi-nm"), elf]).decode()
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) == 3 and (parts[2] == prefix or parts[2].startswith(prefix + ".")):
+            return int(parts[0], 16)
+    return None
 
 
 def loans_check(rom_path):
@@ -669,24 +735,21 @@ def credits_check(rom_path):
         print(f"  los seis creditos del cartucho salen, uno a uno "
               f"({len(seen)} cambios en 1600 frames)")
 
-    # THE BUILD, behind the chord only: a seventh credit, BUILD over the
-    # commit (draw_credits). Not a credit, so not before the chord.
-    if any("BUILD" in a.split() for a, b in seen):
-        failures.append("la version sale sin haber encontrado el acorde")
+    # NO BUILD LINE, with the chord or without: there was a seventh credit
+    # under the chord with the commit, and it went (the ROM's file name says
+    # which build it is). Six credits, the chord or no chord.
     core.set_keys(KEYS["L"], KEYS["R"]); run(core, 4)
     core.set_keys(); run(core, 10)
-    build = None
+    build = False
     for _ in range(1800):
         if "BUILD" in tilemap_text(core, CREDIT_TY).split():
-            build = tilemap_text(core, CREDIT_TY + 1)
+            build = True
             break
         core.run_frame()
-    import re as _re
-    tag = build and _re.search(r"\b([0-9A-F]{7}|LOCAL)(-DEV)?\b", build)
-    if not tag:
-        failures.append(f"con el acorde no sale la version: {build!r}")
+    if build or any("BUILD" in a.split() for a, b in seen):
+        failures.append("los creditos aun dicen BUILD")
     else:
-        print(f"  con el acorde, un septimo credito: BUILD {tag.group(0)}")
+        print("  ni con el acorde sale una linea BUILD: los seis y nada mas")
 
     # The invented line is gone: the cartridge spells him PAZHITNOV, on its
     # own level screen, and the port used to print a PAJITNOV of its own.

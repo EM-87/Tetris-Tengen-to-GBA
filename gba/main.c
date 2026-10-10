@@ -29,6 +29,17 @@ static bool air_send_frame(int stage, uint32_t done, uint32_t total) {
     return (read_buttons() & TENGEN_BTN_B) != 0;
 }
 
+/* THE DEMO'S MUSIC MIX (under the chord) borrows g_music, which is also
+ * what LEVEL SETTINGS shows as the player's choice: it goes back as the
+ * demo ends, either way out. */
+static bool g_demo_mix;
+static uint8_t g_demo_music_kept;
+static void demo_music_back(void) {
+    if (!g_demo_mix) return;
+    g_music = g_demo_music_kept;
+    g_demo_mix = false;
+}
+
 int main(void) {
     /* First: every screen from here on waits for its frame in vsync(), and
      * vsync() sleeps until an interrupt that this is what switches on. */
@@ -390,7 +401,19 @@ int main(void) {
                  * (main.asm.txt:3220-3221): the attract mode is silent but
                  * for the game's effects. */
                 g_front_tune = FRONT_NOTHING;
-                stop_music();
+                /* ...EXCEPT UNDER THE CHORD, where it plays MUSIC MIX: the
+                 * tunes the chord uncovered, taking turns at its level-ups
+                 * as in a game. g_music is the match's tune, and the
+                 * player's choice on LEVEL SETTINGS: kept, and given back
+                 * as the demo ends (demo_music_back). */
+                if (g_pause_unlocked) {
+                    g_demo_music_kept = g_music;
+                    g_demo_mix = true;
+                    g_music = MUSIC_MIX;
+                    start_music(MUSIC_MIX);
+                } else {
+                    stop_music();
+                }
                 vsync();
                 audio_frame();
                 clear_screen();
@@ -1353,6 +1376,7 @@ int main(void) {
         if (g_demo) {
             if (pressed & (MENU_ADVANCE | TENGEN_BTN_B)) {
                 g_demo = false;
+                demo_music_back();
                 g_ai_active = false;
                 match_running = false;
                 screen = SCREEN_GAME_SELECT;
@@ -1436,6 +1460,7 @@ int main(void) {
         if (g_demo && !match_running) {
             if (++g_demo_over_frames >= DEMO_GAMEOVER_FRAMES) {
                 g_demo = false;
+                demo_music_back();
                 g_ai_active = false;
                 screen = SCREEN_TITLE;
                 g_front_tune = FRONT_NOTHING;

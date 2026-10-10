@@ -672,9 +672,12 @@ chosen (`erase_records_prompt`); a high scores table per mode on the release
 COMPUTER one each, the mode's name in the heading where HIGH SCORES was),
 which LEFT and RIGHT walk on the title's SELECT page (`--modetables`); the
 last name typed on a console already in the next row it makes, START to
-take it, B putting back that and not A (`g_last_name`, on the battery); under the chord, a seventh credit, BUILD and
-the commit the ROM was built from (`-DEV` with changes not committed;
-`TENGEN_BUILD` from the Makefile), so a ROM on a flash cart can be named.
+take it, B putting back that and not A (`g_last_name`, on the battery); the
+attract demo playing MUSIC MIX under the chord, where the cartridge's is
+silent but for its effects, the player's tune on LEVEL SETTINGS given back
+as it ends (`demo_music_back`, `--demo`).
+(There was a seventh credit under the chord, BUILD and the commit; it went,
+and the ROM file's name is what says which build it is.)
 [8, 11, 17, 19, 20, 23, 28, 30]
 
 **Knowingly not shown**: proto_c's title animation (its rows are the ones
