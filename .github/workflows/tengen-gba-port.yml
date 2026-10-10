@@ -1,0 +1,96 @@
+# Tengen Tetris -> GBA port: the checks that need no cartridge dump.
+#
+# The ROM itself, and the 42 checks `make gba-check` runs against it, need the
+# graphics and the sound engine that `make assets` extracts from a dump of the
+# original cartridge — which is not in this repository and must not be. So
+# what runs here is everything that does not: the rules core and its tests
+# (with the sanitizers too), the asset converter's own self-test, the core
+# cross-compiled for the GBA, and the host side of the cartridge trace.
+# `make gba-check` and the probes against the cartridge stay local.
+name: tengen-gba-port
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    name: Core rules (host)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # -Werror: the build is warning-free today and should stay that way.
+      - name: make test
+        run: make test CFLAGS="-std=c99 -Wall -Wextra -Wpedantic -Werror -g -O1"
+
+      # The same tests under AddressSanitizer and UBSan. A rule that works on
+      # x86 and not on the GBA's ARM is most likely undefined behaviour, and
+      # this is where it shows.
+      - name: make test (sanitizers)
+        run: |
+          make clean
+          make test CFLAGS="-std=c99 -Wall -Wextra -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=all"
+
+      # The fuzzers: every mode played by random hands and the computer,
+      # and the lobby and names swap over a link that loses transfers, with
+      # the invariants checked as they go (sanitizers on). A short run here;
+      # `make fuzz FUZZ_GAMES=... FUZZ_RUNS=...` for a long one.
+      - name: make fuzz
+        run: |
+          make clean
+          make fuzz
+
+      # The host half of `make trace` (the port against the cartridge, frame
+      # by frame). The comparison needs a dump; building it does not.
+      - name: trace harness builds
+        run: make build/trace_core CFLAGS="-std=c99 -Wall -Wextra -Werror -O1"
+
+  core-arm:
+    name: Core cross-compiles for the GBA
+    runs-on: ubuntu-latest
+    # An apt mirror that hangs once held a PR for hours: a few minutes is
+    # all this job ever takes.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      # With network timeouts and retries: a mirror that stopped answering
+      # held this step until the job's own limit, twice in one afternoon.
+      - name: Install arm-none-eabi-gcc
+        run: |
+          APT="-o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3"
+          for try in 1 2 3; do
+            sudo timeout 180 apt-get $APT update &&
+            sudo timeout 240 apt-get $APT install -y gcc-arm-none-eabi && break
+            echo "apt failed (try $try), retrying"; sleep 10
+          done
+          command -v arm-none-eabi-gcc
+      # The platform-independent core with the ROM's own flags (see ARMFLAGS
+      # in the Makefile). The gba/ layer cannot be built here: it includes
+      # the headers `make assets` generates from a dump.
+      - name: Compile src/ for ARM7TDMI, Thumb
+        run: |
+          for f in src/tengen_core.c src/tengen_link.c src/tengen_ai.c; do
+            arm-none-eabi-gcc -mcpu=arm7tdmi -mthumb -mthumb-interwork \
+              -std=c99 -Wall -Wextra -Werror -O2 -ffreestanding -fno-builtin \
+              -c "$f" -o /dev/null
+          done
+
+  tools:
+    name: Asset converter and tools
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      # Tile conversion, attributes, screen reflow and title composition,
+      # checked on synthetic data — no dump needed.
+      - name: make assets-check
+        run: make assets-check
+      - name: Python tools compile
+        run: python -m py_compile tools/*.py tools/probes/*.py tools/romcheck/*.py

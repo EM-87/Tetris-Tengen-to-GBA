@@ -6,23 +6,23 @@ el trabajo de contexto ya hecho.
 ---
 
 Estoy trabajando en un port de **Tetris (NES, Tengen, 1989)** a Game Boy
-Advance, en `tengen_gba_port/` dentro de este repo. El objetivo es jugabilidad
-y gráficos del playfield 1:1 con el original — mismos controles, mismas
+Advance, en este repo. El objetivo es jugabilidad y gráficos del playfield
+1:1 con el original — mismos controles, mismas
 rarezas de rotación y de RNG — adaptando solo el HUD alrededor, porque la
 pantalla de GBA (240×160) no tiene el mismo ancho que la de NES (256×240)
 aunque el playfield (80×160 px) entra exacto en el alto del GBA sin escalar.
 
 Antes de tocar código, leé en este orden:
 
-1. `tengen_gba_port/CLAUDE.md` — reglas de trabajo del proyecto (la ROM es la
+1. `CLAUDE.md` — reglas de trabajo del proyecto (la ROM es la
    fuente de verdad, no la memoria de "cómo es el Tetris normal"; núcleo
    independiente de plataforma; nunca subir un placeholder a "verificado" sin
    citar la línea del disassembly que lo confirma).
-2. `tengen_gba_port/reference/NOTES.md` — qué está verificado contra la ROM,
+2. `reference/NOTES.md` — qué está verificado contra la ROM,
    con número de línea de `main.asm.txt`. Evita re-derivar de cero cosas ya
    trazadas: el RNG, el wallkick, el timing de DAS, la curva de gravedad, la
    geometría del campo, el puntaje y las paletas.
-3. `tengen_gba_port/README.md` — estado general y cómo compilar.
+3. `README.md` — estado general y cómo compilar.
 
 Una cosa que sorprende y conviene saber de entrada: **el sonido no está
 reimplementado, está emulado**. `gba/nes6502.c` es un intérprete de 6502 chico

@@ -1,4 +1,4 @@
-# Working in tengen_gba_port/
+# Working in Tetris-Tengen-to-GBA
 
 Port of Tetris (NES, Tengen) to GBA. Goal: 1:1 gameplay and graphics for the
 playfield itself; the surrounding HUD is redesigned to fit the GBA's narrower

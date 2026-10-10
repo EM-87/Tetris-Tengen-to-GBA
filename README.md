@@ -225,8 +225,8 @@ brew install --cask gcc-arm-embedded   # macOS
 Para `make gba-check`, además: `pip install pygba` y la librería de mGBA
 (`apt-get install libmgba0.10`).
 
-En GitHub, cada push y cada PR que toque `tengen_gba_port/` corre lo que no
-necesita el dump (`.github/workflows/tengen-gba-port.yml`): `make test`
+En GitHub, cada push y cada PR corre lo que no necesita el dump
+(`.github/workflows/tengen-gba-port.yml`): `make test`
 con `-Werror` y otra vez con los sanitizers, `make assets-check`, el núcleo
 compilado para el GBA y el arnés de `make trace`. `make gba-check` y las
 comparaciones contra el cartucho necesitan el dump y se corren en local.
@@ -234,7 +234,7 @@ comparaciones contra el cartucho necesitan el dump y se corren en local.
 ## Estructura
 
 ```
-tengen_gba_port/
+Tetris-Tengen-to-GBA/
 ├── src/                  núcleo del juego (C99, sin dependencias de GBA)
 ├── tests/                tests nativos del núcleo
 ├── gba/                  capa de GBA: hardware, crt0, linker script, renderer,
