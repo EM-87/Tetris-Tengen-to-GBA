@@ -579,6 +579,28 @@ def tilemap_text(core, row, first=0, last=30):
     return "".join(out).strip()
 
 
+def heading_unraised(core, row, first=0, last=30):
+    """The letters of a window's HEADING drawn with the plain glyph.
+
+    A heading is drawn a pixel higher than the lines under it, with copies of
+    the letters shifted up inside their tiles (PMENU_RAISED_CHARS), and a
+    letter with no copy fell back to the plain one: CABLE LOST came out with
+    its A, E, S and T a pixel above its C, B, L and O, one line at two
+    heights. tilemap_text reads both the same, so this is what tells them
+    apart: every letter or ? on the row that is NOT a raised copy, on any of
+    the layers a line can be drawn on.
+    """
+    lay = check_layout(getattr(core, "_tengen_rom", None))
+    plain = []
+    for x in range(first, last):
+        for addr in (SCREENBLOCK_ADDR, SCREENBLOCK_OFFSET_ADDR,
+                     SCREENBLOCK_LIFTED_ADDR, SCREENBLOCK_PANEL_ADDR):
+            t = core.memory.u16[addr + (row * 32 + x) * 2] & 0x3FF
+            if 0x41 <= t <= 0x5A or t == lay["question"]:
+                plain.append("?" if t == lay["question"] else chr(t))
+    return plain
+
+
 # ---------------------------------------------------------------------------
 # The title screen's sprites: the cathedral overlay and the fireworks.
 #
@@ -761,12 +783,19 @@ PMENU_TY = (SCREEN_H // TILE - PMENU_H) // 2
 # rows came out; see PMENU_H in gba/port.h.
 # FIVE ROWS AND THREE LINES. The word MUSIC went — the tune's NAME is the
 # entry, and a label over a value that is itself the choice says nothing —
-# and with it the blank rows, so PM_MUSIC and PM_TUNE are now the same line.
-# The question is one line too, "EXIT?", with the mark doing what SURE? did.
+# and with it the blank rows. The question is one line too, "EXIT?", with the
+# mark doing what SURE? did.
+# ...AND THE TUNE'S NAME WENT TOO, to a window of its own: the entry is
+# MUSIC again, and A on it opens a window with every tune on a line.
 PM_HEAD = PMENU_TY + 1       # PAUSE
-PM_MUSIC = PMENU_TY + 2      # ...the tune's name, which IS the music entry
-PM_TUNE = PM_MUSIC
-PM_EXIT = PMENU_TY + 3       # EXIT
+PM_MUSIC = PMENU_TY + 2      # MUSIC
+PM_EXIT = PMENU_TY + 3       # EXIT GAME
+# The tunes' window: the heading MUSIC and a line per tune, eight under the
+# chord (PMENU_H_MAX in gba/port.h), centred like the menu.
+PMT_H = 11
+PMT_TY = (SCREEN_H // TILE - PMT_H) // 2
+PMT_HEAD = PMT_TY + 1        # MUSIC
+PMT_FIRST = PMT_TY + 2       # NO MUSIC, and the rest in kMusicNames' order
 PM_ASK = PMENU_TY + 1        # the question, "SURE?"
 PM_SURE = PM_ASK
 PM_ANSWER = PMENU_TY + 2     # YES, with NO under it

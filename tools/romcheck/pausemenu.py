@@ -6,7 +6,7 @@ from .harness import (
     KEYS, LEADER_HEAD_TY, MUSIC_COUNT_MAX, MUSIC_ROW,
     PMENU_H, PMENU_TX, PMENU_TY, PMENU_W_T, pmenu_span,
     PM_EXIT, PM_HEAD, PM_L, PM_MUSIC,
-    PM_R, PM_SURE, PM_TUNE, REG_SOUND1CNT_X,
+    PM_R, PM_SURE, PMT_FIRST, PMT_H, PMT_HEAD, PMT_TY, REG_SOUND1CNT_X,
     SCREENBLOCK_ADDR, SCREEN_TW_TILES, SCREEN_W, TILE,
     game_offsets, game_state_address, load, pixels,
     press_start, run, sound_state, start_game,
@@ -101,13 +101,63 @@ def pausemenu_check(rom_path):
             print(f"  la caja va de x={x0} a {x1 - 1}, centro {middle}: "
                    f"centrada en el tablero")
 
-    before = row(PM_TUNE)
-    tap("RIGHT")
-    if row(PM_TUNE) == before:
-        failures.append("DERECHA no cambia la cancion en el menu de pausa")
+    # MUSIC OPENS THE TUNES' WINDOW, the way EXIT GAME opens its
+    # question: every tune on a line of its own under MUSIC, the cursor on
+    # the one playing. A takes the one under the cursor and goes back to the
+    # menu; B goes back with nothing changed. LEFT and RIGHT, which used to
+    # change the tune in place, change nothing now.
+    music, _ = game_state_address(rom_path, "g_music")
+
+    def tunes():
+        return [tilemap_text(core, PMT_FIRST + i, PM_L, PM_R)
+                for i in range(PMT_H - 3)]
+
+    def marked():
+        got = [i for i, t in enumerate(tunes()) if ">" in t]
+        return got[0] if len(got) == 1 else None
+
+    if row(PM_MUSIC).replace("->", "").strip() != "MUSIC":
+        failures.append(f"la entrada de la musica no dice MUSIC: "
+                        f"{row(PM_MUSIC)!r}")
+    tap("RIGHT"); tap("LEFT")
+    if music is not None and core.memory.u8[music] != 0:
+        failures.append("IZQUIERDA o DERECHA aun cambian la cancion en el menu")
+    tap("A")
+    names = [t.replace("->", "").strip() for t in tunes()]
+    if "MUSIC" not in tilemap_text(core, PMT_HEAD, PM_L, PM_R):
+        failures.append(f"A en MUSIC no abre la ventana MUSIC: "
+                        f"{tilemap_text(core, PMT_HEAD, PM_L, PM_R)!r}")
+    elif names[0] != "NO MUSIC" or names[-1] != "MUSIC MIX" or \
+            "KOROBEINIKI" not in names:
+        failures.append(f"la ventana no lista las ocho canciones: {names}")
+    elif marked() != 0:
+        failures.append(f"la flecha no abre en la cancion que suena "
+                        f"(NO MUSIC): fila {marked()}")
     else:
-        print(f"  la musica se cambia sin salir: {before.strip()!r} -> "
-               f"{row(PM_TUNE).strip()!r}")
+        print(f"  MUSIC abre su ventana con las {len(names)} canciones, la "
+              f"flecha en la que suena")
+        tap("DOWN"); tap("DOWN")
+        tap("B")
+        if core.memory.u8[music] != 0 or "MUSIC" not in row(PM_MUSIC):
+            failures.append("B en la ventana cambia la cancion o no vuelve al "
+                            "menu")
+        else:
+            tap("A")
+            tap("DOWN")
+            tap("A")
+            if core.memory.u8[music] != 1 or "MUSIC" not in row(PM_MUSIC):
+                failures.append(f"A en LOGINSKA no la elige o no vuelve al "
+                                f"menu: g_music {core.memory.u8[music]}")
+            else:
+                print("  B vuelve sin tocar nada; A elige y vuelve al menu")
+    # ...and the window, its eleven rows, gone once it is: no line of it left
+    # above or below the menu's box.
+    left = [r for r in (PMT_TY + 1, PMT_TY + 2, PMT_TY + PMT_H - 2)
+            if tilemap_text(core, r, PM_L, PM_R).strip("- >")
+            in ("MUSIC", "NO MUSIC", "MUSIC MIX")]
+    if left:
+        failures.append(f"al cerrar la ventana quedan lineas suyas en las "
+                        f"filas {left}")
 
     # ...AND MUSIC MIX IS AS QUIET HERE AS IT IS ON THE SETTINGS SCREEN.
     # There is no one tune to audition in a rotation, so the selection screen
@@ -116,14 +166,13 @@ def pausemenu_check(rom_path):
     # choice sound like two different things depending on where you made it.
     # And going quiet must not leave the MATCH quiet: nothing else restarts
     # the engine on the way out of a pause, so the silence is spent on the
-    # unpause.
-    for _ in range(12):
-        if "MIX" in row(PM_TUNE):
-            break
-        tap("RIGHT")
-    if "MIX" not in row(PM_TUNE):
-        failures.append("el menu de pausa no ofrece MUSIC MIX")
+    # unpause. The window opens on LOGINSKA, just chosen; UP twice goes past
+    # the top of the list and round to it.
+    tap("A"); tap("UP"); tap("UP")
+    if "MIX" not in tunes()[-1] or marked() != len(tunes()) - 1:
+        failures.append("ARRIBA desde arriba no da la vuelta a MUSIC MIX")
     else:
+        tap("A")
         loud = 0
         for _ in range(120):
             core.run_frame()
@@ -334,27 +383,44 @@ def pause_menu_visible(rom_path):
     tap("START"); run(core, 60)
     rows = pixels(core if False else screen)
 
-    def lit(ty, tx0, tx1):
-        return sum(1 for y in range(ty * TILE, (ty + 1) * TILE)
-                   for x in range(tx0 * TILE, tx1 * TILE)
-                   if rows[y][x] != (0, 0, 0))
+    # BAJO EL ACORDE EL TABLERO ES UN MURO DE LADRILLOS, y un ladrillo
+    # tambien enciende pixeles: una fila de la caja que no llegase dejaria ver
+    # los de debajo y contaria como dibujada. Asi que ademas de tinta, en la
+    # fila no puede haber el gris medio de los ladrillos (el $10 de
+    # piecePaletteIndex0), que la caja no usa.
+    BRICK = (156, 148, 156)
 
-    # Las filas de la caja, de arriba abajo: el borde, PAUSE, MUSIC, el nombre
-    # de la cancion, EXIT y el borde de abajo. Ninguna puede salir vacia.
-    want = ((PMENU_TY, "el borde de arriba de la caja"),
-            (PM_HEAD, "el titulo PAUSE"),
-            (PM_MUSIC, "la linea MUSIC"),
-            (PM_TUNE, "el nombre de la cancion"),
-            (PM_EXIT, "la linea EXIT"),
-            (PMENU_TY + PMENU_H - 1, "el borde de abajo de la caja"))
-    for ty, what in want:
-        n = lit(ty, PMENU_TX + 2, PMENU_TX + PMENU_W_T - 2)
-        if n < 20:
-            failures.append(f"{what} no llega a la pantalla ({n} pixeles "
-                             f"encendidos en la fila {ty}): el dibujado se "
-                             f"esta pasando del blanco vertical")
-        else:
-            print(f"  {what}: {n} pixeles en pantalla")
+    def lit(ty, tx0, tx1):
+        px = [rows[y][x] for y in range(ty * TILE, (ty + 1) * TILE)
+              for x in range(tx0 * TILE, tx1 * TILE)]
+        return sum(1 for p in px if p != (0, 0, 0)), sum(p == BRICK for p in px)
+
+    def look(want):
+        for ty, what in want:
+            n, bricks = lit(ty, PMENU_TX + 2, PMENU_TX + PMENU_W_T - 2)
+            if n < 20 or bricks:
+                failures.append(f"{what} no llega a la pantalla ({n} pixeles "
+                                 f"encendidos en la fila {ty}, {bricks} de "
+                                 f"ladrillo): el dibujado se esta pasando del "
+                                 f"blanco vertical")
+            else:
+                print(f"  {what}: {n} pixeles en pantalla")
+
+    # Las filas de la caja, de arriba abajo: el borde, PAUSE, MUSIC,
+    # EXIT GAME y el borde de abajo. Ninguna puede salir vacia.
+    look(((PMENU_TY, "el borde de arriba de la caja"),
+          (PM_HEAD, "el titulo PAUSE"),
+          (PM_MUSIC, "la linea MUSIC"),
+          (PM_EXIT, "la linea EXIT GAME"),
+          (PMENU_TY + PMENU_H - 1, "el borde de abajo de la caja")))
+    # ...y las de la ventana de canciones, la caja mas grande que hay.
+    tap("A"); run(core, 30)
+    rows = pixels(screen)
+    look(((PMT_TY, "el borde de arriba de la ventana MUSIC"),
+          (PMT_HEAD, "el titulo MUSIC"),
+          (PMT_FIRST, "la primera cancion"),
+          (PMT_TY + PMT_H - 2, "la ultima cancion"),
+          (PMT_TY + PMT_H - 1, "el borde de abajo de la ventana")))
     del core, screen
     return failures
 

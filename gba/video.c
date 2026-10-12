@@ -581,6 +581,14 @@ void set_piece_palette(TengenTetromino piece) {
     set_bank_from_piece(PAL_PIECE_BANK, piece);
 }
 
+/* The paused board's bricks: piecePaletteIndex0, which is what the field
+ * wears at level 0 — its greys — in the falling piece's bank. See T_BRICK. */
+void set_brick_palette(void) {
+    const uint8_t *entry = kRomPiecePalettes[0];
+    vu16 *bank = MEM_PALETTE + PAL_PIECE_BANK * 16;
+    for (int i = 0; i < 3; i++) bank[1 + i] = nes_colour_to_gba(entry[i]);
+}
+
 /* The preview's, from the SAME table and the same rule — only indexed by the
  * piece that is coming rather than the one that is here. */
 void set_next_palette(TengenTetromino piece) {

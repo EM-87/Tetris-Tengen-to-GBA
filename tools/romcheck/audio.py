@@ -868,25 +868,95 @@ def chord_extras_check(rom_path):
             print(f"  acorde={int(chord)}: pasar el record de {top} -> fanfarria {jingles} vez/veces")
         del core, screen
 
-    # The pause.
+    # The pause: under the chord the board goes behind a wall of BRICKS, the
+    # cartridge's lone shaded block ($0F, the handicap's garbage) in every
+    # cell, grey whatever the level — in the falling piece's bank, which
+    # gets the piece's colours back with the board.
+    from .harness import COL_FIELD, PAL_PIECE_BANK, PALETTE_ADDR, PMENU_H, \
+        PMENU_TY, pixels
+    T_BRICK = 0x0F
+
     def shown_cells(core):
         # Only where the blocks were planted: the plaque and the pause menu
         # stand in the middle of the board and are tiles too.
         return sum(map_row_text(core, r)[0:5].count("#") for r in range(14, 20))
-    for chord, entry, board, want_hidden, name in (
-            (False, 0, 0, False, "1 PLAYER sin acorde"),
-            (True, 0, 0, True, "1 PLAYER con acorde"),
-            (True, 3, 1, False, "VERSUS con acorde (el tablero de la maquina)")):
-        core, screen = start(chord, entry)
+
+    def not_bricks(core):
+        """The board's cells, outside the menu's rows, that are not a brick
+        in the bricks' bank."""
+        odd = []
+        for r in range(20):
+            if PMENU_TY <= r < PMENU_TY + PMENU_H:
+                continue
+            for c in range(COL_FIELD[0], COL_FIELD[1]):
+                e = core.memory.u16[0x0600E000 + (r * 32 + c) * 2]
+                if (e & 0x3FF) != T_BRICK or e >> 12 != PAL_PIECE_BANK:
+                    odd.append((c, r))
+        return odd
+
+    def grey_spread(rows):
+        """How far from grey the board's lit pixels get, below the menu."""
+        return max((max(p) - min(p) for y in range(112, 160)
+                    for p in rows[y][80:160] if p != (0, 0, 0)), default=-1)
+
+    def bank_spread(core):
+        """...and the bricks' bank, entries 1-3, as the GBA holds them."""
+        worst = 0
+        for i in (1, 2, 3):
+            c = core.memory.u16[PALETTE_ADDR + (PAL_PIECE_BANK * 16 + i) * 2]
+            rgb = (c & 31, (c >> 5) & 31, (c >> 10) & 31)
+            worst = max(worst, max(rgb) - min(rgb))
+        return worst
+
+    for chord, entry, board, level, want_bricks, name in (
+            (False, 0, 0, 0, False, "1 PLAYER sin acorde"),
+            (True, 0, 0, 0, True, "1 PLAYER con acorde"),
+            (True, 0, 0, 5, True, "1 PLAYER con acorde, nivel 5"),
+            (True, 3, 1, 0, False, "VERSUS con acorde (el tablero de la maquina)")):
+        core, screen = load(rom_path)   # `screen` must stay alive; see load()
+        run(core, 8)
+        press_start(core); run(core, 10)
+        if chord:
+            core.set_keys(KEYS["L"], KEYS["R"]); run(core, 4)
+            core.set_keys(); run(core, 12)
+        for _ in range(entry):
+            core.set_keys(KEYS["DOWN"]); run(core, 4)
+            core.set_keys(); run(core, 10)
+        press_start(core); run(core, 10)
+        for _ in range(level):
+            core.set_keys(KEYS["RIGHT"]); run(core, 4)
+            core.set_keys(); run(core, 10)
+        press_start(core); run(core, 40)
         for row in range(14, 20):
             for col in range(1, 6):
                 core.memory.u8[base + off["field"] + board * PF + row * PF_W + col] = CELL_BLOCK
         press_start(core); run(core, 12)
         cells = shown_cells(core)
-        if (cells == 0) != want_hidden:
-            failures.append(f"{name}: en pausa se ven {cells} celdas del tablero")
+        odd = not_bricks(core)
+        if not want_bricks:
+            if cells == 0 or len(odd) < 100:
+                failures.append(f"{name}: en pausa el tablero no se ve "
+                                f"({cells} celdas, {200 - len(odd)} ladrillos)")
+            else:
+                print(f"  {name}: en pausa se ven sus {cells} celdas")
+        elif odd:
+            failures.append(f"{name}: en pausa no es un muro de ladrillos: "
+                            f"{len(odd)} celdas no lo son (la primera, columna "
+                            f"{odd[0][0]} fila {odd[0][1]})")
+        elif grey_spread(pixels(screen)) > 24 or bank_spread(core) > 3:
+            failures.append(f"{name}: los ladrillos no son grises (pixeles "
+                            f"{grey_spread(pixels(screen))}, banco "
+                            f"{bank_spread(core)})")
         else:
-            print(f"  {name}: en pausa se ven {cells} celdas")
+            # ...and with the pause gone, the board and the piece's colours.
+            press_start(core); run(core, 12)
+            back = shown_cells(core)
+            if back == 0 or bank_spread(core) <= 3:
+                failures.append(f"{name}: al reanudar no vuelve el tablero "
+                                f"({back} celdas) o la pieza sigue gris")
+            else:
+                print(f"  {name}: en pausa un muro de ladrillos grises; al "
+                      f"reanudar, el tablero y la pieza en sus colores")
         del core, screen
 
     for f in failures:
@@ -894,5 +964,5 @@ def chord_extras_check(rom_path):
     if failures:
         return 1
     print("OK: bajo el acorde, el tempo sube con la pila, el record suena y la "
-          "pausa esconde el tablero.")
+          "pausa esconde el tablero tras un muro de ladrillos.")
     return 0

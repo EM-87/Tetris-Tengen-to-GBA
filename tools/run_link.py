@@ -1480,7 +1480,8 @@ def pause_check(rom):
     silent = loudest(40)
     widths = read(cores, "g_pmenu_drawn_w")
     tune = read(cores, "g_music")
-    tap("RIGHT", who=1)                                # the SLAVE picks a tune
+    # The SLAVE picks a tune: MUSIC, the next one down, A.
+    tap("A", who=1); tap("DOWN", who=1); tap("A", who=1)
     both(10)
     tune2 = read(cores, "g_music")
     tap("START", who=0)                                # ...and resume
@@ -1567,7 +1568,10 @@ def menu_list_check(rom):
     both(20)
     seen = []
     for _ in range(2):
-        tap("RIGHT", who=1)                        # el ESCLAVO cambia
+        # el ESCLAVO cambia: MUSIC, la siguiente, A. La ventana abre en
+        # la que suena, asi que va a KATIUSKA y luego a MUSIC MIX, las dos
+        # fuera de la lista de cinco que tendria sin el acorde.
+        tap("A", who=1); tap("DOWN", who=1); tap("A", who=1)
         both(10)
         seen.append([c.memory.u8[sym[0]] for c in cores])
     if any(a != b for a, b in seen):
@@ -2141,6 +2145,17 @@ def lost_check(rom):
         failures.append(f"tras {LINK_GIVEUP_FRAMES_PY} frames sin cable no "
                         f"sale la ventana de CABLE LOST en las dos (perdido "
                         f"{gone}, ventana {boxes})")
+    # ...AND ITS HEADING ON ONE LINE: every letter the raised copy, as PAUSE's
+    # are. Half of them were, and CABLE LOST stood at two heights.
+    heads = [run_rom.tilemap_text(c, run_rom.PM_HEAD) for c in cores]
+    plain = [run_rom.heading_unraised(c, run_rom.PM_HEAD) for c in cores]
+    if any("CABLE LOST" not in h for h in heads):
+        failures.append(f"la ventana no dice CABLE LOST: {heads}")
+    elif any(plain):
+        failures.append(f"CABLE LOST a dos alturas: {plain[0] or plain[1]} "
+                        f"un pixel por debajo de las demas letras")
+    else:
+        print("  CABLE LOST, todas sus letras a la misma altura")
     tap("START")
     both(30)
     pages = [" ".join(run_rom.tilemap_text(c, r) for r in range(0, 20))

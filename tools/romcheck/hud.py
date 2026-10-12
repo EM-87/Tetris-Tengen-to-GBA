@@ -331,6 +331,110 @@ def stats_show_check(rom_path):
     return 0
 
 
+def show_frame_check(rom_path):
+    """THE SHOW DOES NOT BREAK THE BOXES, IN ANY HUD.
+
+    The level-up show clears what it needs inside a box and puts its stage
+    there; the rope round the box is not its to touch. It touched it twice:
+    in 1 PLAYER's HUD BANNER the show wiped the whole right column, the box's
+    top run and corner with it, and drew the plain strip of rope the screen
+    had before the boxes (draw_field_braid) — the box came apart at the top
+    for the length of every show. And HUD VERSUS cleared the left box ten
+    columns wide from the braid down to the first ledge, which is the eight
+    of its interior and the two of its inner rope: the rope by the board had
+    a hole in it six rows deep.
+
+    Read off the main map, by palette: every cell drawn in the braid's bank
+    while the match was on (rope, corners, ledges) has to be the same cell
+    all through the show. The show may ADD ledges — HUD STATS draws one where
+    NEXT was — but not take any away. Six cases, every HUD of the three modes
+    reachable without a cable.
+    """
+    off = game_offsets(rom_path)
+    base, why = game_state_address(rom_path)
+    if base is None:
+        print(f"SALTADO: {why}")
+        return 0
+
+    BRAID_BANK = 2                # gba/screen_1p.h
+    failures = []
+
+    def frame(core):
+        cells = {}
+        for ty in range(SCREEN_H // TILE):
+            for tx in range(30):
+                e = core.memory.u16[SCREENBLOCK_ADDR + (ty * 32 + tx) * 2]
+                if e >> 12 == BRAID_BANK:
+                    cells[(tx, ty)] = e
+        return cells
+
+    for name, down, chord, selects in (
+            ("1 PLAYER, HUD BANNER", 0, False, 0),
+            ("1 PLAYER, HUD STATS", 0, False, 1),
+            ("VERSUS COMPUTER, HUD VERSUS", 3, False, 0),
+            ("VERSUS COMPUTER, HUD STATS", 3, True, 1),
+            ("WITH COMPUTER, HUD COOP", 4, False, 0),
+            ("WITH COMPUTER, HUD STATS", 4, True, 1)):
+        core, screen = load(rom_path)   # `screen` must stay alive; see load()
+        _ = screen
+
+        def tap(*keys):
+            core.set_keys(*[KEYS[k] for k in keys]); run(core, 4)
+            core.set_keys(); run(core, 12)
+
+        run(core, 8)
+        press_start(core); run(core, 20)
+        if chord:
+            tap("L", "R"); run(core, 12)
+        for _ in range(down):
+            tap("DOWN")
+        press_start(core); run(core, 12)
+        press_start(core); run(core, 60)
+        for _ in range(selects):
+            tap("SELECT")
+        run(core, 20)
+        before = frame(core)
+
+        for who in (0, 1):
+            at = base + off["stride"] * who
+            core.memory.u8[at + off["lines"]] = 29
+            core.memory.u8[at + off["lines"] + 1] = 0
+        fill_rows(core, base + off["field"], (19,))
+        level = core.memory.u8[base + off["level"]]
+        for _ in range(60):
+            core.set_keys(KEYS["DOWN"]); run(core, 8)
+            core.set_keys(); run(core, 2)
+            if core.memory.u8[base + off["level"]] != level:
+                break
+        else:
+            failures.append(f"{name}: el nivel no subio")
+            continue
+
+        # Hands off the pad: a press fast-forwards the show. Looked at as it
+        # opens and again well into it.
+        broken = []
+        for wait in (60, 340):
+            run(core, wait)
+            now = frame(core)
+            broken = sorted(c for c, e in before.items() if now.get(c) != e)
+            if broken:
+                failures.append(f"{name}: el baile rompe el marco en "
+                                 f"{len(broken)} celdas (la primera, columna "
+                                 f"{broken[0][0]} fila {broken[0][1]})")
+                break
+        if not broken:
+            print(f"  {name}: el marco entero durante todo el baile "
+                  f"({len(before)} celdas de cuerda y baldas)")
+        del core, screen
+
+    for f in failures:
+        print("FALLA:", f)
+    if failures:
+        return 1
+    print("OK: el baile no rompe ningun cajon, en ningun HUD.")
+    return 0
+
+
 def versus_hud_check(rom_path):
     """THE RACE'S THIRD HUD, and what a paused race shows.
 

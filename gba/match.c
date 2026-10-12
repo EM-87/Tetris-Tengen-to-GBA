@@ -313,7 +313,14 @@ static void refresh_palettes(void) {
         g_shown_level = p->level;
         set_field_palette_for_level(g_shown_level);
     }
-    if (p->piece.current != g_shown_piece) {
+    /* THE PAUSE'S BRICKS BORROW THE PIECE'S BANK (T_BRICK): grey while they
+     * are up, and the piece's colours put back with the board. What is
+     * remembered as shown is then no piece at all, so the first frame with
+     * a board in it reinstalls the piece's whichever it is. */
+    if (board_bricked()) {
+        set_brick_palette();
+        g_shown_piece = TENGEN_TETROMINO_COUNT;
+    } else if (p->piece.current != g_shown_piece) {
         g_shown_piece = p->piece.current;
         set_piece_palette(g_shown_piece);
     }
@@ -333,21 +340,23 @@ static uint8_t g_pause_row;    /* which line the cursor is on */
 static bool g_mix_held;
 bool g_pause_confirm;   /* ...and the SURE? question over the top of it */
 static bool g_pause_yes;
+/* ...or the tunes' window, and the line its cursor is on. See PMENU_H_MAX. */
+static bool g_pause_tunes;
+static uint8_t g_tune_row;
 
+/* A row at a time, straight into the main map: the tunes' window is eleven
+ * rows of eighteen, drawn on every frame of the pause, and a call per tile
+ * (with the skin's bank asked for each one) was frames past the blank. */
 static void draw_box_frame(int tx, int ty, int w, int h) {
-    for (int x = 0; x < w; x++) {
-        set_map_tile(tx + x, ty,
-                      WITH_BANK(x == 0 ? T_BOX_TL : x == w - 1 ? T_BOX_TR : T_BOX_T,
-                                 plaque_bank()));
-        set_map_tile(tx + x, ty + h - 1,
-                      WITH_BANK(x == 0 ? T_BOX_BL : x == w - 1 ? T_BOX_BR : T_BOX_B,
-                                 plaque_bank()));
-    }
-    for (int y = 1; y < h - 1; y++) {
-        set_map_tile(tx, ty + y, WITH_BANK(T_BOX_L, plaque_bank()));
-        set_map_tile(tx + w - 1, ty + y, WITH_BANK(T_BOX_R, plaque_bank()));
-        for (int x = 1; x < w - 1; x++)
-            set_map_tile(tx + x, ty + y, WITH_BANK(T_BLANK, plaque_bank()));
+    int bank = plaque_bank();
+    vu16 *row = MEM_SCREENBLOCK(SCREENBLOCK) + ty * MAP_W + tx;
+    for (int y = 0; y < h; y++, row += MAP_W) {
+        int l = T_BOX_L, m = T_BLANK, r = T_BOX_R;
+        if (y == 0) { l = T_BOX_TL; m = T_BOX_T; r = T_BOX_TR; }
+        else if (y == h - 1) { l = T_BOX_BL; m = T_BOX_B; r = T_BOX_BR; }
+        row[0] = WITH_BANK(l, bank);
+        for (int x = 1; x < w - 1; x++) row[x] = WITH_BANK(m, bank);
+        row[w - 1] = WITH_BANK(r, bank);
     }
 }
 
@@ -429,59 +438,71 @@ static void draw_pmenu_line(int in_tx, int in_w, int ty, const char *text,
     }
 }
 
-/* The box drawn last, so a change of width can clean up after it. */
-static int g_pmenu_drawn_w;
+/* The box drawn last, its width and height, so a change of size can clean
+ * up after it. */
+static int g_pmenu_drawn_w, g_pmenu_drawn_h;
 
-/* WHAT THE WIDEST BOX WOULD COVER, on all four layers, saved as the box
- * first goes up. Nothing under it changes while the game is paused, so a box
- * that gets narrower — another tune, or the EXIT? question — puts back the
- * strips it uncovers from here. It used to ask for a whole repaint of the
- * static screen instead, and those frames finished a scanline past the
- * vertical blank. */
-static const uint8_t kPmenuLayers[4] = {
-    SCREENBLOCK, SCREENBLOCK_STATS, SCREENBLOCK_PANEL, SCREENBLOCK_HISTOGRAM
-};
-static uint16_t g_pmenu_under[4][PMENU_H][PMENU_W_MAX];
+/* WHAT THE BOXES COVER, on all four layers. Nothing under them changes
+ * while the game is paused, so a box that gets smaller — the question after
+ * the menu, the menu after the tunes' window — puts back what it uncovers
+ * from here. It used to ask for a whole repaint of the static screen
+ * instead, and those frames finished a scanline past the vertical blank.
+ *
+ * SAVED AS IT IS FIRST COVERED. What is held is the centred rectangle round
+ * every box since the screen was last whole (g_pmenu_saved_w, _h); a box
+ * that reaches past it saves the difference before it is drawn, and nothing
+ * has covered that yet. Eleven rows of eighteen, four layers deep, on the
+ * frame the pause goes up was the heaviest way to have it.
+ *
+ * THE FOUR LAYERS ARE FOUR SCREENBLOCKS IN A ROW — the main map, the
+ * offset one, the counters' and the histogram's — so layer `l` is the main
+ * map plus `l` maps, and the copies below walk them by pointer. */
+typedef char pmenu_layers_in_a_row[
+    SCREENBLOCK_STATS == SCREENBLOCK + 1 && SCREENBLOCK_PANEL == SCREENBLOCK + 2 &&
+    SCREENBLOCK_HISTOGRAM == SCREENBLOCK + 3 ? 1 : -1];
+#define PMENU_LAYER(l) (MEM_SCREENBLOCK(SCREENBLOCK) + (l) * MAP_W * 32)
+#define PMENU_TX0 ((SCREEN_TW - PMENU_W_MAX) / 2)
+#define PMENU_TY0 ((SCREEN_TH - PMENU_H_MAX) / 2)
+/* Sixteen hundred bytes. In EWRAM on a cartridge, whose IWRAM had less than
+ * the stack's 4KB left over with them; in IWRAM on a Single-Pak copy, whose
+ * EWRAM is the program itself and has a few hundred bytes to spare. */
+#ifndef TENGEN_MULTIBOOT
+__attribute__((section(".ewram")))
+#endif
+static uint16_t g_pmenu_under[4][PMENU_H_MAX][PMENU_W_MAX];
+static int g_pmenu_saved_w, g_pmenu_saved_h;
 
-static void pmenu_save_under(void) {
-    int tx0 = (SCREEN_TW - PMENU_W_MAX) / 2;
-    for (int l = 0; l < 4; l++) {
-        vu16 *map = MEM_SCREENBLOCK(kPmenuLayers[l]);
-        for (int y = 0; y < PMENU_H; y++)
-            for (int x = 0; x < PMENU_W_MAX; x++)
-                g_pmenu_under[l][y][x] = map[(PMENU_TY + y) * MAP_W + tx0 + x];
-    }
-}
-
-/* Puts back the columns a box `from` wide covered and one `to` wide does
- * not. */
-static void pmenu_restore_strips(int from, int to) {
-    int tx0 = (SCREEN_TW - PMENU_W_MAX) / 2;
-    int a = (SCREEN_TW - from) / 2, b = (SCREEN_TW - to) / 2;
-    for (int l = 0; l < 4; l++) {
-        vu16 *map = MEM_SCREENBLOCK(kPmenuLayers[l]);
-        for (int y = 0; y < PMENU_H; y++)
-            for (int tx = a; tx < a + from; tx++) {
-                if (tx >= b && tx < b + to) continue;
-                map[(PMENU_TY + y) * MAP_W + tx] = g_pmenu_under[l][y][tx - tx0];
+/* Every cell of the centred box `w` by `h` that the centred box `keep_w` by
+ * `keep_h` does not cover: saved, or put back. A row of it is at most two
+ * runs, either side of the kept box, copied straight. */
+static void pmenu_cells(int w, int h, int keep_w, int keep_h, bool back) {
+    int x0 = (SCREEN_TW - w) / 2, y0 = (SCREEN_TH - h) / 2;
+    int kx = (SCREEN_TW - keep_w) / 2, ky = (SCREEN_TH - keep_h) / 2;
+    for (int l = 0; l < 4; l++)
+        for (int ty = y0; ty < y0 + h; ty++) {
+            vu16 *map = PMENU_LAYER(l) + ty * MAP_W;
+            uint16_t *under = g_pmenu_under[l][ty - PMENU_TY0];
+            bool kept = ty >= ky && ty < ky + keep_h;
+            int run[2][2] = { { x0, kept ? kx : x0 + w },
+                              { kept ? kx + keep_w : x0 + w, x0 + w } };
+            for (int r = 0; r < 2; r++) {
+                if (back)
+                    for (int tx = run[r][0]; tx < run[r][1]; tx++)
+                        map[tx] = under[tx - PMENU_TX0];
+                else
+                    for (int tx = run[r][0]; tx < run[r][1]; tx++)
+                        under[tx - PMENU_TX0] = map[tx];
             }
-    }
+        }
 }
 
-/* ...AND PUT BACK WHOLE WHEN THE PAUSE ENDS: the box's own columns, on all
+/* ...AND PUT BACK WHOLE WHEN THE PAUSE ENDS: the box's own cells, on all
  * four layers, from what was saved as it went up. That is all a pause
  * changed on the screen, and a repaint of the whole static screen to undo it
  * was the heaviest frame the game had — the one that left a pause finished
  * drawing at line 222 of 227, five lines from the next picture. */
-static void pmenu_restore_box(int w) {
-    int tx0 = (SCREEN_TW - PMENU_W_MAX) / 2;
-    int a = (SCREEN_TW - w) / 2;
-    for (int l = 0; l < 4; l++) {
-        vu16 *map = MEM_SCREENBLOCK(kPmenuLayers[l]);
-        for (int y = 0; y < PMENU_H; y++)
-            for (int tx = a; tx < a + w; tx++)
-                map[(PMENU_TY + y) * MAP_W + tx] = g_pmenu_under[l][y][tx - tx0];
-    }
+static void pmenu_restore_box(void) {
+    pmenu_cells(g_pmenu_drawn_w, g_pmenu_drawn_h, 0, 0, true);
 }
 
 /* The same for the cartridge's own plaque (no chord, no menu): it is on the
@@ -519,18 +540,59 @@ static bool g_unpause_patch;
  * is the teardown, and it runs off the same g_repaint that paints the plaque
  * over — see draw_match.
  *
- * `w` columns of it, centred: the box on screen, or the one before it if that
- * was wider. Never more — the panels' counters live on these layers just
- * outside a narrow box, and wiping the widest box's worth took their digits
- * with it. */
-static void clear_pmenu_layers(int w) {
-    int tx = (SCREEN_TW - w) / 2;
-    clear_panel_region(tx, PMENU_TY, w, PMENU_H);
-    for (int y = 0; y < PMENU_H; y++)
-        for (int x = 0; x < w; x++) {
-            set_stats_tile(tx + x, PMENU_TY + y, T_BLANK);
-            set_histogram_tile(tx + x, PMENU_TY + y, T_BLANK);
+ * The box's own cells, centred: the box on screen, or the one before it if
+ * that was bigger. Never more — the panels' counters live on these layers
+ * just outside a narrow box, and wiping the widest box's worth took their
+ * digits with it. */
+static void clear_pmenu_layers(int w, int h) {
+    int tx = (SCREEN_TW - w) / 2, ty = (SCREEN_TH - h) / 2;
+    for (int l = 1; l < 4; l++)            /* all but the main map */
+        for (int y = ty; y < ty + h; y++) {
+            vu16 *map = PMENU_LAYER(l) + y * MAP_W;
+            for (int x = tx; x < tx + w; x++) map[x] = T_BLANK;
         }
+}
+
+/* ONE WAY TO PUT UP A BOX, for the menu, its question, the tunes and the
+ * lost cable: `count` lines, the heading and then the choices, with the
+ * arrow before line `cursor` (none if there is no such line). */
+/* Saves what a box `w` by `h` will cover that no box has covered since the
+ * screen was last whole. The first box saves from scratch. */
+static void pmenu_reach(int w, int h) {
+    if (!g_pmenu_drawn_w) g_pmenu_saved_w = g_pmenu_saved_h = 0;
+    int sw = w > g_pmenu_saved_w ? w : g_pmenu_saved_w;
+    int sh = h > g_pmenu_saved_h ? h : g_pmenu_saved_h;
+    if (sw != g_pmenu_saved_w || sh != g_pmenu_saved_h) {
+        pmenu_cells(sw, sh, g_pmenu_saved_w, g_pmenu_saved_h, false);
+        g_pmenu_saved_w = sw;
+        g_pmenu_saved_h = sh;
+    }
+}
+
+static void draw_pmenu(const char *const *lines, int count, int cursor) {
+    int w = pmenu_width(lines, count), h = count + 2;
+    pmenu_reach(w, h);
+    /* A box of another size than the last one uncovers the board, the braid
+     * and the panels' edges where the last one was: put back just those. */
+    if (g_pmenu_drawn_w && (w != g_pmenu_drawn_w || h != g_pmenu_drawn_h))
+        pmenu_cells(g_pmenu_drawn_w, g_pmenu_drawn_h, w, h, true);
+    /* THE OTHER THREE LAYERS HAVE TO GET OUT OF THE WAY where the box lands:
+     * the counters' background is drawn ABOVE the main one, and a box that
+     * met one would have the panel printing straight through it. It is also
+     * what wipes the line the cursor was on a frame ago. */
+    clear_pmenu_layers(w, h);
+    g_pmenu_drawn_w = w;
+    g_pmenu_drawn_h = h;
+
+    int tx = (SCREEN_TW - w) / 2, ty = (SCREEN_TH - h) / 2;
+    draw_box_frame(tx, ty, w, h);
+    /* The heading keeps its own colour because it is not a choice, and a
+     * pixel more under it than there is between the choices (see
+     * PMENU_RAISED_BASE). */
+    for (int i = 0; i < count; i++)
+        draw_pmenu_line(tx + 1, w - 2, ty + 1 + i, lines[i],
+                         i ? BANK_LABEL : BANK_NOTE, i ? PL_CHOICE : PL_HEADING,
+                         i == cursor);
 }
 
 /* CABLE LOST, in the pause menu's own window and by its own machinery (what
@@ -542,19 +604,17 @@ static void draw_cable_lost_box(void) {
     /* Over the air there is no cable to have lost (wireless.c). */
     const char *lines[] = { g_lost_over_air ? "SIGNAL LOST" : "CABLE LOST",
                             "PRESS START", "TO LEAVE" };
-    int w = pmenu_width(lines, 3);
-    if (!g_pmenu_drawn_w) pmenu_save_under();
-    else if (w < g_pmenu_drawn_w) pmenu_restore_strips(g_pmenu_drawn_w, w);
-    clear_pmenu_layers(w);
-    g_pmenu_drawn_w = w;
-    int tx = (SCREEN_TW - w) / 2;
-    draw_box_frame(tx, PMENU_TY, w, PMENU_H);
-    draw_pmenu_line(tx + 1, w - 2, PMENU_TY + 1, lines[0], BANK_NOTE,
-                     PL_HEADING, false);
-    draw_pmenu_line(tx + 1, w - 2, PMENU_TY + 2, lines[1], BANK_LABEL,
-                     PL_CHOICE, false);
-    draw_pmenu_line(tx + 1, w - 2, PMENU_TY + 3, lines[2], BANK_LABEL,
-                     PL_CHOICE, false);
+    draw_pmenu(lines, 3, -1);
+}
+
+/* The tunes the window lists. THE SAME LIST ON BOTH CONSOLES: over the cable
+ * the menu is the MASTER's (there because it found the chord), so its list
+ * is the one with the uncovered tunes whatever this console found. Counted
+ * from this console's own chord, a slave that had not rung it went through
+ * five tunes while the master went through eight, and the two ended up
+ * playing different ones. */
+static int pause_tune_count(void) {
+    return g_linked ? MUSIC_UNLOCKED_COUNT : music_choices();
 }
 
 static void draw_pause_menu(void) {
@@ -563,38 +623,24 @@ static void draw_pause_menu(void) {
      * a line, so the arrow answers one of them and not the gap between. */
     /* "SURE?", not "EXIT?": the entry it answers already says EXIT GAME,
      * and the question saying it again read as a second menu. */
-    const char *ask[] = { "SURE?", "YES", "NO" };
-    /* THE TUNE'S NAME IS THE ENTRY. A label over a value that is itself the
-     * choice is a label saying nothing. See PMENU_H. */
+    static const char *const ask[] = { "SURE?", "YES", "NO" };
     /* "EXIT GAME", not "EXIT": a player took the bare word for closing the
      * menu and walked out of the game. */
-    const char *menu[] = { "PAUSE", kMusicNames[g_music], "EXIT GAME" };
-    const char *const *lines = g_pause_confirm ? ask : menu;
-    int w = pmenu_width(lines, 3);
-    /* The first box since the screen was last whole: keep what it covers. */
-    if (!g_pmenu_drawn_w) pmenu_save_under();
-    /* A box narrower than the last one uncovers the board, the braid and the
-     * panels' edges: put back just those strips. */
-    else if (w < g_pmenu_drawn_w) pmenu_restore_strips(g_pmenu_drawn_w, w);
-    /* THE OTHER THREE LAYERS HAVE TO GET OUT OF THE WAY where the box lands:
-     * the counters' background is drawn ABOVE the main one, and a box that
-     * met one would have the panel printing straight through it. It is also
-     * what wipes the line the cursor was on a frame ago. */
-    clear_pmenu_layers(w);
-    g_pmenu_drawn_w = w;
-
-    int tx = (SCREEN_TW - w) / 2;
-    draw_box_frame(tx, PMENU_TY, w, PMENU_H);
-    /* The heading keeps its own colour because it is not a choice, and a
-     * pixel more under it than there is between the choices (see
-     * PMENU_RAISED_BASE). */
-    draw_pmenu_line(tx + 1, w - 2, PMENU_TY + 1, lines[0], BANK_NOTE,
-                     PL_HEADING, false);
-    bool first = g_pause_confirm ? g_pause_yes : g_pause_row == PMENU_MUSIC;
-    draw_pmenu_line(tx + 1, w - 2, PMENU_TY + 2, lines[1], BANK_LABEL,
-                     PL_CHOICE, first);
-    draw_pmenu_line(tx + 1, w - 2, PMENU_TY + 3, lines[2], BANK_LABEL,
-                     PL_CHOICE, !first);
+    /* "MUSIC", not "CHANGE MUSIC": twelve letters and the arrow need a box
+     * of eighteen, and EXIT GAME's sixteen is the most that leaves the
+     * panels' last column of figures showing — the score's digits, and a
+     * paused race's rival numbers (`--versushud`). */
+    static const char *const menu[] = { "PAUSE", "MUSIC", "EXIT GAME" };
+    if (g_pause_confirm) {
+        draw_pmenu(ask, 3, g_pause_yes ? 1 : 2);
+    } else if (g_pause_tunes) {
+        const char *tunes[1 + MUSIC_UNLOCKED_COUNT] = { "MUSIC" };
+        int count = pause_tune_count();
+        for (int i = 0; i < count; i++) tunes[1 + i] = kMusicNames[i];
+        draw_pmenu(tunes, 1 + count, 1 + g_tune_row);
+    } else {
+        draw_pmenu(menu, 3, 1 + g_pause_row);
+    }
 }
 
 /* One frame of it. Returns true if the menu ate the input, which is what
@@ -614,17 +660,71 @@ static bool pause_menu_input(uint8_t pressed, bool *leaving) {
      * the next pause opens on the column and not on a half-answered
      * "EXIT?". A takes a choice, B backs out of one. What comes off the
      * screen is pause_toggled's to decide, as the core unpauses: a repaint
-     * forced here put the frame that leaves the menu at line 222 of 227. */
+     * forced here put the frame that leaves the menu at line 222 of 227.
+     * The tunes' window goes the same way, and nothing in it is chosen. */
     if (pressed & TENGEN_BTN_START) {
         g_pause_confirm = false;
+        g_pause_tunes = false;
         return false;
+    }
+
+    /* THE TUNES' WINDOW: Up and Down walk the list, and SELECT walks it
+     * down as it does every list; A takes the tune under the cursor and B
+     * leaves the one that was playing, both back to the menu. */
+    if (g_pause_tunes) {
+        int count = pause_tune_count();
+        if (pressed & TENGEN_BTN_UP)
+            g_tune_row = (uint8_t)((g_tune_row + count - 1) % count);
+        if (pressed & (TENGEN_BTN_DOWN | TENGEN_BTN_SELECT))
+            g_tune_row = (uint8_t)((g_tune_row + 1) % count);
+        if (pressed & (TENGEN_BTN_A | TENGEN_BTN_B)) {
+            g_pause_tunes = false;
+            screen_blip();
+        }
+        /* The one already playing, taken again, is left where it is: a
+         * pause suspends a tune, it does not rewind it. */
+        if ((pressed & TENGEN_BTN_A) && g_tune_row != g_music) {
+            g_levelup_resume = 0;        /* the new tune is already on */
+            g_music = g_tune_row;
+            /* The mix restarts on its current turn rather than from the
+             * top. */
+            g_mix_step = 0;
+            /* HEARD AT ONCE, which is the whole point of choosing it here —
+             * and the game is PAUSED, so the engine has been suspended and a
+             * track handed to it now would sit there silent. Resume, then
+             * start. The pause's own suspend goes back on when the menu is
+             * left, because tengen_pause_input resumes on the way out either
+             * way.
+             *
+             * EXCEPT MUSIC MIX, WHICH HAS NOTHING TO PREVIEW. The selection
+             * screen already says so in as many words (see front_tune): the
+             * mix is a rotation that belongs to the match, not one tune to
+             * audition, so it goes quiet there like NO MUSIC does. This menu
+             * was starting whichever tune the rotation happened to be on,
+             * which is the one place in the port where the same choice
+             * sounded like two different things depending on which screen
+             * you made it from.
+             *
+             * Going quiet here means the match would come back silent,
+             * though — nothing restarts the engine on the way out of a
+             * pause — so the silence is remembered and spent on the
+             * unpause. */
+            nes_audio_play(NES_MUSIC_RESUME);
+            if (g_music == MUSIC_MIX) {
+                stop_music();
+                g_mix_held = true;
+            } else {
+                start_music(g_music);
+                g_mix_held = false;
+            }
+        }
+        return true;
     }
 
     if (g_pause_confirm) {
         /* The answers stack, so Up and Down move between them as they do on
-         * the column, and SELECT does too. Left and Right are kept because a
-         * hand that has just been changing the tune with them is already
-         * there. */
+         * the column, and SELECT does too. Left and Right are kept from when
+         * the tune was changed with them on the line above. */
         if (pressed & (TENGEN_BTN_LEFT | TENGEN_BTN_RIGHT | TENGEN_BTN_UP |
                         TENGEN_BTN_DOWN | TENGEN_BTN_SELECT))
             g_pause_yes = !g_pause_yes;
@@ -671,54 +771,23 @@ static bool pause_menu_input(uint8_t pressed, bool *leaving) {
      * step. */
     if (pressed & (TENGEN_BTN_UP | TENGEN_BTN_DOWN | TENGEN_BTN_SELECT))
         g_pause_row = (uint8_t)((g_pause_row + 1) % PMENU_ROWS);
-    if (g_pause_row == PMENU_MUSIC &&
-        (pressed & (TENGEN_BTN_LEFT | TENGEN_BTN_RIGHT))) {
-        /* THE SAME LIST ON BOTH CONSOLES. Over the cable the menu is the
-         * MASTER's (there because it found the chord), so its list is the
-         * one with the uncovered tunes whatever this console found. Counted
-         * from this console's own chord, a slave that had not rung it
-         * stepped through five tunes while the master stepped through
-         * eight, and the two ended up playing different ones. */
-        int count = g_linked ? MUSIC_UNLOCKED_COUNT : music_choices();
-        int step = (pressed & TENGEN_BTN_RIGHT) ? 1 : count - 1;
-        g_levelup_resume = 0;        /* the new tune is already on */
-        g_music = (uint8_t)((g_music + step) % count);
-        /* Heard at once, which is the whole point of putting it here. The mix
-         * restarts on its current turn rather than from the top. */
-        g_mix_step = 0;
-        /* HEARD AT ONCE, which is the whole point of putting it here — and
-         * the game is PAUSED, so the engine has been suspended and a track
-         * handed to it now would sit there silent. Resume, then start. The
-         * pause's own suspend goes back on when the menu is left, because
-         * tengen_pause_input resumes on the way out either way.
-         *
-         * EXCEPT MUSIC MIX, WHICH HAS NOTHING TO PREVIEW. The selection
-         * screen already says so in as many words (see front_tune): the mix
-         * is a rotation that belongs to the match, not one tune to audition,
-         * so it goes quiet there like NO MUSIC does. This menu was starting
-         * whichever tune the rotation happened to be on, which is the one
-         * place in the port where the same choice sounded like two different
-         * things depending on which screen you made it from.
-         *
-         * Going quiet here means the match would come back silent, though —
-         * nothing restarts the engine on the way out of a pause — so the
-         * silence is remembered and spent on the unpause below. */
-        nes_audio_play(NES_MUSIC_RESUME);
-        if (g_music == MUSIC_MIX) {
-            stop_music();
-            g_mix_held = true;
-        } else {
-            start_music(g_music);
-            g_mix_held = false;
-        }
-    }
     /* A TAKES THE CHOICE, and only A. START used to do it here as well and it
-     * cost the menu its way out — see the note at the top. */
-    if (g_pause_row == PMENU_EXIT && (pressed & TENGEN_BTN_A)) {
-        g_pause_confirm = true;
-        /* The question's box is narrower than the column's; what the wide
-         * one covered comes back from under it (pmenu_restore_strips). */
-        g_pause_yes = false;   /* NO first: a pause menu does not lose games */
+     * cost the menu its way out — see the note at the top. Each entry opens
+     * a window of its own; what the menu's box covered and the window's does
+     * not comes back from under it (pmenu_cells). */
+    if (pressed & TENGEN_BTN_A) {
+        if (g_pause_row == PMENU_EXIT) {
+            g_pause_confirm = true;
+            g_pause_yes = false;   /* NO first: a pause menu does not lose games */
+        } else {
+            g_pause_tunes = true;
+            g_tune_row = g_music;  /* on the one playing */
+            /* WHAT THE WINDOW WILL COVER IS SAVED NOW, out of the blank:
+             * nothing under it changes between here and the frame that
+             * draws it, and that frame, saving it too, finished at line 223
+             * of 227 (`--vblank`). */
+            pmenu_reach(PMENU_W_MAX, PMENU_H_MAX);
+        }
         screen_blip();
     }
     return true;
@@ -1001,6 +1070,7 @@ static void pause_toggled(bool was_paused) {
      * everywhere else on it — opened the quit question instead. */
     g_pause_row = PMENU_MUSIC;
     g_pause_confirm = false;
+    g_pause_tunes = false;
     /* pauseOrUnpause suspends and resumes the music
      * (main.asm.txt:7204-7211) — the same pair the front end uses to
      * go quiet, through the same two helpers so the port never loses
@@ -1231,15 +1301,15 @@ void draw_match(bool *sweeping) {
          * and so never writes: PAUSE, the tune's name and EXIT simply stayed
          * printed over the playfield. They are wiped here, where the plaque
          * is painted over, because that is the same moment — the box that was
-         * drawn, at the width it was drawn. */
-        if (g_pmenu_drawn_w) clear_pmenu_layers(g_pmenu_drawn_w);
+         * drawn, at the size it was drawn. */
+        if (g_pmenu_drawn_w) clear_pmenu_layers(g_pmenu_drawn_w, g_pmenu_drawn_h);
         g_pmenu_drawn_w = 0;
         g_plaque_drawn = false;
         g_unpause_patch = false;
         draw_static_screen();
         g_repaint = false;
     } else if (g_unpause_patch) {
-        if (g_pmenu_drawn_w) pmenu_restore_box(g_pmenu_drawn_w);
+        if (g_pmenu_drawn_w) pmenu_restore_box();
         if (g_plaque_drawn) plaque_restore();
         g_pmenu_drawn_w = 0;
         g_plaque_drawn = false;

@@ -392,6 +392,14 @@ int field_view(void) {
     return g_view;
 }
 
+/* UNDER THE CHORD A PAUSE HIDES THE BOARD, as Tetris DX's does, so a pause
+ * is a rest and not a long look at the stack. Not when the board up is the
+ * RIVAL'S — a paused race under the chord shows the other one (field_view),
+ * and that is what the pause is for there. */
+bool board_bricked(void) {
+    return g_session.game.paused && g_pause_unlocked && field_view() == g_view;
+}
+
 void draw_line_clear_sweep(void) {
     int slot = hud_clearing_slot();
     const TengenPlayerState *p = &g_session.game.player[slot];
@@ -623,21 +631,6 @@ static void draw_ledge(int tx, int ty, int w) {
         set_map_tile(tx + x, ty, WITH_BANK(T_LEDGE, BRAID_BANK));
 }
 
-/* The two columns of rope that frame the playfield, as a plain strip from top
- * to bottom. Used when the banner or the dancers take the rest of the column:
- * clearing around the box leaves its corners dangling, and the cartridge's own
- * screen has a plain strip here anyway.
- *
- * THE RUN MUST BE THE PANEL'S OWN. This strip replaces the right panel's left
- * side, so it is kBraidRight — the same tile draw_braid_panel puts there. Hand
- * it the other one and the weave changes direction every time L+R is pressed,
- * which is exactly what it used to do. */
-void draw_field_braid(int tx, const uint8_t run[1][2]) {
-    for (int y = 0; y < SCREEN_TH; y++)
-        for (int dx = 0; dx < BRAID_T; dx++)
-            set_map_tile(tx + dx, y, WITH_BANK(run[0][dx], BRAID_BANK));
-}
-
 /* AN INVERTED L, NOT A BOX. Rope along the top and down the side facing the
  * board; the screen's own edge closes it outward and the bottom is simply
  * open, which is what the cartridge's coop panels are. It was a closed
@@ -751,12 +744,17 @@ void draw_stats_show(int elapsed, int count) {
     g_idle_show = false;
 }
 
-/* The stage the level-up blit paints where the banner was. */
+/* The stage the level-up blit paints where the banner was. Its first rows
+ * are blank, and the first of them falls on the box's top run (the show is
+ * a row up; see DANCER_LIFT): a blank painted there was a hole in the rope,
+ * so the stage starts where the box's interior does. */
 void draw_dancer_stage(void) {
-    for (int y = 0; y < DANCER_STAGE_TH; y++)
+    for (int y = 0; y < DANCER_STAGE_TH; y++) {
+        if (DANCER_STAGE_TY + y < BOX_TOP_IN) continue;
         for (int x = 0; x < DANCER_STAGE_TW; x++)
             set_map_tile(DANCER_STAGE_TX + x, DANCER_STAGE_TY + y,
                           WITH_BANK(kDancerStage[y][x], 1));
+    }
     /* The sixth ledge, standing in for the screen border the cartridge's
      * bottom dancer uses; see the note beside DANCER_LIFT. */
     for (int x = 0; x < DANCER_STAGE_TW; x++)
@@ -1822,14 +1820,15 @@ void draw_panel(void) {
 }
 
 void draw_field(void) {
-    /* UNDER THE CHORD A PAUSE HIDES THE BOARD, as Tetris DX's does, so a
-     * pause is a rest and not a long look at the stack. Not when the board
-     * up is the RIVAL'S — a paused race under the chord shows the other one
-     * (field_view), and that is what the pause is for there. */
-    if (g_session.game.paused && g_pause_unlocked && field_view() == g_view) {
+    /* ...BEHIND A WALL OF BRICKS (board_bricked). It used to be put away
+     * into nothing, and an empty board under a pause read as a board that
+     * had gone; a cell of the cartridge's grey block in every cell reads as
+     * one put away. See T_BRICK for the tile and its colours. */
+    if (board_bricked()) {
         for (int row = 0; row < TENGEN_PF_HEIGHT; row++)
             for (int col = 0; col < field_cols(); col++)
-                set_map_tile(field_tx() + col, FIELD_TY + row, WITH_BANK(0, 0));
+                set_map_tile(field_tx() + col, FIELD_TY + row,
+                              WITH_BANK(T_BRICK, PAL_PIECE_BANK));
         return;
     }
     /* THE COOP BOARD IS field[0] FOR BOTH PLAYERS — the core shares it the
