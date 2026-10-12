@@ -1191,11 +1191,18 @@ def vblank_check(rom_path):
     core.set_keys(KEYS["L"], KEYS["R"]); run(core, 4); core.set_keys(); run(core, 12)
     press_start(core); run(core, 12)
     press_start(core); run(core, 30)
+    # The tunes' window is the biggest box there is, eleven rows of eighteen:
+    # opening it, walking all of it, taking a tune and closing it, and
+    # opening it again and leaving the pause straight from it, which puts
+    # the whole of it back in one frame.
+    got = tap_measure(core, ["START"]) + tap_measure(core, ["A"])
+    for _ in range(8):
+        got += tap_measure(core, ["DOWN"])
+    got += tap_measure(core, ["A"])
+    results["la ventana de canciones, de cancion en cancion"] = got
+    got = tap_measure(core, ["A"]) + tap_measure(core, ["START"])
+    results["quitar la pausa desde la ventana de canciones"] = got
     got = tap_measure(core, ["START"])
-    for _ in range(8):                        # every tune: every box width
-        got += tap_measure(core, ["RIGHT"])
-    results["menu de pausa, de cancion en cancion"] = got
-    got = []
     for keys in (["DOWN"], ["A"], ["B"], ["A"], ["START"]):
         got += tap_measure(core, keys)
     results["la pregunta SURE?, volver, y quitar la pausa"] = got
@@ -1289,11 +1296,14 @@ def unpause_check(rom_path):
     cases = (
         ("1P, la placa", 0, False, 0, ()),
         ("1P acorde, el menu", 0, True, 0, ()),
-        ("1P acorde, otra cancion", 0, True, 0, ("RIGHT",)),
+        ("1P acorde, otra cancion", 0, True, 0, ("A", "DOWN", "A")),
+        ("1P acorde, la ventana de canciones", 0, True, 0, ("A", "DOWN")),
+        ("1P acorde, la ventana y de vuelta", 0, True, 0, ("A", "B")),
         ("1P acorde, la pregunta SURE?", 0, True, 0, ("DOWN", "A")),
         ("VERSUS acorde, el tablero del rival", 3, True, 0, ()),
-        ("VERSUS acorde, HUD STATS", 3, True, 1, ("RIGHT",)),
+        ("VERSUS acorde, HUD STATS", 3, True, 1, ("A", "DOWN")),
         ("WITH acorde, el menu", 4, True, 0, ()),
+        ("WITH acorde, la ventana de canciones", 4, True, 0, ("A",)),
     )
     for what, downs, chord, selects, keys in cases:
         core, screen = load(rom_path)   # `screen` must stay alive; see load()

@@ -123,6 +123,8 @@ def main():
                      help="check vsync halts the CPU instead of spinning")
     ap.add_argument("--statsshow", action="store_true",
                      help="check HUD Stats's level-up troupe, in the left box")
+    ap.add_argument("--showframe", action="store_true",
+                     help="check the level-up show leaves every box's rope whole")
     ap.add_argument("--versushud", action="store_true",
                      help="check the race's third HUD and its paused view")
     ap.add_argument("--demo", action="store_true",
@@ -202,6 +204,8 @@ def main():
         sys.exit(versus_hud_check(args.rom))
     if args.statsshow:
         sys.exit(stats_show_check(args.rom))
+    if args.showframe:
+        sys.exit(show_frame_check(args.rom))
     if args.sleep:
         sys.exit(sleep_check(args.rom))
     if args.sweep:

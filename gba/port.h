@@ -323,6 +323,16 @@
  * by staging the two players' pieces as sprites with a palette each. */
 #define PAL_PIECE2_BANK 14
 
+/* THE PAUSED BOARD'S BRICKS, under the chord (draw_field). The cartridge's
+ * lone shaded block — tile $0F, which is what the wall nibble and the
+ * handicap's garbage draw ("a lone shaded block", reference/NOTES.md) — in
+ * every cell. It takes the level's colours on the board, though, and is
+ * grey only at level 0; so the bricks are drawn in the falling piece's bank,
+ * which has no piece to colour while the board is put away, loaded with
+ * piecePaletteIndex0 — the level-0 greys — for as long as they are up
+ * (set_brick_palette, refresh_palettes). */
+#define T_BRICK 0x0F
+
 /* ...AND THE PARTNER'S PREVIEW, on a coop board, which needs a fourth set of
  * piece colours: their NEXT is not their CURRENT and it is not ours either.
  * It is borrowed from the TITLE'S OWN BANK the way the plaque, the histogram
@@ -720,9 +730,10 @@
  *   left panel  (cols 0-9)   board on its RIGHT -> kBraidLeft,  HangLeft
  *   right panel (cols 20-29) board on its LEFT  -> kBraidRight, HangRight
  *
- * What it must NOT cost is the weave changing direction when the HUD does,
- * so anything that redraws these columns as a plain strip has to use the
- * panel's own tile — see draw_field_braid's callers.
+ * What it must NOT cost is the weave changing direction when the HUD does.
+ * Nothing redraws these columns as a plain strip any more: the level-up
+ * show did, and took the box's top run and corner with it (`--showframe`);
+ * it keeps to the box's interior now.
  *
  * The corners are only ever drawn on the board side, because that is the only
  * side that has one — the other simply runs off the screen. */
@@ -1656,16 +1667,25 @@ typedef enum {
  * FIVE ROWS, a border top and bottom and one thing to a row:
  *
  *      row 1   PAUSE
- *      row 2   KOROBEINIKI
- *      row 3   EXIT
+ *      row 2   MUSIC
+ *      row 3   EXIT GAME
+ *
+ * ...AND THE TUNES IN A WINDOW OF THEIR OWN, the way EXIT GAME has its
+ * SURE?. The tune's name used to BE the second line, changed in place with
+ * LEFT and RIGHT and heard at once: a list you could only walk one name at a
+ * time, blind to what came next, and the one line of the menu that did not
+ * work like the others. A on MUSIC opens a window of that name, every tune on a
+ * line of its own, the cursor on the one playing; A takes one and B leaves
+ * it as it was (pause_menu_input). PMENU_H_MAX rows: the heading and eight
+ * tunes between the borders.
  */
 /* ...AND THE WIDTH NOW FOLLOWS WHAT IS IN IT. The box is as wide as its
- * lines need — the tune's name, with room for the arrow on its left and as
- * much again on its right so the lines still centre on the box — and never
+ * lines need — the longest, with room for the arrow on its left and as much
+ * again on its right so the lines still centre on the box — and never
  * narrower than the question's. Even, always, for the reason above. See
  * pmenu_width in gba/match.c. */
 #define PMENU_W_MIN 10
-#define PMENU_W_MAX 18        /* KOROBEINIKI, the longest name */
+#define PMENU_W_MAX 18        /* KOROBEINIKI, in the tunes' window */
 /* FIVE ROWS, AND THE WORD MUSIC IS GONE.
  *
  * The cartridge's own PAUSE is eight columns by two (`pauseColsRows1`,
@@ -1674,7 +1694,9 @@ typedef enum {
  * came out, in order: the blank row under the heading, the word MUSIC — the
  * tune's NAME is the entry, and a label over a value that is itself the
  * choice is a label saying nothing — and then the blank row between the two
- * entries, with nothing put back in its place.
+ * entries, with nothing put back in its place. (The name has since gone to
+ * the tunes' window, above, and MUSIC is back as an entry that opens
+ * something, like EXIT GAME, not as a label over a value.)
  *
  * TWO PIXELS IN PLACE OF THAT LAST BLANK ROW WAS TRIED, AND THERE IS NO ROOM
  * FOR IT. The idea was to lift the tune onto the counters' layer, which is
@@ -1709,13 +1731,21 @@ typedef enum {
  * centred on an even grid — see below. */
 #define PMENU_H 5
 #define PMENU_TY ((SCREEN_TH - PMENU_H) / 2)
+#define PMENU_H_MAX (MUSIC_UNLOCKED_COUNT + 3)   /* the tunes' window */
 
 /* The headings' letters, one pixel higher: see the note above PMENU_H and
- * upload_tiles. Ten tiles in the charblock's free top above the prototype
- * histogram's window (SKIN_STATS_BASE + 56 = 952), and only the letters
- * the two headings use, since nothing else wants them. */
+ * upload_tiles. In the charblock's free top above the prototype histogram's
+ * window (SKIN_STATS_BASE + 56 = 952).
+ *
+ * THE WHOLE ALPHABET, NOT THE LETTERS SOMEBODY THOUGHT OF. This was only
+ * PAUSE, EXIT? and the R of SURE?, and a letter without a raised copy falls
+ * back to the plain one (raised_tile) — so CABLE LOST and SIGNAL LOST, which
+ * came later and are headings too, had half their letters a pixel lower than
+ * the other half (`heading_unraised`, run_link and run_wireless). Twenty-
+ * seven tiles of the sixty-four free up here, and no heading can be drawn at
+ * two heights again. */
 #define PMENU_RAISED_BASE 960
-#define PMENU_RAISED_CHARS "PAUSEXIT?R"   /* ...and the R of SURE? */
+#define PMENU_RAISED_CHARS "ABCDEFGHIJKLMNOPQRSTUVWXYZ?"
 /* THE ARROW, CLOSE UP. $3E's shaft runs the whole width of its tile and the
  * letters start at the edge of theirs, so an arrow in the column before a
  * word is welded to it and one two columns before is a tile away. These two
@@ -1829,6 +1859,7 @@ void title_window(bool on);
 void set_field_palette_for_level(uint8_t level);
 void set_bank_from_piece(int bank_index, TengenTetromino piece);
 void set_piece_palette(TengenTetromino piece);
+void set_brick_palette(void);
 void set_next_palette(TengenTetromino piece);
 void upload_title_tiles(void);
 void upload_proto_tiles(int skin);
@@ -1863,6 +1894,7 @@ void idle_cossack_celebrate(int lines);
 void draw_line_clear_sweep(void);
 int hud_clearing_slot(void);
 int field_view(void);        /* whose board is drawn; see hud.c */
+bool board_bricked(void);    /* ...or whether it is behind the pause's bricks */
 void points_clear(void);
 void note_award(int slot, TengenStepResult step);
 void draw_points(void);
@@ -1909,7 +1941,6 @@ enum { HUD_MODE_SOLO, HUD_MODE_VERSUS, HUD_MODE_WITH,
 const uint8_t *hud_set(int *n);
 void hud_reset(void);        /* to whatever this mode was last left on */
 void hud_remember(void);     /* ...which SELECT is what writes down */
-void draw_field_braid(int tx, const uint8_t run[1][2]);
 void draw_dancer_stage(void);
 unsigned text_len(const char *s);
 void draw_text(int tx, int ty, const char *text, int bank);

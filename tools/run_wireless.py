@@ -664,6 +664,12 @@ def gone_check(rom):
         print(f"FALLA: sin adaptador para siempre, la(s) consola(s) {bad} no "
               f"dan la partida por perdida con SIGNAL LOST")
         return 1
+    # ...with every letter of it at one height (heading_unraised).
+    plain = [run_rom.heading_unraised(c, run_rom.PM_HEAD) for c in cores]
+    if any(plain):
+        print(f"FALLA: SIGNAL LOST a dos alturas: {plain[0] or plain[1]} un "
+              f"pixel por debajo de las demas letras")
+        return 1
     if len(sys.argv) > 2:
         _KEEP[-1][1][host].to_pil().convert("RGB").resize((480, 320)).save(
             sys.argv[2])

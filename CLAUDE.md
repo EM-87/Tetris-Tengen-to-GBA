@@ -477,7 +477,10 @@ story behind each; the item number is in brackets.
   back: `?` lives at `TILES_GAME_QUESTION` and `%` at `TILES_GAME_PERCENT`
   (both drawn by hand into empty slots, `plant_glyphs`; headers from before
   the `%` stop the build with an `#error`: run `make assets` again), and the
-  pause menu's raised heading letters at `PMENU_RAISED_BASE`. [28]
+  windows' raised heading letters at `PMENU_RAISED_BASE` — the whole
+  alphabet and the `?`, because a letter without a raised copy falls back
+  to the plain one: CABLE LOST came out at two heights
+  (`heading_unraised`). [28]
 - **Title sprites.** The fireworks have the NES's behind-the-background bit
   (OBJ priority 2 here), which is how the frame contains them; a burst is
   mapped through the composition by its own centre, never per sprite. The
@@ -504,7 +507,18 @@ story behind each; the item number is in brackets.
   one (it is there because the master found the chord), never this
   console's own: counted from each console's chord, the two stepped through
   lists of different lengths and played different tunes
-  (`menu_list_check`).
+  (`menu_list_check`, `pause_tune_count`).
+- **The pause menu's windows are one function** (`draw_pmenu`: the menu, the
+  question, the tunes, CABLE LOST), and what they cover is saved as it is
+  first covered and put back as it is uncovered (`pmenu_cells`). The tunes'
+  window is eleven rows of eighteen, drawn every paused frame: its frame and
+  the clearing of the other three layers go a row at a time into VRAM, and
+  what it covers is saved when A opens it, out of the blank — saved by the
+  frame that drew it, that frame finished at line 223 of 227 (`--vblank`).
+- **The level-up show keeps to the box's interior.** It used to wipe the
+  right column and draw the plain strip of rope the screen had before the
+  boxes; HUD VERSUS's cleared the left box ten wide, rope included
+  (`--showframe` holds every braid cell through the show, in all six HUDs).
 - **A linked pause is toggled inside the core**, so the music, the repaint
   and the rest of a pause going up or down live in `pause_toggled`, called
   from the solo frame and the linked one alike; the linked one used to skip
@@ -616,7 +630,10 @@ Versus; WITH: Coop; 2 PLAYER: Versus; COOPERATIVE: Coop — and under the
 chord Stats as VERSUS's and WITH's second), remembered per mode; no HIGH in a
 race, as on the cartridge's 2P screen; one chord (L+R on GAME SELECT or
 LEVEL SETTINGS) that uncovers Korobeiniki, Katiuska, MUSIC MIX, the XE
-levels 18-19, the pause menu (as wide as the tune's name) and those Stats,
+levels 18-19, the pause menu (PAUSE, MUSIC, EXIT GAME, and A on MUSIC
+opening a window with every tune on a line, the cursor on the one playing,
+A to take one and B to leave it; MUSIC and not CHANGE MUSIC, whose box
+would cover the panels' last column of figures) and those Stats,
 and turns the menus' text from blue to white and the credits from the
 cartridge's orange to dark grey to say so; the title's L+R cycling the prototype skins;
 credits rotating every four seconds; the cossacks staged on the panels'
@@ -638,7 +655,9 @@ top of the box (`piece_total`, the port's uncapped count; `--statsrel`); and
 under the chord three touches of Tetris DX's (`--chordfx`): the music a
 quarter faster from a stack of twelve rows and a half from fifteen
 (`stack_tempo`, an extra step of the engine in `audio_frame`), the board
-hidden while paused (not the rival's a paused race shows), and the engine's
+hidden while paused behind a wall of grey bricks — the cartridge's lone
+block $0F in every cell, in the level-0 greys whatever the level (`T_BRICK`;
+not the rival's board a paused race shows) — and the engine's
 unused level-up jingle ($0C) the first time a score passes the top of the
 table (`record_watch`); SELECT on the title shows the HIGH SCORES page,
 which otherwise only a lost game did — the cartridge takes it as START there
@@ -665,8 +684,8 @@ cartridge's three settings pages instead of the one (`gbp.c`,
 itself at power-on or plugged in later, the LINK CABLE screen saying
 WIRELESS, and Single-Pak over it as well (`wireless.c`);
 "EXIT GAME", not "EXIT", on the pause menu (a player took it for closing the
-menu), and its question "SURE?", not "EXIT?" again (an R among the raised
-heading letters, PMENU_RAISED_CHARS, with the arrow's two tiles after them); the high scores erased by L+R+B held at power-on, asked twice with NO
+menu), and its question "SURE?", not "EXIT?" again (the raised heading
+letters, PMENU_RAISED_CHARS, with the arrow's two tiles after them); the high scores erased by L+R+B held at power-on, asked twice with NO
 chosen (`erase_records_prompt`); a high scores table per mode on the release
 (1 PLAYER's is the cartridge's; 2 PLAYER, COOPERATIVE, VERSUS and WITH
 COMPUTER one each, the mode's name in the heading where HIGH SCORES was),

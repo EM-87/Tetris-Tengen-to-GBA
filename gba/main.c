@@ -1283,19 +1283,31 @@ int main(void) {
                  * why the port cannot. */
                 clear_panel_region(BOX_L_TX, 0, BOX_W, SCREEN_TH);
                 clear_panel_region(BOX_R_TX, 0, BOX_W, SCREEN_TH);
-                clear_both(BOX_L_TX, BRAID_T, BOX_W, SHELF_FIRST - BRAID_T);
+                /* THE INTERIOR, EIGHT WIDE, and not the box's ten: the two
+                 * past the interior are the left box's inner rope, and the
+                 * show left a hole in it from the braid to the first ledge
+                 * (`--showframe`). */
+                clear_both(BOX_L_TX, BRAID_T, BOX_IN, SHELF_FIRST - BRAID_T);
                 clear_both(BOX_R_IN, BRAID_T, BOX_IN, SHELF_FIRST - BRAID_T);
                 clear_stats_layer();
                 draw_race_dancers(g_dancer_elapsed, g_dancer_cast);
             } else {
-                /* The stage gets the WHOLE column, the way the cartridge's
-                 * level-up blit gets the whole banner. Painting only the
-                 * stage's own tiles left the NEXT box behind it — with a
-                 * dancer standing inside it — and half of the STATS heading
-                 * showing between the ledges. */
-                clear_region(BOX_R_TX + 2, 0, BOX_W - 2, SCREEN_TH);
+                /* The stage gets the WHOLE INTERIOR of the box, the way the
+                 * cartridge's level-up blit gets the whole banner. Painting
+                 * only the stage's own tiles left the NEXT box behind it —
+                 * with a dancer standing inside it — and half of the STATS
+                 * heading showing between the ledges.
+                 *
+                 * THE INTERIOR AND NOT THE COLUMN. It used to wipe the column
+                 * from the screen's top and put back a plain strip of rope
+                 * down the board's side, which is what this screen had before
+                 * the boxes: for the length of every show the box lost its
+                 * top run and its corner, and the rope by the board turned
+                 * into the old one (`--showframe`). The banner lives inside
+                 * the box, and so does the stage that takes its place. */
+                clear_region(BOX_R_IN, BOX_TOP_IN, BOX_IN,
+                             SCREEN_TH - BOX_TOP_IN);
                 clear_stats_layer();
-                draw_field_braid(BOX_R_TX, kBraidRight);
                 draw_dancer_stage();
                 /* Nothing here redraws NEXT any more and nothing has to: it
                  * lives in the LEFT panel's top compartment in both HUDs now,
