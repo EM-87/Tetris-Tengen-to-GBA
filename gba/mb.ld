@@ -5,8 +5,9 @@
  *
  * The same program as gba.ld's in every other way: .iwram and .data are
  * copied to internal WRAM at startup from where they were loaded, .bss and
- * the stacks live there, and .ewram — the 6502's 64KB address space — is
- * laid after the image, so image and buffers together have to fit in the
+ * the stacks live there, and .ewram — the 6502's view of its program's
+ * half of the address space, 32KB — is laid after the image, so image and
+ * buffers together have to fit in the
  * 256KB. The link says so if they do not, and so does the image's own
  * limit: the BIOS takes at most $3FF40 bytes. */
 

@@ -3953,6 +3953,78 @@ static void test_locked_cells_never_overwrite_the_walls(void) {
     }
 }
 
+/* UP DROPS THE PIECE, BEHIND THE CHORD (TengenGame.hard_drop): the port's,
+ * not the cartridge's, whose UP does nothing in play. One press and the piece
+ * is where holding DOWN would have put it, locked, on the same frame — and
+ * scored as holding DOWN scores it, each row a soft-drop step. */
+static void test_up_drops_the_piece_where_down_would_land_it(void) {
+    for (int on = 0; on < 2; on++) {
+        TengenGame drop;
+        tengen_new_game(&drop, 0x2468, 0, false, false, false);
+        drop.hard_drop = (on != 0);
+        tengen_step(&drop, TENGEN_PLAYER_1, 0);        /* the first piece */
+        drop.player[0].piece.current = TT_T;
+        drop.player[0].piece.orientation = 0;
+        drop.player[0].piece.x = 4;
+        drop.player[0].piece.y = TENGEN_SPAWN_Y;
+        drop.player[0].fall_timer = 30;
+        TengenGame held = drop;
+
+        TengenStepResult r = tengen_step(&drop, TENGEN_PLAYER_1, TENGEN_BTN_UP);
+        if (!on) {
+            /* Off, UP is nothing at all. */
+            CHECK(!r.piece_locked);
+            CHECK(drop.player[0].piece.current == TT_T);
+            CHECK(drop.player[0].piece.y == TENGEN_SPAWN_Y);
+            continue;
+        }
+        CHECK(r.piece_locked);
+        CHECK(drop.player[0].piece.current == TT_NONE);
+
+        TengenStepResult h;
+        int frames = 0;
+        do {
+            h = tengen_step(&held, TENGEN_PLAYER_1, TENGEN_BTN_DOWN);
+        } while (!h.piece_locked && ++frames < 3000);
+        CHECK(h.piece_locked);
+        CHECK(memcmp(&drop.field[0], &held.field[0], sizeof drop.field[0]) == 0);
+        /* A long drop is a fully accelerated one either way: doubled. */
+        CHECK(r.award == h.award);
+        CHECK(r.award_rows_above_floor == h.award_rows_above_floor);
+        CHECK(drop.player[0].score == held.player[0].score);
+    }
+}
+
+/* ...ONE PRESS, ONE PIECE: UP held into the next deal does not drop that
+ * one too. */
+static void test_up_held_drops_one_piece(void) {
+    TengenGame g;
+    tengen_new_game(&g, 0x1357, 0, false, false, false);
+    g.hard_drop = true;
+    tengen_step(&g, TENGEN_PLAYER_1, 0);
+    CHECK(tengen_step(&g, TENGEN_PLAYER_1, TENGEN_BTN_UP).piece_locked);
+    tengen_step(&g, TENGEN_PLAYER_1, TENGEN_BTN_UP);   /* the deal */
+    CHECK(g.player[0].piece.current != TT_NONE);
+    for (int i = 0; i < 20; i++)
+        CHECK(!tengen_step(&g, TENGEN_PLAYER_1, TENGEN_BTN_UP).piece_locked);
+    tengen_step(&g, TENGEN_PLAYER_1, 0);
+    CHECK(tengen_step(&g, TENGEN_PLAYER_1, TENGEN_BTN_UP).piece_locked);
+}
+
+/* ...AND ON A SHARED BOARD IT STOPS ON THE PARTNER without landing, as any
+ * fall the partner refuses does (L840B): above it, still falling. */
+static void test_up_stops_on_the_coop_partner(void) {
+    TengenGame game;
+    place_coop_pair(&game, TT_O, 0, 5, 4, TT_O, 0, 5, 12);
+    game.hard_drop = true;
+    game.player[1].fall_timer = 200;
+    TengenStepResult r = tengen_step(&game, TENGEN_PLAYER_1, TENGEN_BTN_UP);
+    CHECK(!r.piece_locked);
+    CHECK(game.player[0].piece.current == TT_O);
+    CHECK(game.player[0].piece.y == 10);
+    CHECK(!tengen_coop_pieces_overlap(&game, TENGEN_PLAYER_1));
+}
+
 /* THE CARTRIDGE'S OWN BUGS, MENDED BEHIND THE CHORD (TengenGame.mended).
  * Each is checked both ways: off, the cartridge's behaviour stands. */
 static void test_mended_coop_deal_waits_for_room(void) {
@@ -4146,6 +4218,9 @@ int main(void) {
     test_the_ports_computer_keeps_a_persons_pace();
     test_mended_coop_deal_waits_for_room();
     test_mended_collapse_lifts_the_falling_piece();
+    test_up_drops_the_piece_where_down_would_land_it();
+    test_up_held_drops_one_piece();
+    test_up_stops_on_the_coop_partner();
     test_either_player_can_pause_a_linked_game();
     test_level_starts_at_the_chosen_start_level();
     test_level_is_recomputed_from_the_line_total();

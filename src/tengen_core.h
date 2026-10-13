@@ -360,6 +360,14 @@ typedef struct {
      *     (INFERRED from the same split; seen by `make fuzz`). Mended, the
      *     falling piece is lifted the least it takes to be clear again. */
     bool mended;
+    /* UP DROPS THE PIECE — the port's, behind the chord, set and cleared like
+     * `mended` (the master's chord over a cable). The cartridge's UP does
+     * nothing in play. A fresh press takes the piece down to rest and locks
+     * it on the same frame, every row of the way a soft-drop step, so it
+     * lands and scores where holding DOWN would have: the threshold tightens
+     * a row at a time and a drop of a few rows is doubled (add_lock_score).
+     * A partner underneath stops it without a lock, as it stops any fall. */
+    bool hard_drop;
 } TengenGame;
 
 /* ----------------------------------------------------------------------- *

@@ -1578,6 +1578,26 @@ TengenStepResult tengen_step(TengenGame *game, TengenPlayerSlot slot, uint8_t he
     if (rotate_cw) tengen_try_rotate(game, slot, true);
     if (rotate_ccw) tengen_try_rotate(game, slot, false);
 
+    /* UP DROPS THE PIECE (TengenGame.hard_drop; the port's, behind the
+     * chord). Down while the row below is free, each row a soft-drop step —
+     * the threshold tightened as holding DOWN tightens it — and the step
+     * that finds the row taken is the gravity step below, which lands it, or
+     * leaves it hanging over a coop partner, exactly as it would have. After
+     * this frame's shifts and turns, so a press that turns as it drops drops
+     * the turned piece. */
+    if (game->hard_drop && (new_presses & TENGEN_BTN_UP)) {
+        for (;;) {
+            if (p->drop_rate_possible >= 2) p->drop_rate_possible--;
+            p->piece.y++;
+            bool free = tengen_position_valid(game, slot) &&
+                        !tengen_coop_pieces_overlap(game, slot);
+            p->piece.y--;
+            if (!free) break;
+            p->piece.y++;
+        }
+        gravity_tick = true;
+    }
+
     if (gravity_tick) {
         p->piece.y++;
 

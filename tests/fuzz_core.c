@@ -94,6 +94,9 @@ int main(int argc, char **argv) {
         /* Half the games with the cartridge's bugs mended (TengenGame): in
          * those, not even its own two overlaps may happen. */
         g.mended = rnd() & 1;
+        /* ...and UP's drop on half, which moves a piece the furthest in
+         * one frame of anything in the game. */
+        g.hard_drop = rnd() & 1;
         tengen_apply_handicap(&g, TENGEN_PLAYER_1, (uint8_t)(rnd() % 5));
         if (two && !coop)
             tengen_apply_handicap(&g, TENGEN_PLAYER_2, (uint8_t)(rnd() % 5));
@@ -127,6 +130,7 @@ int main(int argc, char **argv) {
                     held[p] = tengen_ai_buttons(&ai[p], &g, (TengenPlayerSlot)p,
                                                 clock);
                     if (!(rnd() % 50)) held[p] |= TENGEN_BTN_DOWN;
+                    if (!(rnd() % 40)) held[p] |= TENGEN_BTN_UP;
                 } else if (!(rnd() % 6)) {
                     held[p] = (uint8_t)rnd();
                     /* START now and then, so games are mostly played and

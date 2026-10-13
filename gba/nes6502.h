@@ -16,18 +16,28 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+/* The half of the address space the program is in, and the view of it. */
+#define NES6502_CODE_BASE 0x8000u
+#define NES6502_CODE_SIZE 0x8000u
+
 /* Memory the interpreter needs, supplied by the caller so this file stays
  * free of any decision about where things live. */
 typedef struct {
     uint8_t *ram;          /* 2KB, mirrored across $0000-$1FFF */
-    /* THE WHOLE 64KB ADDRESS SPACE, AS THE CODE SEES IT: the program bytes
-     * at their own address and zero everywhere else. An instruction fetch is
-     * then one load, `code[pc]`, with no range check in front of it — and a
-     * fetch is the one thing the interpreter does more of than anything
-     * else. Reads of anything that is not RAM or the APU come from here too,
-     * which is the same answer the range checks used to give: the bytes
-     * inside the slice, and zero outside it. Supplied by the caller, 64KB,
-     * filled by nes6502_init. */
+    /* THE PROGRAM'S HALF OF THE ADDRESS SPACE, AS THE CODE SEES IT: the
+     * program bytes at their own address and zero everywhere else, $8000 to
+     * $FFFF. An instruction fetch is then one load, `code[pc]`, with no range
+     * check in front of it — and a fetch is the one thing the interpreter
+     * does more of than anything else. The pointer is the view's less
+     * $8000, so it is indexed by the 6502's address; PC never leaves the
+     * half (nes6502_call stops it as a runaway). Reads of anything that is
+     * not RAM or the APU come from here too, or are zero below it, which is
+     * the same answer the range checks used to give.
+     *
+     * IT WAS THE WHOLE 64KB, half of it zeros nothing could fetch, and on a
+     * Single-Pak copy the program and its buffers share 256KB: the copy was
+     * down to thirty-two bytes spare. Supplied by the caller, 32KB, filled
+     * by nes6502_init. */
     const uint8_t *code;
     uint8_t apu[0x18];     /* $4000-$4017, last value written (also read back) */
     /* One bit per APU register, set by every write to it and cleared by
@@ -44,8 +54,9 @@ typedef struct {
     bool faulted;          /* hit an undocumented opcode, a BRK, or ran away */
 } Nes6502;
 
-/* `code_view` is the caller's 64KB; `prg` is copied into it at `prg_base`
- * and the rest is zeroed. */
+/* `code_view` is the caller's NES6502_CODE_SIZE, standing for $8000-$FFFF;
+ * `prg` is copied into it at `prg_base` (an address in that half) and the
+ * rest is zeroed. */
 void nes6502_init(Nes6502 *cpu, uint8_t *ram, uint8_t *code_view,
                    const uint8_t *prg, uint16_t prg_base, uint32_t prg_size);
 

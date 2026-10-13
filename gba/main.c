@@ -728,6 +728,9 @@ int main(void) {
                 /* The cartridge's own bugs mended, behind the chord (see
                  * TengenGame.mended; over a cable the master's chord). */
                 g_session.game.mended = g_pause_unlocked;
+                /* ...and UP's drop, behind the same chord (see
+                 * TengenGame.hard_drop). */
+                g_session.game.hard_drop = g_pause_unlocked;
                 tengen_ai_reset(&g_ai);
                 /* AT THE CARTRIDGE'S PACE. The port once had it hold Down
                  * and look at each piece first ("va un tanto lento"); that
