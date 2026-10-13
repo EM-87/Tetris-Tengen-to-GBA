@@ -30,7 +30,14 @@ IWRAM_CODE static uint8_t bus_read(Nes6502 *cpu, uint16_t addr) {
     if (addr >= 0x4000 && addr <= 0x4017) return cpu->bus.apu[addr - 0x4000];
     /* The program's own bytes, or zero for anything outside what the sound
      * engine was measured to touch: the view is built that way, so reading
-     * it is deterministic rather than a read past an array. */
+     * it is deterministic rather than a read past an array.
+     *
+     * NOTHING BELOW $8000 BUT RAM AND THE APU IS READ, and that is measured,
+     * not hoped: tools/extract_assets.py runs every track and fails the
+     * build if the engine touches anything else. A test for it here, where
+     * this is inlined at every read in the interpreter, cost 1.7KB of
+     * internal WRAM — the stacks' — so there is none: such a read would come
+     * from below the view. */
     return cpu->bus.code[addr];
 }
 
@@ -48,26 +55,31 @@ IWRAM_CODE static void bus_write(Nes6502 *cpu, uint16_t addr, uint8_t value) {
 void nes6502_init(Nes6502 *cpu, uint8_t *ram, uint8_t *code_view,
                    const uint8_t *prg, uint16_t prg_base, uint32_t prg_size) {
     for (int i = 0; i < 0x800; i++) ram[i] = 0;
-    /* A word at a time: 64KB of byte stores into external WRAM is most of a
+    /* A word at a time: 32KB of byte stores into external WRAM is half a
      * frame, and this runs before the title is drawn. The view is
      * word-aligned by its caller. */
     {
         uint32_t *words = (uint32_t *)code_view;
-        for (uint32_t i = 0; i < 0x10000 / 4; i++) words[i] = 0;
+        for (uint32_t i = 0; i < NES6502_CODE_SIZE / 4; i++) words[i] = 0;
     }
-    if (((uintptr_t)prg & 3) == 0 && (prg_base & 3) == 0 &&
-        (uint32_t)prg_base + prg_size <= 0x10000) {
+    /* The slice at its own address, which in the view is less $8000; none
+     * of it below. */
+    uint32_t at = prg_base >= NES6502_CODE_BASE ? prg_base - NES6502_CODE_BASE
+                                                : NES6502_CODE_SIZE;
+    if (((uintptr_t)prg & 3) == 0 && (at & 3) == 0 &&
+        at + prg_size <= NES6502_CODE_SIZE) {
         const uint32_t *src = (const uint32_t *)prg;
-        uint32_t *dst = (uint32_t *)(code_view + prg_base);
+        uint32_t *dst = (uint32_t *)(code_view + at);
         uint32_t n = prg_size / 4;
         for (uint32_t i = 0; i < n; i++) dst[i] = src[i];
-        for (uint32_t i = n * 4; i < prg_size; i++) code_view[prg_base + i] = prg[i];
+        for (uint32_t i = n * 4; i < prg_size; i++) code_view[at + i] = prg[i];
     } else {
-        for (uint32_t i = 0; i < prg_size && prg_base + i < 0x10000; i++)
-            code_view[prg_base + i] = prg[i];
+        for (uint32_t i = 0; i < prg_size && at + i < NES6502_CODE_SIZE; i++)
+            code_view[at + i] = prg[i];
     }
     cpu->bus.ram = ram;
-    cpu->bus.code = code_view;
+    /* Indexed by the 6502's own address: see Nes6502Bus.code. */
+    cpu->bus.code = (const uint8_t *)((uintptr_t)code_view - NES6502_CODE_BASE);
     for (int i = 0; i < 0x18; i++) cpu->bus.apu[i] = 0;
     cpu->bus.apu_written = 0;
     cpu->a = cpu->x = cpu->y = 0;
@@ -98,8 +110,9 @@ IWRAM_CODE bool nes6502_call(Nes6502 *cpu, uint16_t addr, uint8_t a,
      * was the biggest single cost of a frame. The title screen, which runs
      * the fireworks and the sound engine on top of its own drawing, had none
      * of that to give: it missed a vblank in a hundred and fifty once the
-     * engine had a free list to walk (see NES_AUDIO_RESET). The 64KB view
-     * makes the check unnecessary — see Nes6502Bus.code — and one load per
+     * engine had a free list to walk (see NES_AUDIO_RESET). The view of the
+     * program's half makes the check unnecessary — see Nes6502Bus.code, and
+     * the one test at the top of each step that keeps PC inside it — and one load per
      * byte is also the SMALLEST way to write it, which matters: this switch
      * is ~200 fetch sites in internal WRAM, and a fast path inlined at each
      * of them once grew it past the stacks. */
@@ -128,7 +141,15 @@ IWRAM_CODE bool nes6502_call(Nes6502 *cpu, uint16_t addr, uint8_t a,
     uint8_t v;
 
     for (uint32_t step = 0; step < max_steps; step++) {
-        if (PC == SENTINEL) {
+        /* ONE TEST FOR TWO THINGS: home (the sentinel) or out of the program
+         * — below $8000, or the sentinel's last few bytes — where the view
+         * holds nothing to fetch. Either a return or a runaway; no
+         * instruction ever starts outside, so none of its three bytes can be
+         * read from outside either. Out of it, a zero used to come back and
+         * stop the CPU as a BRK; it is stopped the same way, one test
+         * sooner, for twenty-eight bytes. */
+        if ((uint16_t)(PC - NES6502_CODE_BASE) >= SENTINEL - NES6502_CODE_BASE) {
+            if (PC != SENTINEL) break;
             cpu->a = A; cpu->x = X; cpu->y = Y; cpu->sp = S; cpu->p = P;
             cpu->pc = PC;
             return true;

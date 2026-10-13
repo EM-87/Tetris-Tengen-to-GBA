@@ -463,12 +463,11 @@ typedef char pmenu_layers_in_a_row[
 #define PMENU_LAYER(l) (MEM_SCREENBLOCK(SCREENBLOCK) + (l) * MAP_W * 32)
 #define PMENU_TX0 ((SCREEN_TW - PMENU_W_MAX) / 2)
 #define PMENU_TY0 ((SCREEN_TH - PMENU_H_MAX) / 2)
-/* Sixteen hundred bytes. In EWRAM on a cartridge, whose IWRAM had less than
- * the stack's 4KB left over with them; in IWRAM on a Single-Pak copy, whose
- * EWRAM is the program itself and has a few hundred bytes to spare. */
-#ifndef TENGEN_MULTIBOOT
+/* Sixteen hundred bytes, in EWRAM: internal WRAM had less than the stack's
+ * 4KB left over with them, on a cartridge and on a Single-Pak copy alike,
+ * and since the 6502's view went to half (NES6502_CODE_SIZE) the copy has
+ * room out there. */
 __attribute__((section(".ewram")))
-#endif
 static uint16_t g_pmenu_under[4][PMENU_H_MAX][PMENU_W_MAX];
 static int g_pmenu_saved_w, g_pmenu_saved_h;
 
@@ -643,6 +642,82 @@ static void draw_pause_menu(void) {
     }
 }
 
+/* THE TUNES' WINDOW PLAYS THE TUNE UNDER ITS ARROW, and the menu around it
+ * plays nothing. The pause has the engine suspended (pause_toggled); the
+ * window lets it go, and every move puts the tune the arrow lands on on
+ * from its first bar — an audition, the way LEVEL SETTINGS gives one. NO
+ * MUSIC is silence, and so is MUSIC MIX, which is a rotation that belongs to
+ * the match and has no one tune to audition (see front_tune). Leaving, the
+ * engine is left holding the match's tune and suspended again: the one
+ * under the arrow with A, picking up on the unpause where its audition got
+ * to; the one there was with B or START. On a prototype whose pause plays
+ * on (pause_keeps_music) it is not suspended, as nothing else is.
+ *
+ * It used to be the other way round: the window was silent and A started
+ * the tune in the menu behind it, which was the one place in the pause the
+ * music played, and the wrong one. */
+static uint8_t g_preview;        /* the tune the window has on: its arrow's */
+static bool g_preview_live;      /* ...the engine let go for it */
+static bool g_preview_moved;     /* ...and the arrow has left where it opened */
+
+static void tunes_open(void) {
+    g_pause_tunes = true;
+    g_tune_row = g_preview = g_music;    /* on the one playing */
+    g_preview_moved = false;
+    /* WHERE THE PAUSE STOPPED IT, not from the top: the arrow is on the
+     * match's own tune, so that is what plays — on, as an unpause would
+     * have it. Not the mix's, which the arrow on MUSIC MIX does not
+     * audition. */
+    g_preview_live = g_music != MUSIC_MIX;
+    if (!g_preview_live) return;
+    nes_audio_play(NES_MUSIC_RESUME);
+    if (MUSIC_IS_HANDTUNE(g_music) && !handtune_playing()) {
+        if (handtune_current() == MUSIC_HANDTUNE_OF(g_music)) handtune_resume();
+        else handtune_start(MUSIC_HANDTUNE_OF(g_music));
+    }
+}
+
+static void tunes_move(uint8_t row) {
+    g_tune_row = g_preview = row;
+    g_preview_moved = true;
+    if (row == MUSIC_MIX) {
+        stop_music();
+        return;
+    }
+    /* Loaded first and only then let go, if the engine is still frozen:
+     * see start_music. */
+    start_music(row);
+    if (!g_preview_live) {
+        nes_audio_play(NES_MUSIC_RESUME);
+        g_preview_live = true;
+    }
+}
+
+static void tunes_close(bool take) {
+    g_pause_tunes = false;
+    if (take && g_tune_row != g_music) {
+        g_levelup_resume = 0;        /* the new tune is already on */
+        g_music = g_tune_row;
+        /* The mix restarts on its current turn rather than from the top. */
+        g_mix_step = 0;
+    }
+    /* The arrow left the match's tune: it goes back on, from its first bar
+     * (B or START). With A the arrow IS on it. */
+    if (g_preview != g_music) {
+        if (g_music == MUSIC_MIX) stop_music();
+        else start_music(g_music);
+    }
+    /* THE MIX'S OWN TUNE WENT AT THE FIRST MOVE, and nothing restarts the
+     * engine on the way out of a pause: the unpause owes the match a tune
+     * (see g_mix_held). */
+    if (g_music != MUSIC_MIX) g_mix_held = false;
+    else if (g_preview_moved) g_mix_held = true;
+    if (!pause_keeps_music()) {
+        if (g_preview_live) nes_audio_play(NES_MUSIC_SUSPEND);
+        handtune_suspend();
+    }
+}
+
 /* One frame of it. Returns true if the menu ate the input, which is what
  * keeps the cheat codes out of it — they are entered on the pad while paused
  * too, and a Down meant for this menu is the first byte of one of them. */
@@ -664,59 +739,23 @@ static bool pause_menu_input(uint8_t pressed, bool *leaving) {
      * The tunes' window goes the same way, and nothing in it is chosen. */
     if (pressed & TENGEN_BTN_START) {
         g_pause_confirm = false;
-        g_pause_tunes = false;
+        if (g_pause_tunes) tunes_close(false);
         return false;
     }
 
     /* THE TUNES' WINDOW: Up and Down walk the list, and SELECT walks it
-     * down as it does every list; A takes the tune under the cursor and B
-     * leaves the one that was playing, both back to the menu. */
+     * down as it does every list, playing the tune under the arrow as it
+     * goes (tunes_move); A takes it and B leaves the one there was, both
+     * back to the menu (tunes_close). */
     if (g_pause_tunes) {
         int count = pause_tune_count();
         if (pressed & TENGEN_BTN_UP)
-            g_tune_row = (uint8_t)((g_tune_row + count - 1) % count);
-        if (pressed & (TENGEN_BTN_DOWN | TENGEN_BTN_SELECT))
-            g_tune_row = (uint8_t)((g_tune_row + 1) % count);
+            tunes_move((uint8_t)((g_tune_row + count - 1) % count));
+        else if (pressed & (TENGEN_BTN_DOWN | TENGEN_BTN_SELECT))
+            tunes_move((uint8_t)((g_tune_row + 1) % count));
         if (pressed & (TENGEN_BTN_A | TENGEN_BTN_B)) {
-            g_pause_tunes = false;
+            tunes_close((pressed & TENGEN_BTN_A) != 0);
             screen_blip();
-        }
-        /* The one already playing, taken again, is left where it is: a
-         * pause suspends a tune, it does not rewind it. */
-        if ((pressed & TENGEN_BTN_A) && g_tune_row != g_music) {
-            g_levelup_resume = 0;        /* the new tune is already on */
-            g_music = g_tune_row;
-            /* The mix restarts on its current turn rather than from the
-             * top. */
-            g_mix_step = 0;
-            /* HEARD AT ONCE, which is the whole point of choosing it here —
-             * and the game is PAUSED, so the engine has been suspended and a
-             * track handed to it now would sit there silent. Resume, then
-             * start. The pause's own suspend goes back on when the menu is
-             * left, because tengen_pause_input resumes on the way out either
-             * way.
-             *
-             * EXCEPT MUSIC MIX, WHICH HAS NOTHING TO PREVIEW. The selection
-             * screen already says so in as many words (see front_tune): the
-             * mix is a rotation that belongs to the match, not one tune to
-             * audition, so it goes quiet there like NO MUSIC does. This menu
-             * was starting whichever tune the rotation happened to be on,
-             * which is the one place in the port where the same choice
-             * sounded like two different things depending on which screen
-             * you made it from.
-             *
-             * Going quiet here means the match would come back silent,
-             * though — nothing restarts the engine on the way out of a
-             * pause — so the silence is remembered and spent on the
-             * unpause. */
-            nes_audio_play(NES_MUSIC_RESUME);
-            if (g_music == MUSIC_MIX) {
-                stop_music();
-                g_mix_held = true;
-            } else {
-                start_music(g_music);
-                g_mix_held = false;
-            }
         }
         return true;
     }
@@ -780,8 +819,7 @@ static bool pause_menu_input(uint8_t pressed, bool *leaving) {
             g_pause_confirm = true;
             g_pause_yes = false;   /* NO first: a pause menu does not lose games */
         } else {
-            g_pause_tunes = true;
-            g_tune_row = g_music;  /* on the one playing */
+            tunes_open();
             /* WHAT THE WINDOW WILL COVER IS SAVED NOW, out of the blank:
              * nothing under it changes between here and the frame that
              * draws it, and that frame, saving it too, finished at line 223

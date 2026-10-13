@@ -117,13 +117,13 @@ const uint16_t kNes6502Probe[3] = {
 };
 
 static uint8_t g_prev[0x18];
-/* The 6502's whole address space as the engine's code sees it, laid out in
- * external WRAM at startup: the program bytes at their own address, zero
- * everywhere else. Every instruction fetch is one load from here (see
- * Nes6502Bus.code), so it is worth both the copy and the 64KB: external
- * WRAM answers in fewer cycles than the cartridge bus, and unlike internal
- * WRAM it has the room. */
-__attribute__((section(".ewram"), aligned(4))) static uint8_t g_code[0x10000];
+/* The program's half of the 6502's address space, $8000-$FFFF, as the
+ * engine's code sees it, laid out in external WRAM at startup: the program
+ * bytes at their own address, zero everywhere else. Every instruction fetch
+ * is one load from here (see Nes6502Bus.code), so it is worth both the copy
+ * and the 32KB: external WRAM answers in fewer cycles than the cartridge
+ * bus, and unlike internal WRAM it has the room. */
+__attribute__((section(".ewram"), aligned(4))) static uint8_t g_code[NES6502_CODE_SIZE];
 
 /* The NES triangle's own waveform, written into GBA wave RAM: its 32-step
  * 4-bit ramp, 15 down to 0 and back up, which is exactly the shape wave RAM
@@ -336,13 +336,15 @@ bool nes_rom_call(uint16_t addr, uint8_t a, uint32_t max_steps) {
 
 uint8_t *nes_rom_ram(void) { return g_nes_ram; }
 
-/* ONE BYTE OF THE CARTRIDGE, by its own address. The 64KB view the
- * interpreter fetches from holds the whole slice at the addresses the 6502
- * knows it by, so a caller that wants the cartridge's DATA rather than its
+/* ONE BYTE OF THE CARTRIDGE, by its own address. The view the interpreter
+ * fetches from holds the whole slice at the addresses the 6502 knows it by
+ * (less $8000), so a caller that wants the cartridge's DATA rather than its
  * code — a table of pointers, a list of tile ids — can read it here instead
  * of having it extracted into a header of its own. The dancers' choreography
  * is read this way; see the driver in gba/hud.c. */
-uint8_t nes_rom_peek(uint16_t addr) { return g_code[addr]; }
+uint8_t nes_rom_peek(uint16_t addr) {
+    return addr >= NES6502_CODE_BASE ? g_code[addr - NES6502_CODE_BASE] : 0;
+}
 
 /* ...and what the last nes_rom_call left in A, for the routines whose answer
  * is a return value rather than a write to RAM. */

@@ -15,6 +15,9 @@ void tengen_link_start(TengenLink *link, uint16_t seed, uint8_t start_level,
     /* The cartridge's bugs mended on the master's chord, which is what `xe`
      * carries over the wire too: both consoles, the same game. */
     link->game.mended = xe;
+    /* ...and UP's drop, on the same chord: a press is in the buttons both
+     * consoles step with, so both drop it on the same frame. */
+    link->game.hard_drop = xe;
     link->local_slot = (uint8_t)local_slot;
     link->frame = 0;
     link->desynced = false;

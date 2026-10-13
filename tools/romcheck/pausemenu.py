@@ -106,7 +106,19 @@ def pausemenu_check(rom_path):
     # the one playing. A takes the one under the cursor and goes back to the
     # menu; B goes back with nothing changed. LEFT and RIGHT, which used to
     # change the tune in place, change nothing now.
+    # AND THE WINDOW PLAYS THE TUNE UNDER ITS ARROW, while the menu around it
+    # plays nothing: an audition in the one, the pause's silence in the
+    # other (tunes_move, tunes_close).
     music, _ = game_state_address(rom_path, "g_music")
+
+    def heard(frames=60):
+        n = 0
+        for _ in range(frames):
+            core.run_frame()
+            st = sound_state(core)
+            if st["activos"] or st["pulso 1"] or st["pulso 2"] or st["triangulo"]:
+                n += 1
+        return n
 
     def tunes():
         return [tilemap_text(core, PMT_FIRST + i, PM_L, PM_R)
@@ -136,20 +148,34 @@ def pausemenu_check(rom_path):
     else:
         print(f"  MUSIC abre su ventana con las {len(names)} canciones, la "
               f"flecha en la que suena")
-        tap("DOWN"); tap("DOWN")
+        tap("DOWN")
+        auditioned = heard()
+        tap("DOWN")
         tap("B")
+        quiet = heard()
         if core.memory.u8[music] != 0 or "MUSIC" not in row(PM_MUSIC):
             failures.append("B en la ventana cambia la cancion o no vuelve al "
                             "menu")
+        elif auditioned < 30:
+            failures.append(f"con la flecha en LOGINSKA la ventana no la toca "
+                            f"({auditioned} de 60 frames con sonido)")
+        elif quiet:
+            failures.append(f"de vuelta en el menu de pausa sigue sonando "
+                            f"({quiet} de 60 frames)")
         else:
             tap("A")
             tap("DOWN")
             tap("A")
+            quiet = heard()
             if core.memory.u8[music] != 1 or "MUSIC" not in row(PM_MUSIC):
                 failures.append(f"A en LOGINSKA no la elige o no vuelve al "
                                 f"menu: g_music {core.memory.u8[music]}")
+            elif quiet:
+                failures.append(f"elegida LOGINSKA, el menu de pausa la toca "
+                                f"({quiet} de 60 frames)")
             else:
-                print("  B vuelve sin tocar nada; A elige y vuelve al menu")
+                print("  la flecha toca la cancion que pisa; B vuelve sin tocar "
+                      "nada, A la elige, y el menu calla")
     # ...and the window, its eleven rows, gone once it is: no line of it left
     # above or below the menu's box.
     left = [r for r in (PMT_TY + 1, PMT_TY + 2, PMT_TY + PMT_H - 2)

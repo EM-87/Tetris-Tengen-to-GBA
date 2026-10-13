@@ -959,10 +959,33 @@ def chord_extras_check(rom_path):
                       f"reanudar, el tablero y la pieza en sus colores")
         del core, screen
 
+    # UP DROPS THE PIECE under the chord (TengenGame.hard_drop): one press
+    # and it is down and planted, four more cells on the board within a
+    # couple of frames. Without the chord UP is the cartridge's, nothing, and
+    # at level 0 nothing lands that soon.
+    def settled(core):
+        return sum(1 for i in range(PF)
+                   if core.memory.u8[base + off["field"] + i] not in (0, 15))
+    for chord in (False, True):
+        core, screen = start(chord)
+        run(core, 20)
+        before = settled(core)
+        core.set_keys(KEYS["UP"]); run(core, 3)
+        core.set_keys(); run(core, 2)
+        landed = settled(core) - before
+        if landed != (4 if chord else 0):
+            failures.append(f"acorde={chord}: ARRIBA deja {landed} celdas "
+                            f"nuevas en el tablero, no {4 if chord else 0}")
+        else:
+            print(f"  acorde={int(chord)}: ARRIBA "
+                  f"{'tira la pieza de golpe' if chord else 'no hace nada'}")
+        del core, screen
+
     for f in failures:
         print(f"FALLA: {f}")
     if failures:
         return 1
-    print("OK: bajo el acorde, el tempo sube con la pila, el record suena y la "
-          "pausa esconde el tablero tras un muro de ladrillos.")
+    print("OK: bajo el acorde, el tempo sube con la pila, el record suena, la "
+          "pausa esconde el tablero tras un muro de ladrillos y ARRIBA tira "
+          "la pieza.")
     return 0

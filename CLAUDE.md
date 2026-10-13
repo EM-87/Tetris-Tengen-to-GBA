@@ -171,9 +171,14 @@ story behind each; the item number is in brackets.
 - **The Single-Pak slave is the same program, linked for EWRAM**
   (`gba/mb.ld`, `-DTENGEN_MULTIBOOT`, crt0's multiboot entries under
   MULTIBOOT) and carried inside the cartridge's ROM (`gba/mb_image.s`),
-  which is why the ROM is 512 KB. Image plus the 6502's 64 KB must fit in
-  256 KB and the link asserts it — and it is nearly FULL: about 400 bytes
-  to spare (196208 of 196608). Code the copy can never run says so at the
+  which is why the ROM is 512 KB. Image plus the 6502's view must fit in
+  256 KB and the link asserts it. It was nearly FULL — thirty-two bytes to
+  spare once UP's drop went in — until the view went from the whole 64 KB
+  address space to the program's half, $8000-$FFFF (`NES6502_CODE_SIZE`):
+  about 31 KB spare now. Watch it anyway: `arm-none-eabi-nm -n
+  build/tengen_mb.elf | grep __ewram_end` against 0x02040000, and IWRAM's
+  4 KB for the stacks on both builds (the link asserts that one too, and a
+  test inlined at each of the interpreter's reads cost 1.7 KB of it). Code the copy can never run says so at the
   call, where link-time optimisation can see it (`#ifdef TENGEN_MULTIBOOT`):
   the logos, and the Game Boy Player, found only by its logo — leaving its
   pages out is what made room for the computer's ARM loops. A `false` from a
@@ -515,6 +520,17 @@ story behind each; the item number is in brackets.
   the clearing of the other three layers go a row at a time into VRAM, and
   what it covers is saved when A opens it, out of the blank — saved by the
   frame that drew it, that frame finished at line 223 of 227 (`--vblank`).
+- **The tunes' window auditions and the pause menu does not.** Opening it
+  lets the suspended engine go and the match's tune plays on; each move puts
+  the tune under the arrow on from its first bar (NO MUSIC and MUSIC MIX
+  silent); leaving puts the match's tune back if the arrow left it and
+  suspends again, so the menu around it is silent (`tunes_open`,
+  `tunes_move`, `tunes_close`; `--pausemenu` listens).
+- **UP drops the piece under the chord** (`TengenGame.hard_drop`, set with
+  `mended`, the master's chord over a cable): a fresh press takes it down a
+  row at a time inside the frame, each row a soft-drop step, and the
+  gravity step below lands it — so it rests, scores and stops on a coop
+  partner exactly as holding DOWN would (`test_up_*`, `--chordfx`).
 - **The level-up show keeps to the box's interior.** It used to wipe the
   right column and draw the plain strip of rope the screen had before the
   boxes; HUD VERSUS's cleared the left box ten wide, rope included
@@ -632,6 +648,7 @@ race, as on the cartridge's 2P screen; one chord (L+R on GAME SELECT or
 LEVEL SETTINGS) that uncovers Korobeiniki, Katiuska, MUSIC MIX, the XE
 levels 18-19, the pause menu (PAUSE, MUSIC, EXIT GAME, and A on MUSIC
 opening a window with every tune on a line, the cursor on the one playing,
+the tune under the arrow playing as it moves and the menu around it silent,
 A to take one and B to leave it; MUSIC and not CHANGE MUSIC, whose box
 would cover the panels' last column of figures) and those Stats,
 and turns the menus' text from blue to white and the credits from the
@@ -659,7 +676,9 @@ hidden while paused behind a wall of grey bricks — the cartridge's lone
 block $0F in every cell, in the level-0 greys whatever the level (`T_BRICK`;
 not the rival's board a paused race shows) — and the engine's
 unused level-up jingle ($0C) the first time a score passes the top of the
-table (`record_watch`); SELECT on the title shows the HIGH SCORES page,
+table (`record_watch`); UP dropping the piece at once under the chord, as
+later Tetrises do, landed and scored as a DOWN held all the way would
+(`TengenGame.hard_drop`); SELECT on the title shows the HIGH SCORES page,
 which otherwise only a lost game did — the cartridge takes it as START there
 ($9FA4) — (`--titlescores`); a Single-Pak copy's
 records handed to a console with a save every time they link, with RECORDS

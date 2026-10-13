@@ -42,7 +42,7 @@ def selftest(rom_path):
             failures.append(f"harness.py dice {name}={have}, la ROM {lay[name]}")
 
     # The title screen must come up first and must not be blank. Boot takes
-    # a few frames (the sound engine's 64KB code view is laid out before
+    # a few frames (the sound engine's 32KB code view is laid out before
     # anything is drawn) and the title's own tile swap hides behind one black
     # frame, so the check waits for it rather than looking at frame 8 exactly.
     run(core, 8)
