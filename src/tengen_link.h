@@ -83,7 +83,8 @@ void tengen_link_start(TengenLink *link, uint16_t seed, uint8_t start_level,
 #define TENGEN_RULE_HARD_DROP  0x01   /* TengenGame.hard_drop */
 #define TENGEN_RULE_FAST_DOWN  0x02   /* TengenGame.fast_soft */
 #define TENGEN_RULE_FAST_SHIFT 0x04   /* TengenGame.fast_shift */
-#define TENGEN_RULES_ALL       0x07
+#define TENGEN_RULE_HOLD       0x08   /* TengenGame.hold */
+#define TENGEN_RULES_ALL       0x0F
 void tengen_link_rules(TengenLink *link, uint8_t rules);
 
 /* One frame. `local_buttons` is what this machine's player is holding;
@@ -135,7 +136,7 @@ typedef enum {
      * stop-and-wait turn costs two transfers, which is two sixtieths of a
      * second on a screen the player is already sitting on. */
     TENGEN_LOBBY_HANDICAP = 5,  /* player 1 in bits 0-3, player 2 in bits 4-7,
-                                 * the master's rules in 8-10 (TENGEN_RULE_*) */
+                                 * the master's rules in 8-11 (TENGEN_RULE_*) */
     TENGEN_LOBBY_GO      = 6,
     /* ...and two the match itself is over before either is used: the records
      * swap, below. They share the tag space because they share the wire and

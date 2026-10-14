@@ -177,6 +177,11 @@ typedef struct {
     uint8_t drop_rate_possible;/* dropRatePossibleP1/2 */
     uint8_t fall_timer;        /* player1FallTimer/2 */
     TengenPiece piece;
+    /* THE PIECE PUT ASIDE (TengenGame.hold, the port's): TT_NONE until one
+     * is, and whether this piece has been put aside or swapped already —
+     * once per piece, until a lock deals the next. */
+    TengenTetromino held;
+    bool hold_spent;
     TengenRng rng;             /* player1RNGSeed/2 (own lookahead sequence) */
     uint32_t score;
     uint32_t lines;
@@ -381,6 +386,14 @@ typedef struct {
      *               every one of these is). */
     uint8_t fast_shift;
     uint8_t fast_soft;
+    /* ...AND HOLD, a bit per player as well: a fresh SELECT, which the
+     * cartridge's play never reads, puts the falling piece aside
+     * (TengenPlayerState.held). Into an empty box it goes and the next comes
+     * in, dealt as any piece is; with one held, the two swap and the held
+     * one comes in at the top as dealt, turned 0 and on a fresh fall timer.
+     * Once per piece. A piece that would not fit at the top, or would come
+     * up inside a coop partner's, is not taken: the press does nothing. */
+    uint8_t hold;
 } TengenGame;
 
 /* ----------------------------------------------------------------------- *

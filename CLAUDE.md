@@ -531,13 +531,13 @@ story behind each; the item number is in brackets.
   press takes it down a row at a time inside the frame, each row a soft-drop
   step, and the gravity step below lands it — so it rests, scores and stops
   on a coop partner exactly as holding DOWN would (`test_up_*`, `--chordfx`).
-- **The pause menu's OPTIONS are five switches, all OFF until a player sets
-  them** (`OPT_HARD_DROP`..`OPT_SWAP_AB`, `g_options`): HARD DROP, FAST DOWN
+- **The pause menu's OPTIONS are six switches, all OFF until a player sets
+  them** (`OPT_HARD_DROP`..`OPT_HOLD`, `g_options`): HARD DROP, FAST DOWN
   (`fast_soft`: DOWN a row every frame), FAST SHIFT (`fast_shift`: the side
   repeat at 8 then every 2 frames, the cartridge's 11 and 6), GHOST (the
   landing place in outline, `tengen_drop_distance`; in coop the partner's
-  too, in its bank) and SWAP A-B (the turns the other way round; the menu
-  still reads A as A). Kept on the battery with a check byte
+  too, in its bank), SWAP A-B (the turns the other way round; the menu
+  still reads A as A) and HOLD (below). Kept on the battery with a check byte
   (`SAVE_OPTIONS_OFF`, $0404) and in force whenever the chord is; a
   Single-Pak copy keeps them until it is switched off. The faster hands are
   per player in the core (a bit per slot), so the computer beside a solo
@@ -560,10 +560,26 @@ story behind each; the item number is in brackets.
   The pause menu's moves and switches tick as the front end's do, with the
   floor at $40 for the tick's length (`nes_audio_gag_lower`, `pause_tick`);
   `pause_ticks_hold_the_tune` checks LOGINSKA stays held.
-- **Over the cable the three rules are the match's and the other two each
-  player's.** HARD DROP, FAST DOWN and FAST SHIFT cross from the master's
-  OPTIONS in HANDICAP's bits 8-10 (`TengenLobby.rules`,
-  `tengen_link_rules`, for both players); either player changes one from the
+- **HOLD** (`TengenGame.hold`, a bit per player; `held`, `hold_spent`): a
+  fresh SELECT puts the falling piece aside — into an empty box, and the
+  next is dealt as any piece is; with one held, the two swap and the held one
+  comes in at the top as dealt. Once per piece, until a lock deals the next.
+  A piece that would come up inside a coop partner's is refused (on a board
+  of its own it always fits: pieces come in on the hidden rows); a restarted
+  race board holds nothing. With it on,
+  SELECT is HOLD's and L+R swaps the HUD; HUD STATS shows HOLD where its
+  cossack stood (`draw_hold_cell`, NEXT's lettering drawn at boot as
+  `T_HOLD_LABEL`, colours in `PAL_NEXT2_BANK`, which only HUD COOP uses
+  otherwise), the cossack and his colour change go, and over the cable the
+  two linked modes get HUD STATS as a second HUD (`hud_set`). Switched under
+  the pause, the cell changes hands by itself; only a HUD that left the set
+  is drawn whole, and on the frame AFTER the box comes down (`g_hud_dirty`):
+  the two on one frame ended at line 225 of 227. A bit of its own after the
+  others (`OPT_HOLD` $20), so earlier saves read the same.
+- **Over the cable the four rules are the match's and the other two each
+  player's.** HARD DROP, FAST DOWN, FAST SHIFT and HOLD cross from the
+  master's OPTIONS in HANDICAP's bits 8-11 (`TengenLobby.rules`,
+  `tengen_link_rules`, for both players; `opt_link_rules` numbers them); either player changes one from the
   shared menu on both consoles, for that match only. GHOST is drawn by the
   console that has it, and SWAP A-B turns A and B in the word that console
   sends (`g_pad_swap`, read by `link_read_buttons` in the serial interrupt)
@@ -717,8 +733,8 @@ unused level-up jingle ($0C) the first time a score passes the top of the
 table (`record_watch`); the pause menu's OPTIONS, all OFF until set and
 kept on the battery: UP dropping the piece at once, as later Tetrises do,
 landed and scored as a DOWN held all the way would (`TengenGame.hard_drop`),
-a faster soft drop and side repeat, a ghost of the landing place and A/B
-turned round; SELECT on the title shows the HIGH SCORES page,
+a faster soft drop and side repeat, a ghost of the landing place, A/B
+turned round and HOLD on SELECT; SELECT on the title shows the HIGH SCORES page,
 which otherwise only a lost game did — the cartridge takes it as START there
 ($9FA4) — (`--titlescores`); a Single-Pak copy's
 records handed to a console with a save every time they link, with RECORDS

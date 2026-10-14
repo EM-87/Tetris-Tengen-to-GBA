@@ -386,6 +386,13 @@ void options_apply_solo(TengenGame *game) {
     game->hard_drop = (on & OPT_HARD_DROP) != 0;
     game->fast_soft = (on & OPT_FAST_DOWN) ? me : 0;
     game->fast_shift = (on & OPT_FAST_SHIFT) ? me : 0;
+    game->hold = (on & OPT_HOLD) ? me : 0;
+}
+
+/* HOLD IN FORCE for this console's player (TengenGame.hold): what SELECT and
+ * L+R mean in a match, and what HUD STATS shows where its cossack stood. */
+bool hold_on(void) {
+    return (g_session.game.hold >> g_view) & 1;
 }
 
 /* What the window says a switch is. The rules are read off the match, which
@@ -397,6 +404,7 @@ static bool option_value(int i) {
     case OPT_HARD_DROP:  return g->hard_drop;
     case OPT_FAST_DOWN:  return (g->fast_soft >> g_view) & 1;
     case OPT_FAST_SHIFT: return (g->fast_shift >> g_view) & 1;
+    case OPT_HOLD:       return (g->hold >> g_view) & 1;
     default:             return (g_options >> i) & 1;
     }
 }
@@ -413,13 +421,15 @@ static void option_toggle(int i, bool here) {
         uint8_t rules = 0;
         for (int r = 0; r < OPT_COUNT; r++)
             if (((1u << r) & OPT_RULES) && option_value(r)) rules |= (uint8_t)(1u << r);
-        tengen_link_rules(&g_session, (uint8_t)(rules ^ bit));
+        tengen_link_rules(&g_session, opt_link_rules((uint8_t)(rules ^ bit)));
+        if (bit == OPT_HOLD) hud_hold_changed();
         return;
     }
     if (!here && g_linked) return;
     g_options ^= bit;
     options_save();
     if (!g_linked) options_apply_solo(g);
+    if (bit == OPT_HOLD) hud_hold_changed();
 }
 
 /* A row at a time, straight into the main map: the tunes' window is eleven
@@ -689,7 +699,7 @@ static void draw_pmenu(const char *const *lines, int count, int cursor) {
  * wide and leaves FAST SHIFT its ten. */
 #define OPT_W 16
 static const char *const kOptionNames[OPT_COUNT] = {
-    "HARD DROP", "FAST DOWN", "FAST SHIFT", "GHOST", "SWAP A-B"
+    "HARD DROP", "FAST DOWN", "FAST SHIFT", "GHOST", "SWAP A-B", "HOLD"
 };
 
 static void draw_options_box(void) {
@@ -1546,6 +1556,12 @@ void draw_match(bool *sweeping) {
         g_pmenu_drawn_w = 0;
         g_plaque_drawn = false;
         g_unpause_patch = false;
+    } else if (g_hud_dirty && !g_session.game.paused) {
+        /* The HUD changed under the pause (hud_hold_changed): drawn whole on
+         * the frame AFTER the one that took the box down, not on it — the two
+         * together ended at line 225 of 227. */
+        g_hud_dirty = false;
+        g_repaint = true;
     }
     refresh_palettes();
     /* THE SWEEP'S ONE TIDY-UP, BEFORE THE PANEL: the frame it finishes, the

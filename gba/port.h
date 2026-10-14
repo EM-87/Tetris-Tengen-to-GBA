@@ -1784,7 +1784,12 @@ typedef enum {
 #define T_CHECK_OFF (T_GHOST + 2 * GHOST_TILES)   /* and +1, its right half */
 #define T_CHECK_ON  (T_CHECK_OFF + 2)             /* and +1 */
 #define CHECK_SHIFT_PX 4    /* the box's left column in the pair */
-typedef char ghost_tiles_fit[T_CHECK_ON + 2 <= 1024 ? 1 : -1];
+/* ...AND HOLD's LABEL (OPT_HOLD), four tiles in NEXT's own lettering — a
+ * letter a tile, two-pixel strokes in its red — which has no H and no D, so
+ * all four are drawn at boot in that style (upload_tiles). */
+#define T_HOLD_LABEL (T_CHECK_ON + 2)
+#define HOLD_LABEL_W 4
+typedef char ghost_tiles_fit[T_HOLD_LABEL + HOLD_LABEL_W <= 1024 ? 1 : -1];
 
 /* The frame's own tiles, out of the plaque the game over is drawn with. */
 #define T_BOX_TL 0x29
@@ -1819,14 +1824,25 @@ typedef char ghost_tiles_fit[T_CHECK_ON + 2 <= 1024 ? 1 : -1];
 #define OPT_FAST_SHIFT 0x04   /* a held side repeats sooner (fast_shift) */
 #define OPT_GHOST      0x08   /* where the piece will land, in outline */
 #define OPT_SWAP_AB    0x10   /* A turns the other way, and B with it */
-#define OPT_COUNT 5
+/* ...and the sixth, HOLD, a rule like the first three (TengenGame.hold): a
+ * bit of its own after the others, so a byte a console saved before it was
+ * there still reads the same. On, SELECT puts the piece aside, HUD STATS
+ * shows it where its cossack stood, and L+R swaps the HUD in SELECT's place
+ * (the cossack and his colours go with him). */
+#define OPT_HOLD       0x20
+#define OPT_COUNT 6
 #define OPT_ALL   ((1u << OPT_COUNT) - 1)
-#define OPT_RULES (OPT_HARD_DROP | OPT_FAST_DOWN | OPT_FAST_SHIFT)
+#define OPT_RULES (OPT_HARD_DROP | OPT_FAST_DOWN | OPT_FAST_SHIFT | OPT_HOLD)
 #define OPT_H (OPT_COUNT + 3)   /* the window: heading, switches, frame */
-/* The rules cross the cable as they are (tengen_lobby_rules). */
+/* The rules cross the cable as the link numbers them (tengen_lobby_rules):
+ * the first three as they are, HOLD moved down to its bit. */
 typedef char opt_rules_are_the_links[
     OPT_HARD_DROP == TENGEN_RULE_HARD_DROP && OPT_FAST_DOWN == TENGEN_RULE_FAST_DOWN &&
     OPT_FAST_SHIFT == TENGEN_RULE_FAST_SHIFT ? 1 : -1];
+static inline uint8_t opt_link_rules(uint8_t opt) {
+    return (uint8_t)((opt & (OPT_HARD_DROP | OPT_FAST_DOWN | OPT_FAST_SHIFT)) |
+                     ((opt & OPT_HOLD) ? TENGEN_RULE_HOLD : 0));
+}
 
 /* ----------------------------------------------------------------------- *
  * WHAT CROSSES BETWEEN THE FIVE
@@ -2002,6 +2018,8 @@ enum { HUD_MODE_SOLO, HUD_MODE_VERSUS, HUD_MODE_WITH,
 const uint8_t *hud_set(int *n);
 void hud_reset(void);        /* to whatever this mode was last left on */
 void hud_remember(void);     /* ...which SELECT is what writes down */
+void hud_hold_changed(void); /* HOLD switched under the pause */
+extern bool g_hud_dirty;     /* ...and the HUD has to be drawn whole */
 void draw_dancer_stage(void);
 unsigned text_len(const char *s);
 void draw_text(int tx, int ty, const char *text, int bank);
@@ -2140,5 +2158,6 @@ extern uint8_t g_options;
 void options_load(void);
 void options_apply_solo(TengenGame *game);
 uint8_t options_mine(void);
+bool hold_on(void);
 
 #endif /* PORT_H */
