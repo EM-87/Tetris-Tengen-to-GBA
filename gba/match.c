@@ -116,8 +116,12 @@ void cossack_watch(int slot, TengenStepResult step) {
 
 /* THE GAME BOY PLAYER'S RUMBLE (gbp.c), on what this console's player
  * does: a clear, longer the more rows — a TETRIS the most — the level going
- * up, and the top-out. Nothing on a GBA, which has no motor. */
+ * up, and the top-out. Nothing on a GBA, which has no motor. And only under
+ * the chord, the match's (match_chord), as the rest of what the port adds:
+ * the cartridge's pad never shook. */
+static bool pause_menu_on(void);
 static void rumble_step(TengenStepResult step) {
+    if (!pause_menu_on()) return;
     if (step.lines_cleared) {
         int rows = 0;
         for (uint32_t m = step.rows_cleared_mask; m; m &= m - 1) rows++;
@@ -1086,6 +1090,10 @@ void link_match_begin(bool menu) {
 static bool pause_menu_on(void) {
     return g_linked ? g_link_menu : g_pause_unlocked;
 }
+
+/* The chord a match is played under: this console's, or over the cable the
+ * master's — what the pause menu answers to. */
+bool match_chord(void) { return pause_menu_on(); }
 
 /* THE CABLE WENT QUIET: THE MATCH WAITS FOR IT. It used to end two seconds
  * in, which on a real cable is a match lost to a knocked plug. Lockstep can

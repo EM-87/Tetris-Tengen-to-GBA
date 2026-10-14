@@ -855,8 +855,11 @@ def pmenu_span(core):
 # SELECT corner on a licensing notice for a company that folded in 1991; this
 # port spends it on whoever made the port. The other five are the people who
 # made the game and are held to the cartridge's own spelling.
+# ...WITHOUT THE CHORD. Under it the port's own line takes Mirrorsoft's place
+# (CREDIT_PORT); without it the six are the cartridge's, Mirrorsoft's too.
+CREDIT_PORT = ("PORTED WITH CLAUDE", "BY EDUARDO MARTINEZ")
 CREDITS = [
-    ("PORTED WITH CLAUDE", "BY EDUARDO MARTINEZ"),
+    ("LICENSED BY", "MIRRORSOFT LTD."),
     ("CONCEPT BY", "ALEXEY PAZHITNOV"),
     ("DESIGN BY", "VADIM GERASIMOV"),
     ("PROGRAMMED BY", "ED LOGG"),

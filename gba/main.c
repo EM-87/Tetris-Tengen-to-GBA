@@ -331,8 +331,12 @@ int main(void) {
              * game could. The page as a game over leaves it, with nothing
              * to type, and back to the title as it goes back after one: a
              * button or LEADER_HOLD_FRAMES. The table is this title's
-             * build's (leader_use_table). */
-            if (pressed & TENGEN_BTN_SELECT) {
+             * build's (leader_use_table).
+             *
+             * UNDER THE CHORD, as the rest of what the port adds is: without
+             * it SELECT is the cartridge's, another START ($9FA4), which is
+             * MENU_ADVANCE below. */
+            if (g_pause_unlocked && (pressed & TENGEN_BTN_SELECT)) {
                 g_leader_row = -1;
                 leader_frames = 0;
                 leader_browsing = true;

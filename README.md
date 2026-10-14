@@ -128,8 +128,10 @@ Lo que el GBA tiene de más:
 |---|---|---|
 | Partida | SELECT | cambia de HUD (dos por modo); con HOLD, guarda la pieza |
 | Partida, HUD Stats | L+R | cambia el color del cosaco; con HOLD, cambia de HUD (en cualquier HUD) |
-| GAME SELECT o LEVEL SETTINGS | L+R | destapa las canciones ocultas (Korobeiniki, Katiuska, MUSIC MIX), los niveles 18-19 y el menú de pausa |
+| GAME SELECT o LEVEL SETTINGS | L+R | el acorde: destapa las canciones ocultas (Korobeiniki, Katiuska, MUSIC MIX), los niveles 18-19, el menú de pausa y lo demás que añade el port (abajo) |
 | Título | L+R | recorre los títulos de los prototipos (su skin llega al juego) |
+| Título, con el acorde | SELECT | las tablas de HIGH SCORES, una por modo (Izquierda/Derecha las recorren); sin el acorde, SELECT es otro START, como en el cartucho |
+| Pantalla LINK CABLE | SELECT | Single-Pak: envía el juego a una GBA sin cartucho |
 | Carrera, tablero muerto | A+B | se levanta y sigue, como en el cartucho |
 | En cualquier sitio salvo una partida por cable | L+R+SELECT | reposo: pantalla y sonido apagados, casi sin gastar pila (una partida en solitario se pausa antes); A, B, START o SELECT despiertan |
 | En cualquier momento | A+B+START+SELECT | reinicia el juego (en la EZ-Flash IV lo intercepta el propio cartucho) |
@@ -150,6 +152,19 @@ FAST DOWN, FAST SHIFT y HOLD son reglas de la partida: las del maestro, para
 los dos, y cualquiera las cambia desde el menú compartido solo para esa
 partida; GHOST y SWAP A-B son de cada jugador.
 
+**Sin el acorde, el cartucho tal cual** en lo que se ve y se oye: los
+créditos son los suyos (con LICENSED BY MIRRORSOFT LTD.), SELECT en el título
+es otro START y el mando no vibra. Con el acorde, el crédito del port ocupa
+el sitio del de Mirrorsoft, SELECT en el título abre los récords, el Game Boy
+Player vibra, y además de lo de arriba la música acelera con la pila alta, la
+pausa tapa el tablero con un muro de bloques, un récord nuevo suena con el
+jingle que el cartucho no usa, y se arreglan los fallos propios del cartucho:
+el reparto en cooperativo que nace dentro de la pieza del compañero, la
+pieza que cae metida en las filas del compañero que se derrumban, los
+estantes del panel que no tocan la cuerda y el bisel de las fichas $01 y $03,
+que dibujan su esquina un píxel más abajo que las demás (es el arte del
+cartucho, byte a byte).
+
 **Apagar en pausa no pierde la partida**, como en Tetris DX: una partida en
 solitario en pausa se guarda en la memoria del cartucho, y al encender vuelve
 en pausa donde estaba. Si se reanuda, se acaba o se sale, se borra; el
@@ -157,9 +172,9 @@ reinicio A+B+START+SELECT también la borra. (Una ROM nueva no recupera la
 partida de otra: la estructura puede haber cambiado.)
 
 **Game Boy Player**: al encender sale su logo, como en los juegos que lo
-soportaban, y si el juego corre en un Game Boy Player lo reconoce y el mando
-de GameCube vibra al hacer líneas (más con un TETRIS), al subir de nivel y al
-perder. Y en la tele los ajustes vuelven a ser las tres pantallas del
+soportaban, y si el juego corre en un Game Boy Player lo reconoce y, con el
+acorde, el mando de GameCube vibra al hacer líneas (más con un TETRIS), al
+subir de nivel y al perder. Y en la tele los ajustes vuelven a ser las tres pantallas del
 cartucho, LEVEL, HANDICAP y MUSIC, cada una con su columna de números (START
 pasa de pantalla, B vuelve). El logo es de Nintendo y no va en el repo: se genera con
 `python3 tools/make_gbp_logo.py captura.png` a partir de una captura sin
@@ -170,7 +185,6 @@ Player.
 GBA, y solo al encender (no tras el reinicio por botones ni en la copia
 Single-Pak). El logo no va en el repo: se genera una vez con
 `python3 tools/make_splash.py logo.png`, y sin él la ROM arranca directa.
-| Pantalla LINK CABLE | SELECT | Single-Pak: envía el juego a una GBA sin cartucho |
 
 Con el juego en pausa entran los tres códigos originales, un botón por
 frame:

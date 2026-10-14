@@ -149,7 +149,9 @@ story behind each; the item number is in brackets.
   glyphs have one row of leading, so a lift can close a gap but never open
   one; BG3 is the histogram, and the lifted credit line in the front end.
   Anything whose ink is not centred in its tiles needs its own layer. A box
-  drawn over the board is torn down on every layer it used. [21, 28]
+  drawn over the board is torn down on every layer it used; a cell is
+  cleared on ITS layer, not on whichever the code around it has chosen
+  (`hold_cell_gone`: HOLD's label outlived HOLD under the cossack). [21, 28]
 - **The build.** `-flto` is what keeps the drawing inside the vertical blank.
   The C is Thumb; code that must be ARM says so per function (`IWRAM_CODE`),
   and `vsync` picks its SWI encoding by `__thumb__`. Mind `.iwram` in
@@ -271,8 +273,10 @@ story behind each; the item number is in brackets.
   normal mode on its clock, answering GBATEK's NINTENDO handshake row by
   row (`tengen_gbp_reply`, host-tested) and then 400000yyh, rumble on or
   off — a clear, longer for more rows, the level and the top-out
-  (`rumble_step`). The cable takes the port in `link_init` and gives it
-  back in `link_shutdown`. The result survives a soft reset with the
+  (`rumble_step`), and only under the match's chord: without it the motor
+  stays off, as the cartridge's pad never shook. The cable takes the port
+  in `link_init` and gives it back in `link_shutdown`. The result survives
+  a soft reset with the
   splash's word. Before a sleep the motor goes off and the answer already
   in the port is made again as "off" (`gbp_quiet`): asleep nothing serves
   the interrupt, and a sleep in the last of a top-out's rumble left "on"
@@ -707,7 +711,10 @@ A to take one and B to leave it; MUSIC and not CHANGE MUSIC, whose box
 would cover the panels' last column of figures) and those Stats,
 and turns the menus' text from blue to white and the credits from the
 cartridge's orange to dark grey to say so; the title's L+R cycling the prototype skins;
-credits rotating every four seconds; the cossacks staged on the panels'
+credits rotating every four seconds — the cartridge's six, GAME SELECT's
+LICENSED BY MIRRORSOFT LTD. among them (`ppuPatchLicensedBy`, $A1EF), and
+under the chord the port's own line in Mirrorsoft's place (`--credits`);
+the cossacks staged on the panels'
 ledges where the cartridge uses a middle strip the port does not have; a
 second cossack for the rival in HUD VERSUS; a paused race under the chord
 showing the rival's board (not over the cable), with their NEXT, colours and numbers; the
@@ -720,7 +727,9 @@ ledge while the fall leaves time for them, `deep`; tengen_ai.c); the cartridge's
 bugs mended under the chord (`TengenGame.mended`, the master's chord over a
 cable): a coop deal waits for room instead of coming up inside the
 partner's piece, a falling piece is lifted out of the partner's collapsed
-rows, and the left panel's shelves meet the rope (`mend_shelf_joins`); the
+rows, the left panel's shelves meet the rope (`mend_shelf_joins`), and
+block tiles $01 and $03 draw their outer bevel corner where the other
+twelve and the lone block do (`mend_bevels`, `--chordfx`); the
 STATS bars, under the chord, scaled to the tallest once one would run off the
 top of the box (`piece_total`, the port's uncapped count; `--statsrel`); and
 under the chord three touches of Tetris DX's (`--chordfx`): the music a
@@ -734,9 +743,10 @@ table (`record_watch`); the pause menu's OPTIONS, all OFF until set and
 kept on the battery: UP dropping the piece at once, as later Tetrises do,
 landed and scored as a DOWN held all the way would (`TengenGame.hard_drop`),
 a faster soft drop and side repeat, a ghost of the landing place, A/B
-turned round and HOLD on SELECT; SELECT on the title shows the HIGH SCORES page,
-which otherwise only a lost game did — the cartridge takes it as START there
-($9FA4) — (`--titlescores`); a Single-Pak copy's
+turned round and HOLD on SELECT; under the chord SELECT on the title shows
+the HIGH SCORES page, which otherwise only a lost game did — without it
+SELECT is the cartridge's there, another START ($9FA4) — (`--titlescores`);
+a Single-Pak copy's
 records handed to a console with a save every time they link, with RECORDS
 SAVED on both (`TengenRecordSync`, `records_dump_check`); a handicap of its own
 for the computer in VERSUS COMPUTER under the chord; the pause menu over the
@@ -753,7 +763,7 @@ on the battery through a power cycle, as Tetris DX does (`suspend.c`); the
 publisher's logo on white at power-on (`splash.c`, from an image you supply
 through `tools/make_splash.py`, gitignored like the cartridge's art); every
 colour through one table for the GBA's LCD (`kLcdGamma`, the identity
-today); the Game Boy Player's logo at power-on, its rumble, and on it the
+today); the Game Boy Player's logo at power-on, its rumble under the chord, and on it the
 cartridge's three settings pages instead of the one (`gbp.c`,
 `draw_tv_page`); 2 PLAYER and COOPERATIVE over the Wireless Adapter, found by
 itself at power-on or plugged in later, the LINK CABLE screen saying
@@ -764,7 +774,8 @@ letters, PMENU_RAISED_CHARS, with the arrow's two tiles after them); the high sc
 chosen (`erase_records_prompt`); a high scores table per mode on the release
 (1 PLAYER's is the cartridge's; 2 PLAYER, COOPERATIVE, VERSUS and WITH
 COMPUTER one each, the mode's name in the heading where HIGH SCORES was),
-which LEFT and RIGHT walk on the title's SELECT page (`--modetables`); the
+which LEFT and RIGHT walk on the title's SELECT page under the chord
+(`--modetables`); the
 last name typed on a console already in the next row it makes, START to
 take it, B putting back that and not A (`g_last_name`, on the battery); the
 attract demo playing MUSIC MIX under the chord, where the cartridge's is
@@ -772,7 +783,6 @@ silent but for its effects, the player's tune on LEVEL SETTINGS given back
 as it ends (`demo_music_back`, `--demo`).
 (There was a seventh credit under the chord, BUILD and the commit; it went,
 and the ROM file's name is what says which build it is.)
-[8, 11, 17, 19, 20, 23, 28, 30]
 
 **Knowingly not shown**: proto_c's title animation (its rows are the ones
 the composition drops); a screen-change noise under proto_a (its dump has
@@ -791,6 +801,9 @@ depends on how many times its main loop spun on the title).
 
 **Looks like a bug, is the cartridge's**: the one-pixel gap between the left
 panel's shelves and the rope — the wall tile `$6A` has a blank first column.
+A one-pixel jog in some pieces' bevel, plainest against the pause's wall of
+lone blocks: tiles $01 and $03, a run's two ends, draw their outer corner a
+row lower than the rest (the CHR, byte for byte); mended under the chord.
 In coop, a piece dealt on top of the partner's still near the entry
 (getNextTetromino asks nothing, main.asm.txt:3688-3725), and blocks coming
 down into a falling piece when the partner's rows collapse (INFERRED: the

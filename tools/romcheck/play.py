@@ -1775,26 +1775,53 @@ def gbp_check(rom_path):
         else:
             print("  a dormir con la vibracion en marcha: se apaga antes")
 
-    # A game, four rows ready to go, a piece dropped on them: the clear
-    # turns the motor on, and it goes off again.
-    # Title, GAME SELECT, and on a Player the settings' three pages
-    # (tv_menu_check).
-    for wait in (10, 12, 12, 12, 60):
-        player.frame([KEYS["START"]])
-        for _ in range(wait):
-            player.frame()
-    fill_rows(core, base + off["field"], [16, 17, 18, 19])
-    mark = len(player.answers)
-    for _ in range(240):
-        player.frame([KEYS["DOWN"]])
-    after = player.answers[mark:]
+    # A game, four rows ready to go, a piece dropped on them. The motor is
+    # the chord's: without it the clear leaves it off, as the cartridge has
+    # none; with it (L+R on GAME SELECT) the clear turns it on, and it goes
+    # off again.
+    def tetris(player, chord):
+        core = player.core
+        # Title, GAME SELECT, and on a Player the settings' three pages
+        # (tv_menu_check).
+        for n, wait in enumerate((10, 12, 12, 12, 60)):
+            player.frame([KEYS["START"]])
+            for _ in range(wait):
+                player.frame()
+            if n == 0 and chord:
+                for _ in range(4):
+                    player.frame([KEYS["L"], KEYS["R"]])
+                for _ in range(12):
+                    player.frame()
+        fill_rows(core, base + off["field"], [16, 17, 18, 19])
+        mark = len(player.answers)
+        for _ in range(240):
+            player.frame([KEYS["DOWN"]])
+        return player.answers[mark:]
+
+    after = tetris(player, False)
+    if not after or any(a != 0x40000004 for a in after):
+        failures.append("sin el truco, una limpieza enciende la vibracion")
+    else:
+        print("  sin el truco, un TETRIS deja la vibracion apagada")
+
+    harness.SHOW_SPLASH[0] = True
+    try:
+        core3, screen3 = load(rom_path)
+    finally:
+        harness.SHOW_SPLASH[0] = False
+    chorded = FakePlayer(core3, logo)
+    chorded.screen = screen3
+    for _ in range(400):
+        chorded.frame()
+    after = tetris(chorded, True)
     if 0x40000026 not in after:
-        failures.append("una limpieza no enciende la vibracion")
+        failures.append("con el truco, una limpieza no enciende la vibracion")
     elif after[-1] != 0x40000004:
         failures.append("la vibracion no se apaga despues")
     else:
         n = after.count(0x40000026)
-        print(f"  un TETRIS: vibracion encendida {n} frames, y apagada luego")
+        print(f"  con el truco, un TETRIS: vibracion encendida {n} frames, "
+              f"y apagada luego")
 
     # And a plain GBA: nobody answers the logo, the port stays the cable's.
     harness.SHOW_SPLASH[0] = True

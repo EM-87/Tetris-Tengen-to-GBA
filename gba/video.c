@@ -790,6 +790,45 @@ static void upload_skin_frame_palette(int skin) {
 }
 #endif
 
+/* THE CARTRIDGE'S TWO ODD BEVELS, MENDED UNDER THE CHORD. Of the release's
+ * fourteen block tiles, the two ends of a horizontal run draw their outer
+ * corner a row lower than the other twelve and the lone block do: $01's
+ * top-left staircase starts on row 2 instead of row 1, $03's bottom-right on
+ * row 7 instead of row 6 — the cartridge's CHR, byte for byte (`--chordfx`
+ * holds every outer corner to the lone block's). Next to each other the
+ * pieces show it as a one-pixel jog in the bevel, and the pause's wall of
+ * lone blocks over them showed it every time it went up. Under the chord the
+ * two corners are drawn as every other tile draws them; without it, the
+ * cartridge's. A pixel is changed only if it holds what the other state
+ * has, so a skin's art, or another dump's, is never written over. */
+static const struct { uint8_t tile, row, col, cart, mended; } kBevelMend[] = {
+    { 0x01, 1, 1, 1, 3 }, { 0x01, 2, 2, 1, 3 },     /* $01: top-left */
+    { 0x03, 6, 6, 3, 1 }, { 0x03, 7, 7, 3, 1 },     /* $03: bottom-right */
+};
+static bool g_bevel_mended;
+static bool release_tiles_loaded(void);
+
+static void bevel_write(void) {
+    if (!release_tiles_loaded()) return;
+    vu16 *base = MEM_CHARBLOCK(CHARBLOCK);
+    for (unsigned i = 0; i < sizeof kBevelMend / sizeof kBevelMend[0]; i++) {
+        vu16 *h = base + kBevelMend[i].tile * 16 + kBevelMend[i].row * 2 +
+                  (kBevelMend[i].col >> 2);
+        int shift = 4 * (kBevelMend[i].col & 3);
+        uint8_t from = g_bevel_mended ? kBevelMend[i].cart : kBevelMend[i].mended;
+        uint8_t to = g_bevel_mended ? kBevelMend[i].mended : kBevelMend[i].cart;
+        if (((*h >> shift) & 0xF) == from)
+            *h = (uint16_t)((*h & ~(0xF << shift)) | (to << shift));
+    }
+}
+
+/* The match's chord, as it starts (skin_begin_match), and whenever the
+ * release's tiles are put back in their slots (apply_skin). */
+void mend_bevels(bool on) {
+    g_bevel_mended = on;
+    bevel_write();
+}
+
 /* WHICH SKIN THE TILE SLOTS ARE HOLDING RIGHT NOW. 0 is the release; 1..N
  * index the prototypes in the order the dumps were given to
  * extract_assets.py. The title cycles it with L+R and the board follows,
@@ -811,20 +850,26 @@ bool g_title_skin_found;
  * charblock slots as the board's, but in the MENU palette bank, so a
  * prototype's fret would be there in the cartridge's blue. The board is where
  * a skin belongs; see the callers. */
+#if SCREEN_PROTO_AVAILABLE && SCREEN_SKIN_PLAY
+/* -2, never a skin number: the first call must upload even the release
+ * (-1), because upload_skin_play is the only writer of the panel's braid run
+ * at SKIN_PANEL_RUN_BASE. Starting at -1 left the release's top braid blank
+ * on a fresh boot until a prototype had been entered and left. */
+static int g_skin_loaded = -2;
+static bool release_tiles_loaded(void) { return g_skin_loaded < 0; }
+#else
+static bool release_tiles_loaded(void) { return true; }
+#endif
+
 void apply_skin(int skin) {
 #if SCREEN_PROTO_AVAILABLE && SCREEN_SKIN_PLAY
-    /* -2, never a skin number: the first call must upload even the
-     * release (-1), because upload_skin_play is the only writer of the
-     * panel's braid run at SKIN_PANEL_RUN_BASE. Starting at -1 left the
-     * release's top braid blank on a fresh boot until a prototype had
-     * been entered and left. */
-    static int loaded = -2;
-    if (skin != loaded) {
-        loaded = skin;
+    if (skin != g_skin_loaded) {
+        g_skin_loaded = skin;
         upload_skin_play(skin);
         upload_skin_banner(skin);
         upload_skin_stats(skin);
         upload_skin_frame_palette(skin);
+        if (skin < 0) bevel_write();     /* the release's, as they stand */
     }
     /* THE BORROWED BANKS ARE NOT MEMOISED, and that is the whole of a bug
      * worth setting down. Three of a skin's palettes are LOANS from the
@@ -887,6 +932,9 @@ void skin_begin_match(bool linked, int cable_skin) {
      * no wall kick, and rows that go the frame they complete. See
      * proto_rules. */
     g_session.game.proto_rules = !linked && g_board_skin >= 0;
+    /* ...and the two odd bevels, mended if this match has the chord: this
+     * console's alone, the master's over the cable (see mend_bevels). */
+    mend_bevels(match_chord());
 }
 
 /* THIS BUILD'S SKINS AS THE CABLE KNOWS THEM: a fingerprint of each one's

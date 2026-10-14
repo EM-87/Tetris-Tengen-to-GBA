@@ -988,6 +988,42 @@ def chord_extras_check(rom_path):
                   f"{'tira la pieza de golpe' if switch else 'no hace nada'}")
         del core, screen
 
+    # THE TWO ODD BEVELS (mend_bevels): the ends of a horizontal run, $01
+    # and $03, draw their outer corner a row lower than the other block
+    # tiles in the cartridge's own art. Without the chord, so they stay;
+    # with it, every outer corner is the lone block's ($0F), which is what
+    # the pause's wall is made of.
+    def art(core, t):
+        rows = []
+        for y in range(8):
+            w = int.from_bytes(bytes(core.memory.u8[0x06000000 + t * 32 + y * 4 + i]
+                                     for i in range(4)), "little")
+            rows.append([(w >> (4 * x)) & 15 for x in range(8)])
+        return rows
+
+    def corners(core):
+        """Tiles whose outer corners differ from $0F's: top-left (rows 1-2,
+        columns 1-2) on $01 $04 $0B, bottom-right (rows 6-7, columns 6-7)
+        on $03 $06 $0C."""
+        lone = art(core, 0x0F)
+        tl = lambda a: [a[y][x] for y in (1, 2) for x in (1, 2)]
+        br = lambda a: [a[y][x] for y in (6, 7) for x in (6, 7)]
+        odd = [t for t in (0x01, 0x04, 0x0B) if tl(art(core, t)) != tl(lone)]
+        odd += [t for t in (0x03, 0x06, 0x0C) if br(art(core, t)) != br(lone)]
+        return odd
+    for chord in (False, True):
+        core, screen = start(chord)
+        odd = corners(core)
+        want = [] if chord else [0x01, 0x03]
+        if odd != want:
+            failures.append(f"acorde={chord}: las esquinas del bisel que no son "
+                            f"las del bloque suelto son {[hex(t) for t in odd]}, "
+                            f"no {[hex(t) for t in want]}")
+        else:
+            print(f"  acorde={int(chord)}: "
+                  f"{'todas las esquinas del bisel como el bloque suelto' if chord else 'las de $01 y $03, las del cartucho'}")
+        del core, screen
+
     for f in failures:
         print(f"FALLA: {f}")
     if failures:
