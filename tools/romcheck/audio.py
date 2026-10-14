@@ -231,7 +231,7 @@ def quit_audio_check(rom_path):
 
     playing = heard(120)
     tap("START"); run(core, 10)             # pausa, que ya es el menu
-    tap("DOWN")                             # MUSIC -> EXIT
+    tap("UP")                               # MUSIC -> EXIT, round the top
     tap("A")                                # -> la pregunta
     tap("RIGHT")                            # NO -> YES
     tap("A"); run(core, 40)                 # fuera
@@ -959,26 +959,33 @@ def chord_extras_check(rom_path):
                       f"reanudar, el tablero y la pieza en sus colores")
         del core, screen
 
-    # UP DROPS THE PIECE under the chord (TengenGame.hard_drop): one press
-    # and it is down and planted, four more cells on the board within a
-    # couple of frames. Without the chord UP is the cartridge's, nothing, and
-    # at level 0 nothing lands that soon.
+    # UP DROPS THE PIECE once HARD DROP is ON in the pause menu's OPTIONS
+    # (TengenGame.hard_drop): one press and it is down and planted, four more
+    # cells on the board within a couple of frames. Without the chord UP is
+    # the cartridge's, nothing, and at level 0 nothing lands that soon; with
+    # the chord and the option as a console first has it, OFF, nothing too.
     def settled(core):
         return sum(1 for i in range(PF)
                    if core.memory.u8[base + off["field"] + i] not in (0, 15))
-    for chord in (False, True):
+    for chord, switch, name in ((False, False, "sin acorde"),
+                                (True, False, "con acorde, HARD DROP sin tocar"),
+                                (True, True, "con acorde y HARD DROP en ON")):
         core, screen = start(chord)
+        if switch:
+            for k in ("START", "DOWN", "A", "A", "START"):   # OPTIONS, line 1
+                core.set_keys(KEYS[k]); run(core, 4)
+                core.set_keys(); run(core, 10)
         run(core, 20)
         before = settled(core)
         core.set_keys(KEYS["UP"]); run(core, 3)
         core.set_keys(); run(core, 2)
         landed = settled(core) - before
-        if landed != (4 if chord else 0):
-            failures.append(f"acorde={chord}: ARRIBA deja {landed} celdas "
-                            f"nuevas en el tablero, no {4 if chord else 0}")
+        if landed != (4 if switch else 0):
+            failures.append(f"{name}: ARRIBA deja {landed} celdas "
+                            f"nuevas en el tablero, no {4 if switch else 0}")
         else:
-            print(f"  acorde={int(chord)}: ARRIBA "
-                  f"{'tira la pieza de golpe' if chord else 'no hace nada'}")
+            print(f"  {name}: ARRIBA "
+                  f"{'tira la pieza de golpe' if switch else 'no hace nada'}")
         del core, screen
 
     for f in failures:
@@ -987,5 +994,5 @@ def chord_extras_check(rom_path):
         return 1
     print("OK: bajo el acorde, el tempo sube con la pila, el record suena, la "
           "pausa esconde el tablero tras un muro de ladrillos y ARRIBA tira "
-          "la pieza.")
+          "la pieza cuando HARD DROP esta en ON.")
     return 0

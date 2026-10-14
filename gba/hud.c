@@ -1819,6 +1819,38 @@ void draw_panel(void) {
     g_panel_layer = false;
 }
 
+/* THE GHOST (OPT_GHOST): this console's player's piece where it would land
+ * (tengen_drop_distance), in outline, under everything else on the board —
+ * a coop partner's piece passing over it hides it, and so does the piece
+ * itself once it is that low. Only on this player's own board and only in
+ * play: a paused race showing the rival's board has no ghost of anybody's. */
+static void draw_ghost(void) {
+    const TengenGame *g = &g_session.game;
+    const TengenPlayerState *sp = &g->player[g_view];
+    if (!(options_mine() & OPT_GHOST) || g->paused || field_view() != g_view ||
+        !sp->game_active || sp->line_clear_timer > 0)
+        return;
+    int d = tengen_drop_distance(g, (TengenPlayerSlot)g_view);
+    if (d <= 0) return;
+    TengenCell cells[4];
+    int count = tengen_active_piece_cells(g, (TengenPlayerSlot)g_view, cells);
+    for (int i = 0; i < count; i++) {
+        int row = cells[i].row + d;
+        int col = cells[i].col - field_col0();
+        if (row < 0 || col < 0 || col >= field_cols()) continue;
+        int m = 0;
+        for (int j = 0; j < count; j++) {
+            int dr = cells[j].row - cells[i].row, dc = cells[j].col - cells[i].col;
+            if (dr == -1 && dc == 0) m |= GHOST_UP;
+            if (dr == 1 && dc == 0) m |= GHOST_DOWN;
+            if (dr == 0 && dc == -1) m |= GHOST_LEFT;
+            if (dr == 0 && dc == 1) m |= GHOST_RIGHT;
+        }
+        set_map_tile(field_tx() + col, FIELD_TY + row,
+                      WITH_BANK(T_GHOST + m, PAL_PIECE_BANK));
+    }
+}
+
 void draw_field(void) {
     /* ...BEHIND A WALL OF BRICKS (board_bricked). It used to be put away
      * into nothing, and an empty board under a pause read as a board that
@@ -1888,6 +1920,7 @@ void draw_field(void) {
      * of nowhere when it locked and joined the settled cells. The partner
      * goes down first so the local piece wins any overlap, which is the one
      * the player is steering. */
+    draw_ghost();
     for (int pass = 0; pass < 2; pass++) {
         /* field_view, not g_view: a paused race shows the other board, and
          * the piece falling on it is that board's. */

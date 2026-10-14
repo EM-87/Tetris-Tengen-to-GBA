@@ -922,6 +922,9 @@ typedef struct {
 #define SAVE_NAME_OFF SAVE_EXTRA_OFF
 #define SAVE_MODE_OFF(m) (SAVE_EXTRA_OFF + 0x10u + (unsigned)(m) * SAVE_TABLE_BYTES)
 #define SAVE_MODE_SUMS_OFF SAVE_MODE_OFF(LEADER_MODE_TABLES)
+/* ...and the pause menu's OPTIONS (OPT_HARD_DROP), a byte and its check, in
+ * the gap the name leaves before the modes' tables. */
+#define SAVE_OPTIONS_OFF (SAVE_NAME_OFF + LEADER_INITIALS + 1)
 
 /* HOW LONG EACH OF THE TWO PAGES STANDS THERE, and both are the cartridge's
  * own, counted on its own clock — which nobody would guess at, because both
@@ -1761,6 +1764,18 @@ typedef enum {
 #define PMENU_RAISED_COUNT ((int)sizeof(PMENU_RAISED_CHARS) - 1)
 #define T_ARROW_TAIL (PMENU_RAISED_BASE + PMENU_RAISED_COUNT)
 #define T_ARROW_HEAD (PMENU_RAISED_BASE + PMENU_RAISED_COUNT + 1)
+/* THE GHOST (OPT_GHOST): where the piece will land, as the piece's outline
+ * and nothing inside it. Sixteen tiles, made at boot after the arrow, one
+ * per set of neighbours a cell has in its own piece (GHOST_UP and the rest,
+ * added up): a side with a neighbour has no line, so four cells draw one
+ * silhouette rather than four boxes. In the falling piece's colours. */
+#define T_GHOST (T_ARROW_HEAD + 1)
+#define GHOST_UP    1
+#define GHOST_RIGHT 2
+#define GHOST_DOWN  4
+#define GHOST_LEFT  8
+#define GHOST_INK   1       /* the colour of the piece's bank it is drawn in */
+typedef char ghost_tiles_fit[T_GHOST + 16 <= 1024 ? 1 : -1];
 
 /* The frame's own tiles, out of the plaque the game over is drawn with. */
 #define T_BOX_TL 0x29
@@ -1772,9 +1787,37 @@ typedef enum {
 #define T_BOX_B  0x3B
 #define T_BOX_BR 0x3C
 
-#define PMENU_MUSIC 0
-#define PMENU_EXIT  1
-#define PMENU_ROWS  2
+/* ...AND OPTIONS BETWEEN THEM, a window of the game's own switches (see
+ * OPT_HARD_DROP): the box is a row taller and still at row 7, as a six-row
+ * box centres where a five-row one did. */
+#define PMENU_MUSIC   0
+#define PMENU_OPTIONS 1
+#define PMENU_EXIT    2
+#define PMENU_ROWS    3
+
+/* THE OPTIONS WINDOW'S SWITCHES, one bit each, in the window's order. ALL
+ * OFF on a console that never set them, and the cartridge's game is what
+ * they are off to; set, they are kept on the battery (SAVE_OPTIONS_OFF) and
+ * are there again every time the chord is, which is what puts the window on
+ * the menu at all.
+ *
+ * The first three are the MATCH'S RULES: over the cable both boards play
+ * the master's, crossed in the lobby, and a change on the shared menu is a
+ * change for both and not kept. The last two are the player's own — what
+ * this console draws and how its pad reads — and never cross. */
+#define OPT_HARD_DROP  0x01   /* UP drops the piece (TengenGame.hard_drop) */
+#define OPT_FAST_DOWN  0x02   /* DOWN falls a row a frame (fast_soft) */
+#define OPT_FAST_SHIFT 0x04   /* a held side repeats sooner (fast_shift) */
+#define OPT_GHOST      0x08   /* where the piece will land, in outline */
+#define OPT_SWAP_AB    0x10   /* A turns the other way, and B with it */
+#define OPT_COUNT 5
+#define OPT_ALL   ((1u << OPT_COUNT) - 1)
+#define OPT_RULES (OPT_HARD_DROP | OPT_FAST_DOWN | OPT_FAST_SHIFT)
+#define OPT_H (OPT_COUNT + 3)   /* the window: heading, switches, frame */
+/* The rules cross the cable as they are (tengen_lobby_rules). */
+typedef char opt_rules_are_the_links[
+    OPT_HARD_DROP == TENGEN_RULE_HARD_DROP && OPT_FAST_DOWN == TENGEN_RULE_FAST_DOWN &&
+    OPT_FAST_SHIFT == TENGEN_RULE_FAST_SHIFT ? 1 : -1];
 
 /* ----------------------------------------------------------------------- *
  * WHAT CROSSES BETWEEN THE FIVE
@@ -1801,6 +1844,15 @@ extern bool g_ai_active;
 extern uint8_t g_view;
 void vsync(void);
 uint8_t read_buttons(void);
+/* A and B the other way round (OPT_SWAP_AB), for the pad of a match only:
+ * the pause menu's A is A whatever the switch says. */
+static inline uint8_t pad_swap_ab(uint8_t b) {
+    return (uint8_t)((b & ~(TENGEN_BTN_A | TENGEN_BTN_B)) |
+                     ((b & TENGEN_BTN_A) << 1) | ((b & TENGEN_BTN_B) >> 1));
+}
+/* ...and over the cable the word this console sends is read in the serial
+ * interrupt (link_read_buttons), so the match says there when to turn it. */
+extern volatile bool g_pad_swap;
 bool shoulder_chord(void);
 /* L+R+SELECT: see system_sleep (video.c). */
 extern volatile uint32_t g_vblank_count;   /* see irq_handler */
@@ -2075,5 +2127,9 @@ void link_match_begin(bool menu);
 void front_music(uint8_t which);
 bool solo_play_frame(uint8_t buttons, uint8_t pressed, bool *quit);
 void draw_match(bool *sweeping);
+extern uint8_t g_options;
+void options_load(void);
+void options_apply_solo(TengenGame *game);
+uint8_t options_mine(void);
 
 #endif /* PORT_H */

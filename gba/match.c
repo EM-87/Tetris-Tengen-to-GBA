@@ -343,6 +343,84 @@ static bool g_pause_yes;
 /* ...or the tunes' window, and the line its cursor is on. See PMENU_H_MAX. */
 static bool g_pause_tunes;
 static uint8_t g_tune_row;
+/* ...or the options' window, and its line. See OPT_HARD_DROP. */
+static bool g_pause_options;
+static uint8_t g_option_row;
+
+/* THE OPTIONS, as this console's player set them (OPT_HARD_DROP and the
+ * rest). Kept on the battery with a check byte of their own; a byte that
+ * does not check, or a console that never wrote one, is everything OFF. A
+ * Single-Pak copy has no battery, so it keeps them until it is switched
+ * off. */
+uint8_t g_options;
+
+static uint8_t options_check(uint8_t v) { return (uint8_t)(0xC3 ^ (v * 7)); }
+
+void options_load(void) {
+    uint8_t v = sram_read(SAVE_OPTIONS_OFF);
+    g_options = (v & ~OPT_ALL) || sram_read(SAVE_OPTIONS_OFF + 1) != options_check(v)
+                    ? 0 : v;
+}
+
+static void options_save(void) {
+    sram_write(SAVE_OPTIONS_OFF, g_options);
+    sram_write(SAVE_OPTIONS_OFF + 1, options_check(g_options));
+}
+
+/* THE PLAYER'S OWN TWO (OPT_GHOST, OPT_SWAP_AB), in force: when the menu
+ * that sets them is there — this console's chord, or over the cable the
+ * master's — and never in the attract demo, whose pad is the computer's. */
+static bool pause_menu_on(void);
+uint8_t options_mine(void) {
+    if (g_demo || !pause_menu_on()) return 0;
+    return (uint8_t)(g_options & ~OPT_RULES);
+}
+
+/* THE RULES (OPT_RULES) ONTO A SOLO GAME, for the one person playing it:
+ * player 1. The computer beside it, when there is one, plays with the
+ * cartridge's hands — and never presses UP. Without the chord, the
+ * cartridge's game. */
+void options_apply_solo(TengenGame *game) {
+    uint8_t on = g_pause_unlocked ? g_options : 0;
+    uint8_t me = 1u << TENGEN_PLAYER_1;
+    game->hard_drop = (on & OPT_HARD_DROP) != 0;
+    game->fast_soft = (on & OPT_FAST_DOWN) ? me : 0;
+    game->fast_shift = (on & OPT_FAST_SHIFT) ? me : 0;
+}
+
+/* What the window says a switch is. The rules are read off the match, which
+ * is what they ARE in it — over the cable the master's, whatever this
+ * console has kept — and the player's own off this console. */
+static bool option_value(int i) {
+    const TengenGame *g = &g_session.game;
+    switch (1u << i) {
+    case OPT_HARD_DROP:  return g->hard_drop;
+    case OPT_FAST_DOWN:  return (g->fast_soft >> g_view) & 1;
+    case OPT_FAST_SHIFT: return (g->fast_shift >> g_view) & 1;
+    default:             return (g_options >> i) & 1;
+    }
+}
+
+/* A switch thrown. Solo, it is kept and in force at once. Over the cable
+ * both consoles throw a rule together — the menu runs on both players'
+ * presses on both (see g_link_menu) — for both boards and for this match
+ * only, since it was the master's to begin with; and a player's own switch
+ * is thrown by that player's console alone (`here`), where it is kept. */
+static void option_toggle(int i, bool here) {
+    uint8_t bit = (uint8_t)(1u << i);
+    TengenGame *g = &g_session.game;
+    if ((bit & OPT_RULES) && g_linked) {
+        uint8_t rules = 0;
+        for (int r = 0; r < OPT_COUNT; r++)
+            if (((1u << r) & OPT_RULES) && option_value(r)) rules |= (uint8_t)(1u << r);
+        tengen_link_rules(&g_session, (uint8_t)(rules ^ bit));
+        return;
+    }
+    if (!here && g_linked) return;
+    g_options ^= bit;
+    options_save();
+    if (!g_linked) options_apply_solo(g);
+}
 
 /* A row at a time, straight into the main map: the tunes' window is eleven
  * rows of eighteen, drawn on every frame of the pause, and a call per tile
@@ -568,8 +646,8 @@ static void pmenu_reach(int w, int h) {
     }
 }
 
-static void draw_pmenu(const char *const *lines, int count, int cursor) {
-    int w = pmenu_width(lines, count), h = count + 2;
+/* The box itself, `w` by `h` and centred, before anything is written in it. */
+static void pmenu_frame(int w, int h) {
     pmenu_reach(w, h);
     /* A box of another size than the last one uncovers the board, the braid
      * and the panels' edges where the last one was: put back just those. */
@@ -582,9 +660,13 @@ static void draw_pmenu(const char *const *lines, int count, int cursor) {
     clear_pmenu_layers(w, h);
     g_pmenu_drawn_w = w;
     g_pmenu_drawn_h = h;
+    draw_box_frame((SCREEN_TW - w) / 2, (SCREEN_TH - h) / 2, w, h);
+}
 
+static void draw_pmenu(const char *const *lines, int count, int cursor) {
+    int w = pmenu_width(lines, count), h = count + 2;
+    pmenu_frame(w, h);
     int tx = (SCREEN_TW - w) / 2, ty = (SCREEN_TH - h) / 2;
-    draw_box_frame(tx, ty, w, h);
     /* The heading keeps its own colour because it is not a choice, and a
      * pixel more under it than there is between the choices (see
      * PMENU_RAISED_BASE). */
@@ -592,6 +674,40 @@ static void draw_pmenu(const char *const *lines, int count, int cursor) {
         draw_pmenu_line(tx + 1, w - 2, ty + 1 + i, lines[i],
                          i ? BANK_LABEL : BANK_NOTE, i ? PL_CHOICE : PL_HEADING,
                          i == cursor);
+}
+
+/* THE OPTIONS' WINDOW IS A TABLE, NOT A LIST, so its lines do not centre:
+ * the switch's name stands at the left, after the arrow's two columns, and
+ * ON or OFF at the right, in a column of their own — on the offset layer,
+ * three pixels in, which leaves the right edge the same margin the arrow
+ * leaves the left. ON in the heading's colour, OFF in the names': which
+ * switches are on is what a player opens it to see. FAST SHIFT is the
+ * longest name, and its OFF still stands clear of it. */
+static const char *const kOptionNames[OPT_COUNT] = {
+    "HARD DROP", "FAST DOWN", "FAST SHIFT", "GHOST", "SWAP A-B"
+};
+
+static void draw_options_box(void) {
+    const int w = PMENU_W_MAX, h = OPT_H;
+    pmenu_frame(w, h);
+    int tx = (SCREEN_TW - w) / 2, ty = (SCREEN_TH - h) / 2;
+    draw_pmenu_line(tx + 1, w - 2, ty + 1, "OPTIONS", BANK_NOTE, PL_HEADING, false);
+    for (int i = 0; i < OPT_COUNT; i++) {
+        int y = ty + 2 + i;
+        const char *name = kOptionNames[i];
+        for (int c = 0; name[c]; c++)
+            set_map_tile(tx + 3 + c, y, WITH_BANK(ascii_tile(name[c]), BANK_LABEL));
+        if (i == g_option_row) {
+            set_map_tile(tx + 1, y, WITH_BANK(T_ARROW_TAIL, BANK_LABEL));
+            set_map_tile(tx + 2, y, WITH_BANK(T_ARROW_HEAD, BANK_LABEL));
+        }
+        bool on = option_value(i);
+        const char *value = on ? "ON" : "OFF";
+        int len = on ? 2 : 3;
+        for (int c = 0; c < len; c++)
+            set_stats_tile(tx + w - 2 - len + c, y,
+                           WITH_BANK(ascii_tile(value[c]), on ? BANK_NOTE : BANK_LABEL));
+    }
 }
 
 /* CABLE LOST, in the pause menu's own window and by its own machinery (what
@@ -629,16 +745,18 @@ static void draw_pause_menu(void) {
      * of eighteen, and EXIT GAME's sixteen is the most that leaves the
      * panels' last column of figures showing — the score's digits, and a
      * paused race's rival numbers (`--versushud`). */
-    static const char *const menu[] = { "PAUSE", "MUSIC", "EXIT GAME" };
+    static const char *const menu[] = { "PAUSE", "MUSIC", "OPTIONS", "EXIT GAME" };
     if (g_pause_confirm) {
         draw_pmenu(ask, 3, g_pause_yes ? 1 : 2);
+    } else if (g_pause_options) {
+        draw_options_box();
     } else if (g_pause_tunes) {
         const char *tunes[1 + MUSIC_UNLOCKED_COUNT] = { "MUSIC" };
         int count = pause_tune_count();
         for (int i = 0; i < count; i++) tunes[1 + i] = kMusicNames[i];
         draw_pmenu(tunes, 1 + count, 1 + g_tune_row);
     } else {
-        draw_pmenu(menu, 3, 1 + g_pause_row);
+        draw_pmenu(menu, 1 + PMENU_ROWS, 1 + g_pause_row);
     }
 }
 
@@ -723,7 +841,9 @@ static void tunes_close(bool take) {
  * too, and a Down meant for this menu is the first byte of one of them. */
 static bool pause_menu_on(void);
 
-static bool pause_menu_input(uint8_t pressed, bool *leaving) {
+/* `mine` is what of `pressed` this console's own player pressed: all of it
+ * solo, over the cable this console's half (see option_toggle). */
+static bool pause_menu_input(uint8_t pressed, uint8_t mine, bool *leaving) {
     if (!pause_menu_on() || !g_session.game.paused) return false;
 
     /* START IS ALWAYS RESUME, EVERYWHERE IN THIS MENU — on the EXIT line and
@@ -739,8 +859,30 @@ static bool pause_menu_input(uint8_t pressed, bool *leaving) {
      * The tunes' window goes the same way, and nothing in it is chosen. */
     if (pressed & TENGEN_BTN_START) {
         g_pause_confirm = false;
+        g_pause_options = false;
         if (g_pause_tunes) tunes_close(false);
         return false;
+    }
+
+    /* THE OPTIONS' WINDOW: Up and Down walk it and SELECT walks it down, as
+     * in the tunes'; A throws the switch under the arrow, and so do Left and
+     * Right, which is how a value is changed on the settings screen; B goes
+     * back to the menu. Nothing waits to be confirmed — a switch is thrown
+     * as it is pressed (option_toggle). */
+    if (g_pause_options) {
+        if (pressed & TENGEN_BTN_UP)
+            g_option_row = (uint8_t)((g_option_row + OPT_COUNT - 1) % OPT_COUNT);
+        else if (pressed & (TENGEN_BTN_DOWN | TENGEN_BTN_SELECT))
+            g_option_row = (uint8_t)((g_option_row + 1) % OPT_COUNT);
+        if (pressed & (TENGEN_BTN_A | TENGEN_BTN_LEFT | TENGEN_BTN_RIGHT)) {
+            option_toggle(g_option_row,
+                          (mine & (TENGEN_BTN_A | TENGEN_BTN_LEFT | TENGEN_BTN_RIGHT)) != 0);
+            screen_blip();
+        } else if (pressed & TENGEN_BTN_B) {
+            g_pause_options = false;
+            screen_blip();
+        }
+        return true;
     }
 
     /* THE TUNES' WINDOW: Up and Down walk the list, and SELECT walks it
@@ -806,9 +948,11 @@ static bool pause_menu_input(uint8_t pressed, bool *leaving) {
     /* SELECT MOVES THE CURSOR, the way it does on the settings screen — the
      * cartridge's own LA048 treats SELECT as another DOWN ($9FBC), and this
      * menu has no reason to be the one place in the port where it does not.
-     * Up and Down still do it too; with two entries all three are the same
-     * step. */
-    if (pressed & (TENGEN_BTN_UP | TENGEN_BTN_DOWN | TENGEN_BTN_SELECT))
+     * Up goes up; with two entries it was the same step as the others, with
+     * three it is not. */
+    if (pressed & TENGEN_BTN_UP)
+        g_pause_row = (uint8_t)((g_pause_row + PMENU_ROWS - 1) % PMENU_ROWS);
+    else if (pressed & (TENGEN_BTN_DOWN | TENGEN_BTN_SELECT))
         g_pause_row = (uint8_t)((g_pause_row + 1) % PMENU_ROWS);
     /* A TAKES THE CHOICE, and only A. START used to do it here as well and it
      * cost the menu its way out — see the note at the top. Each entry opens
@@ -818,6 +962,11 @@ static bool pause_menu_input(uint8_t pressed, bool *leaving) {
         if (g_pause_row == PMENU_EXIT) {
             g_pause_confirm = true;
             g_pause_yes = false;   /* NO first: a pause menu does not lose games */
+        } else if (g_pause_row == PMENU_OPTIONS) {
+            g_pause_options = true;
+            g_option_row = 0;
+            /* Saved out of the blank, as the tunes' window is below. */
+            pmenu_reach(PMENU_W_MAX, OPT_H);
         } else {
             tunes_open();
             /* WHAT THE WINDOW WILL COVER IS SAVED NOW, out of the blank:
@@ -892,6 +1041,7 @@ void link_match_begin(bool menu) {
     g_levelup_resume = 0;
     g_link_prev[0] = g_link_prev[1] = 0xFF;   /* see swallow_held_buttons */
     g_link_waiting = false;
+    g_pad_swap = false;    /* until the first frame says (link_frame_done) */
 }
 
 static bool pause_menu_on(void) {
@@ -949,6 +1099,15 @@ static void link_give_up(void) {
     g_lost_over_air = wireless_on();
 }
 
+/* THE PAD'S A AND B FOR THE NEXT WORDS (g_pad_swap): turned while the match
+ * plays on with the player's SWAP A-B on, and never once it is paused, when
+ * the shared menu reads the words, or over. */
+static bool link_frame_done(bool going) {
+    g_pad_swap = going && !g_session.game.paused &&
+                 (options_mine() & OPT_SWAP_AB) != 0;
+    return going;
+}
+
 bool link_play_frame(uint8_t pressed, bool *quit) {
     /* The master starts one transfer per frame off its own vblank; the slave
      * has nothing to start. Either way the interrupt does the collecting. */
@@ -976,19 +1135,21 @@ bool link_play_frame(uint8_t pressed, bool *quit) {
          * presses; if it takes them, neither board sees them. */
         uint8_t local_buttons = tengen_link_buttons(local);
         uint8_t b0 = tengen_link_buttons(f.master), b1 = tengen_link_buttons(f.slave);
-        uint8_t menu_pressed = (uint8_t)((b0 & ~g_link_prev[0]) |
-                                         (b1 & ~g_link_prev[1]));
+        uint8_t new0 = (uint8_t)(b0 & ~g_link_prev[0]);
+        uint8_t new1 = (uint8_t)(b1 & ~g_link_prev[1]);
+        uint8_t menu_pressed = (uint8_t)(new0 | new1);
         g_link_prev[0] = b0;
         g_link_prev[1] = b1;
         if (g_session.game.paused && pause_menu_on()) {
             bool leaving = false;
-            if (pause_menu_input(menu_pressed, &leaving)) {
+            if (pause_menu_input(menu_pressed, link_is_master() ? new0 : new1,
+                                 &leaving)) {
                 local_buttons = 0;
                 remote = (uint16_t)(remote & ~TENGEN_LINK_BUTTON_MASK);
             }
             if (leaving) {
                 *quit = true;
-                return false;
+                return link_frame_done(false);
             }
         }
 
@@ -1037,14 +1198,14 @@ bool link_play_frame(uint8_t pressed, bool *quit) {
      * same game — and a cable quiet for LINK_GIVEUP_FRAMES is taken for gone. */
     if (g_session.desynced) {
         link_give_up();
-        return false;
+        return link_frame_done(false);
     }
     link_wait(stepped == 0 && link_starved() > LINK_LOST_FRAMES);
     if (g_link_waiting && link_starved() > LINK_GIVEUP_FRAMES) {
         link_give_up();
-        return false;
+        return link_frame_done(false);
     }
-    return !match_over();
+    return link_frame_done(!match_over());
 }
 
 /* Plays what this screen should be playing, and does nothing if it already
@@ -1109,6 +1270,7 @@ static void pause_toggled(bool was_paused) {
     g_pause_row = PMENU_MUSIC;
     g_pause_confirm = false;
     g_pause_tunes = false;
+    g_pause_options = false;
     /* pauseOrUnpause suspends and resumes the music
      * (main.asm.txt:7204-7211) — the same pair the front end uses to
      * go quiet, through the same two helpers so the port never loses
@@ -1222,7 +1384,7 @@ bool solo_play_frame(uint8_t buttons, uint8_t pressed, bool *quit) {
         pressed = TENGEN_BTN_START;
         sleep_next = true;
     }
-    if (pause_menu_input(pressed, quit)) { buttons = 0; pressed = 0; }
+    if (pause_menu_input(pressed, pressed, quit)) { buttons = 0; pressed = 0; }
     if (g_session.game.player[0].game_active) {
         uint8_t presses[2] = { pressed, 0 };
         TengenCheat cheat[2];
@@ -1234,6 +1396,9 @@ bool solo_play_frame(uint8_t buttons, uint8_t pressed, bool *quit) {
             screen_blip();
     }
 
+    /* SWAP A-B (OPT_SWAP_AB): the turns the other way round. After the
+     * menu, which reads the pad as it is. */
+    if (options_mine() & OPT_SWAP_AB) buttons = pad_swap_ab(buttons);
     TengenStepResult local = tengen_step(&g_session.game, TENGEN_PLAYER_1, buttons);
     note_award(TENGEN_PLAYER_1, local);
     cossack_watch(TENGEN_PLAYER_1, local);

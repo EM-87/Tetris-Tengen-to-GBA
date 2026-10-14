@@ -15,12 +15,18 @@ void tengen_link_start(TengenLink *link, uint16_t seed, uint8_t start_level,
     /* The cartridge's bugs mended on the master's chord, which is what `xe`
      * carries over the wire too: both consoles, the same game. */
     link->game.mended = xe;
-    /* ...and UP's drop, on the same chord: a press is in the buttons both
-     * consoles step with, so both drop it on the same frame. */
-    link->game.hard_drop = xe;
+    /* UP's drop and the faster hands are not the chord's any more but the
+     * master's OPTIONS: off until tengen_link_rules says. */
     link->local_slot = (uint8_t)local_slot;
     link->frame = 0;
     link->desynced = false;
+}
+
+void tengen_link_rules(TengenLink *link, uint8_t rules) {
+    const uint8_t both = (1u << TENGEN_PLAYER_1) | (1u << TENGEN_PLAYER_2);
+    link->game.hard_drop = (rules & TENGEN_RULE_HARD_DROP) != 0;
+    link->game.fast_soft = (rules & TENGEN_RULE_FAST_DOWN) ? both : 0;
+    link->game.fast_shift = (rules & TENGEN_RULE_FAST_SHIFT) ? both : 0;
 }
 
 bool tengen_link_step(TengenLink *link, uint8_t local_buttons,
@@ -129,6 +135,10 @@ void tengen_lobby_start_held(TengenLobby *lobby, uint16_t seed) {
     lobby->hold = true;
 }
 
+void tengen_lobby_rules(TengenLobby *lobby, uint8_t rules) {
+    lobby->rules = (uint8_t)(rules & TENGEN_RULES_ALL);
+}
+
 void tengen_lobby_release(TengenLobby *lobby, uint16_t seed,
                            uint8_t start_level, uint8_t music,
                            const uint8_t handicap[2], bool coop, bool xe) {
@@ -169,7 +179,8 @@ uint16_t tengen_lobby_word(const TengenLobby *lobby, bool master) {
         case TENGEN_LOBBY_HANDICAP:
             return tagged(TENGEN_LOBBY_HANDICAP,
                            (uint16_t)((lobby->handicap[0] & 0x0F) |
-                                      ((lobby->handicap[1] & 0x0F) << 4)));
+                                      ((lobby->handicap[1] & 0x0F) << 4) |
+                                      ((lobby->rules & TENGEN_RULES_ALL) << 8)));
         case TENGEN_LOBBY_SKIN:
             if (lobby->skin_offer < 0) return tagged(TENGEN_LOBBY_SKIN, 0);
             return tagged(TENGEN_LOBBY_SKIN,
@@ -380,6 +391,7 @@ void tengen_lobby_apply(TengenLobby *lobby, bool master, bool got,
         case TENGEN_LOBBY_HANDICAP:
             lobby->handicap[0] = (uint8_t)(payload & 0x0F);
             lobby->handicap[1] = (uint8_t)((payload >> 4) & 0x0F);
+            lobby->rules = (uint8_t)((payload >> 8) & TENGEN_RULES_ALL);
             break;
         case TENGEN_LOBBY_SKIN:
             /* Found by the ART, not by the index: the two builds may list

@@ -360,14 +360,27 @@ typedef struct {
      *     (INFERRED from the same split; seen by `make fuzz`). Mended, the
      *     falling piece is lifted the least it takes to be clear again. */
     bool mended;
-    /* UP DROPS THE PIECE — the port's, behind the chord, set and cleared like
-     * `mended` (the master's chord over a cable). The cartridge's UP does
+    /* UP DROPS THE PIECE — the port's, set by the GBA layer from the pause
+     * menu's OPTIONS (HARD DROP; the master's over a cable, see
+     * tengen_link_rules), off unless a player turned it on. The cartridge's UP does
      * nothing in play. A fresh press takes the piece down to rest and locks
      * it on the same frame, every row of the way a soft-drop step, so it
      * lands and scores where holding DOWN would have: the threshold tightens
      * a row at a time and a drop of a few rows is doubled (add_lock_score).
      * A partner underneath stops it without a lock, as it stops any fall. */
     bool hard_drop;
+    /* ...AND TWO FASTER HANDS, the port's as well, a bit per player
+     * (1 << slot) so that a computer's pad never has them, set by the GBA
+     * layer from the pause menu's OPTIONS (the master's over a cable):
+     *   fast_shift  the auto-shift fires on the TENGEN_DAS_FAST_FIRST'th
+     *               frame of a hold and every TENGEN_DAS_FAST_REPEAT after,
+     *               where the cartridge waits 11 and then 6;
+     *   fast_soft   DOWN takes the piece a row every frame from the first,
+     *               where the cartridge's soft drop starts slow and speeds up
+     *               a frame a row (and a drop at full speed is doubled, so
+     *               every one of these is). */
+    uint8_t fast_shift;
+    uint8_t fast_soft;
 } TengenGame;
 
 /* ----------------------------------------------------------------------- *
@@ -500,6 +513,11 @@ extern const uint8_t TENGEN_LEVEL_LINE_TENS[21];
  * That fast retry is what unsticks two players standing on each other: every
  * refused shift runs the fall-timer stagger. */
 #define TENGEN_DAS_CHARGE_BLOCKED 9
+/* The port's faster auto-shift (TengenGame.fast_shift): the first repeat on
+ * the 8th frame of the hold and one every 2 after, the blocked retry kept
+ * the cartridge's two frames short of the charge. */
+#define TENGEN_DAS_FAST_FIRST  8
+#define TENGEN_DAS_FAST_REPEAT 2
 /* Both the charge AND the repeat: the ROM zeroes the counter on every fire
  * (main.asm.txt:157-166), so a held rotate button turns the piece four times
  * a second and no faster. See apply_autorotate. */
@@ -696,6 +714,14 @@ bool tengen_position_valid(const TengenGame *game, TengenPlayerSlot slot);
  * transcribed bit shift for bit shift. Always false outside coop, which is
  * the ROM's own `bit playMode / bpl` at :8C2C. Exposed for the tests. */
 bool tengen_coop_pieces_overlap(const TengenGame *game, TengenPlayerSlot slot);
+
+/* HOW FAR THE SLOT'S FALLING PIECE COULD STILL FALL on the settled field:
+ * the rows between it and where it would land if nothing else moved — the
+ * ghost the port draws behind the pause menu's OPTIONS. The port's own; the
+ * cartridge has no ghost. A coop partner's falling piece is not counted (it
+ * is passing through), and there is nothing to count without a piece in
+ * play: 0. Nothing in the game is changed. */
+int tengen_drop_distance(const TengenGame *game, TengenPlayerSlot slot);
 
 /* Attempts to shift the active piece by `dx` columns; reverts and returns
  * false if that would be an invalid position. */

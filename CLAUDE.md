@@ -526,11 +526,34 @@ story behind each; the item number is in brackets.
   silent); leaving puts the match's tune back if the arrow left it and
   suspends again, so the menu around it is silent (`tunes_open`,
   `tunes_move`, `tunes_close`; `--pausemenu` listens).
-- **UP drops the piece under the chord** (`TengenGame.hard_drop`, set with
-  `mended`, the master's chord over a cable): a fresh press takes it down a
-  row at a time inside the frame, each row a soft-drop step, and the
-  gravity step below lands it — so it rests, scores and stops on a coop
-  partner exactly as holding DOWN would (`test_up_*`, `--chordfx`).
+- **UP drops the piece when HARD DROP is ON** (`TengenGame.hard_drop`, from
+  the pause menu's OPTIONS; it used to come with the chord itself): a fresh
+  press takes it down a row at a time inside the frame, each row a soft-drop
+  step, and the gravity step below lands it — so it rests, scores and stops
+  on a coop partner exactly as holding DOWN would (`test_up_*`, `--chordfx`).
+- **The pause menu's OPTIONS are five switches, all OFF until a player sets
+  them** (`OPT_HARD_DROP`..`OPT_SWAP_AB`, `g_options`): HARD DROP, FAST DOWN
+  (`fast_soft`: DOWN a row every frame), FAST SHIFT (`fast_shift`: the side
+  repeat at 8 then every 2 frames, the cartridge's 11 and 6), GHOST (the
+  landing place in outline, `tengen_drop_distance`, `T_GHOST`'s sixteen
+  neighbour tiles) and SWAP A-B (the turns the other way round; the menu
+  still reads A as A). Kept on the battery with a check byte
+  (`SAVE_OPTIONS_OFF`, $0404) and in force whenever the chord is; a
+  Single-Pak copy keeps them until it is switched off. The faster hands are
+  per player in the core (a bit per slot), so the computer beside a solo
+  player keeps the cartridge's. The window is a table — names left after the
+  arrow, ON/OFF right on the offset layer — not a centred list
+  (`draw_options_box`). `--pausemenu` (`pause_options`) sets, uses and
+  re-reads them across a reset.
+- **Over the cable the three rules are the match's and the other two each
+  player's.** HARD DROP, FAST DOWN and FAST SHIFT cross from the master's
+  OPTIONS in HANDICAP's bits 8-10 (`TengenLobby.rules`,
+  `tengen_link_rules`, for both players); either player changes one from the
+  shared menu on both consoles, for that match only. GHOST is drawn by the
+  console that has it, and SWAP A-B turns A and B in the word that console
+  sends (`g_pad_swap`, read by `link_read_buttons` in the serial interrupt)
+  while the match plays, never paused — so the turn is in the lockstep and
+  both boards agree (`run_link` `options_check`).
 - **The level-up show keeps to the box's interior.** It used to wipe the
   right column and draw the plain strip of rope the screen had before the
   boxes; HUD VERSUS's cleared the left box ten wide, rope included
@@ -646,7 +669,7 @@ Versus; WITH: Coop; 2 PLAYER: Versus; COOPERATIVE: Coop — and under the
 chord Stats as VERSUS's and WITH's second), remembered per mode; no HIGH in a
 race, as on the cartridge's 2P screen; one chord (L+R on GAME SELECT or
 LEVEL SETTINGS) that uncovers Korobeiniki, Katiuska, MUSIC MIX, the XE
-levels 18-19, the pause menu (PAUSE, MUSIC, EXIT GAME, and A on MUSIC
+levels 18-19, the pause menu (PAUSE, MUSIC, OPTIONS, EXIT GAME, and A on MUSIC
 opening a window with every tune on a line, the cursor on the one playing,
 the tune under the arrow playing as it moves and the menu around it silent,
 A to take one and B to leave it; MUSIC and not CHANGE MUSIC, whose box
@@ -676,9 +699,11 @@ hidden while paused behind a wall of grey bricks — the cartridge's lone
 block $0F in every cell, in the level-0 greys whatever the level (`T_BRICK`;
 not the rival's board a paused race shows) — and the engine's
 unused level-up jingle ($0C) the first time a score passes the top of the
-table (`record_watch`); UP dropping the piece at once under the chord, as
-later Tetrises do, landed and scored as a DOWN held all the way would
-(`TengenGame.hard_drop`); SELECT on the title shows the HIGH SCORES page,
+table (`record_watch`); the pause menu's OPTIONS, all OFF until set and
+kept on the battery: UP dropping the piece at once, as later Tetrises do,
+landed and scored as a DOWN held all the way would (`TengenGame.hard_drop`),
+a faster soft drop and side repeat, a ghost of the landing place and A/B
+turned round; SELECT on the title shows the HIGH SCORES page,
 which otherwise only a lost game did — the cartridge takes it as START there
 ($9FA4) — (`--titlescores`); a Single-Pak copy's
 records handed to a console with a save every time they link, with RECORDS

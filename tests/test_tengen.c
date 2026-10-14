@@ -3673,6 +3673,46 @@ static void test_xe_travels_over_the_cable(void) {
     CHECK(slave.xe);
 }
 
+/* THE MASTER'S RULES CROSS TOO (the pause menu's OPTIONS: TENGEN_RULE_*),
+ * in HANDICAP's spare bits, every combination of the three, and beside the
+ * handicaps without touching them. */
+static void test_rules_travel_over_the_cable(void) {
+    for (uint8_t rules = 0; rules <= TENGEN_RULES_ALL; rules++) {
+        TengenLobby master, slave;
+        const uint8_t handicap[2] = { 4, 3 };
+        tengen_lobby_start_held(&master, 0xC0DE);
+        tengen_lobby_start_held(&slave, 0);
+        slave.rules = (uint8_t)(rules ^ TENGEN_RULES_ALL);   /* its own lose */
+        tengen_lobby_release(&master, 0xC0DE, 3, 1, handicap, false, true);
+        tengen_lobby_rules(&master, rules);
+        for (int i = 0; i < 64 && !(master.ready && slave.ready); i++) {
+            uint16_t mw = tengen_lobby_word(&master, true);
+            uint16_t sw = tengen_lobby_word(&slave, false);
+            tengen_lobby_apply(&master, true, true, mw, sw);
+            tengen_lobby_apply(&slave, false, true, mw, sw);
+        }
+        CHECK(master.ready && slave.ready);
+        CHECK(slave.rules == rules);
+        CHECK(slave.handicap[0] == 4 && slave.handicap[1] == 3);
+    }
+}
+
+/* ...and both consoles play by them: BOTH players, since over the cable both
+ * pads are people's. The chord alone no longer drops a piece on UP. */
+static void test_link_rules_are_both_players(void) {
+    TengenLink link;
+    tengen_link_start(&link, 0x1234, 0, TENGEN_PLAYER_1, false, true);
+    CHECK(!link.game.hard_drop && !link.game.fast_soft && !link.game.fast_shift);
+    tengen_link_rules(&link, TENGEN_RULE_HARD_DROP | TENGEN_RULE_FAST_SHIFT);
+    CHECK(link.game.hard_drop);
+    CHECK(link.game.fast_soft == 0);
+    CHECK(link.game.fast_shift == 3);
+    tengen_link_rules(&link, TENGEN_RULE_FAST_DOWN);
+    CHECK(!link.game.hard_drop);
+    CHECK(link.game.fast_soft == 3);
+    CHECK(link.game.fast_shift == 0);
+}
+
 static void test_soft_drop_requires_down_alone(void) {
     /* main.asm.txt:185-188: `and #DOWN+LEFT+RIGHT; cmp #DOWN` — Down combined
      * with a direction does NOT soft drop, it resets the threshold to 5. */
@@ -3953,7 +3993,7 @@ static void test_locked_cells_never_overwrite_the_walls(void) {
     }
 }
 
-/* UP DROPS THE PIECE, BEHIND THE CHORD (TengenGame.hard_drop): the port's,
+/* UP DROPS THE PIECE WITH HARD DROP ON (TengenGame.hard_drop): the port's,
  * not the cartridge's, whose UP does nothing in play. One press and the piece
  * is where holding DOWN would have put it, locked, on the same frame — and
  * scored as holding DOWN scores it, each row a soft-drop step. */
@@ -4023,6 +4063,118 @@ static void test_up_stops_on_the_coop_partner(void) {
     CHECK(game.player[0].piece.current == TT_O);
     CHECK(game.player[0].piece.y == 10);
     CHECK(!tengen_coop_pieces_overlap(&game, TENGEN_PLAYER_1));
+}
+
+/* THE PORT'S FASTER HANDS, a player at a time (TengenGame.fast_shift and
+ * fast_soft, a bit per slot), from the pause menu's OPTIONS. Off, the
+ * cartridge's timing to the frame. */
+static void test_fast_shift_repeats_sooner_and_closer(void) {
+    for (int on = 0; on < 2; on++) {
+        TengenGame g;
+        tengen_new_game(&g, 9, 0, false, false, false);
+        g.fast_shift = on ? (uint8_t)(1u << TENGEN_PLAYER_1) : 0;
+        g.player[0].piece.current = TT_O;
+        g.player[0].piece.x = 9;
+        g.player[0].piece.y = 0;
+        g.player[0].fall_timer = 200;
+        int moves[3], n = 0;
+        int8_t last = g.player[0].piece.x;
+        for (int f = 1; f <= 40 && n < 3; f++) {
+            tengen_step(&g, TENGEN_PLAYER_1, TENGEN_BTN_LEFT);
+            if (g.player[0].piece.x != last) {
+                moves[n++] = f;
+                last = g.player[0].piece.x;
+            }
+        }
+        int first = on ? TENGEN_DAS_FAST_FIRST : TENGEN_DAS_CHARGE_FIRST;
+        int repeat = on ? TENGEN_DAS_FAST_REPEAT : TENGEN_DAS_CHARGE_REPEAT;
+        CHECK(n == 3);
+        CHECK(moves[0] == 1);
+        CHECK(moves[1] == first);
+        CHECK(moves[2] == first + repeat);
+    }
+}
+
+static void test_fast_down_falls_a_row_every_frame(void) {
+    for (int on = 0; on < 2; on++) {
+        TengenGame g;
+        tengen_new_game(&g, 13, 0, false, false, false);
+        g.fast_soft = on ? (uint8_t)(1u << TENGEN_PLAYER_1) : 0;
+        g.player[0].piece.current = TT_O;
+        g.player[0].piece.x = 4;
+        g.player[0].piece.y = 0;
+        g.player[0].fall_timer = 200;
+        g.player[0].drop_rate_possible = TENGEN_DROP_RATE_AFTER_RELEASE;
+        for (int i = 0; i < 6; i++)
+            tengen_step(&g, TENGEN_PLAYER_1, TENGEN_BTN_DOWN);
+        /* Six frames held: six rows fast, one row the cartridge's way (its
+         * threshold after a release is five). */
+        CHECK(g.player[0].piece.y == (on ? 6 : 1));
+    }
+}
+
+/* ...and only the player who has them: the other pad, the computer's in a
+ * game against it, keeps the cartridge's. */
+static void test_fast_hands_are_one_players(void) {
+    TengenGame g;
+    tengen_new_game(&g, 21, 0, true, false, false);
+    g.fast_shift = g.fast_soft = (uint8_t)(1u << TENGEN_PLAYER_2);
+    for (int s = 0; s < 2; s++) {
+        g.player[s].piece.current = TT_O;
+        g.player[s].piece.x = 4;
+        g.player[s].piece.y = 0;
+        g.player[s].fall_timer = 200;
+        g.player[s].drop_rate_possible = TENGEN_DROP_RATE_AFTER_RELEASE;
+    }
+    for (int i = 0; i < 6; i++) {
+        tengen_step(&g, TENGEN_PLAYER_1, TENGEN_BTN_DOWN);
+        tengen_step(&g, TENGEN_PLAYER_2, TENGEN_BTN_DOWN);
+    }
+    CHECK(g.player[TENGEN_PLAYER_1].piece.y == 1);
+    CHECK(g.player[TENGEN_PLAYER_2].piece.y == 6);
+}
+
+/* WHERE THE PIECE WOULD LAND (tengen_drop_distance: the ghost the pause
+ * menu's OPTIONS can draw): as far down as it fits on the settled field and
+ * not a row further — three rows less over a row three high. */
+static void test_drop_distance_is_where_it_fits(void) {
+    TengenGame g;
+    tengen_new_game(&g, 0x51, 0, false, false, false);
+    tengen_step(&g, TENGEN_PLAYER_1, 0);
+    TengenPiece *pc = &g.player[0].piece;
+    pc->current = TT_T;
+    pc->orientation = 0;
+    pc->x = 4;
+    pc->y = TENGEN_SPAWN_Y;
+    int seen[2];
+    for (int ledge = 0; ledge < 2; ledge++) {
+        if (ledge)
+            for (int c = 1; c < TENGEN_PF_WIDTH - 1; c++)
+                g.field[0].cell[TENGEN_PF_HEIGHT - 3][c] = TT_I;
+        int d = seen[ledge] = tengen_drop_distance(&g, TENGEN_PLAYER_1);
+        CHECK(d > 0);
+        pc->y = (int8_t)(TENGEN_SPAWN_Y + d);
+        CHECK(tengen_position_valid(&g, TENGEN_PLAYER_1));
+        pc->y = (int8_t)(TENGEN_SPAWN_Y + d + 1);
+        CHECK(!tengen_position_valid(&g, TENGEN_PLAYER_1));
+        pc->y = TENGEN_SPAWN_Y;
+    }
+    CHECK(seen[1] == seen[0] - 3);
+    pc->current = TT_NONE;
+    CHECK(tengen_drop_distance(&g, TENGEN_PLAYER_1) == 0);
+}
+
+/* ...ON THE BOARD, NOT ON THE PARTNER: a coop partner's piece is passing
+ * through, and the ghost says where this one locks. */
+static void test_drop_distance_looks_through_the_partner(void) {
+    TengenGame game;
+    place_coop_pair(&game, TT_O, 0, 5, 4, TT_O, 0, 5, 12);
+    int d = tengen_drop_distance(&game, TENGEN_PLAYER_1);
+    CHECK(4 + d > 12);
+    game.player[0].piece.y = (int8_t)(4 + d);
+    CHECK(tengen_position_valid(&game, TENGEN_PLAYER_1));
+    game.player[0].piece.y = (int8_t)(4 + d + 1);
+    CHECK(!tengen_position_valid(&game, TENGEN_PLAYER_1));
 }
 
 /* THE CARTRIDGE'S OWN BUGS, MENDED BEHIND THE CHORD (TengenGame.mended).
@@ -4138,6 +4290,8 @@ int main(void) {
     test_xe_adds_two_levels();
     test_xe_level_code_reaches_the_mods_own_levels();
     test_xe_travels_over_the_cable();
+    test_rules_travel_over_the_cable();
+    test_link_rules_are_both_players();
     test_soft_drop_requires_down_alone();
     test_soft_drop_accelerates_while_held();
     test_fresh_direction_press_is_swallowed_after_soft_drop();
@@ -4221,6 +4375,11 @@ int main(void) {
     test_up_drops_the_piece_where_down_would_land_it();
     test_up_held_drops_one_piece();
     test_up_stops_on_the_coop_partner();
+    test_fast_shift_repeats_sooner_and_closer();
+    test_fast_down_falls_a_row_every_frame();
+    test_fast_hands_are_one_players();
+    test_drop_distance_is_where_it_fits();
+    test_drop_distance_looks_through_the_partner();
     test_either_player_can_pause_a_linked_game();
     test_level_starts_at_the_chosen_start_level();
     test_level_is_recomputed_from_the_line_total();

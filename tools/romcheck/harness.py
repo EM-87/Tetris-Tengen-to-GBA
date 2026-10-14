@@ -389,8 +389,9 @@ def game_offsets(rom_path):
         core, screen = load(rom_path)   # `screen` must stay alive; see load()
         (field, player, stride, cur, y, level, stats,
          paused, held, nxt, alive, x, score, lines,
-         counts, orient, piece_ids, proto_rules, total) = (
-            core.memory.u16[addr + i * 2] for i in range(19))
+         counts, orient, piece_ids, proto_rules, total,
+         hard_drop, fast_shift, fast_soft) = (
+            core.memory.u16[addr + i * 2] for i in range(22))
         _GAME_PROBE_CACHE[rom_path] = {
             "field": field, "player": player, "stride": stride,
             "current": player + cur, "y": player + y,
@@ -402,6 +403,8 @@ def game_offsets(rom_path):
             "orientation": player + orient,
             "piece_ids": piece_ids, "proto_rules": proto_rules,
             "total": player + total,
+            "hard_drop": hard_drop, "fast_shift": fast_shift,
+            "fast_soft": fast_soft,
         }
     return _GAME_PROBE_CACHE[rom_path]
 
@@ -775,7 +778,7 @@ PAL_PIECE_BANK, PAL_NEXT_BANK = 12, 13
 # question's second line ride the counters' layer two pixels down, the
 # even-length ones the offset layer three across — but tilemap_text reads all
 # four, so these are just rows.
-PMENU_H = 5
+PMENU_H = 6
 PMENU_TY = (SCREEN_H // TILE - PMENU_H) // 2
 # SEVEN ROWS NOW, not ten: the cartridge's own PAUSE is eight columns by two
 # and its GAME OVER plaque six by four, and a box half the height of the
@@ -787,9 +790,20 @@ PMENU_TY = (SCREEN_H // TILE - PMENU_H) // 2
 # mark doing what SURE? did.
 # ...AND THE TUNE'S NAME WENT TOO, to a window of its own: the entry is
 # MUSIC again, and A on it opens a window with every tune on a line.
+# ...AND OPTIONS BETWEEN THEM, a row more: six rows centre on row 7 as five
+# did, so nothing above EXIT GAME moved.
 PM_HEAD = PMENU_TY + 1       # PAUSE
 PM_MUSIC = PMENU_TY + 2      # MUSIC
-PM_EXIT = PMENU_TY + 3       # EXIT GAME
+PM_OPTIONS = PMENU_TY + 3    # OPTIONS
+PM_EXIT = PMENU_TY + 4       # EXIT GAME
+# The options' window: the heading and a line per switch (OPT_COUNT in
+# gba/port.h), each name at the left and ON or OFF at the right, in this
+# order.
+PMO_NAMES = ("HARD DROP", "FAST DOWN", "FAST SHIFT", "GHOST", "SWAP A-B")
+PMO_H = len(PMO_NAMES) + 3
+PMO_TY = (SCREEN_H // TILE - PMO_H) // 2
+PMO_HEAD = PMO_TY + 1        # OPTIONS
+PMO_FIRST = PMO_TY + 2       # HARD DROP, and the rest in PMO_NAMES' order
 # The tunes' window: the heading MUSIC and a line per tune, eight under the
 # chord (PMENU_H_MAX in gba/port.h), centred like the menu.
 PMT_H = 11

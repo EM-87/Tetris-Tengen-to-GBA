@@ -79,7 +79,7 @@ uint16_t ascii_tile(char c) {
  * translation unit could not. (`retain` too, once; this toolchain ignores it
  * with a warning, and the image is byte for byte the same without it.) */
 __attribute__((used))
-const uint16_t kGameProbe[19] = {
+const uint16_t kGameProbe[22] = {
     (uint16_t)offsetof(TengenGame, field),
     (uint16_t)offsetof(TengenGame, player),
     (uint16_t)sizeof(TengenPlayerState),
@@ -104,6 +104,11 @@ const uint16_t kGameProbe[19] = {
     /* ...and the port's own piece count, which the histogram reads under
      * the chord (`--statsrel`). */
     (uint16_t)offsetof(TengenPlayerState, piece_total),
+    /* ...and the rules the pause menu's OPTIONS set, which the cable check
+     * reads on both consoles. */
+    (uint16_t)offsetof(TengenGame, hard_drop),
+    (uint16_t)offsetof(TengenGame, fast_shift),
+    (uint16_t)offsetof(TengenGame, fast_soft),
 };
 
 /* ...AND THE PORT'S OWN NUMBERS THE CHECKS READ THE SCREEN AND THE SAVE BY:
@@ -424,8 +429,15 @@ uint8_t read_buttons(void) {
  * transfer (see link.h). Nothing else may go in here. */
 /* IWRAM too: -flto inlines it today, and without that it would be a ROM
  * trampoline between two IWRAM functions. */
+/* ...WITH A AND B TURNED, while a linked match is in play with the player's
+ * SWAP A-B on (OPT_SWAP_AB): the other console plays the same pieces from
+ * the same word, so the turn has to be in the word. */
+volatile bool g_pad_swap;
 IWRAM_CODE uint8_t link_read_buttons(void);
-uint8_t link_read_buttons(void) { return read_buttons(); }
+uint8_t link_read_buttons(void) {
+    uint8_t b = read_buttons();
+    return g_pad_swap ? pad_swap_ab(b) : b;
+}
 
 /* L and R have no NES equivalent, so the game proper never sees them and
  * they are free for the port's own switches. This reports the two together,
@@ -488,6 +500,21 @@ void upload_tiles(void) {
         uint32_t h = px >> shift;            /* the rest, at the left */
         tail[row * 2] = (uint16_t)t; tail[row * 2 + 1] = (uint16_t)(t >> 16);
         head[row * 2] = (uint16_t)h; head[row * 2 + 1] = (uint16_t)(h >> 16);
+    }
+    /* ...and the ghost's sixteen outlines; see T_GHOST. A row is eight
+     * nibbles, the leftmost pixel the lowest. */
+    for (int m = 0; m < 16; m++) {
+        vu16 *out = dst + (T_GHOST + m) * 16;
+        for (int row = 0; row < 8; row++) {
+            uint32_t px = 0;
+            bool edge = (row == 0 && !(m & GHOST_UP)) ||
+                        (row == 7 && !(m & GHOST_DOWN));
+            if (edge) px = 0x11111111u * GHOST_INK;
+            if (!(m & GHOST_LEFT)) px |= GHOST_INK;
+            if (!(m & GHOST_RIGHT)) px |= (uint32_t)GHOST_INK << 28;
+            out[row * 2] = (uint16_t)px;
+            out[row * 2 + 1] = (uint16_t)(px >> 16);
+        }
     }
 }
 
