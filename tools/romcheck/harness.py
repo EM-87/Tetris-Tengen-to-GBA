@@ -343,7 +343,7 @@ _LAYOUT_DEFAULT = {
     "raised": "PAUSEXIT?R",
     "ai_target_x": 6, "ai_target_o": 7, "ai_settle": 8, "ai_soft_drop": 9,
     "ai_coop_aware": 10, "ai_smart": 12, "ai_plan_have": 420,
-    "ai_plan_stage": 0,
+    "ai_plan_stage": 0, "ghost": 989, "check_off": 997,
 }
 
 
@@ -365,7 +365,7 @@ def check_layout(rom_path):
         base = 0x08000000 if addr >= 0x08000000 else 0x02000000
         data = open(rom_path, "rb").read()
         v = [int.from_bytes(data[addr - base + 2 * i:addr - base + 2 * i + 2], "little")
-             for i in range(24)]
+             for i in range(26)]
         at = raised - base
         text = data[at:data.index(b"\0", at)].decode("ascii")
         keys = ("question", "percent", "raised_base", "arrow_tail", "arrow_head",
@@ -373,7 +373,8 @@ def check_layout(rom_path):
                 "skin_tables", "mode_tables", "save_data", "save_table_bytes",
                 "save_entry_bytes", "save_name", "save_mode", "save_mode_sums",
                 "ai_target_x", "ai_target_o", "ai_settle", "ai_soft_drop",
-                "ai_coop_aware", "ai_smart", "ai_plan_have", "ai_plan_stage")
+                "ai_coop_aware", "ai_smart", "ai_plan_have", "ai_plan_stage",
+                "ghost", "check_off")
         layout = dict(zip(keys, v))
         layout["raised"] = text
         _LAYOUT_CACHE[rom_path] = layout
@@ -797,11 +798,16 @@ PM_MUSIC = PMENU_TY + 2      # MUSIC
 PM_OPTIONS = PMENU_TY + 3    # OPTIONS
 PM_EXIT = PMENU_TY + 4       # EXIT GAME
 # The options' window: the heading and a line per switch (OPT_COUNT in
-# gba/port.h), each name at the left and ON or OFF at the right, in this
-# order.
+# gba/port.h), each name at the left after the arrow's two columns and its
+# box at the right (T_CHECK_OFF: two tiles, the right half one more), in
+# this order. Sixteen wide, as the menu (OPT_W in gba/match.c).
 PMO_NAMES = ("HARD DROP", "FAST DOWN", "FAST SHIFT", "GHOST", "SWAP A-B")
 PMO_H = len(PMO_NAMES) + 3
+PMO_W = 16
 PMO_TY = (SCREEN_H // TILE - PMO_H) // 2
+PMO_TX = (30 - PMO_W) // 2
+PMO_NAME = PMO_TX + 3        # the name's first column
+PMO_BOX = PMO_TX + PMO_W - 3  # the box's left half
 PMO_HEAD = PMO_TY + 1        # OPTIONS
 PMO_FIRST = PMO_TY + 2       # HARD DROP, and the rest in PMO_NAMES' order
 # The tunes' window: the heading MUSIC and a line per tune, eight under the

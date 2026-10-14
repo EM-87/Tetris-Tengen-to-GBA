@@ -119,7 +119,7 @@ const uint16_t kGameProbe[22] = {
  * missed made a check read the wrong thing and say nothing
  * (romcheck/harness.py, check_layout). The order is the reader's. */
 __attribute__((used))
-const uint16_t kCheckProbe[24] = {
+const uint16_t kCheckProbe[26] = {
     TILES_GAME_QUESTION, TILES_GAME_PERCENT,
     PMENU_RAISED_BASE, T_ARROW_TAIL, T_ARROW_HEAD,
     SCREEN_LEADER_HEAD_TY, SCREEN_LEADER_FIRST_TY, LEADER_ENTRIES,
@@ -136,6 +136,8 @@ const uint16_t kCheckProbe[24] = {
     (uint16_t)offsetof(TengenAi, smart),
     (uint16_t)offsetof(TengenAi, plan_have),
     (uint16_t)offsetof(TengenAi, plan_stage),
+    /* ...and the tiles made for the ghost and the options' boxes. */
+    T_GHOST, T_CHECK_OFF,
 };
 __attribute__((used))
 const char kCheckRaised[] = PMENU_RAISED_CHARS;
@@ -501,19 +503,25 @@ void upload_tiles(void) {
         tail[row * 2] = (uint16_t)t; tail[row * 2 + 1] = (uint16_t)(t >> 16);
         head[row * 2] = (uint16_t)h; head[row * 2 + 1] = (uint16_t)(h >> 16);
     }
-    /* ...and the ghost's sixteen outlines; see T_GHOST. A row is eight
+    /* ...and the options' boxes; see T_CHECK_OFF. Seven by seven, on the
+     * letters' rows (ink 1-7 under a blank row 0) and in their ink; ON has
+     * a three-by-three dot in the middle. A row of the pair is sixteen
      * nibbles, the leftmost pixel the lowest. */
-    for (int m = 0; m < 16; m++) {
-        vu16 *out = dst + (T_GHOST + m) * 16;
+    for (int on = 0; on < 2; on++) {
+        vu16 *l = dst + ((on ? T_CHECK_ON : T_CHECK_OFF)) * 16;
+        vu16 *r = l + 16;
         for (int row = 0; row < 8; row++) {
-            uint32_t px = 0;
-            bool edge = (row == 0 && !(m & GHOST_UP)) ||
-                        (row == 7 && !(m & GHOST_DOWN));
-            if (edge) px = 0x11111111u * GHOST_INK;
-            if (!(m & GHOST_LEFT)) px |= GHOST_INK;
-            if (!(m & GHOST_RIGHT)) px |= (uint32_t)GHOST_INK << 28;
-            out[row * 2] = (uint16_t)px;
-            out[row * 2 + 1] = (uint16_t)(px >> 16);
+            uint64_t px = 0;
+            for (int x = 0; x < 7; x++) {
+                bool edge = row == 1 || row == 7 || x == 0 || x == 6;
+                bool dot = on && row >= 3 && row <= 5 && x >= 2 && x <= 4;
+                if (row >= 1 && (edge || dot))
+                    px |= (uint64_t)1 << (4 * (CHECK_SHIFT_PX + x));
+            }
+            l[row * 2] = (uint16_t)px;
+            l[row * 2 + 1] = (uint16_t)(px >> 16);
+            r[row * 2] = (uint16_t)(px >> 32);
+            r[row * 2 + 1] = (uint16_t)(px >> 48);
         }
     }
 }

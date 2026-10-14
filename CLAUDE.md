@@ -535,16 +535,31 @@ story behind each; the item number is in brackets.
   them** (`OPT_HARD_DROP`..`OPT_SWAP_AB`, `g_options`): HARD DROP, FAST DOWN
   (`fast_soft`: DOWN a row every frame), FAST SHIFT (`fast_shift`: the side
   repeat at 8 then every 2 frames, the cartridge's 11 and 6), GHOST (the
-  landing place in outline, `tengen_drop_distance`, `T_GHOST`'s sixteen
-  neighbour tiles) and SWAP A-B (the turns the other way round; the menu
+  landing place in outline, `tengen_drop_distance`; in coop the partner's
+  too, in its bank) and SWAP A-B (the turns the other way round; the menu
   still reads A as A). Kept on the battery with a check byte
   (`SAVE_OPTIONS_OFF`, $0404) and in force whenever the chord is; a
   Single-Pak copy keeps them until it is switched off. The faster hands are
   per player in the core (a bit per slot), so the computer beside a solo
   player keeps the cartridge's. The window is a table — names left after the
-  arrow, ON/OFF right on the offset layer — not a centred list
+  arrow, a box right (`T_CHECK_OFF`: empty OFF, dotted ON, the arrow's
+  margin on the right) — sixteen wide like the menu, not a centred list
   (`draw_options_box`). `--pausemenu` (`pause_options`) sets, uses and
   re-reads them across a reset.
+- **The ghost is the piece's own outline** (`ghost_make`): the four cells'
+  tiles read back out of video memory as one silhouette, outside being what
+  its edge reaches without crossing ink (the O's tiles leave a hole in it),
+  and of it the pixels next to outside. Every block's top row and left column
+  are blank, so an eight-pixel outline stood a pixel proud of the piece above
+  and to the left. Made again only when the piece, its turn or the skin
+  changes (`--pausemenu` `ghost_fits` compares it pixel for pixel).
+- **The pause's gag is lowered for the cursor's tick.** `MUSIC_SUSPEND` sets
+  the class floor a voice must reach to be heard (`$FA` = $F0, compared at
+  $D889); the screen's blip is over it, the cursor's tick (`MENU_SELECT`,
+  class between $40 and $7F) is not, every tune is class 7 or 8 (under $20).
+  The pause menu's moves and switches tick as the front end's do, with the
+  floor at $40 for the tick's length (`nes_audio_gag_lower`, `pause_tick`);
+  `pause_ticks_hold_the_tune` checks LOGINSKA stays held.
 - **Over the cable the three rules are the match's and the other two each
   player's.** HARD DROP, FAST DOWN and FAST SHIFT cross from the master's
   OPTIONS in HANDICAP's bits 8-10 (`TengenLobby.rules`,

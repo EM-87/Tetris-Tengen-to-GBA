@@ -1765,17 +1765,26 @@ typedef enum {
 #define T_ARROW_TAIL (PMENU_RAISED_BASE + PMENU_RAISED_COUNT)
 #define T_ARROW_HEAD (PMENU_RAISED_BASE + PMENU_RAISED_COUNT + 1)
 /* THE GHOST (OPT_GHOST): where the piece will land, as the piece's outline
- * and nothing inside it. Sixteen tiles, made at boot after the arrow, one
- * per set of neighbours a cell has in its own piece (GHOST_UP and the rest,
- * added up): a side with a neighbour has no line, so four cells draw one
- * silhouette rather than four boxes. In the falling piece's colours. */
+ * and nothing inside it. Four tiles for this player's ghost and four for a
+ * coop partner's, written as the piece changes (ghost_make): the outline is
+ * taken from the piece's OWN tiles as they are in video memory — the four
+ * cells' ink as one silhouette, and of it only the pixels at its edge — so
+ * it covers exactly what the piece would, the blank row and column every
+ * block keeps on its top and left included, and follows a skin's art. It
+ * was sixteen fixed outlines once, a tile's full eight pixels each, and it
+ * stood a pixel proud of the piece above and to the left. In the falling
+ * piece's colours (its bank's GHOST_INK). */
 #define T_GHOST (T_ARROW_HEAD + 1)
-#define GHOST_UP    1
-#define GHOST_RIGHT 2
-#define GHOST_DOWN  4
-#define GHOST_LEFT  8
+#define GHOST_TILES 4       /* per ghost: one per cell */
 #define GHOST_INK   1       /* the colour of the piece's bank it is drawn in */
-typedef char ghost_tiles_fit[T_GHOST + 16 <= 1024 ? 1 : -1];
+/* ...AND THE OPTIONS WINDOW'S BOXES, after them: a switch's state as a box
+ * of the letters' size, empty for OFF and with a dot in it for ON. Two
+ * tiles each, the box moved across the pair so its right side is as far
+ * from the frame as the arrow's tail is on the left (see draw_options_box). */
+#define T_CHECK_OFF (T_GHOST + 2 * GHOST_TILES)   /* and +1, its right half */
+#define T_CHECK_ON  (T_CHECK_OFF + 2)             /* and +1 */
+#define CHECK_SHIFT_PX 4    /* the box's left column in the pair */
+typedef char ghost_tiles_fit[T_CHECK_ON + 2 <= 1024 ? 1 : -1];
 
 /* The frame's own tiles, out of the plaque the game over is drawn with. */
 #define T_BOX_TL 0x29

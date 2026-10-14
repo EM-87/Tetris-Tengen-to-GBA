@@ -88,6 +88,16 @@
 #define NES_SOUND_SCREEN_SWITCH 0x15
 #define NES_SOUND_TOPOUT       0x16
 
+/* THE PAUSE'S GAG LOWERED FOR A FEW FRAMES, for a sound under it to be
+ * heard (see nes_audio.c). MEASURED on the engine, a voice's class being
+ * what the gag is compared with (`$0292,x`, LD35D): MENU_SELECT, the
+ * cursor's tick, sounds with the floor at $40 and not at $80; LOGINSKA only
+ * below $20, as every tune is class 7 or 8 ($1C-$23). So $40 lets the tick
+ * through and keeps the music held. */
+#define NES_GAG_TICK_FLOOR  0x40
+#define NES_GAG_TICK_FRAMES 24
+void nes_audio_gag_lower(uint8_t floor, uint8_t frames);
+
 /* Sets up the GBA's sound hardware and the emulated engine. Call once. */
 void nes_audio_init(void);
 
