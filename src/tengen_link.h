@@ -74,6 +74,18 @@ typedef struct {
 void tengen_link_start(TengenLink *link, uint16_t seed, uint8_t start_level,
                         TengenPlayerSlot local_slot, bool coop, bool xe);
 
+/* THE MATCH'S RULES THAT ARE THE PORT'S, not the cartridge's: the pause
+ * menu's OPTIONS on the master's console (TengenLobby.rules), off on a
+ * console that never set them. UP's drop is the whole game's; the faster
+ * hands are each player's in the core and BOTH players' here, since over the
+ * cable both pads are people's. Both consoles call this with the same rules,
+ * at the start and whenever the shared pause menu changes one. */
+#define TENGEN_RULE_HARD_DROP  0x01   /* TengenGame.hard_drop */
+#define TENGEN_RULE_FAST_DOWN  0x02   /* TengenGame.fast_soft */
+#define TENGEN_RULE_FAST_SHIFT 0x04   /* TengenGame.fast_shift */
+#define TENGEN_RULES_ALL       0x07
+void tengen_link_rules(TengenLink *link, uint8_t rules);
+
 /* One frame. `local_buttons` is what this machine's player is holding;
  * `remote_word` is what arrived from the other machine. Returns false, and
  * sets `desynced`, if the remote word is not for the frame we are on — after
@@ -122,7 +134,8 @@ typedef enum {
      * of nought to four need six bits and CONFIG has four left. One more
      * stop-and-wait turn costs two transfers, which is two sixtieths of a
      * second on a screen the player is already sitting on. */
-    TENGEN_LOBBY_HANDICAP = 5,  /* player 1 in bits 0-3, player 2 in bits 4-7 */
+    TENGEN_LOBBY_HANDICAP = 5,  /* player 1 in bits 0-3, player 2 in bits 4-7,
+                                 * the master's rules in 8-10 (TENGEN_RULE_*) */
     TENGEN_LOBBY_GO      = 6,
     /* ...and two the match itself is over before either is used: the records
      * swap, below. They share the tag space because they share the wire and
@@ -165,6 +178,7 @@ typedef struct {
     uint8_t handicap[2];   /* menuPlayer1Handicap / menuPlayer2Handicap */
     bool coop;           /* one twelve-wide board between them, not two */
     bool xe;             /* the Tetris Tengen XE level range; see tengen_core.h */
+    uint8_t rules;       /* TENGEN_RULE_*: the master's, as they arrive */
     bool ready;          /* the handshake finished; the match may start */
     uint8_t stage;       /* master: the tag in flight. slave: the last taken */
     uint8_t echo;        /* slave: the tag it owes back */
@@ -236,6 +250,11 @@ void tengen_lobby_start_held(TengenLobby *lobby, uint16_t seed);
 void tengen_lobby_release(TengenLobby *lobby, uint16_t seed,
                            uint8_t start_level, uint8_t music,
                            const uint8_t handicap[2], bool coop, bool xe);
+
+/* ...and the master's RULES (TENGEN_RULE_*), after the release and before
+ * the handshake reaches HANDICAP, which carries them. Unset, none: the
+ * cartridge's game. */
+void tengen_lobby_rules(TengenLobby *lobby, uint8_t rules);
 
 /* THE PROTOTYPES AS A SKIN OVER THE CABLE. Call on both consoles after the
  * lobby starts: `prints` is this console's own skins' fingerprints

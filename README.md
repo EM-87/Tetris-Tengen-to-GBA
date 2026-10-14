@@ -135,6 +135,17 @@ Lo que el GBA tiene de más:
 | En cualquier momento | A+B+START+SELECT | reinicia el juego (en la EZ-Flash IV lo intercepta el propio cartucho) |
 | Al encender, mantenidos | L+R+B | borra los récords (pregunta dos veces, con NO elegido) |
 
+**El menú de pausa** (con el acorde) es PAUSE, MUSIC, OPTIONS y EXIT GAME.
+OPTIONS tiene cinco interruptores, todos en OFF hasta que los toqués, que se
+guardan en el cartucho y vuelven cada vez que hacés el acorde: **HARD DROP**
+(Arriba tira la pieza de golpe), **FAST DOWN** (Abajo baja una fila por
+frame), **FAST SHIFT** (el lateral repite antes y más rápido), **GHOST** (la
+silueta de dónde va a caer la pieza) y **SWAP A-B** (A y B giran al revés).
+A, Izquierda o Derecha cambian el de la flecha; B vuelve. Por cable, las tres
+primeras son reglas de la partida: las del maestro, para los dos, y
+cualquiera las cambia desde el menú compartido solo para esa partida; GHOST
+y SWAP A-B son de cada jugador.
+
 **Apagar en pausa no pierde la partida**, como en Tetris DX: una partida en
 solitario en pausa se guarda en la memoria del cartucho, y al encender vuelve
 en pausa donde estaba. Si se reanuda, se acaba o se sale, se borra; el

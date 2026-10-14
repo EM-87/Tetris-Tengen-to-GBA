@@ -141,8 +141,10 @@ static TengenTetromino roll_next_piece(TengenRng *rng) {
  * colliding cell — the ROM's scan writes its hit index to $2D as it goes, so
  * the last write wins, and that value is what the scoring routine consumes
  * (main.asm.txt:1029-1064). */
-static bool position_valid_ex(const TengenGame *game, TengenPlayerSlot slot,
-                               int *lowest_hit_row) {
+/* `dy` rows below where the piece is: 0 for where it is, more for the
+ * ghost (tengen_drop_distance). */
+static bool position_valid_at(const TengenGame *game, TengenPlayerSlot slot,
+                              int dy, int *lowest_hit_row) {
     const TengenPlayerState *p = &game->player[slot];
     const TengenPlayfield *field = &game->field[game->coop ? 0 : slot];
     const TengenPiece *piece = &p->piece;
@@ -152,7 +154,7 @@ static bool position_valid_ex(const TengenGame *game, TengenPlayerSlot slot,
         for (int c = 0; c < 4; c++) {
             if (!tengen_piece_occupies(piece->current, piece->orientation, r, c)) continue;
 
-            int rom_row = piece->y + r;
+            int rom_row = piece->y + dy + r;
             int storage_col = piece->x + c - TENGEN_ROM_COL_ORIGIN;
             bool hit = false;
 
@@ -201,8 +203,24 @@ static bool position_valid_ex(const TengenGame *game, TengenPlayerSlot slot,
     return ok;
 }
 
+static bool position_valid_ex(const TengenGame *game, TengenPlayerSlot slot,
+                               int *lowest_hit_row) {
+    return position_valid_at(game, slot, 0, lowest_hit_row);
+}
+
 bool tengen_position_valid(const TengenGame *game, TengenPlayerSlot slot) {
     return position_valid_ex(game, slot, NULL);
+}
+
+/* The port's, not the cartridge's: see the header. The floor rows stop the
+ * count whatever is on the board, so it ends. */
+int tengen_drop_distance(const TengenGame *game, TengenPlayerSlot slot) {
+    if (game->player[slot].piece.current == TT_NONE ||
+        !position_valid_at(game, slot, 0, NULL))
+        return 0;
+    int d = 0;
+    while (position_valid_at(game, slot, d + 1, NULL)) d++;
+    return d;
 }
 
 /* ----------------------------------------------------------------------- *
@@ -326,8 +344,11 @@ bool tengen_try_move(TengenGame *game, TengenPlayerSlot slot, int dx) {
     piece->x = (int8_t)(piece->x + dx);
     if (check_position(game, slot, &by_partner)) return true;
 
-    if (dx < 0) p->das_left = TENGEN_DAS_CHARGE_BLOCKED;
-    else if (dx > 0) p->das_right = TENGEN_DAS_CHARGE_BLOCKED;
+    /* Two frames short of the charge, the faster one's too. */
+    uint8_t blocked = ((game->fast_shift >> slot) & 1)
+                      ? TENGEN_DAS_FAST_FIRST - 2 : TENGEN_DAS_CHARGE_BLOCKED;
+    if (dx < 0) p->das_left = blocked;
+    else if (dx > 0) p->das_right = blocked;
     piece->x = old_x;
     if (by_partner) coop_yield(game, slot);
     return false;
@@ -1177,15 +1198,19 @@ void tengen_clear_bonus_counts(TengenGame *game) {
  *    frame itself, which is why the first repeat lands on the 11th frame of
  *    the hold rather than the 11th frame after it. */
 static void apply_das(uint8_t held, uint8_t new_presses, TengenButton dir_btn,
-                       uint8_t *das_counter, bool *fire) {
+                       uint8_t *das_counter, bool *fire, bool fast) {
+    /* The cartridge's 11 and 6, or the port's faster pair
+     * (TengenGame.fast_shift): the same counter, other thresholds. */
+    const uint8_t first = fast ? TENGEN_DAS_FAST_FIRST : TENGEN_DAS_CHARGE_FIRST;
+    const uint8_t repeat = fast ? TENGEN_DAS_FAST_REPEAT : TENGEN_DAS_CHARGE_REPEAT;
     *fire = (new_presses & dir_btn) != 0;
     if ((held & dir_btn) && !(held & TENGEN_BTN_DOWN)) {
         (*das_counter)++;
-        if (*das_counter >= TENGEN_DAS_CHARGE_FIRST) {
+        if (*das_counter >= first) {
             *fire = true;
             /* Reloads to 5, not 0 (main.asm.txt:124) — that's what makes the
              * repeat interval 6 frames while the initial charge is 11. */
-            *das_counter = TENGEN_DAS_CHARGE_FIRST - TENGEN_DAS_CHARGE_REPEAT;
+            *das_counter = (uint8_t)(first - repeat);
         }
     } else {
         *das_counter = 0;
@@ -1513,8 +1538,11 @@ TengenStepResult tengen_step(TengenGame *game, TengenPlayerSlot slot, uint8_t he
      * B (cw) rotate, then A (ccw) rotate (main.asm.txt:96-183, 538-575).
      * Collected here, applied after the fall timer below. */
     bool move_left, move_right, rotate_cw, rotate_ccw;
-    apply_das(held_buttons, new_presses, TENGEN_BTN_LEFT, &p->das_left, &move_left);
-    apply_das(held_buttons, new_presses, TENGEN_BTN_RIGHT, &p->das_right, &move_right);
+    bool fast_shift = (game->fast_shift >> slot) & 1;
+    apply_das(held_buttons, new_presses, TENGEN_BTN_LEFT, &p->das_left,
+              &move_left, fast_shift);
+    apply_das(held_buttons, new_presses, TENGEN_BTN_RIGHT, &p->das_right,
+              &move_right, fast_shift);
     apply_autorotate(held_buttons, new_presses, TENGEN_BTN_B, &p->auto_rotate_counter_b, &rotate_cw);
     apply_autorotate(held_buttons, new_presses, TENGEN_BTN_A, &p->auto_rotate_counter_a, &rotate_ccw);
 
@@ -1534,6 +1562,9 @@ TengenStepResult tengen_step(TengenGame *game, TengenPlayerSlot slot, uint8_t he
                           == TENGEN_BTN_DOWN;
 
     if (soft_dropping) {
+        /* THE PORT'S FAST DOWN (TengenGame.fast_soft): the threshold at its
+         * floor from the first frame, so a row every frame. */
+        if ((game->fast_soft >> slot) & 1) p->drop_rate_possible = 1;
         p->drop_repeat++;
         if (p->drop_repeat >= p->drop_rate_possible) {
             gravity_tick = true;

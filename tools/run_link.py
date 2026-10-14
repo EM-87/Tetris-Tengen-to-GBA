@@ -1507,7 +1507,7 @@ def pause_check(rom):
     # EXIT, YES: both out, on the same transfer.
     tap("START", who=0)
     both(10)
-    tap("DOWN", who=0)                                 # MUSIC -> EXIT
+    tap("UP", who=0)                                   # MUSIC -> EXIT, round
     tap("A", who=0)                                    # EXIT? ...
     tap("DOWN", who=1)                                 # NO -> YES, from the slave
     tap("A", who=0)
@@ -1533,9 +1533,121 @@ def pause_check(rom):
         return 1
     print("OK: el menu de pausa va por cable y hace lo mismo en las dos consolas.")
     if (menu_list_check(rom) or levelup_music_check(rom) or
-            coop_levelup_music_check(rom)):
+            coop_levelup_music_check(rom) or options_check(rom)):
         return 1
     return late_check(rom)
+
+
+def options_check(rom):
+    """LAS OPCIONES POR CABLE: LAS REGLAS SON DEL MAESTRO, LO DEMAS DE CADA UNO.
+
+    Las tres reglas de OPTIONS -- HARD DROP, FAST DOWN, FAST SHIFT -- son de
+    la partida: cruzan en el lobby desde las del maestro (bits 8-10 de
+    HANDICAP) y las dos consolas juegan con ellas, para los dos jugadores; las
+    del esclavo no cuentan. Desde el menu compartido, cualquiera de los dos
+    cambia una regla en las dos consolas, solo para esa partida (la bateria
+    del maestro no cambia). GHOST y SWAP A-B son de cada jugador: la sombra en
+    el tablero de quien la tiene, y A y B girados en la palabra que manda su
+    consola (g_pad_swap) mientras se juega, nunca en pausa. Y la partida sigue
+    siendo la misma en las dos.
+    """
+    from romcheck.harness import check_layout
+    sym, why = symbol(rom, "g_session")
+    syms = {n: symbol(rom, n)[0] for n in ("g_options", "g_pad_swap")}
+    if sym is None or None in syms.values():
+        print(f"SALTADO: {why or 'faltan simbolos de las opciones'}")
+        return 0
+    import run_rom
+    off = run_rom.game_offsets(rom)
+    ghost0 = check_layout(rom)["arrow_head"] + 1
+    failures = []
+
+    def check_byte(v):
+        return 0xC3 ^ ((v * 7) & 0xFF)
+
+    cores, cable, both, tap = _pair(rom)
+    # The master: HARD DROP and GHOST. The slave: FAST DOWN (a rule, which
+    # must lose) and SWAP A-B. Straight into each battery before boot.
+    for core, v in zip(cores, (0x09, 0x12)):
+        core.memory.u8[0x0E000404] = v
+        core.memory.u8[0x0E000405] = check_byte(v)
+    both(8)
+    tap("START")
+    both(4, [[KEYS["L"], KEYS["R"]]] * 2)
+    both(10, [[], []])
+    tap("DOWN"); tap("START")                          # 2 PLAYER -> the cable
+    both(50)
+    tap("START", who=0)                                # the master starts it
+    both(80)
+
+    def game(name):
+        return [c.memory.u8[sym[0] + off[name]] for c in cores]
+
+    def ghosts(core):
+        return sum(1 for r in range(20) for c in range(32)
+                   if ghost0 <= (core.memory.u16[0x0600E000 + (r * 32 + c) * 2]
+                                 & 0x3FF) < ghost0 + 16)
+
+    def mine(name):
+        return [c.memory.u8[syms[name][0]] for c in cores]
+
+    if (game("hard_drop"), game("fast_soft"), game("fast_shift")) != \
+            ([1, 1], [0, 0], [0, 0]):
+        failures.append(f"las reglas no son las del maestro en las dos: "
+                        f"hard_drop {game('hard_drop')}, fast_soft "
+                        f"{game('fast_soft')}, fast_shift {game('fast_shift')}")
+    else:
+        print("  las reglas de la partida son las del maestro (HARD DROP), en "
+              "las dos; el FAST DOWN del esclavo no cuenta")
+    g = [ghosts(c) for c in cores]
+    if g[0] != 4 or g[1] != 0:
+        failures.append(f"la sombra no es de quien la tiene: celdas {g}")
+    else:
+        print("  la sombra en el tablero del maestro, que la tiene, y no en el "
+              "del esclavo")
+    if mine("g_pad_swap") != [0, 1]:
+        failures.append(f"SWAP A-B no gira la palabra del esclavo: g_pad_swap "
+                        f"{mine('g_pad_swap')}")
+    else:
+        print("  el esclavo manda A y B girados; el maestro no")
+
+    # The shared menu: the SLAVE opens OPTIONS and throws FAST DOWN (a rule:
+    # both consoles, this match only) and its own GHOST (its own console).
+    tap("START", who=1)
+    both(10)
+    paused_swap = mine("g_pad_swap")
+    tap("DOWN", who=1); tap("A", who=1)                # OPTIONS
+    tap("DOWN", who=1); tap("A", who=1)                # FAST DOWN
+    tap("DOWN", who=1); tap("DOWN", who=1); tap("A", who=1)   # GHOST
+    tap("START", who=0)
+    both(30)
+    if paused_swap != [0, 0]:
+        failures.append(f"en pausa la palabra sigue girada: {paused_swap}")
+    if game("fast_soft") != [3, 3]:
+        failures.append(f"FAST DOWN desde el menu compartido no cambia en las "
+                        f"dos: fast_soft {game('fast_soft')}")
+    elif mine("g_options") != [0x09, 0x1A]:
+        failures.append(f"las opciones de cada uno no son las suyas: "
+                        f"g_options {[hex(v) for v in mine('g_options')]}")
+    elif cores[0].memory.u8[0x0E000404] != 0x09:
+        failures.append("una regla cambiada por cable se guarda en la bateria "
+                        "del maestro")
+    elif [ghosts(c) for c in cores] != [4, 4]:
+        failures.append(f"el GHOST del esclavo no sale en su tablero: "
+                        f"{[ghosts(c) for c in cores]}")
+    elif not _same_match(rom, cores):
+        failures.append("tras las opciones las dos consolas ya no juegan la "
+                        "misma partida")
+    else:
+        print("  desde el menu compartido el esclavo pone FAST DOWN en las dos "
+              "(sin guardarlo) y su GHOST en la suya; la partida sigue igual")
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: por cable las reglas son del maestro y de los dos; la sombra y "
+          "el giro, de cada uno.")
+    return 0
 
 
 def menu_list_check(rom):

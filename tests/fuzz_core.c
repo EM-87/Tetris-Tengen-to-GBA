@@ -97,6 +97,9 @@ int main(int argc, char **argv) {
         /* ...and UP's drop on half, which moves a piece the furthest in
          * one frame of anything in the game. */
         g.hard_drop = rnd() & 1;
+        /* ...and the faster hands, on either player or both. */
+        g.fast_shift = (uint8_t)(rnd() & 3);
+        g.fast_soft = (uint8_t)(rnd() & 3);
         tengen_apply_handicap(&g, TENGEN_PLAYER_1, (uint8_t)(rnd() % 5));
         if (two && !coop)
             tengen_apply_handicap(&g, TENGEN_PLAYER_2, (uint8_t)(rnd() % 5));

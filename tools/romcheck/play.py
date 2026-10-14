@@ -1203,9 +1203,17 @@ def vblank_check(rom_path):
     got = tap_measure(core, ["A"]) + tap_measure(core, ["START"])
     results["quitar la pausa desde la ventana de canciones"] = got
     got = tap_measure(core, ["START"])
-    for keys in (["DOWN"], ["A"], ["B"], ["A"], ["START"]):
+    for keys in (["UP"], ["A"], ["B"], ["A"], ["START"]):   # UP: round to EXIT
         got += tap_measure(core, keys)
     results["la pregunta SURE?, volver, y quitar la pausa"] = got
+    # The options' window, eight rows of eighteen with two layers in every
+    # line: opening it, walking it, throwing a switch there and back, out to
+    # the menu and in again, and leaving the pause straight from it.
+    got = tap_measure(core, ["START"]) + tap_measure(core, ["DOWN"])
+    for keys in (["A"], ["DOWN"], ["DOWN"], ["DOWN"], ["DOWN"], ["DOWN"],
+                 ["RIGHT"], ["LEFT"], ["B"], ["A"], ["START"]):
+        got += tap_measure(core, keys)
+    results["la ventana OPTIONS, un interruptor, volver y quitar la pausa"] = got
     del core, screen
 
     core, screen = load(rom_path)
@@ -1299,7 +1307,9 @@ def unpause_check(rom_path):
         ("1P acorde, otra cancion", 0, True, 0, ("A", "DOWN", "A")),
         ("1P acorde, la ventana de canciones", 0, True, 0, ("A", "DOWN")),
         ("1P acorde, la ventana y de vuelta", 0, True, 0, ("A", "B")),
-        ("1P acorde, la pregunta SURE?", 0, True, 0, ("DOWN", "A")),
+        ("1P acorde, la pregunta SURE?", 0, True, 0, ("UP", "A")),
+        ("1P acorde, la ventana OPTIONS", 0, True, 0, ("DOWN", "A")),
+        ("1P acorde, OPTIONS y de vuelta", 0, True, 0, ("DOWN", "A", "B")),
         ("VERSUS acorde, el tablero del rival", 3, True, 0, ()),
         ("VERSUS acorde, HUD STATS", 3, True, 1, ("A", "DOWN")),
         ("WITH acorde, el menu", 4, True, 0, ()),

@@ -3,10 +3,11 @@ The pause menu the chord uncovers: its lines, its box, its tune
 and its way out.
 """
 from .harness import (
-    KEYS, LEADER_HEAD_TY, MUSIC_COUNT_MAX, MUSIC_ROW,
+    KEYS, LEADER_HEAD_TY, MUSIC_COUNT_MAX, MUSIC_ROW, check_layout,
     PMENU_H, PMENU_TX, PMENU_TY, PMENU_W_T, pmenu_span,
-    PM_EXIT, PM_HEAD, PM_L, PM_MUSIC,
-    PM_R, PM_SURE, PMT_FIRST, PMT_H, PMT_HEAD, PMT_TY, REG_SOUND1CNT_X,
+    PM_EXIT, PM_HEAD, PM_L, PM_MUSIC, PM_OPTIONS,
+    PM_R, PM_SURE, PMO_FIRST, PMO_H, PMO_HEAD, PMO_NAMES, PMO_TY,
+    PMT_FIRST, PMT_H, PMT_HEAD, PMT_TY, REG_SOUND1CNT_X,
     SCREENBLOCK_ADDR, SCREEN_TW_TILES, SCREEN_W, TILE,
     game_offsets, game_state_address, load, pixels,
     press_start, run, sound_state, start_game,
@@ -235,13 +236,24 @@ def pausemenu_check(rom_path):
     if ">" not in row(PM_MUSIC) or ">" in row(PM_EXIT):
         failures.append(f"la flecha no esta en MUSIC: {row(PM_MUSIC)!r} / "
                          f"{row(PM_EXIT)!r}")
-    # ...and SELECT moves it, the way it does on the settings screen.
+    # ...and SELECT moves it down, the way it does on the settings screen:
+    # MUSIC, OPTIONS, EXIT GAME. UP goes back up, round past the top.
+    if "OPTIONS" not in row(PM_OPTIONS):
+        failures.append(f"el menu no tiene OPTIONS entre MUSIC y EXIT GAME: "
+                        f"{row(PM_OPTIONS)!r}")
     tap("SELECT")
-    if ">" not in row(PM_EXIT) or ">" in row(PM_MUSIC):
-        failures.append(f"SELECT no mueve la flecha: {row(PM_MUSIC)!r} / "
-                         f"{row(PM_EXIT)!r}")
+    on_options = ">" in row(PM_OPTIONS) and ">" not in row(PM_MUSIC)
+    tap("SELECT")
+    if not on_options or ">" not in row(PM_EXIT) or ">" in row(PM_OPTIONS):
+        failures.append(f"SELECT no baja la flecha de linea en linea: "
+                        f"{row(PM_MUSIC)!r} / {row(PM_OPTIONS)!r} / "
+                        f"{row(PM_EXIT)!r}")
     else:
-        print("  la flecha marca la linea, y SELECT la mueve")
+        tap("UP"); tap("UP"); tap("UP")
+        if ">" not in row(PM_EXIT):
+            failures.append("ARRIBA no sube la flecha, o no da la vuelta")
+        else:
+            print("  la flecha marca la linea, SELECT la baja y ARRIBA la sube")
 
     # START IS THE WAY OUT FROM EVERY LINE OF IT, the EXIT line included: it
     # is the button that put the plaque up. The cursor is sitting on EXIT
@@ -258,7 +270,7 @@ def pausemenu_check(rom_path):
         # The board's own frame art decodes as the odd stray letter inside
         # these columns, so this looks for the menu's WORDS and its cursor.
         seen = " ".join(row(r) for r in range(PMENU_TY, PMENU_TY + PMENU_H))
-        leftover = [w for w in ("PAUSE", "MUSIC", "EXIT", "LOGINSKA", ">")
+        leftover = [w for w in ("PAUSE", "MUSIC", "OPTIONS", "EXIT", "LOGINSKA", ">")
                     if w in seen]
         if leftover:
             failures.append("START reanuda pero deja texto del menu en "
@@ -368,6 +380,7 @@ def pausemenu_check(rom_path):
 
     failures += pause_menu_visible(rom_path)
     failures += pause_resume_music(rom_path)
+    failures += pause_options(rom_path)
 
     for f in failures:
         print("FALLA:", f)
@@ -433,10 +446,11 @@ def pause_menu_visible(rom_path):
                 print(f"  {what}: {n} pixeles en pantalla")
 
     # Las filas de la caja, de arriba abajo: el borde, PAUSE, MUSIC,
-    # EXIT GAME y el borde de abajo. Ninguna puede salir vacia.
+    # OPTIONS, EXIT GAME y el borde de abajo. Ninguna puede salir vacia.
     look(((PMENU_TY, "el borde de arriba de la caja"),
           (PM_HEAD, "el titulo PAUSE"),
           (PM_MUSIC, "la linea MUSIC"),
+          (PM_OPTIONS, "la linea OPTIONS"),
           (PM_EXIT, "la linea EXIT GAME"),
           (PMENU_TY + PMENU_H - 1, "el borde de abajo de la caja")))
     # ...y las de la ventana de canciones, la caja mas grande que hay.
@@ -447,6 +461,205 @@ def pause_menu_visible(rom_path):
           (PMT_FIRST, "la primera cancion"),
           (PMT_TY + PMT_H - 2, "la ultima cancion"),
           (PMT_TY + PMT_H - 1, "el borde de abajo de la ventana")))
+    # ...y las de la de opciones, que se pinta entera cada frame igual.
+    tap("B"); tap("DOWN"); tap("A"); run(core, 30)
+    rows = pixels(screen)
+    look(((PMO_TY, "el borde de arriba de la ventana OPTIONS"),
+          (PMO_HEAD, "el titulo OPTIONS"),
+          (PMO_FIRST, "HARD DROP"),
+          (PMO_TY + PMO_H - 2, "SWAP A-B"),
+          (PMO_TY + PMO_H - 1, "el borde de abajo de la ventana")))
+    del core, screen
+    return failures
+
+
+def pause_options(rom_path):
+    """LA VENTANA OPTIONS: SUS CINCO INTERRUPTORES, Y QUE SE QUEDAN.
+
+    OPTIONS, entre MUSIC y EXIT GAME, abre una ventana con un interruptor por
+    linea -- HARD DROP, FAST DOWN, FAST SHIFT, GHOST, SWAP A-B --, el nombre a
+    la izquierda y ON u OFF a la derecha. Todos en OFF la primera vez. A, o
+    IZQUIERDA y DERECHA, cambian el de la flecha; B vuelve al menu sin dejar
+    nada de la ventana. Lo que cambian se nota en la partida al momento: la
+    sombra de la pieza donde caera, A y B girando al reves (y el menu leyendo
+    A como A), ABAJO cayendo una fila por frame. Y se guardan en la bateria
+    (SAVE_OPTIONS_OFF, $0E000404 y su byte de control): tras un reset, con el
+    acorde otra vez, estan como se dejaron; sin el acorde, no hay ninguno.
+    """
+    off = game_offsets(rom_path)
+    base, why = game_state_address(rom_path)
+    if base is None:
+        print(f"SALTADO: {why}")
+        return []
+    ghost0 = check_layout(rom_path)["arrow_head"] + 1
+    failures = []
+    core, screen = load(rom_path)   # `screen` must stay alive; see load()
+
+    def tap(*names, hold=4, settle=12):
+        core.set_keys(*[KEYS[n] for n in names]); run(core, hold)
+        core.set_keys(); run(core, settle)
+
+    def row(r):
+        return tilemap_text(core, r, *pmenu_span(core))
+
+    def switches():
+        """Each line of the window as (name, ON?, arrow?), or None."""
+        got = []
+        for i, name in enumerate(PMO_NAMES):
+            t = tilemap_text(core, PMO_FIRST + i, PM_L, PM_R)
+            # The value is on the offset layer, three pixels right, and reads
+            # back hard against the longest name: "FAST SHIFTOFF".
+            line = t.replace("->", " ").replace(">", " ").strip()
+            value = line[len(name):].strip()
+            if not line.startswith(name) or value not in ("ON", "OFF"):
+                return None
+            got.append((name, value == "ON", ">" in t))
+        return got
+
+    def ghosts():
+        return sum(1 for r in range(20) for c in range(32)
+                   if ghost0 <= (core.memory.u16[SCREENBLOCK_ADDR + (r * 32 + c) * 2]
+                                 & 0x3FF) < ghost0 + 16)
+
+    def into_game(chord=True):
+        run(core, 8)
+        press_start(core); run(core, 10)
+        if chord:
+            tap("L", "R")
+        press_start(core); run(core, 12)
+        press_start(core); run(core, 40)
+
+    def open_options():
+        tap("START")
+        while ">" not in row(PM_OPTIONS):
+            tap("DOWN")
+        tap("A")
+
+    into_game()
+    open_options()
+    sw = switches()
+    if "OPTIONS" not in tilemap_text(core, PMO_HEAD, PM_L, PM_R) or sw is None:
+        failures.append(f"A en OPTIONS no abre la ventana con sus cinco "
+                        f"interruptores: "
+                        f"{[tilemap_text(core, PMO_FIRST + i, PM_L, PM_R) for i in range(5)]}")
+        del core, screen
+        return failures
+    if any(on for _, on, _ in sw) or [a for _, _, a in sw] != [True] + [False] * 4:
+        failures.append(f"la ventana no abre con todo en OFF y la flecha en "
+                        f"HARD DROP: {sw}")
+    else:
+        print("  OPTIONS abre su ventana: cinco interruptores, todos en OFF")
+
+    # A on HARD DROP, then DOWN to GHOST and RIGHT, LEFT, RIGHT: ON, OFF, ON.
+    tap("A")
+    for _ in range(3):
+        tap("DOWN")
+    tap("RIGHT"); tap("LEFT")
+    mid = switches()
+    tap("RIGHT")
+    sw = switches()
+    want = [True, False, False, True, False]
+    saved = (core.memory.u8[0x0E000404], core.memory.u8[0x0E000405])
+    if sw is None or [on for _, on, _ in sw] != want or mid[3][1]:
+        failures.append(f"A, IZQUIERDA y DERECHA no cambian el interruptor de la "
+                        f"flecha: {sw}")
+    elif saved[0] != 0x09:
+        failures.append(f"las opciones no se guardan en la bateria: "
+                        f"$0E000404 = {saved[0]:#04x}")
+    else:
+        print("  A, IZQUIERDA y DERECHA cambian el de la flecha, y se guarda en "
+              "la bateria al momento")
+
+    # SWAP A-B: ON, and B still goes back -- the menu reads its own A and B.
+    tap("DOWN"); tap("A")
+    tap("B")
+    if "OPTIONS" in tilemap_text(core, PMO_HEAD, PM_L, PM_R) or \
+            ">" not in row(PM_OPTIONS):
+        failures.append("con SWAP A-B en ON, B ya no cierra la ventana: el menu "
+                        "no debe girar los botones")
+    else:
+        # ...and nothing of the window left round the menu's smaller box.
+        frame = (0x29, 0x2A, 0x2B, 0x3A, 0x3B, 0x3C)
+        stray = [r for r in (PMO_TY, PMO_TY + PMO_H - 1)
+                 if any((core.memory.u16[SCREENBLOCK_ADDR + (r * 32 + c) * 2]
+                         & 0x3FF) in frame for c in range(32))]
+        if stray:
+            failures.append(f"al volver al menu quedan bordes de la ventana en "
+                            f"las filas {stray}")
+        else:
+            print("  B vuelve al menu (con SWAP A-B en ON) y la ventana se va "
+                  "entera")
+
+    # In the game: the ghost on the board, and A turning the other way.
+    tap("START"); run(core, 10)
+    if ghosts() != 4:
+        failures.append(f"con GHOST en ON no se ve la sombra de la pieza "
+                        f"({ghosts()} celdas)")
+    else:
+        print("  GHOST: la sombra de la pieza, cuatro celdas, donde caera")
+
+    def turn():
+        """One A on a T held high: the orientation it ends up in."""
+        core.memory.u8[base + off["current"]] = 2          # TT_T
+        core.memory.u8[base + off["orientation"]] = 0
+        core.memory.u8[base + off["y"]] = 8
+        tap("A", settle=2)
+        return core.memory.u8[base + off["orientation"]]
+    swapped = turn()
+    open_options()
+    for _ in range(4):
+        tap("DOWN")
+    tap("A"); tap("START"); run(core, 10)                   # SWAP A-B off
+    plain = turn()
+    if swapped == plain or (swapped + plain) % 4 != 0:
+        failures.append(f"SWAP A-B no gira al reves: A deja la T en {swapped} "
+                        f"con el y en {plain} sin el")
+    else:
+        print(f"  SWAP A-B: A gira la T a {swapped}, sin el a {plain}")
+
+    # FAST DOWN: DOWN held falls a row a frame.
+    def fall(frames=8):
+        core.memory.u8[base + off["current"]] = 3          # TT_O, high up
+        core.memory.u8[base + off["y"]] = 7
+        y0 = core.memory.u8[base + off["y"]]
+        core.set_keys(KEYS["DOWN"]); run(core, frames); core.set_keys(); run(core, 1)
+        return core.memory.u8[base + off["y"]] - y0
+    slow = fall()
+    open_options()
+    tap("DOWN"); tap("A"); tap("START"); run(core, 30)      # FAST DOWN on
+    fast = fall()
+    if fast < 7 or slow > 3:
+        failures.append(f"FAST DOWN no acelera ABAJO: {slow} filas en 8 frames "
+                        f"sin el, {fast} con el")
+    else:
+        print(f"  FAST DOWN: ABAJO {slow} filas en 8 frames sin el, {fast} "
+              f"con el")
+
+    # THEY STAY. A reset, the chord again, and the window as it was left:
+    # HARD DROP, FAST DOWN and GHOST on.
+    core.reset()
+    into_game()
+    if ghosts() != 4:
+        failures.append("tras un reset la sombra no vuelve con el acorde")
+    open_options()
+    sw = switches()
+    if sw is None or [on for _, on, _ in sw] != [True, True, False, True, False]:
+        failures.append(f"tras un reset las opciones no son las que se dejaron: "
+                        f"{sw}")
+    else:
+        print("  tras un reset y con el acorde, las opciones son las que se "
+              "dejaron")
+    # ...and without the chord there are none: no ghost on the board. Off
+    # the plaque first, or the paused game on the battery comes back with
+    # its chord (suspend.c).
+    tap("START"); run(core, 5)
+    core.reset()
+    into_game(chord=False)
+    if ghosts():
+        failures.append("sin el acorde se ve la sombra: las opciones son del "
+                        "acorde")
+    else:
+        print("  sin el acorde, ninguna: el juego del cartucho")
     del core, screen
     return failures
 

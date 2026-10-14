@@ -74,6 +74,7 @@ int main(void) {
      * nothing there to keep. See leader_load. */
     leader_reset();
     leader_load();
+    options_load();
     set_field_palette_for_level(0);
     clear_screen();
 
@@ -696,6 +697,10 @@ int main(void) {
                      * and both leave the lobby together. */
                     link_lobby_release(&lobby, seed, start_level, g_music, handicap,
                                         game_mode == GAME_COOP, g_xe);
+                    /* ...and the rules in this console's OPTIONS, which are
+                     * the match's (OPT_RULES): the chord's, like the menu. */
+                    tengen_lobby_rules(&lobby, g_pause_unlocked
+                                                   ? (uint8_t)(g_options & OPT_RULES) : 0);
                     screen = SCREEN_LINK_WAIT;
                     vsync();
                     audio_frame();
@@ -728,9 +733,10 @@ int main(void) {
                 /* The cartridge's own bugs mended, behind the chord (see
                  * TengenGame.mended; over a cable the master's chord). */
                 g_session.game.mended = g_pause_unlocked;
-                /* ...and UP's drop, behind the same chord (see
-                 * TengenGame.hard_drop). */
-                g_session.game.hard_drop = g_pause_unlocked;
+                /* ...and the pause menu's OPTIONS, which the same chord
+                 * puts there: UP's drop and the faster hands, as the player
+                 * left them (options_apply_solo). */
+                options_apply_solo(&g_session.game);
                 tengen_ai_reset(&g_ai);
                 /* AT THE CARTRIDGE'S PACE. The port once had it hold Down
                  * and look at each piece first ("va un tanto lento"); that
@@ -803,6 +809,10 @@ int main(void) {
                     /* ...and the game itself, over the one just dealt. */
                     resuming = false;
                     suspend_apply();
+                    /* ...with the OPTIONS as they are now: they are kept
+                     * on their own (SAVE_OPTIONS_OFF), and may have been
+                     * changed under the plaque after it was written. */
+                    options_apply_solo(&g_session.game);
                     g_mix_step = resume.mix_step;
                     g_hud = resume.hud;
                     g_idle_palette = resume.idle_palette;
@@ -1077,6 +1087,7 @@ int main(void) {
                 tengen_link_start(&g_session, lobby.seed, lobby.start_level,
                                    link_is_master() ? TENGEN_PLAYER_1 : TENGEN_PLAYER_2,
                                    lobby.coop, lobby.xe);
+                tengen_link_rules(&g_session, lobby.rules);
                 swallow_held_buttons(&g_session.game);
                 /* Both consoles bury both boards from the one seed the lobby
                  * delivered, so the two fields match without another word on
