@@ -100,6 +100,8 @@ int main(int argc, char **argv) {
         /* ...and the faster hands, on either player or both. */
         g.fast_shift = (uint8_t)(rnd() & 3);
         g.fast_soft = (uint8_t)(rnd() & 3);
+        /* ...and HOLD, which deals and swaps pieces mid-fall. */
+        g.hold = (uint8_t)(rnd() & 3);
         tengen_apply_handicap(&g, TENGEN_PLAYER_1, (uint8_t)(rnd() % 5));
         if (two && !coop)
             tengen_apply_handicap(&g, TENGEN_PLAYER_2, (uint8_t)(rnd() % 5));
@@ -134,6 +136,7 @@ int main(int argc, char **argv) {
                                                 clock);
                     if (!(rnd() % 50)) held[p] |= TENGEN_BTN_DOWN;
                     if (!(rnd() % 40)) held[p] |= TENGEN_BTN_UP;
+                    if (!(rnd() % 60)) held[p] |= TENGEN_BTN_SELECT;
                 } else if (!(rnd() % 6)) {
                     held[p] = (uint8_t)rnd();
                     /* START now and then, so games are mostly played and
@@ -164,6 +167,21 @@ int main(int argc, char **argv) {
                           "p%d moved into the field: piece %d (%d,%d o%d)",
                           p, is->piece.current, is->piece.x, is->piece.y,
                           is->piece.orientation);
+                /* A HOLD brings a piece in at the top: it must be somewhere
+                 * it fits, and not inside the partner's. (A restart empties
+                 * the box, which is not a hold.) */
+                if (!r.restarted &&
+                    (is->held != was->held || (is->hold_spent && !was->hold_spent &&
+                                               is->piece.current != was->piece.current))) {
+                    CHECK(is->held >= TT_I && is->held <= TT_Z, "p%d held %d", p, is->held);
+                    if (piece_in_play(&g, p)) {
+                        CHECK(tengen_position_valid(&g, (TengenPlayerSlot)p),
+                              "p%d held into the field", p);
+                        if (coop && piece_in_play(&g, p ^ 1))
+                            CHECK(!tengen_coop_pieces_overlap(&g, (TengenPlayerSlot)p),
+                                  "p%d held into its partner's piece", p);
+                    }
+                }
                 if (moved && coop && piece_in_play(&g, p ^ 1) &&
                     !tengen_coop_pieces_overlap(&before, (TengenPlayerSlot)p))
                     CHECK(!tengen_coop_pieces_overlap(&g, (TengenPlayerSlot)p),

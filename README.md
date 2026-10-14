@@ -126,8 +126,8 @@ Lo que el GBA tiene de más:
 
 | Dónde | Botón | Qué hace |
 |---|---|---|
-| Partida | SELECT | cambia de HUD (dos por modo) |
-| Partida, HUD Stats | L+R | cambia el color del cosaco |
+| Partida | SELECT | cambia de HUD (dos por modo); con HOLD, guarda la pieza |
+| Partida, HUD Stats | L+R | cambia el color del cosaco; con HOLD, cambia de HUD (en cualquier HUD) |
 | GAME SELECT o LEVEL SETTINGS | L+R | destapa las canciones ocultas (Korobeiniki, Katiuska, MUSIC MIX), los niveles 18-19 y el menú de pausa |
 | Título | L+R | recorre los títulos de los prototipos (su skin llega al juego) |
 | Carrera, tablero muerto | A+B | se levanta y sigue, como en el cartucho |
@@ -136,17 +136,19 @@ Lo que el GBA tiene de más:
 | Al encender, mantenidos | L+R+B | borra los récords (pregunta dos veces, con NO elegido) |
 
 **El menú de pausa** (con el acorde) es PAUSE, MUSIC, OPTIONS y EXIT GAME.
-OPTIONS tiene cinco interruptores, todos en OFF hasta que los toqués, que se
+OPTIONS tiene seis interruptores, todos en OFF hasta que los toqués, que se
 guardan en el cartucho y vuelven cada vez que hacés el acorde: **HARD DROP**
 (Arriba tira la pieza de golpe), **FAST DOWN** (Abajo baja una fila por
 frame), **FAST SHIFT** (el lateral repite antes y más rápido), **GHOST** (la
 silueta de dónde va a caer la pieza, y en cooperativo también la del
-compañero) y **SWAP A-B** (A y B giran al revés). Cada uno tiene su casilla:
-vacía apagado, con punto encendido. A, Izquierda o Derecha cambian el de la
-flecha; B vuelve. Por cable, las tres
-primeras son reglas de la partida: las del maestro, para los dos, y
-cualquiera las cambia desde el menú compartido solo para esa partida; GHOST
-y SWAP A-B son de cada jugador.
+compañero), **SWAP A-B** (A y B giran al revés) y **HOLD** (SELECT guarda la
+pieza que cae, y la cambia por la guardada; una vez por pieza). Con HOLD, el
+HUD se cambia con L+R y en HUD STATS la pieza guardada sale donde estaba el
+cosaco. Cada uno tiene su casilla: vacía apagado, con punto encendido. A,
+Izquierda o Derecha cambian el de la flecha; B vuelve. Por cable, HARD DROP,
+FAST DOWN, FAST SHIFT y HOLD son reglas de la partida: las del maestro, para
+los dos, y cualquiera las cambia desde el menú compartido solo para esa
+partida; GHOST y SWAP A-B son de cada jugador.
 
 **Apagar en pausa no pierde la partida**, como en Tetris DX: una partida en
 solitario en pausa se guarda en la memoria del cartucho, y al encender vuelve

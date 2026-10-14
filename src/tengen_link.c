@@ -27,6 +27,7 @@ void tengen_link_rules(TengenLink *link, uint8_t rules) {
     link->game.hard_drop = (rules & TENGEN_RULE_HARD_DROP) != 0;
     link->game.fast_soft = (rules & TENGEN_RULE_FAST_DOWN) ? both : 0;
     link->game.fast_shift = (rules & TENGEN_RULE_FAST_SHIFT) ? both : 0;
+    link->game.hold = (rules & TENGEN_RULE_HOLD) ? both : 0;
 }
 
 bool tengen_link_step(TengenLink *link, uint8_t local_buttons,

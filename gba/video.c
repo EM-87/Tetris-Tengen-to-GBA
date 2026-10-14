@@ -79,7 +79,7 @@ uint16_t ascii_tile(char c) {
  * translation unit could not. (`retain` too, once; this toolchain ignores it
  * with a warning, and the image is byte for byte the same without it.) */
 __attribute__((used))
-const uint16_t kGameProbe[22] = {
+const uint16_t kGameProbe[24] = {
     (uint16_t)offsetof(TengenGame, field),
     (uint16_t)offsetof(TengenGame, player),
     (uint16_t)sizeof(TengenPlayerState),
@@ -109,6 +109,9 @@ const uint16_t kGameProbe[22] = {
     (uint16_t)offsetof(TengenGame, hard_drop),
     (uint16_t)offsetof(TengenGame, fast_shift),
     (uint16_t)offsetof(TengenGame, fast_soft),
+    /* ...and HOLD's: the switch and the piece put aside. */
+    (uint16_t)offsetof(TengenGame, hold),
+    (uint16_t)offsetof(TengenPlayerState, held),
 };
 
 /* ...AND THE PORT'S OWN NUMBERS THE CHECKS READ THE SCREEN AND THE SAVE BY:
@@ -119,7 +122,7 @@ const uint16_t kGameProbe[22] = {
  * missed made a check read the wrong thing and say nothing
  * (romcheck/harness.py, check_layout). The order is the reader's. */
 __attribute__((used))
-const uint16_t kCheckProbe[26] = {
+const uint16_t kCheckProbe[27] = {
     TILES_GAME_QUESTION, TILES_GAME_PERCENT,
     PMENU_RAISED_BASE, T_ARROW_TAIL, T_ARROW_HEAD,
     SCREEN_LEADER_HEAD_TY, SCREEN_LEADER_FIRST_TY, LEADER_ENTRIES,
@@ -136,8 +139,8 @@ const uint16_t kCheckProbe[26] = {
     (uint16_t)offsetof(TengenAi, smart),
     (uint16_t)offsetof(TengenAi, plan_have),
     (uint16_t)offsetof(TengenAi, plan_stage),
-    /* ...and the tiles made for the ghost and the options' boxes. */
-    T_GHOST, T_CHECK_OFF,
+    /* ...and the tiles made for the ghost, the options' boxes and HOLD. */
+    T_GHOST, T_CHECK_OFF, T_HOLD_LABEL,
 };
 __attribute__((used))
 const char kCheckRaised[] = PMENU_RAISED_CHARS;
@@ -522,6 +525,25 @@ void upload_tiles(void) {
             l[row * 2 + 1] = (uint16_t)(px >> 16);
             r[row * 2] = (uint16_t)(px >> 32);
             r[row * 2 + 1] = (uint16_t)(px >> 48);
+        }
+    }
+    /* ...and HOLD's label in NEXT's lettering; see T_HOLD_LABEL. Row 0 blank
+     * and column 0 blank, as NEXT's letters keep them; ink in colour 2. */
+    static const uint8_t kHoldLetters[HOLD_LABEL_W][7] = {
+        { 0x63, 0x63, 0x63, 0x7F, 0x63, 0x63, 0x63 },   /* H */
+        { 0x3E, 0x63, 0x63, 0x63, 0x63, 0x63, 0x3E },   /* O */
+        { 0x60, 0x60, 0x60, 0x60, 0x60, 0x60, 0x7F },   /* L */
+        { 0x7E, 0x63, 0x63, 0x63, 0x63, 0x63, 0x7E },   /* D */
+    };
+    for (int t = 0; t < HOLD_LABEL_W; t++) {
+        vu16 *out = dst + (T_HOLD_LABEL + t) * 16;
+        for (int row = 0; row < 8; row++) {
+            uint32_t px = 0;
+            uint8_t bits = row ? kHoldLetters[t][row - 1] : 0;
+            for (int x = 1; x < 8; x++)            /* bit 6 is column 1 */
+                if (bits & (0x40 >> (x - 1))) px |= 2u << (4 * x);
+            out[row * 2] = (uint16_t)px;
+            out[row * 2 + 1] = (uint16_t)(px >> 16);
         }
     }
 }

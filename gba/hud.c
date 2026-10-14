@@ -577,8 +577,6 @@ uint8_t g_hud = HUD_BANNER;
 static const uint8_t kHudSolo[]      = { HUD_BANNER, HUD_STATS };
 static const uint8_t kHudVersus[]    = { HUD_VERSUS, HUD_STATS };
 static const uint8_t kHudWith[]      = { HUD_COOP,   HUD_STATS };
-static const uint8_t kHudCable2p[]   = { HUD_VERSUS };
-static const uint8_t kHudCableCoop[] = { HUD_COOP };
 
 static int hud_mode(void) {
     if (g_session.game.coop) return g_ai_active ? HUD_MODE_WITH : HUD_MODE_COOP;
@@ -592,15 +590,35 @@ static int hud_mode(void) {
  * own screen carries one. So the second HUD of the two computer modes is one
  * more thing the chord uncovers (see g_pause_unlocked), and without it they
  * offer their own screen alone. */
+/* ...AND OVER THE CABLE, STATS WHEN HOLD IS ON (OPT_HOLD): its cell is the
+ * only place the piece put aside is shown, and a rule both boards play by
+ * that one of them could not see would be no rule at all. Off, the cable's
+ * modes keep their one screen. */
 const uint8_t *hud_set(int *n) {
     int extra = g_pause_unlocked ? 2 : 1;
     switch (hud_mode()) {
         case HUD_MODE_VERSUS: *n = extra; return kHudVersus;
         case HUD_MODE_WITH:   *n = extra; return kHudWith;
-        case HUD_MODE_2P:     *n = 1; return kHudCable2p;
-        case HUD_MODE_COOP:   *n = 1; return kHudCableCoop;
+        case HUD_MODE_2P:     *n = hold_on() ? 2 : 1; return kHudVersus;
+        case HUD_MODE_COOP:   *n = hold_on() ? 2 : 1; return kHudWith;
         default:              *n = 2; return kHudSolo;
     }
+}
+
+/* HOLD WENT ON OR OFF UNDER THE PAUSE. HUD STATS's cell changes hands
+ * between the cossack and HOLD by itself, as the panel draws it every frame
+ * (see g_hold_cell_drawn). What may not is the set of HUDs: over the cable
+ * STATS comes and goes with HOLD, and if the HUD on screen is no longer in
+ * it the match goes back to the set's first — drawn whole when the pause
+ * comes down (g_hud_dirty), not under the box. Only then: a whole repaint
+ * on the frame that leaves the pause ended at line 225 of 227. */
+bool g_hud_dirty;
+void hud_hold_changed(void) {
+    int n;
+    const uint8_t *set = hud_set(&n);
+    for (int i = 0; i < n; i++) if (set[i] == g_hud) return;
+    g_hud = set[0];
+    g_hud_dirty = true;
 }
 
 /* WHAT EACH MODE WAS LAST LEFT ON, which starts as what each mode opens on.
@@ -1117,12 +1135,13 @@ void bonus_end(void) {
  * scrolled three pixels for its own reasons (see SCREENBLOCK_STATS) and puts
  * them half a pixel the other side of centre. No new layer, no new art, and
  * the even widths stay on the main one where they are already right. */
-static void draw_next_piece(int tx, int ty, int slot, int bank) {
+/* A piece standing on its own in a cell of the panel, as dealt: NEXT's, and
+ * HOLD's (see draw_hold_cell). */
+static void draw_preview_piece(int tx, int ty, TengenTetromino next, int bank) {
     clear_region(tx, ty, NEXT_CELL_W, 3);
     for (int y = 0; y < 3; y++)
         for (int x = 0; x < NEXT_CELL_W; x++) set_stats_tile(tx + x, ty + y, T_BLANK);
 
-    TengenTetromino next = g_session.game.player[slot].piece.next;
     if (next <= TT_NONE || next >= TENGEN_TETROMINO_COUNT) return;
     set_bank_from_piece(bank, next);
 
@@ -1152,6 +1171,32 @@ static void draw_next_piece(int tx, int ty, int slot, int bank) {
             else              set_map_tile(tx + c + shift, ty + r, entry);
         }
     }
+}
+
+static void draw_next_piece(int tx, int ty, int slot, int bank) {
+    draw_preview_piece(tx, ty, g_session.game.player[slot].piece.next, bank);
+}
+
+/* HOLD'S CELL (OPT_HOLD): where HUD STATS's cossack stands, the piece put
+ * aside under HOLD in NEXT's own lettering, laid out as NEXT is in the box
+ * opposite — the right box's interior is the left's, mirrored. The piece's
+ * colours borrow the coop partner's preview bank (PAL_NEXT2_BANK), which is
+ * only ever on screen in HUD COOP; both set it on every frame they draw. */
+#define PAL_HOLD_BANK PAL_NEXT2_BANK
+/* ...and whether it is on the screen, for the coop panel's cossack, who is a
+ * sprite and leaves the cell's tiles alone: the frame HOLD goes off, he
+ * clears them first. (HUD STATS's own cell is cleared every frame.) */
+static bool g_hold_cell_drawn;
+static void draw_hold_cell(int tx, int ty, int w, int shown) {
+    g_hold_cell_drawn = true;
+    bool was = g_panel_layer;
+    g_panel_layer = false;
+    int label_tx = tx + (w - HOLD_LABEL_W) / 2;
+    for (int i = 0; i < HOLD_LABEL_W; i++)
+        set_map_tile(label_tx + i, ty, WITH_BANK(T_HOLD_LABEL + i, BANK_LABEL));
+    draw_preview_piece(tx + (w - NEXT_CELL_W) / 2, ty + 2,
+                       g_session.game.player[shown].held, PAL_HOLD_BANK);
+    g_panel_layer = was;
 }
 
 /* WHAT THE RIGHT-HAND BOX SHOWS.
@@ -1502,9 +1547,20 @@ static void draw_coop_stats_panel(const TengenPlayerState *me) {
      * terms he has in HUD Stats: he stops when the board dies and when the
      * plaque goes up, and he stands down for the level-up show because that
      * show has the real eight of them out on these very ledges. */
-    if (g_dancer_active) {
+    /* ...UNLESS HOLD IS ON (OPT_HOLD): the compartment is HOLD's, laid out
+     * as the NEXT opposite it is. */
+    if (hold_on()) {
+        hide_idle_cossack();
+        clear_both(COOP_R_TX, BRAID_T, COOP_PANEL_W, COOP_LEDGE_FIRST - BRAID_T);
+        clear_panel_region(COOP_R_TX, BRAID_T, COOP_PANEL_W, COOP_LEDGE_FIRST - BRAID_T);
+        draw_hold_cell(COOP_R_TX, COOP_NEXT_TY, COOP_PANEL_W, g_view);
+    } else if (g_dancer_active) {
         hide_idle_cossack();
     } else {
+        if (g_hold_cell_drawn) {
+            clear_both(COOP_R_TX, BRAID_T, COOP_PANEL_W, COOP_LEDGE_FIRST - BRAID_T);
+            g_hold_cell_drawn = false;
+        }
         bool alive = me->game_active && !g_session.game.paused;
         draw_idle_cossack(g_idle_frame, alive, g_idle_palette, COOP_R_TX, BRAID_T,
                            COOP_PANEL_W, COOP_LEDGE_FIRST - BRAID_T);
@@ -1796,16 +1852,24 @@ void draw_panel(void) {
          * music is suspended is the one part of the screen that did not
          * notice the game had stopped. */
         bool alive = p->game_active && !g_session.game.paused;
-        /* The interlude, danced solo: see g_idle_show. It runs off the show's
-         * own clock so it lasts exactly as long as the show does. */
-        g_idle_show = g_dancer_active;
-        draw_idle_cossack(g_idle_show ? (int)g_dancer_elapsed : g_idle_frame,
-                           alive || g_idle_show, cossack_palette_for(shown),
-                           BOX_R_IN, ROW_DANCER, BOX_IN, ROW_DANCER_H);
-        g_idle_show = false;
-        if (alive) g_idle_frame++;
+        if (hold_on()) {
+            /* ...UNLESS HOLD IS ON (OPT_HOLD): then the cell is HOLD's, and
+             * he is not in it, nor dancing the show. */
+            hide_idle_cossack();
+            clear_both(BOX_R_IN, ROW_DANCER, BOX_IN, ROW_DANCER_H);
+            draw_hold_cell(BOX_R_IN, ROW_NEXT, BOX_IN, shown);
+        } else {
+            /* The interlude, danced solo: see g_idle_show. It runs off the
+             * show's own clock so it lasts exactly as long as the show does. */
+            g_idle_show = g_dancer_active;
+            draw_idle_cossack(g_idle_show ? (int)g_dancer_elapsed : g_idle_frame,
+                               alive || g_idle_show, cossack_palette_for(shown),
+                               BOX_R_IN, ROW_DANCER, BOX_IN, ROW_DANCER_H);
+            g_idle_show = false;
+            if (alive) g_idle_frame++;
 
-        clear_both(BOX_R_IN, ROW_DANCER, BOX_IN, ROW_DANCER_H);
+            clear_both(BOX_R_IN, ROW_DANCER, BOX_IN, ROW_DANCER_H);
+        }
         /* THE HISTOGRAM IN EVERY MODE, a race included. The cartridge keeps
          * none in 2P, which is why this box used to be empty there — but the
          * cartridge has no VERSUS COMPUTER either, and the counts it would

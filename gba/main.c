@@ -700,7 +700,7 @@ int main(void) {
                     /* ...and the rules in this console's OPTIONS, which are
                      * the match's (OPT_RULES): the chord's, like the menu. */
                     tengen_lobby_rules(&lobby, g_pause_unlocked
-                                                   ? (uint8_t)(g_options & OPT_RULES) : 0);
+                                                   ? opt_link_rules(g_options & OPT_RULES) : 0);
                     screen = SCREEN_LINK_WAIT;
                     vsync();
                     audio_frame();
@@ -1361,7 +1361,12 @@ int main(void) {
                               !g_session.game.paused && !g_link_waiting &&
                               g_session.game.player[g_view].game_active &&
                               hud_count > 1;
-        if (hud_swappable && (pressed & TENGEN_BTN_SELECT)) {
+        /* ...AND WITH HOLD ON, SELECT IS HOLD'S (OPT_HOLD, the core reads
+         * it) and L+R does this instead: the cossack whose colours they
+         * changed is not in HUD STATS any more. */
+        bool hud_key = hold_on() ? shoulder_chord()
+                                 : (pressed & TENGEN_BTN_SELECT) != 0;
+        if (hud_swappable && hud_key) {
             {
                 int n;
                 const uint8_t *set = hud_set(&n);
@@ -1389,7 +1394,7 @@ int main(void) {
          * STATS and nowhere else. On any other HUD the chord changed a
          * palette nothing on screen was using and chirped to say so, which is
          * a control that answers and does nothing. */
-        if (hud_swappable && hud_stats() && shoulder_chord()) {
+        if (hud_swappable && hud_stats() && !hold_on() && shoulder_chord()) {
             g_idle_palette = (uint8_t)((g_idle_palette + 1) % IDLE_PALETTE_COUNT);
             nes_audio_play(NES_SOUND_CHIRP);
         }

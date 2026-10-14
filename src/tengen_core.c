@@ -814,6 +814,7 @@ static void spawn_piece(TengenGame *game, TengenPlayerSlot slot) {
      * only coop indexes the table by player so the two share a wide field. */
     p->piece.x = game->coop ? TENGEN_SPAWN_X[slot] : TENGEN_SPAWN_X[2];
     p->drop_repeat = 0;
+    p->hold_spent = false;      /* a new piece may be put aside (hold) */
 
     /* Piece statistics (main.asm.txt:3730-3797, the tail of getNextTetromino).
      * Counted as the piece is DEALT, not as it locks, and only in 1P: the ROM
@@ -829,6 +830,33 @@ static void spawn_piece(TengenGame *game, TengenPlayerSlot slot) {
             p->piece_stats[p->piece.current]++;
         }
     }
+}
+
+/* HOLD, the port's (TengenGame.hold). True if it happened; refused, the
+ * player's state is as it was. */
+static bool hold_piece(TengenGame *game, TengenPlayerSlot slot) {
+    TengenPlayerState *p = &game->player[slot];
+    TengenPlayerState was = *p;
+    TengenTetromino aside = p->piece.current;
+    if (p->held == TT_NONE) {
+        spawn_piece(game, slot);           /* the next comes in, dealt */
+    } else {
+        p->piece.current = p->held;
+        p->piece.orientation = 0;
+        p->piece.y = TENGEN_SPAWN_Y;
+        p->piece.x = game->coop ? TENGEN_SPAWN_X[slot] : TENGEN_SPAWN_X[2];
+        p->fall_timer = TENGEN_DROP_RATE_AT_SPAWN;
+        p->drop_rate_possible = TENGEN_DROP_RATE_AT_SPAWN;
+        p->drop_repeat = 0;
+    }
+    if (!tengen_position_valid(game, slot) ||
+        (game->coop && tengen_coop_pieces_overlap(game, slot))) {
+        *p = was;
+        return false;
+    }
+    p->held = aside;
+    p->hold_spent = true;
+    return true;
 }
 
 /* Gravity, VERIFIED against L9AEE (main.asm.txt:3970-4025).
@@ -1300,6 +1328,9 @@ bool tengen_restart_player(TengenGame *game, TengenPlayerSlot slot) {
     p->piece.current = TT_NONE;
     p->piece.next = TT_NONE;
     p->piece.orientation = 0;
+    /* ...and nothing put aside (TengenGame.hold): the port's, a new board. */
+    p->held = TT_NONE;
+    p->hold_spent = false;
     /* longBarCodeUsedP1,x and undoCodeUsedP1,x (:3452-3453): a restarted
      * board gets both codes back. `player1BonusCounter,x` ($78) is cleared
      * on the same run and has no field here — the port keeps the level's
@@ -1532,6 +1563,14 @@ TengenStepResult tengen_step(TengenGame *game, TengenPlayerSlot slot, uint8_t he
     if ((new_presses & (TENGEN_BTN_LEFT | TENGEN_BTN_RIGHT)) &&
         (p->held_last_frame & TENGEN_BTN_DOWN)) {
         new_presses &= (uint8_t)~(TENGEN_BTN_LEFT | TENGEN_BTN_RIGHT);
+    }
+
+    /* HOLD (TengenGame.hold): a fresh SELECT, and the frame is the swap's,
+     * as a deal's is (see the spawn above) — no move, no turn, no fall. */
+    if (((game->hold >> slot) & 1) && (new_presses & TENGEN_BTN_SELECT) &&
+        !p->hold_spent && hold_piece(game, slot)) {
+        p->held_last_frame = held_buttons;
+        return result;
     }
 
     /* Order mirrors doSomethingWithInputDuringGameplay: left, right, then

@@ -1559,16 +1559,16 @@ def options_check(rom):
         return 0
     import run_rom
     off = run_rom.game_offsets(rom)
-    ghost0 = check_layout(rom)["arrow_head"] + 1
+    ghost0 = check_layout(rom)["ghost"]
     failures = []
 
     def check_byte(v):
         return 0xC3 ^ ((v * 7) & 0xFF)
 
     cores, cable, both, tap = _pair(rom)
-    # The master: HARD DROP and GHOST. The slave: FAST DOWN (a rule, which
-    # must lose) and SWAP A-B. Straight into each battery before boot.
-    for core, v in zip(cores, (0x09, 0x12)):
+    # The master: HARD DROP, GHOST and HOLD. The slave: FAST DOWN (a rule,
+    # which must lose) and SWAP A-B. Straight into each battery before boot.
+    for core, v in zip(cores, (0x29, 0x12)):
         core.memory.u8[0x0E000404] = v
         core.memory.u8[0x0E000405] = check_byte(v)
     both(8)
@@ -1586,19 +1586,42 @@ def options_check(rom):
     def ghosts(core):
         return sum(1 for r in range(20) for c in range(32)
                    if ghost0 <= (core.memory.u16[0x0600E000 + (r * 32 + c) * 2]
-                                 & 0x3FF) < ghost0 + 16)
+                                 & 0x3FF) < ghost0 + 8)   # T_GHOST: 4 + 4
 
     def mine(name):
         return [c.memory.u8[syms[name][0]] for c in cores]
 
-    if (game("hard_drop"), game("fast_soft"), game("fast_shift")) != \
-            ([1, 1], [0, 0], [0, 0]):
+    if (game("hard_drop"), game("fast_soft"), game("fast_shift"), game("hold")) != \
+            ([1, 1], [0, 0], [0, 0], [3, 3]):
         failures.append(f"las reglas no son las del maestro en las dos: "
                         f"hard_drop {game('hard_drop')}, fast_soft "
-                        f"{game('fast_soft')}, fast_shift {game('fast_shift')}")
+                        f"{game('fast_soft')}, fast_shift {game('fast_shift')}, "
+                        f"hold {game('hold')}")
     else:
-        print("  las reglas de la partida son las del maestro (HARD DROP), en "
-              "las dos; el FAST DOWN del esclavo no cuenta")
+        print("  las reglas de la partida son las del maestro (HARD DROP y HOLD), "
+              "en las dos; el FAST DOWN del esclavo no cuenta")
+    # HOLD over the cable: the slave's SELECT puts its piece aside on both.
+    held_at = sym[0] + off["held"] + off["stride"]
+    tap("SELECT", who=1)
+    both(10)
+    held = [c.memory.u8[held_at] for c in cores]
+    if held[0] == 0 or held[0] != held[1] or not _same_match(rom, cores):
+        failures.append(f"el HOLD del esclavo no es el mismo en las dos: {held}")
+    else:
+        print(f"  el esclavo guarda su pieza con SELECT, y las dos lo ven ({held[0]})")
+    # ...and with it the cable's one HUD becomes two: L+R goes to STATS,
+    # where HOLD's cell is (hud_set).
+    hud_sym, _ = symbol(rom, "g_hud")
+    if hud_sym is not None:
+        before = cores[1].memory.u8[hud_sym[0]]
+        both(4, [[], [KEYS["L"], KEYS["R"]]])
+        both(20, [[], []])
+        after = cores[1].memory.u8[hud_sym[0]]
+        if before == after:
+            failures.append(f"por cable con HOLD, L+R no cambia de HUD ({before})")
+        else:
+            print(f"  por cable con HOLD, L+R cambia de HUD ({before} -> {after})")
+        hud_versus = before
     g = [ghosts(c) for c in cores]
     if g[0] != 4 or g[1] != 0:
         failures.append(f"la sombra no es de quien la tiene: celdas {g}")
@@ -1619,17 +1642,27 @@ def options_check(rom):
     tap("DOWN", who=1); tap("A", who=1)                # OPTIONS
     tap("DOWN", who=1); tap("A", who=1)                # FAST DOWN
     tap("DOWN", who=1); tap("DOWN", who=1); tap("A", who=1)   # GHOST
+    # ...and HOLD off, a rule, from the slave on HUD STATS: the cable's set
+    # of HUDs loses STATS, and the slave's goes back to its first.
+    tap("DOWN", who=1); tap("DOWN", who=1); tap("A", who=1)   # HOLD
     tap("START", who=0)
     both(30)
+    if hud_sym is not None and (game("hold") != [0, 0] or
+                                cores[1].memory.u8[hud_sym[0]] != hud_versus):
+        failures.append(f"HOLD apagado por cable no vuelve al HUD de la carrera: "
+                        f"hold {game('hold')}, HUD {cores[1].memory.u8[hud_sym[0]]}")
+    elif hud_sym is not None:
+        print("  HOLD apagado desde el menu compartido: en las dos, y el esclavo "
+              "vuelve de STATS al HUD de la carrera")
     if paused_swap != [0, 0]:
         failures.append(f"en pausa la palabra sigue girada: {paused_swap}")
     if game("fast_soft") != [3, 3]:
         failures.append(f"FAST DOWN desde el menu compartido no cambia en las "
                         f"dos: fast_soft {game('fast_soft')}")
-    elif mine("g_options") != [0x09, 0x1A]:
+    elif mine("g_options") != [0x29, 0x1A]:
         failures.append(f"las opciones de cada uno no son las suyas: "
                         f"g_options {[hex(v) for v in mine('g_options')]}")
-    elif cores[0].memory.u8[0x0E000404] != 0x09:
+    elif cores[0].memory.u8[0x0E000404] != 0x29:
         failures.append("una regla cambiada por cable se guarda en la bateria "
                         "del maestro")
     elif [ghosts(c) for c in cores] != [4, 4]:

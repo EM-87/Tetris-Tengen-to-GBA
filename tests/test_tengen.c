@@ -2408,6 +2408,21 @@ static void test_a_restarted_board_is_dealt_the_match_s_own_pieces(void) {
            fresh.player[TENGEN_PLAYER_2].fall_timer);
 }
 
+/* ...AND WITH NOTHING PUT ASIDE (TengenGame.hold): a new board, not the old
+ * one's HOLD box. */
+static void test_a_restarted_board_holds_nothing(void) {
+    TengenGame g;
+    tengen_new_game(&g, 0x7BCD, 0, true, false, false);
+    g.hold = 1u << TENGEN_PLAYER_2;
+    tengen_step(&g, TENGEN_PLAYER_2, 0);
+    tengen_step(&g, TENGEN_PLAYER_2, TENGEN_BTN_SELECT);
+    CHECK(g.player[TENGEN_PLAYER_2].held != TT_NONE);
+    g.player[TENGEN_PLAYER_2].game_active = false;      /* topped out */
+    CHECK(tengen_restart_player(&g, TENGEN_PLAYER_2));
+    CHECK(g.player[TENGEN_PLAYER_2].held == TT_NONE);
+    CHECK(!g.player[TENGEN_PLAYER_2].hold_spent);
+}
+
 static void test_only_a_race_restarts_one_board(void) {
     /* handleGameOver branches on playMode first: 0 (1P) and $FF (coop, and
      * WITH COMPUTER with it) go to initializeGameMode, which is a whole new
@@ -3711,6 +3726,10 @@ static void test_link_rules_are_both_players(void) {
     CHECK(!link.game.hard_drop);
     CHECK(link.game.fast_soft == 3);
     CHECK(link.game.fast_shift == 0);
+    CHECK(link.game.hold == 0);
+    tengen_link_rules(&link, TENGEN_RULE_HOLD);
+    CHECK(link.game.hold == 3);
+    CHECK(link.game.fast_soft == 0);
 }
 
 static void test_soft_drop_requires_down_alone(void) {
@@ -4177,6 +4196,118 @@ static void test_drop_distance_looks_through_the_partner(void) {
     CHECK(!tengen_position_valid(&game, TENGEN_PLAYER_1));
 }
 
+/* HOLD (TengenGame.hold, a bit per player; the pause menu's OPTIONS): a
+ * fresh SELECT puts the falling piece aside. Into an empty box it goes and
+ * the next comes in, dealt as any piece is; once a piece is held, SELECT
+ * swaps them and the held one comes in at the top, turned as it is dealt.
+ * Once per piece: the box opens again when a piece is dealt by a lock. */
+static TengenGame hold_game(uint8_t mask) {
+    TengenGame g;
+    tengen_new_game(&g, 0x0BEE, 0, false, false, false);
+    g.hold = mask;
+    tengen_step(&g, TENGEN_PLAYER_1, 0);            /* the first piece */
+    g.player[0].fall_timer = 200;
+    return g;
+}
+
+static void test_hold_into_an_empty_box_deals_the_next(void) {
+    TengenGame g = hold_game(1u << TENGEN_PLAYER_1);
+    TengenPlayerState *p = &g.player[0];
+    TengenTetromino first = p->piece.current, second = p->piece.next;
+    tengen_step(&g, TENGEN_PLAYER_1, TENGEN_BTN_LEFT);   /* moved off its spot */
+    tengen_step(&g, TENGEN_PLAYER_1, 0);
+    CHECK(p->held == TT_NONE);
+    tengen_step(&g, TENGEN_PLAYER_1, TENGEN_BTN_SELECT);
+    CHECK(p->held == first);
+    CHECK(p->piece.current == second);
+    CHECK(p->piece.next != TT_NONE);
+    CHECK(p->piece.y == TENGEN_SPAWN_Y);
+    CHECK(p->piece.x == TENGEN_SPAWN_X[2]);
+    CHECK(p->piece.orientation == 0);
+    CHECK(p->hold_spent);
+    /* ...and not again for this piece. */
+    TengenTetromino now = p->piece.current;
+    tengen_step(&g, TENGEN_PLAYER_1, 0);
+    tengen_step(&g, TENGEN_PLAYER_1, TENGEN_BTN_SELECT);
+    CHECK(p->piece.current == now);
+    CHECK(p->held == first);
+}
+
+static void test_hold_swaps_once_the_next_piece_is_dealt(void) {
+    TengenGame g = hold_game(1u << TENGEN_PLAYER_1);
+    TengenPlayerState *p = &g.player[0];
+    TengenTetromino first = p->piece.current;
+    tengen_step(&g, TENGEN_PLAYER_1, TENGEN_BTN_SELECT);
+    /* Down to the floor and locked: the box is open for the next one. */
+    int frames = 0;
+    while (!tengen_step(&g, TENGEN_PLAYER_1, TENGEN_BTN_DOWN).piece_locked &&
+           ++frames < 2000) {}
+    tengen_step(&g, TENGEN_PLAYER_1, 0);               /* the deal's frame */
+    CHECK(p->piece.current != TT_NONE);
+    CHECK(!p->hold_spent);
+    TengenTetromino third = p->piece.current, coming = p->piece.next;
+    tengen_step(&g, TENGEN_PLAYER_1, TENGEN_BTN_SELECT);
+    CHECK(p->piece.current == first);      /* the held one, back */
+    CHECK(p->held == third);
+    CHECK(p->piece.next == coming);        /* a swap deals nothing */
+    CHECK(p->piece.y == TENGEN_SPAWN_Y && p->piece.orientation == 0);
+    CHECK(p->hold_spent);
+}
+
+/* ...off, SELECT is nothing in play, as on the cartridge; and it is one
+ * player's: the other pad, the computer's in a game against it, never
+ * holds. */
+static void test_hold_is_off_and_one_players(void) {
+    TengenGame g = hold_game(0);
+    TengenGame before = g;
+    tengen_step(&g, TENGEN_PLAYER_1, TENGEN_BTN_SELECT);
+    tengen_step(&before, TENGEN_PLAYER_1, 0);
+    CHECK(g.player[0].held == TT_NONE);
+    CHECK(g.player[0].piece.current == before.player[0].piece.current);
+    CHECK(g.player[0].piece.y == before.player[0].piece.y);
+
+    TengenGame two;
+    tengen_new_game(&two, 77, 0, true, false, false);
+    two.hold = 1u << TENGEN_PLAYER_2;
+    tengen_step(&two, TENGEN_PLAYER_1, 0);
+    tengen_step(&two, TENGEN_PLAYER_2, 0);
+    tengen_step(&two, TENGEN_PLAYER_1, TENGEN_BTN_SELECT);
+    tengen_step(&two, TENGEN_PLAYER_2, TENGEN_BTN_SELECT);
+    CHECK(two.player[0].held == TT_NONE);
+    CHECK(two.player[1].held != TT_NONE);
+}
+
+/* ...AND NEVER INTO THE PARTNER: a piece would come in at the top, in the
+ * hidden rows where only the walls are (TENGEN_ROM_ROW_ORIGIN), so on a
+ * board of its own it always fits — but on a coop board the partner's piece
+ * may be standing at this player's entry, and then the hold is refused and
+ * nothing changes, rather than the two pieces overlapping. */
+static void test_hold_refuses_a_piece_that_would_meet_the_partner(void) {
+    /* Player 2's piece standing at player 1's entry. */
+    TengenGame game;
+    place_coop_pair(&game, TT_O, 0, 5, 12,
+                    TT_O, 0, TENGEN_SPAWN_X[TENGEN_PLAYER_1], TENGEN_SPAWN_Y);
+    game.hold = 1u << TENGEN_PLAYER_1;
+    game.player[0].held = TT_O;
+    game.player[0].fall_timer = 200;
+    game.player[1].fall_timer = 200;
+    TengenPlayerState before = game.player[0];
+    tengen_step(&game, TENGEN_PLAYER_1, TENGEN_BTN_SELECT);
+    CHECK(game.player[0].held == TT_O);
+    CHECK(game.player[0].piece.y == 12);
+    CHECK(game.player[0].piece.next == before.piece.next);
+    CHECK(!game.player[0].hold_spent);
+    CHECK(!tengen_coop_pieces_overlap(&game, TENGEN_PLAYER_1));
+    /* ...and with the entry clear, it goes. */
+    game.player[1].piece.x = TENGEN_SPAWN_X[TENGEN_PLAYER_2];
+    game.player[1].piece.y = 14;
+    tengen_step(&game, TENGEN_PLAYER_1, 0);
+    tengen_step(&game, TENGEN_PLAYER_1, TENGEN_BTN_SELECT);
+    CHECK(game.player[0].held == TT_O);
+    CHECK(game.player[0].piece.y == TENGEN_SPAWN_Y);
+    CHECK(game.player[0].hold_spent);
+}
+
 /* THE CARTRIDGE'S OWN BUGS, MENDED BEHIND THE CHORD (TengenGame.mended).
  * Each is checked both ways: off, the cartridge's behaviour stands. */
 static void test_mended_coop_deal_waits_for_room(void) {
@@ -4380,6 +4511,11 @@ int main(void) {
     test_fast_hands_are_one_players();
     test_drop_distance_is_where_it_fits();
     test_drop_distance_looks_through_the_partner();
+    test_hold_into_an_empty_box_deals_the_next();
+    test_hold_swaps_once_the_next_piece_is_dealt();
+    test_hold_is_off_and_one_players();
+    test_hold_refuses_a_piece_that_would_meet_the_partner();
+    test_a_restarted_board_holds_nothing();
     test_either_player_can_pause_a_linked_game();
     test_level_starts_at_the_chosen_start_level();
     test_level_is_recomputed_from_the_line_total();

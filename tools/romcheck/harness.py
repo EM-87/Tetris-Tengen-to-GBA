@@ -343,7 +343,7 @@ _LAYOUT_DEFAULT = {
     "raised": "PAUSEXIT?R",
     "ai_target_x": 6, "ai_target_o": 7, "ai_settle": 8, "ai_soft_drop": 9,
     "ai_coop_aware": 10, "ai_smart": 12, "ai_plan_have": 420,
-    "ai_plan_stage": 0, "ghost": 989, "check_off": 997,
+    "ai_plan_stage": 0, "ghost": 989, "check_off": 997, "hold_label": 1001,
 }
 
 
@@ -365,7 +365,7 @@ def check_layout(rom_path):
         base = 0x08000000 if addr >= 0x08000000 else 0x02000000
         data = open(rom_path, "rb").read()
         v = [int.from_bytes(data[addr - base + 2 * i:addr - base + 2 * i + 2], "little")
-             for i in range(26)]
+             for i in range(27)]
         at = raised - base
         text = data[at:data.index(b"\0", at)].decode("ascii")
         keys = ("question", "percent", "raised_base", "arrow_tail", "arrow_head",
@@ -374,7 +374,7 @@ def check_layout(rom_path):
                 "save_entry_bytes", "save_name", "save_mode", "save_mode_sums",
                 "ai_target_x", "ai_target_o", "ai_settle", "ai_soft_drop",
                 "ai_coop_aware", "ai_smart", "ai_plan_have", "ai_plan_stage",
-                "ghost", "check_off")
+                "ghost", "check_off", "hold_label")
         layout = dict(zip(keys, v))
         layout["raised"] = text
         _LAYOUT_CACHE[rom_path] = layout
@@ -391,8 +391,8 @@ def game_offsets(rom_path):
         (field, player, stride, cur, y, level, stats,
          paused, held, nxt, alive, x, score, lines,
          counts, orient, piece_ids, proto_rules, total,
-         hard_drop, fast_shift, fast_soft) = (
-            core.memory.u16[addr + i * 2] for i in range(22))
+         hard_drop, fast_shift, fast_soft, hold, held) = (
+            core.memory.u16[addr + i * 2] for i in range(24))
         _GAME_PROBE_CACHE[rom_path] = {
             "field": field, "player": player, "stride": stride,
             "current": player + cur, "y": player + y,
@@ -405,7 +405,7 @@ def game_offsets(rom_path):
             "piece_ids": piece_ids, "proto_rules": proto_rules,
             "total": player + total,
             "hard_drop": hard_drop, "fast_shift": fast_shift,
-            "fast_soft": fast_soft,
+            "fast_soft": fast_soft, "hold": hold, "held": player + held,
         }
     return _GAME_PROBE_CACHE[rom_path]
 
@@ -801,7 +801,7 @@ PM_EXIT = PMENU_TY + 4       # EXIT GAME
 # gba/port.h), each name at the left after the arrow's two columns and its
 # box at the right (T_CHECK_OFF: two tiles, the right half one more), in
 # this order. Sixteen wide, as the menu (OPT_W in gba/match.c).
-PMO_NAMES = ("HARD DROP", "FAST DOWN", "FAST SHIFT", "GHOST", "SWAP A-B")
+PMO_NAMES = ("HARD DROP", "FAST DOWN", "FAST SHIFT", "GHOST", "SWAP A-B", "HOLD")
 PMO_H = len(PMO_NAMES) + 3
 PMO_W = 16
 PMO_TY = (SCREEN_H // TILE - PMO_H) // 2

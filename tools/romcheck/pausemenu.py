@@ -383,6 +383,7 @@ def pausemenu_check(rom_path):
     failures += pause_resume_music(rom_path)
     failures += pause_options(rom_path)
     failures += pause_ticks_hold_the_tune(rom_path)
+    failures += pause_hold(rom_path)
 
     for f in failures:
         print("FALLA:", f)
@@ -480,7 +481,7 @@ def pause_options(rom_path):
 
     OPTIONS, entre MUSIC y EXIT GAME, abre una ventana de dieciseis de ancho
     con un interruptor por linea -- HARD DROP, FAST DOWN, FAST SHIFT, GHOST,
-    SWAP A-B --, el nombre a la izquierda y su casilla a la derecha (vacia OFF,
+    SWAP A-B, HOLD --, el nombre a la izquierda y su casilla a la derecha (vacia OFF,
     con punto ON). Todos en OFF la primera vez. A, o IZQUIERDA y DERECHA,
     cambian el de la flecha, y mover la flecha suena como en los menus; B
     vuelve al menu sin dejar nada de la ventana. Lo que cambian se nota en la
@@ -551,19 +552,20 @@ def pause_options(rom_path):
     top = [c for c in range(32)
            if (entry(PMO_TY, c) & 0x3FF) in (0x29, 0x2A, 0x2B)]
     if "OPTIONS" not in tilemap_text(core, PMO_HEAD, PM_L, PM_R) or sw is None:
-        failures.append(f"A en OPTIONS no abre la ventana con sus cinco "
+        failures.append(f"A en OPTIONS no abre la ventana con sus seis "
                         f"interruptores: "
-                        f"{[tilemap_text(core, PMO_FIRST + i, PM_L, PM_R) for i in range(5)]}")
+                        f"{[tilemap_text(core, PMO_FIRST + i, PM_L, PM_R) for i in range(len(PMO_NAMES))]}")
         del core, screen
         return failures
     if (top[0], top[-1]) != (PMO_TX, PMO_TX + PMO_W - 1):
         failures.append(f"la ventana OPTIONS no tiene {PMO_W} de ancho: columnas "
                         f"{top[0]}-{top[-1]}")
-    if any(on for _, on, _ in sw) or [a for _, _, a in sw] != [True] + [False] * 4:
+    if any(on for _, on, _ in sw) or \
+            [a for _, _, a in sw] != [True] + [False] * (len(PMO_NAMES) - 1):
         failures.append(f"la ventana no abre con todo en OFF y la flecha en "
                         f"HARD DROP: {sw}")
     else:
-        print("  OPTIONS abre su ventana: cinco interruptores, todos en OFF")
+        print("  OPTIONS abre su ventana: seis interruptores, todos en OFF")
 
     # MOVING THE ARROW TICKS, as the settings screen's does (cursor_blip):
     # some channel sounds in the frames after a DOWN, and UP puts it back.
@@ -592,7 +594,7 @@ def pause_options(rom_path):
     mid = switches()
     tap("RIGHT")
     sw = switches()
-    want = [True, False, False, True, False]
+    want = [True, False, False, True, False, False]
     saved = (core.memory.u8[0x0E000404], core.memory.u8[0x0E000405])
     if sw is None or [on for _, on, _ in sw] != want or mid[3][1]:
         failures.append(f"A, IZQUIERDA y DERECHA no cambian el interruptor de la "
@@ -678,7 +680,7 @@ def pause_options(rom_path):
         failures.append("tras un reset la sombra no vuelve con el acorde")
     open_options()
     sw = switches()
-    if sw is None or [on for _, on, _ in sw] != [True, True, False, True, False]:
+    if sw is None or [on for _, on, _ in sw] != [True, True, False, True, False, False]:
         failures.append(f"tras un reset las opciones no son las que se dejaron: "
                         f"{sw}")
     else:
@@ -730,6 +732,78 @@ def pause_options(rom_path):
                         "acorde")
     else:
         print("  sin el acorde, ninguna: el juego del cartucho")
+    del core, screen
+    return failures
+
+
+def pause_hold(rom_path):
+    """HOLD, LA SEXTA OPCION: SELECT GUARDA LA PIEZA Y L+R CAMBIA EL HUD.
+
+    Con HOLD en ON, SELECT ya no cambia de HUD: guarda la pieza que cae
+    (TengenPlayerState.held) y entra la siguiente. El HUD lo cambia L+R, y en
+    HUD STATS la celda del cosaco es la de HOLD: la etiqueta en las letras de
+    NEXT, la pieza guardada debajo en sus colores, y ningun cosaco."""
+    off = game_offsets(rom_path)
+    base, why = game_state_address(rom_path)
+    if base is None:
+        return []
+    lay = check_layout(rom_path)
+    failures = []
+    core, screen = load(rom_path)   # `screen` must stay alive; see load()
+
+    def tap(*names, settle=12):
+        core.set_keys(*[KEYS[n] for n in names]); run(core, 4)
+        core.set_keys(); run(core, settle)
+
+    def entry(r, c):
+        return core.memory.u16[SCREENBLOCK_ADDR + (r * 32 + c) * 2]
+
+    def hud():
+        """BANNER while the right column carries the banner's art."""
+        return "BANNER" if any(entry(10, c) & 0x3FF for c in range(24, 28)) else "STATS"
+
+    run(core, 8)
+    press_start(core); run(core, 10)
+    tap("L", "R")
+    press_start(core); run(core, 12)
+    press_start(core); run(core, 60)
+    tap("START"); tap("DOWN"); tap("A")
+    for _ in range(PMO_NAMES.index("HOLD")):
+        tap("DOWN")
+    tap("A"); tap("START", settle=20)
+    held = lambda: core.memory.u8[base + off["held"]]
+    first = core.memory.u8[base + off["current"]]
+    was = hud()
+    tap("SELECT", settle=20)
+    if held() != first or hud() != was:
+        failures.append(f"con HOLD, SELECT no guarda la pieza ({held()} y no "
+                        f"{first}) o cambia el HUD ({was} -> {hud()})")
+    else:
+        print(f"  HOLD: SELECT guarda la pieza que caia ({first}) y el HUD sigue "
+              f"en {was}")
+    tap("L", "R", settle=20)
+    now = hud()
+    label = [entry(3, c) & 0x3FF for c in range(24, 28)]
+    want = [lay["hold_label"] + i for i in range(4)]
+    piece = [entry(r, c) for r in (5, 6) for c in range(24, 28)]
+    piece += [core.memory.u16[SCREENBLOCK_ADDR + 0x800 + (r * 32 + c) * 2]
+              for r in (5, 6) for c in range(23, 28)]
+    in_hold_bank = [e for e in piece if (e & 0x3FF) and e >> 12 == 4]
+    cossack = [i for i in range(124, 128)
+               if (core.memory.u16[0x07000000 + i * 8] & 0x300) != 0x200]
+    if now == was:
+        failures.append("con HOLD, L+R no cambia el HUD")
+    elif now != "STATS" or label != want:
+        failures.append(f"en HUD STATS con HOLD no esta la etiqueta HOLD: "
+                        f"{[hex(t) for t in label]}")
+    elif len(in_hold_bank) < 3:
+        failures.append(f"la celda HOLD no muestra la pieza guardada: "
+                        f"{[hex(e) for e in piece]}")
+    elif cossack:
+        failures.append(f"con HOLD el cosaco sigue en HUD STATS (sprites {cossack})")
+    else:
+        print("  L+R cambia a HUD STATS: HOLD donde estaba el cosaco, con la "
+              "pieza guardada en sus colores")
     del core, screen
     return failures
 
