@@ -405,8 +405,14 @@ def mode_tables_check(rom_path):
     leave()
 
     # The title's page: 1 PLAYER's still has 80000 alone; RIGHT x3 is VERSUS.
+    # It is behind the chord, which a power cycle forgets: rung on GAME
+    # SELECT, and B back to the title.
     def title_page():
         run(core, 20)
+        press_start(core); run(core, 12)
+        core.set_keys(KEYS["L"], KEYS["R"]); run(core, 4)
+        core.set_keys(); run(core, 12)
+        tap("B", settle=30)
         tap("SELECT", settle=30)
 
     def walk_checks(when):

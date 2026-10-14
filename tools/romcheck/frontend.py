@@ -4,7 +4,7 @@ GAME SELECT, the credits, the demo, the cable lobby alone.
 """
 import os
 from .harness import (
-    CATHEDRAL_SPRITES, CELL_BLOCK, CREDITS, CREDIT_TY,
+    CATHEDRAL_SPRITES, CELL_BLOCK, CREDITS, CREDIT_PORT, CREDIT_TY,
     DEMO_START_FRAME, DEMO_WATCH_FRAMES, GAME_SELECT_LONGEST, GAME_SELECT_ROWS,
     GAME_SELECT_TX, GAME_SELECT_TY, HANDICAP_ROW, KEYS,
     LEVEL_ROW, LIMIT_SKINS, LINK_MSG_ROW, LINK_TIMEOUT_FRAMES,
@@ -724,28 +724,42 @@ def credits_check(rom_path):
             seen.append(pair)
         core.run_frame()
 
-    def shown(role, name):
-        return any(role in a and name in b for a, b in seen)
+    def shown(role, name, among=None):
+        return any(role in a and name in b for a, b in (among or seen))
 
     missing = [f"{role} {name}" for role, name in CREDITS if not shown(role, name)]
     if missing:
         failures.append("no aparecen estos creditos del cartucho: "
                          + "; ".join(missing))
+    elif shown(*CREDIT_PORT):
+        failures.append("sin el acorde sale el credito del port")
     else:
-        print(f"  los seis creditos del cartucho salen, uno a uno "
-              f"({len(seen)} cambios en 1600 frames)")
+        print(f"  sin el acorde, los seis creditos del cartucho, Mirrorsoft "
+              f"incluido, uno a uno ({len(seen)} cambios en 1600 frames)")
 
     # NO BUILD LINE, with the chord or without: there was a seventh credit
     # under the chord with the commit, and it went (the ROM's file name says
-    # which build it is). Six credits, the chord or no chord.
+    # which build it is). Six credits, the chord or no chord — and under it
+    # the port's in Mirrorsoft's place.
     core.set_keys(KEYS["L"], KEYS["R"]); run(core, 4)
     core.set_keys(); run(core, 10)
     build = False
+    chorded = []
     for _ in range(1800):
         if "BUILD" in tilemap_text(core, CREDIT_TY).split():
             build = True
             break
+        pair = (tilemap_text(core, CREDIT_TY).strip(),
+                tilemap_text(core, CREDIT_TY + 1).strip())
+        if not chorded or pair != chorded[-1]:
+            chorded.append(pair)
         core.run_frame()
+    later = chorded[1:]           # the line on screen as it was rung aside
+    if not shown(*CREDIT_PORT, among=later) or shown(*CREDITS[0], among=later):
+        failures.append(f"con el acorde el credito del port no ocupa el sitio "
+                        f"de Mirrorsoft: {later}")
+    else:
+        print("  con el acorde, el credito del port en el sitio de Mirrorsoft")
     if build or any("BUILD" in a.split() for a, b in seen):
         failures.append("los creditos aun dicen BUILD")
     else:
@@ -1019,9 +1033,9 @@ def leaving_title_check(rom_path):
         core.set_keys()
         run(core, settle)
 
-    # ...EXCEPT ON THE TITLE, where the port takes SELECT for the HIGH SCORES
-    # page instead (a player asked: there was no other way to see them; see
-    # title_scores_check). START advances, as on the cartridge.
+    # ...EXCEPT ON THE TITLE UNDER THE CHORD, where the port takes SELECT for
+    # the HIGH SCORES page instead (see title_scores_check). START advances,
+    # as on the cartridge.
     tap(KEYS["START"])
     if "GAME SELECT" not in tilemap_text(core, 8):
         failures.append("START no avanza desde el titulo")
@@ -1243,12 +1257,13 @@ def fireworks_check(rom_path):
 
 
 def title_scores_check(rom_path):
-    """SELECT ON THE TITLE SHOWS THE HIGH SCORES.
+    """SELECT ON THE TITLE SHOWS THE HIGH SCORES, UNDER THE CHORD.
 
     There was no way to look at the table but to lose a game. From the title
     SELECT puts the page up as a game over leaves it, with no row to type
     into, and a button takes it back to the title, as after a game. START
-    still goes to GAME SELECT.
+    still goes to GAME SELECT. Behind the chord, as everything the port adds
+    is: without it SELECT is the cartridge's, another START ($9FA4).
     """
     from .harness import LEADER_HEAD_TY
     failures = []
@@ -1258,28 +1273,45 @@ def title_scores_check(rom_path):
     def title_map():
         # The whole map, raw: the title's own tiles are art, not text.
         return [core.memory.u16[SCREENBLOCK_ADDR + i * 2] for i in range(32 * 20)]
-    title = title_map()
 
-    def tap(key):
-        core.set_keys(KEYS[key]); run(core, 4); core.set_keys(); run(core, 20)
+    def tap(*keys):
+        core.set_keys(*[KEYS[k] for k in keys]); run(core, 4)
+        core.set_keys(); run(core, 20)
+
+    def game_select():
+        return "GAME SELECT" in " ".join(tilemap_text(core, r) for r in range(6, 12))
+
+    # Without the chord: the cartridge's SELECT, which advances.
+    tap("SELECT")
+    if not game_select():
+        failures.append("sin el acorde, SELECT en el titulo no avanza como START")
+    else:
+        print("  sin el acorde, SELECT en el titulo es otro START, el del cartucho")
+    # The chord, on GAME SELECT, and B back to the title.
+    tap("L", "R")
+    tap("B")
+    run(core, 20)
+    title = title_map()
 
     tap("SELECT")
     head = tilemap_text(core, LEADER_HEAD_TY)
     row_sym, _ = game_state_address(rom_path, "g_leader_row")
     typing = core.memory.s32[row_sym] if row_sym is not None else -1
     if "HIGH SCORES" not in head:
-        failures.append(f"SELECT en el titulo no pone la tabla: {head!r}")
+        failures.append(f"con el acorde, SELECT en el titulo no pone la tabla: "
+                        f"{head!r}")
     elif typing != -1:
         failures.append(f"la tabla desde el titulo espera letras (fila {typing})")
     else:
-        print("  SELECT en el titulo: HIGH SCORES, sin nada que escribir")
+        print("  con el acorde, SELECT en el titulo: HIGH SCORES, sin nada que "
+              "escribir")
     tap("B")
     if title_map() != title or "HIGH SCORES" in tilemap_text(core, LEADER_HEAD_TY):
         failures.append("B en la tabla no vuelve al titulo")
     else:
         print("  B vuelve al titulo")
     tap("START")
-    if "GAME SELECT" not in " ".join(tilemap_text(core, r) for r in range(6, 12)):
+    if not game_select():
         failures.append("START en el titulo ya no lleva a GAME SELECT")
     for f in failures:
         print(f"FALLA: {f}")

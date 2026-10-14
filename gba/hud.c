@@ -1183,10 +1183,20 @@ static void draw_next_piece(int tx, int ty, int slot, int bank) {
  * colours borrow the coop partner's preview bank (PAL_NEXT2_BANK), which is
  * only ever on screen in HUD COOP; both set it on every frame they draw. */
 #define PAL_HOLD_BANK PAL_NEXT2_BANK
-/* ...and whether it is on the screen, for the coop panel's cossack, who is a
- * sprite and leaves the cell's tiles alone: the frame HOLD goes off, he
- * clears them first. (HUD STATS's own cell is cleared every frame.) */
+/* ...and whether it is on the screen, for the cossack, who is a sprite and
+ * leaves the cell's tiles alone: the frame HOLD goes off, the cell is
+ * cleared first (hold_cell_gone). The panel's own clearing will not do it:
+ * it runs with the panel's layer chosen (g_panel_layer), and HOLD's cell is
+ * on the main one, NEXT's — so its label stayed over the cossack. */
 static bool g_hold_cell_drawn;
+static void hold_cell_gone(int tx, int ty, int w, int h) {
+    if (!g_hold_cell_drawn) return;
+    bool was = g_panel_layer;
+    g_panel_layer = false;
+    clear_both(tx, ty, w, h);
+    g_panel_layer = was;
+    g_hold_cell_drawn = false;
+}
 static void draw_hold_cell(int tx, int ty, int w, int shown) {
     g_hold_cell_drawn = true;
     bool was = g_panel_layer;
@@ -1555,12 +1565,10 @@ static void draw_coop_stats_panel(const TengenPlayerState *me) {
         clear_panel_region(COOP_R_TX, BRAID_T, COOP_PANEL_W, COOP_LEDGE_FIRST - BRAID_T);
         draw_hold_cell(COOP_R_TX, COOP_NEXT_TY, COOP_PANEL_W, g_view);
     } else if (g_dancer_active) {
+        hold_cell_gone(COOP_R_TX, BRAID_T, COOP_PANEL_W, COOP_LEDGE_FIRST - BRAID_T);
         hide_idle_cossack();
     } else {
-        if (g_hold_cell_drawn) {
-            clear_both(COOP_R_TX, BRAID_T, COOP_PANEL_W, COOP_LEDGE_FIRST - BRAID_T);
-            g_hold_cell_drawn = false;
-        }
+        hold_cell_gone(COOP_R_TX, BRAID_T, COOP_PANEL_W, COOP_LEDGE_FIRST - BRAID_T);
         bool alive = me->game_active && !g_session.game.paused;
         draw_idle_cossack(g_idle_frame, alive, g_idle_palette, COOP_R_TX, BRAID_T,
                            COOP_PANEL_W, COOP_LEDGE_FIRST - BRAID_T);
@@ -1859,6 +1867,7 @@ void draw_panel(void) {
             clear_both(BOX_R_IN, ROW_DANCER, BOX_IN, ROW_DANCER_H);
             draw_hold_cell(BOX_R_IN, ROW_NEXT, BOX_IN, shown);
         } else {
+            hold_cell_gone(BOX_R_IN, ROW_DANCER, BOX_IN, ROW_DANCER_H);
             /* The interlude, danced solo: see g_idle_show. It runs off the
              * show's own clock so it lasts exactly as long as the show does. */
             g_idle_show = g_dancer_active;

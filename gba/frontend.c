@@ -537,10 +537,13 @@ static void draw_menu_frame(void) {
 #endif
 }
 
-/* MIRRORSOFT IS NOT ON THIS LIST, and that is the one departure from the
- * cartridge here. Its line was a licensing notice for a company that has not
- * existed since 1991, and the slot goes to whoever made THIS. The five that
- * remain are the people who made the game. */
+/* THE CARTRIDGE'S SIX, AND UNDER THE CHORD THE PORT IN MIRRORSOFT'S PLACE.
+ * GAME SELECT's line (ppuPatchLicensedBy, $A1EF: "LICENSED BY MIRRORSOFT
+ * LTD." on one row, two here) was a licensing notice for a company that has
+ * not existed since 1991; behind the chord, as everything else the port adds
+ * is, that slot goes to whoever made THIS. Without it the credits are the
+ * cartridge's own words (kCreditCartridge). */
+static const char *const kCreditCartridge[2] = { "LICENSED BY", "MIRRORSOFT LTD." };
 static const char *const kCredits[][2] = {
     { "PORTED WITH CLAUDE", "BY EDUARDO MARTINEZ" },
     { "CONCEPT BY",        "ALEXEY PAZHITNOV" },
@@ -566,7 +569,8 @@ static void draw_credits(void) {
         g_credit_timer = 0;
         g_credit = (uint8_t)((g_credit + 1) % CREDIT_COUNT);
     }
-    const char *const *line = kCredits[g_credit];
+    const char *const *line = g_credit == 0 && !g_pause_unlocked
+                                  ? kCreditCartridge : kCredits[g_credit];
     set_credit_layer(true);
     draw_text_lifted(CREDIT_TY, line[0], BANK_CREDIT);
     draw_text_lifted(CREDIT_TY + 1, line[1], BANK_CREDIT);

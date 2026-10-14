@@ -804,6 +804,30 @@ def pause_hold(rom_path):
     else:
         print("  L+R cambia a HUD STATS: HOLD donde estaba el cosaco, con la "
               "pieza guardada en sus colores")
+
+    # ...AND OFF AGAIN, still in HUD STATS: nothing of HOLD's cell is left
+    # on any layer, and the cossack is back. Its label is on the main layer
+    # (NEXT's), and the panel's own clearing only reaches the other two.
+    tap("START"); tap("DOWN"); tap("A")
+    for _ in range(PMO_NAMES.index("HOLD")):
+        tap("DOWN")
+    tap("A"); tap("START", settle=30)
+    hold_tiles = range(lay["hold_label"], lay["hold_label"] + 4)
+    left = [(r, c) for r in range(2, 9) for c in range(22, 30)
+            for layer in (0, 1, 2)
+            if (core.memory.u16[SCREENBLOCK_ADDR + 0x800 * layer + (r * 32 + c) * 2]
+                & 0x3FF) in hold_tiles
+            or (core.memory.u16[SCREENBLOCK_ADDR + 0x800 * layer + (r * 32 + c) * 2]
+                >> 12) == 4 and layer < 2 and (core.memory.u16[
+                    SCREENBLOCK_ADDR + 0x800 * layer + (r * 32 + c) * 2] & 0x3FF)]
+    back = [i for i in range(124, 128)
+            if (core.memory.u16[0x07000000 + i * 8] & 0x300) != 0x200]
+    if hud() != "STATS" or left or not back:
+        failures.append(f"con HOLD apagado en HUD STATS queda su celda "
+                        f"({left[:4]}) o no vuelve el cosaco ({back})")
+    else:
+        print("  HOLD apagado en HUD STATS: su celda se va entera y vuelve el "
+              "cosaco")
     del core, screen
     return failures
 

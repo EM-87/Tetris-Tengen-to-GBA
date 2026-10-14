@@ -2158,6 +2158,8 @@ extern uint8_t g_options;
 void options_load(void);
 void options_apply_solo(TengenGame *game);
 uint8_t options_mine(void);
+bool match_chord(void);
+void mend_bevels(bool on);
 bool hold_on(void);
 
 #endif /* PORT_H */
