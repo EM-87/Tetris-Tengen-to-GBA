@@ -6,7 +6,8 @@ from .harness import (
     KEYS, LEADER_HEAD_TY, MUSIC_COUNT_MAX, MUSIC_ROW, check_layout,
     PMENU_H, PMENU_TX, PMENU_TY, PMENU_W_T, pmenu_span,
     PM_EXIT, PM_HEAD, PM_L, PM_MUSIC, PM_OPTIONS,
-    PM_R, PM_SURE, PMO_FIRST, PMO_H, PMO_HEAD, PMO_NAMES, PMO_TY,
+    PM_R, PM_SURE, PMO_BOX, PMO_FIRST, PMO_H, PMO_HEAD, PMO_NAME, PMO_NAMES,
+    PMO_TY, PMO_TX, PMO_W, PAL_PIECE_BANK,
     PMT_FIRST, PMT_H, PMT_HEAD, PMT_TY, REG_SOUND1CNT_X,
     SCREENBLOCK_ADDR, SCREEN_TW_TILES, SCREEN_W, TILE,
     game_offsets, game_state_address, load, pixels,
@@ -381,6 +382,7 @@ def pausemenu_check(rom_path):
     failures += pause_menu_visible(rom_path)
     failures += pause_resume_music(rom_path)
     failures += pause_options(rom_path)
+    failures += pause_ticks_hold_the_tune(rom_path)
 
     for f in failures:
         print("FALLA:", f)
@@ -476,22 +478,26 @@ def pause_menu_visible(rom_path):
 def pause_options(rom_path):
     """LA VENTANA OPTIONS: SUS CINCO INTERRUPTORES, Y QUE SE QUEDAN.
 
-    OPTIONS, entre MUSIC y EXIT GAME, abre una ventana con un interruptor por
-    linea -- HARD DROP, FAST DOWN, FAST SHIFT, GHOST, SWAP A-B --, el nombre a
-    la izquierda y ON u OFF a la derecha. Todos en OFF la primera vez. A, o
-    IZQUIERDA y DERECHA, cambian el de la flecha; B vuelve al menu sin dejar
-    nada de la ventana. Lo que cambian se nota en la partida al momento: la
-    sombra de la pieza donde caera, A y B girando al reves (y el menu leyendo
-    A como A), ABAJO cayendo una fila por frame. Y se guardan en la bateria
-    (SAVE_OPTIONS_OFF, $0E000404 y su byte de control): tras un reset, con el
-    acorde otra vez, estan como se dejaron; sin el acorde, no hay ninguno.
+    OPTIONS, entre MUSIC y EXIT GAME, abre una ventana de dieciseis de ancho
+    con un interruptor por linea -- HARD DROP, FAST DOWN, FAST SHIFT, GHOST,
+    SWAP A-B --, el nombre a la izquierda y su casilla a la derecha (vacia OFF,
+    con punto ON). Todos en OFF la primera vez. A, o IZQUIERDA y DERECHA,
+    cambian el de la flecha, y mover la flecha suena como en los menus; B
+    vuelve al menu sin dejar nada de la ventana. Lo que cambian se nota en la
+    partida al momento: la sombra de la pieza donde caera -- el contorno de la
+    pieza misma, pixel a pixel, y en cooperativo tambien la del companero --,
+    A y B girando al reves (y el menu leyendo A como A), ABAJO cayendo una
+    fila por frame. Y se guardan en la bateria (SAVE_OPTIONS_OFF, $0E000404 y
+    su byte de control): tras un reset, con el acorde otra vez, estan como se
+    dejaron; sin el acorde, no hay ninguno.
     """
     off = game_offsets(rom_path)
     base, why = game_state_address(rom_path)
     if base is None:
         print(f"SALTADO: {why}")
         return []
-    ghost0 = check_layout(rom_path)["arrow_head"] + 1
+    lay = check_layout(rom_path)
+    ghost0, check_off = lay["ghost"], lay["check_off"]
     failures = []
     core, screen = load(rom_path)   # `screen` must stay alive; see load()
 
@@ -502,24 +508,28 @@ def pause_options(rom_path):
     def row(r):
         return tilemap_text(core, r, *pmenu_span(core))
 
+    def entry(r, c):
+        return core.memory.u16[SCREENBLOCK_ADDR + (r * 32 + c) * 2]
+
     def switches():
-        """Each line of the window as (name, ON?, arrow?), or None."""
+        """Each line of the window as (name, ON?, arrow?), or None: the name
+        after the arrow's two columns, the box's two tiles at the right."""
         got = []
         for i, name in enumerate(PMO_NAMES):
-            t = tilemap_text(core, PMO_FIRST + i, PM_L, PM_R)
-            # The value is on the offset layer, three pixels right, and reads
-            # back hard against the longest name: "FAST SHIFTOFF".
-            line = t.replace("->", " ").replace(">", " ").strip()
-            value = line[len(name):].strip()
-            if not line.startswith(name) or value not in ("ON", "OFF"):
+            r = PMO_FIRST + i
+            t = tilemap_text(core, r, PMO_NAME, PMO_NAME + len(name)).strip()
+            box = [entry(r, PMO_BOX + k) & 0x3FF for k in (0, 1)]
+            if t != name or box not in ([check_off, check_off + 1],
+                                        [check_off + 2, check_off + 3]):
                 return None
-            got.append((name, value == "ON", ">" in t))
+            arrow = ">" in tilemap_text(core, r, PMO_TX + 1, PMO_TX + 3)
+            got.append((name, box[0] == check_off + 2, arrow))
         return got
 
-    def ghosts():
+    def ghosts(which=0):
+        lo = ghost0 + 4 * which
         return sum(1 for r in range(20) for c in range(32)
-                   if ghost0 <= (core.memory.u16[SCREENBLOCK_ADDR + (r * 32 + c) * 2]
-                                 & 0x3FF) < ghost0 + 16)
+                   if lo <= (entry(r, c) & 0x3FF) < lo + 4)
 
     def into_game(chord=True):
         run(core, 8)
@@ -538,17 +548,41 @@ def pause_options(rom_path):
     into_game()
     open_options()
     sw = switches()
+    top = [c for c in range(32)
+           if (entry(PMO_TY, c) & 0x3FF) in (0x29, 0x2A, 0x2B)]
     if "OPTIONS" not in tilemap_text(core, PMO_HEAD, PM_L, PM_R) or sw is None:
         failures.append(f"A en OPTIONS no abre la ventana con sus cinco "
                         f"interruptores: "
                         f"{[tilemap_text(core, PMO_FIRST + i, PM_L, PM_R) for i in range(5)]}")
         del core, screen
         return failures
+    if (top[0], top[-1]) != (PMO_TX, PMO_TX + PMO_W - 1):
+        failures.append(f"la ventana OPTIONS no tiene {PMO_W} de ancho: columnas "
+                        f"{top[0]}-{top[-1]}")
     if any(on for _, on, _ in sw) or [a for _, _, a in sw] != [True] + [False] * 4:
         failures.append(f"la ventana no abre con todo en OFF y la flecha en "
                         f"HARD DROP: {sw}")
     else:
         print("  OPTIONS abre su ventana: cinco interruptores, todos en OFF")
+
+    # MOVING THE ARROW TICKS, as the settings screen's does (cursor_blip):
+    # some channel sounds in the frames after a DOWN, and UP puts it back.
+    def ticks(key):
+        core.set_keys(KEYS[key])
+        n = 0
+        for f in range(20):
+            if f == 4:
+                core.set_keys()
+            core.run_frame()
+            st = sound_state(core)
+            n += bool(st["pulso 1"] or st["pulso 2"] or st["ruido"])
+        return n
+    down, up = ticks("DOWN"), ticks("UP")
+    if not down or not up:
+        failures.append(f"mover la flecha en OPTIONS no suena ({down} y {up} "
+                        f"frames con sonido)")
+    else:
+        print(f"  mover la flecha suena ({down} frames), como en los menus")
 
     # A on HARD DROP, then DOWN to GHOST and RIGHT, LEFT, RIGHT: ON, OFF, ON.
     tap("A")
@@ -597,6 +631,7 @@ def pause_options(rom_path):
                         f"({ghosts()} celdas)")
     else:
         print("  GHOST: la sombra de la pieza, cuatro celdas, donde caera")
+        failures += ghost_fits(core, entry, ghost0)
 
     def turn():
         """One A on a T held high: the orientation it ends up in."""
@@ -649,6 +684,41 @@ def pause_options(rom_path):
     else:
         print("  tras un reset y con el acorde, las opciones son las que se "
               "dejaron")
+    # IN COOP, THE PARTNER'S TOO: the computer's piece in WITH COMPUTER,
+    # with a ghost of its own in its own bank.
+    core2, screen2 = load(rom_path)
+    run(core2, 8)
+    press_start(core2); run(core2, 10)
+    for keys in (["L", "R"], ["DOWN"], ["DOWN"], ["DOWN"], ["DOWN"]):
+        core2.set_keys(*[KEYS[k] for k in keys]); run(core2, 4)
+        core2.set_keys(); run(core2, 12)
+    press_start(core2); run(core2, 12)
+    press_start(core2); run(core2, 40)
+    for k in ("START", "DOWN", "A", "DOWN", "DOWN", "DOWN", "A", "START"):
+        core2.set_keys(KEYS[k]); run(core2, 4); core2.set_keys(); run(core2, 12)
+
+    def coop_ghosts():
+        got = [0, 0]
+        for r in range(20):
+            for c in range(32):
+                e = core2.memory.u16[SCREENBLOCK_ADDR + (r * 32 + c) * 2]
+                t, bank = e & 0x3FF, e >> 12
+                if ghost0 <= t < ghost0 + 8:
+                    got[(t - ghost0) // 4] += 1 if bank == (12, 14)[(t - ghost0) // 4] else 100
+        return got
+    seen = [0, 0]
+    for _ in range(60):
+        run(core2, 1)
+        seen = coop_ghosts()
+        if seen == [4, 4]:
+            break
+    if seen != [4, 4]:
+        failures.append(f"en cooperativo no salen las dos sombras, cada una en "
+                        f"su banco: {seen}")
+    else:
+        print("  en cooperativo, la sombra del companero tambien, en sus colores")
+    del core2, screen2
+
     # ...and without the chord there are none: no ghost on the board. Off
     # the plaque first, or the paused game on the battery comes back with
     # its chord (suspend.c).
@@ -662,6 +732,124 @@ def pause_options(rom_path):
         print("  sin el acorde, ninguna: el juego del cartucho")
     del core, screen
     return failures
+
+
+def pause_ticks_hold_the_tune(rom_path):
+    """EL TIC DEL CURSOR EN PAUSA NO DEJA SALIR LA CANCION.
+
+    La pausa amordaza el motor (MUSIC_SUSPEND pone el umbral de clase en $F0)
+    y el tic del cursor esta por debajo; para que suene se baja el umbral a
+    $40 lo que dura (nes_audio_gag_lower), y las canciones son de clase 7 u 8,
+    por debajo de $20. Con LOGINSKA sonando, en pausa y moviendo la flecha
+    por el menu y por OPTIONS: suena el tic (pulso 2) y ni el triangulo ni el
+    ruido, que en LOGINSKA son la cancion."""
+    failures = []
+    core, screen = load(rom_path)   # `screen` must stay alive; see load()
+
+    def tap(*names, settle=12):
+        core.set_keys(*[KEYS[n] for n in names]); run(core, 4)
+        core.set_keys(); run(core, settle)
+
+    def chans(frames):
+        seen = {}
+        for _ in range(frames):
+            core.run_frame()
+            st = sound_state(core)
+            for k in ("pulso 1", "pulso 2", "triangulo", "ruido"):
+                if st[k]:
+                    seen[k] = seen.get(k, 0) + 1
+        return seen
+
+    run(core, 8)
+    press_start(core); run(core, 10)
+    tap("L", "R")
+    press_start(core); run(core, 12)
+    tap("DOWN"); tap("DOWN"); tap("RIGHT")          # MUSIC: LOGINSKA
+    press_start(core); run(core, 60)
+    playing = chans(30)
+    tap("START", settle=20)
+    heard = {}
+    for k in ("DOWN", "UP", "DOWN", "A", "DOWN", "DOWN", "UP"):
+        core.set_keys(KEYS[k])
+        got = chans(4)
+        core.set_keys()
+        for d in (got, chans(30)):
+            for c, n in d.items():
+                heard[c] = heard.get(c, 0) + n
+    if not playing.get("triangulo"):
+        failures.append(f"LOGINSKA no sonaba antes de la pausa: {playing}")
+    elif heard.get("triangulo") or heard.get("ruido"):
+        failures.append(f"los tics del cursor en pausa dejan salir la cancion: "
+                        f"{heard}")
+    elif heard.get("pulso 2", 0) < 6 * 6:
+        failures.append(f"los tics del cursor en pausa no suenan: {heard}")
+    else:
+        print(f"  en pausa el cursor hace tic ({heard.get('pulso 2')} frames de "
+              f"pulso 2) y LOGINSKA sigue callada")
+    del core, screen
+    return failures
+
+
+def ghost_fits(core, entry, ghost0):
+    """THE GHOST IS THE PIECE'S OWN OUTLINE, pixel for pixel: the falling
+    piece's four tiles (bank 12, the cartridge's block art) make one
+    silhouette; outside it is what its edge reaches without crossing ink;
+    and the ghost's ink is exactly the silhouette's pixels next to that
+    outside, cell for cell. It used to be eight pixels square a cell, a
+    pixel proud of the piece above and to the left."""
+    def art(t):
+        rows = []
+        for y in range(8):
+            w = int.from_bytes(bytes(core.memory.u8[0x06000000 + t * 32 + y * 4 + i]
+                                     for i in range(4)), "little")
+            rows.append([(w >> (4 * x)) & 15 for x in range(8)])
+        return rows
+    for _ in range(90):
+        piece, ghost = [], []
+        for r in range(20):
+            for c in range(32):
+                e = entry(r, c)
+                t, bank = e & 0x3FF, e >> 12
+                if bank == PAL_PIECE_BANK and 1 <= t <= 15:
+                    piece.append((r, c, t))
+                elif ghost0 <= t < ghost0 + 4:
+                    ghost.append((r, c, t))
+        if len(piece) == 4 and len(ghost) == 4:
+            break
+        core.run_frame()
+    else:
+        return [f"no se ven a la vez la pieza y su sombra enteras "
+                f"({len(piece)} y {len(ghost)} celdas)"]
+
+    def layout(cells):
+        r0, c0 = min(r for r, _, _ in cells), min(c for _, c, _ in cells)
+        return sorted((r - r0, c - c0, t) for r, c, t in cells)
+    p, g = layout(piece), layout(ghost)
+    if [(r, c) for r, c, _ in p] != [(r, c) for r, c, _ in g]:
+        return [f"la sombra no tiene la forma de la pieza: {p} / {g}"]
+    ink, drawn = set(), set()
+    for (r, c, t), (_, _, gt) in zip(p, g):
+        a, b = art(t), art(gt)
+        for y in range(8):
+            for x in range(8):
+                if a[y][x]:
+                    ink.add((r * 8 + y, c * 8 + x))
+                if b[y][x]:
+                    drawn.add((r * 8 + y, c * 8 + x))
+    far, todo = set(), [(-1, -1)]
+    while todo:
+        y, x = todo.pop()
+        if (y, x) in far or (y, x) in ink or not (-1 <= y <= 32 and -1 <= x <= 32):
+            continue
+        far.add((y, x))
+        todo += [(y + 1, x), (y - 1, x), (y, x + 1), (y, x - 1)]
+    edge = {(y, x) for y, x in ink
+            if {(y + 1, x), (y - 1, x), (y, x + 1), (y, x - 1)} & far}
+    if drawn != edge:
+        return [f"la sombra no es el contorno de la pieza: {len(drawn - edge)} "
+                f"pixeles de mas, {len(edge - drawn)} de menos"]
+    print(f"  la sombra es el contorno exacto de la pieza ({len(edge)} pixeles)")
+    return []
 
 
 def pause_resume_music(rom_path):

@@ -140,8 +140,10 @@ OPTIONS tiene cinco interruptores, todos en OFF hasta que los toqués, que se
 guardan en el cartucho y vuelven cada vez que hacés el acorde: **HARD DROP**
 (Arriba tira la pieza de golpe), **FAST DOWN** (Abajo baja una fila por
 frame), **FAST SHIFT** (el lateral repite antes y más rápido), **GHOST** (la
-silueta de dónde va a caer la pieza) y **SWAP A-B** (A y B giran al revés).
-A, Izquierda o Derecha cambian el de la flecha; B vuelve. Por cable, las tres
+silueta de dónde va a caer la pieza, y en cooperativo también la del
+compañero) y **SWAP A-B** (A y B giran al revés). Cada uno tiene su casilla:
+vacía apagado, con punto encendido. A, Izquierda o Derecha cambian el de la
+flecha; B vuelve. Por cable, las tres
 primeras son reglas de la partida: las del maestro, para los dos, y
 cualquiera las cambia desde el menú compartido solo para esa partida; GHOST
 y SWAP A-B son de cada jugador.

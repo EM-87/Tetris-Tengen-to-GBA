@@ -1819,36 +1819,113 @@ void draw_panel(void) {
     g_panel_layer = false;
 }
 
-/* THE GHOST (OPT_GHOST): this console's player's piece where it would land
- * (tengen_drop_distance), in outline, under everything else on the board —
- * a coop partner's piece passing over it hides it, and so does the piece
- * itself once it is that low. Only on this player's own board and only in
- * play: a paused race showing the rival's board has no ghost of anybody's. */
-static void draw_ghost(void) {
-    const TengenGame *g = &g_session.game;
-    const TengenPlayerState *sp = &g->player[g_view];
-    if (!(options_mine() & OPT_GHOST) || g->paused || field_view() != g_view ||
-        !sp->game_active || sp->line_clear_timer > 0)
+/* THE GHOSTS (OPT_GHOST): a falling piece where it would land
+ * (tengen_drop_distance), in outline, under everything else on the board.
+ * This player's, and on a coop board the partner's too — a person's or the
+ * computer's — each in its own piece's colours, this player's drawn last so
+ * it wins where the two meet; a piece passing over a ghost hides it, the
+ * piece itself included once it is that low. Only on this player's own
+ * board and only in play: a paused race showing the rival's board has no
+ * ghost of anybody's.
+ *
+ * THE OUTLINE IS THE PIECE'S OWN (see T_GHOST): the four cells' tiles, read
+ * back out of video memory, make one silhouette thirty-two pixels square,
+ * and a pixel of it is outline if a pixel beside it is not in it. Made again
+ * only when the piece, its turn or the skin changes. */
+static struct { TengenTetromino piece; uint8_t orientation; int8_t skin; } g_ghost_made[2];
+
+/* A tile row (eight nibbles) as eight bits of ink, the leftmost pixel bit 0,
+ * and back: the nibbles' low bits gathered together in three folds. */
+static uint32_t ink_bits(uint32_t row) {
+    uint32_t m = (row | (row >> 1) | (row >> 2) | (row >> 3)) & 0x11111111u;
+    m = (m | (m >> 3)) & 0x03030303u;
+    m = (m | (m >> 6)) & 0x000F000Fu;
+    return (m | (m >> 12)) & 0xFFu;
+}
+static uint32_t bits_ink(uint32_t bits) {
+    uint32_t m = (bits | (bits << 12)) & 0x000F000Fu;
+    m = (m | (m << 6)) & 0x03030303u;
+    return ((m | (m << 3)) & 0x11111111u) * GHOST_INK;
+}
+
+static void ghost_make(int which, const TengenPlayerState *sp,
+                       const TengenCell cells[4], int count, int r0, int c0) {
+    int skin = play_skin();
+    if (g_ghost_made[which].piece == sp->piece.current &&
+        g_ghost_made[which].orientation == sp->piece.orientation &&
+        g_ghost_made[which].skin == skin)
         return;
-    int d = tengen_drop_distance(g, (TengenPlayerSlot)g_view);
+    g_ghost_made[which].piece = sp->piece.current;
+    g_ghost_made[which].orientation = sp->piece.orientation;
+    g_ghost_made[which].skin = (int8_t)skin;
+
+    uint32_t sil[34] = { 0 };              /* rows -1..32, bit x = column x */
+    const vu16 *art = MEM_CHARBLOCK(CHARBLOCK);
+    for (int i = 0; i < count; i++) {
+        int tile = piece_cell_tile(sp->piece.current, sp->piece.orientation, i);
+        int y0 = (cells[i].row - r0) * 8, x0 = (cells[i].col - c0) * 8;
+        for (int y = 0; y < 8; y++) {
+            uint32_t row = art[tile * 16 + y * 2] | ((uint32_t)art[tile * 16 + y * 2 + 1] << 16);
+            sil[1 + y0 + y] |= ink_bits(row) << x0;
+        }
+    }
+    /* OUTSIDE IS WHAT THE EDGE OF THE SQUARE REACHES without crossing ink —
+     * not every blank pixel: the O's tiles leave one inside it, and an
+     * outline drawn round that was a dot in the middle of the ghost. */
+    uint32_t far[34];
+    far[0] = far[33] = ~0u;
+    for (int y = 1; y <= 32; y++) far[y] = ~sil[y] & 0x80000001u;
+    for (bool grew = true; grew;) {
+        grew = false;
+        for (int y = 1; y <= 32; y++) {
+            uint32_t n = (far[y] | (far[y] << 1) | (far[y] >> 1) |
+                          far[y - 1] | far[y + 1]) & ~sil[y];
+            if (n != far[y]) { far[y] = n; grew = true; }
+        }
+    }
+    vu16 *out = MEM_CHARBLOCK(CHARBLOCK) + (T_GHOST + which * GHOST_TILES) * 16;
+    for (int i = 0; i < count; i++) {
+        int y0 = (cells[i].row - r0) * 8, x0 = (cells[i].col - c0) * 8;
+        for (int y = 0; y < 8; y++) {
+            int at = 1 + y0 + y;
+            uint32_t by_far = (far[at] << 1) | 1u | (far[at] >> 1) | 0x80000000u |
+                              far[at - 1] | far[at + 1];
+            uint32_t px = bits_ink(((sil[at] & by_far) >> x0) & 0xFFu);
+            out[i * 16 + y * 2] = (uint16_t)px;
+            out[i * 16 + y * 2 + 1] = (uint16_t)(px >> 16);
+        }
+    }
+}
+
+static void draw_ghost(int slot, int which, int bank) {
+    const TengenGame *g = &g_session.game;
+    const TengenPlayerState *sp = &g->player[slot];
+    if (!sp->game_active || sp->line_clear_timer > 0) return;
+    int d = tengen_drop_distance(g, (TengenPlayerSlot)slot);
     if (d <= 0) return;
     TengenCell cells[4];
-    int count = tengen_active_piece_cells(g, (TengenPlayerSlot)g_view, cells);
+    int count = tengen_active_piece_cells(g, (TengenPlayerSlot)slot, cells);
+    int r0 = cells[0].row, c0 = cells[0].col;
+    for (int i = 1; i < count; i++) {
+        if (cells[i].row < r0) r0 = cells[i].row;
+        if (cells[i].col < c0) c0 = cells[i].col;
+    }
+    ghost_make(which, sp, cells, count, r0, c0);
     for (int i = 0; i < count; i++) {
         int row = cells[i].row + d;
         int col = cells[i].col - field_col0();
         if (row < 0 || col < 0 || col >= field_cols()) continue;
-        int m = 0;
-        for (int j = 0; j < count; j++) {
-            int dr = cells[j].row - cells[i].row, dc = cells[j].col - cells[i].col;
-            if (dr == -1 && dc == 0) m |= GHOST_UP;
-            if (dr == 1 && dc == 0) m |= GHOST_DOWN;
-            if (dr == 0 && dc == -1) m |= GHOST_LEFT;
-            if (dr == 0 && dc == 1) m |= GHOST_RIGHT;
-        }
         set_map_tile(field_tx() + col, FIELD_TY + row,
-                      WITH_BANK(T_GHOST + m, PAL_PIECE_BANK));
+                      WITH_BANK(T_GHOST + which * GHOST_TILES + i, bank));
     }
+}
+
+static void draw_ghosts(void) {
+    if (!(options_mine() & OPT_GHOST) || g_session.game.paused ||
+        field_view() != g_view)
+        return;
+    if (g_session.game.coop) draw_ghost(g_view ^ 1, 1, PAL_PIECE2_BANK);
+    draw_ghost(g_view, 0, PAL_PIECE_BANK);
 }
 
 void draw_field(void) {
@@ -1920,7 +1997,7 @@ void draw_field(void) {
      * of nowhere when it locked and joined the settled cells. The partner
      * goes down first so the local piece wins any overlap, which is the one
      * the player is steering. */
-    draw_ghost();
+    draw_ghosts();
     for (int pass = 0; pass < 2; pass++) {
         /* field_view, not g_view: a paused race shows the other board, and
          * the piece falling on it is that board's. */

@@ -327,6 +327,29 @@ void nes_audio_play(uint8_t track_id) {
     nes6502_call(&g_cpu, AUDIO_SET_TRACK_ADDR, track_id, 20000);
 }
 
+/* THE PAUSE'S GAG, OPENED FOR A TICK. MUSIC_SUSPEND does not stop the
+ * engine: it sets the floor a voice's class has to reach to be heard ($FA =
+ * the request's $3C times four, LD02E), and every voice below it is held
+ * silent where it is (the `cmp $FA` at $D889). The screen's blip is over
+ * that floor; the cursor's tick is not, and neither is any tune. This lowers
+ * the floor for a few frames when it is higher, and puts it back after —
+ * unless a request has moved it in between, which then stands. The port's
+ * own: the cartridge's pause has no menu to tick. See NES_GAG_TICK_FLOOR. */
+#define NES_GAG 0xFA
+static uint8_t g_gag_frames, g_gag_floor, g_gag_was;
+
+void nes_audio_gag_lower(uint8_t floor, uint8_t frames) {
+    if (!g_ready) return;
+    if (g_nes_ram[NES_GAG] > floor) {
+        g_gag_was = g_nes_ram[NES_GAG];
+        g_nes_ram[NES_GAG] = floor;
+    }
+    if (g_nes_ram[NES_GAG] == floor && g_gag_was > floor) {
+        g_gag_floor = floor;
+        g_gag_frames = frames;
+    }
+}
+
 /* The rest of the cartridge, for callers that are not the sound engine; see
  * the note in nes_audio.h. One machine, one RAM — deliberately. */
 bool nes_rom_call(uint16_t addr, uint8_t a, uint32_t max_steps) {
@@ -364,6 +387,8 @@ void nes_audio_frame(void) {
     /* The step limit is a hang guard: the engine's worst frame is around 2300
      * instructions, so this is an order of magnitude of headroom. */
     if (!nes6502_call(&g_cpu, AUDIO_UPDATE_ADDR, 0, 60000)) return;
+    if (g_gag_frames && --g_gag_frames == 0 && g_nes_ram[NES_GAG] == g_gag_floor)
+        g_nes_ram[NES_GAG] = g_gag_was;
 
     const uint8_t *apu = g_cpu.bus.apu;
     uint8_t enables = apu[R_SND_CHN];

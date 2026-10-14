@@ -678,17 +678,22 @@ static void draw_pmenu(const char *const *lines, int count, int cursor) {
 
 /* THE OPTIONS' WINDOW IS A TABLE, NOT A LIST, so its lines do not centre:
  * the switch's name stands at the left, after the arrow's two columns, and
- * ON or OFF at the right, in a column of their own — on the offset layer,
- * three pixels in, which leaves the right edge the same margin the arrow
- * leaves the left. ON in the heading's colour, OFF in the names': which
- * switches are on is what a player opens it to see. FAST SHIFT is the
- * longest name, and its OFF still stands clear of it. */
+ * its box at the right, in a column of its own (T_CHECK_OFF): empty for
+ * OFF, a dot in it for ON, and ON in the heading's colour — which switches
+ * are on is what a player opens it to see. The box stands as far in from
+ * the frame on the right as the arrow's tail does on the left.
+ *
+ * SIXTEEN WIDE, the menu's own width. ON and OFF were words once, and the
+ * longest name with OFF after it needed eighteen: the tunes' window's,
+ * which covers the panels' last column of figures. A box is one letter
+ * wide and leaves FAST SHIFT its ten. */
+#define OPT_W 16
 static const char *const kOptionNames[OPT_COUNT] = {
     "HARD DROP", "FAST DOWN", "FAST SHIFT", "GHOST", "SWAP A-B"
 };
 
 static void draw_options_box(void) {
-    const int w = PMENU_W_MAX, h = OPT_H;
+    const int w = OPT_W, h = OPT_H;
     pmenu_frame(w, h);
     int tx = (SCREEN_TW - w) / 2, ty = (SCREEN_TH - h) / 2;
     draw_pmenu_line(tx + 1, w - 2, ty + 1, "OPTIONS", BANK_NOTE, PL_HEADING, false);
@@ -702,11 +707,10 @@ static void draw_options_box(void) {
             set_map_tile(tx + 2, y, WITH_BANK(T_ARROW_HEAD, BANK_LABEL));
         }
         bool on = option_value(i);
-        const char *value = on ? "ON" : "OFF";
-        int len = on ? 2 : 3;
-        for (int c = 0; c < len; c++)
-            set_stats_tile(tx + w - 2 - len + c, y,
-                           WITH_BANK(ascii_tile(value[c]), on ? BANK_NOTE : BANK_LABEL));
+        uint16_t box = on ? T_CHECK_ON : T_CHECK_OFF;
+        int bank = on ? BANK_NOTE : BANK_LABEL;
+        set_map_tile(tx + w - 3, y, WITH_BANK(box, bank));
+        set_map_tile(tx + w - 2, y, WITH_BANK(box + 1, bank));
     }
 }
 
@@ -836,6 +840,15 @@ static void tunes_close(bool take) {
     }
 }
 
+/* THE CURSOR'S TICK UNDER THE PAUSE: the pause has the engine gagged
+ * (MUSIC_SUSPEND), and the tick is one of the sounds the gag holds, so it
+ * is let through for its length (nes_audio_gag_lower) — the tune stays held.
+ * A prototype whose pause plays on has no gag to lower. */
+static void pause_tick(void) {
+    nes_audio_gag_lower(NES_GAG_TICK_FLOOR, NES_GAG_TICK_FRAMES);
+    cursor_blip();
+}
+
 /* One frame of it. Returns true if the menu ate the input, which is what
  * keeps the cheat codes out of it — they are entered on the pad while paused
  * too, and a Down meant for this menu is the first byte of one of them. */
@@ -869,18 +882,26 @@ static bool pause_menu_input(uint8_t pressed, uint8_t mine, bool *leaving) {
      * Right, which is how a value is changed on the settings screen; B goes
      * back to the menu. Nothing waits to be confirmed — a switch is thrown
      * as it is pressed (option_toggle). */
+    /* ...AND IT TICKS as the settings screen does: the cursor's tick for a
+     * move and for a switch thrown, which is a value changed and not a
+     * screen; the screen's blip for B. */
     if (g_pause_options) {
+        bool moved = true;
         if (pressed & TENGEN_BTN_UP)
             g_option_row = (uint8_t)((g_option_row + OPT_COUNT - 1) % OPT_COUNT);
         else if (pressed & (TENGEN_BTN_DOWN | TENGEN_BTN_SELECT))
             g_option_row = (uint8_t)((g_option_row + 1) % OPT_COUNT);
+        else
+            moved = false;
         if (pressed & (TENGEN_BTN_A | TENGEN_BTN_LEFT | TENGEN_BTN_RIGHT)) {
             option_toggle(g_option_row,
                           (mine & (TENGEN_BTN_A | TENGEN_BTN_LEFT | TENGEN_BTN_RIGHT)) != 0);
-            screen_blip();
+            pause_tick();
         } else if (pressed & TENGEN_BTN_B) {
             g_pause_options = false;
             screen_blip();
+        } else if (moved) {
+            pause_tick();
         }
         return true;
     }
@@ -907,8 +928,10 @@ static bool pause_menu_input(uint8_t pressed, uint8_t mine, bool *leaving) {
          * the column, and SELECT does too. Left and Right are kept from when
          * the tune was changed with them on the line above. */
         if (pressed & (TENGEN_BTN_LEFT | TENGEN_BTN_RIGHT | TENGEN_BTN_UP |
-                        TENGEN_BTN_DOWN | TENGEN_BTN_SELECT))
+                        TENGEN_BTN_DOWN | TENGEN_BTN_SELECT)) {
             g_pause_yes = !g_pause_yes;
+            if (!(pressed & (TENGEN_BTN_A | TENGEN_BTN_B))) pause_tick();
+        }
         if (pressed & TENGEN_BTN_B) {
             g_pause_confirm = false;
             screen_blip();
@@ -950,10 +973,16 @@ static bool pause_menu_input(uint8_t pressed, uint8_t mine, bool *leaving) {
      * menu has no reason to be the one place in the port where it does not.
      * Up goes up; with two entries it was the same step as the others, with
      * three it is not. */
+    /* ...with the cursor's tick, as processMenuInput plays on every move of
+     * the cartridge's own menus (:4655) and this port's front end does. */
+    bool moved = true;
     if (pressed & TENGEN_BTN_UP)
         g_pause_row = (uint8_t)((g_pause_row + PMENU_ROWS - 1) % PMENU_ROWS);
     else if (pressed & (TENGEN_BTN_DOWN | TENGEN_BTN_SELECT))
         g_pause_row = (uint8_t)((g_pause_row + 1) % PMENU_ROWS);
+    else
+        moved = false;
+    if (moved && !(pressed & TENGEN_BTN_A)) pause_tick();
     /* A TAKES THE CHOICE, and only A. START used to do it here as well and it
      * cost the menu its way out — see the note at the top. Each entry opens
      * a window of its own; what the menu's box covered and the window's does
@@ -966,7 +995,7 @@ static bool pause_menu_input(uint8_t pressed, uint8_t mine, bool *leaving) {
             g_pause_options = true;
             g_option_row = 0;
             /* Saved out of the blank, as the tunes' window is below. */
-            pmenu_reach(PMENU_W_MAX, OPT_H);
+            pmenu_reach(OPT_W, OPT_H);
         } else {
             tunes_open();
             /* WHAT THE WINDOW WILL COVER IS SAVED NOW, out of the blank:
