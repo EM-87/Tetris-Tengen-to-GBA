@@ -942,15 +942,18 @@ def end_page_check(rom_path):
     """LA PAGINA DE LA PARTIDA, EN SU TABLERO, BAJO EL ACORDE.
 
     Acabada la partida, el cartel de GAME OVER solo un momento
-    (END_PAGE_WAIT_FRAMES), y luego la pila muerta baja fila a fila por el
-    fondo del pozo -- la cortinilla del Tetris de Game Boy -- y en las filas
-    que deja sale la pagina (hud.c, draw_end_page): TIME y PIECES encima del
-    cartel, SINGLE, DOUBLE, TRIPLE, TETRIS, RATE y DROUGHT debajo, cada una
-    con su cifra a la derecha. Se mira:
+    (END_PAGE_WAIT_FRAMES), y luego la cortinilla del Tetris de Game Boy: un
+    muro de los ladrillos de la pausa (T_BRICK) sube fila a fila desde el
+    suelo tapando la pila muerta, se queda entero un momento, y baja fila a
+    fila por el fondo del pozo; en las filas que deja sale la pagina (hud.c,
+    draw_end_page): TIME y PIECES encima del cartel, SINGLE, DOUBLE, TRIPLE,
+    TETRIS, RATE y DROUGHT debajo, cada una con su cifra a la derecha. Se
+    mira:
 
       * sin el acorde, nada: el tablero muerto y su cartel, como el cartucho;
-      * con el, a media cortinilla: TIME ya escrito, la pila bajada debajo, y
-        DROUGHT todavia no;
+      * con el, al principio el cartel solo; a media subida, ladrillos abajo y
+        la pila arriba; el muro entero; a media bajada, TIME ya escrito, los
+        ladrillos debajo, y DROUGHT todavia no;
       * acabada: las ocho lineas, sin un bloque que quede en el pozo, las
         cifras de las limpiezas las que se jugaron (un TETRIS hecho a mano) y
         RATE la cuenta de ellas;
@@ -1002,17 +1005,17 @@ def end_page_check(rom_path):
     def page(core):
         return [tilemap_text(core, r, PAGE_TX, PAGE_TX + 10) for r in range(PF_H)]
 
-    def blocks_left(core, first, last):
-        """Block tiles ($01-$0F) still on the main map in those columns,
-        outside the plaque's rows."""
-        n = 0
-        for row in range(PF_H):
-            if 4 <= row < 8:
-                continue
-            for col in range(first, last):
-                tile = core.memory.u16[SCREENBLOCK_ADDR + (row * 32 + col) * 2] & 0x3FF
-                n += 1 <= tile <= 0x0F
-        return n
+    T_BRICK = 0x0F
+
+    def tiles(core, first, last, rows=range(PF_H)):
+        """The main map's tile ids in those columns and rows, the plaque's
+        four rows left out."""
+        return [core.memory.u16[SCREENBLOCK_ADDR + (row * 32 + col) * 2] & 0x3FF
+                for row in rows if not 4 <= row < 8 for col in range(first, last)]
+
+    def blocks_left(core, first, last, rows=range(PF_H)):
+        """Block tiles ($01-$0F, the bricks among them) in those columns."""
+        return sum(1 <= t <= 0x0F for t in tiles(core, first, last, rows))
 
     # Without the chord: the cartridge's game over, and nothing written.
     core, screen = finished(False, 0)
@@ -1033,22 +1036,35 @@ def end_page_check(rom_path):
         if core is None:
             failures.append(f"{name}: el tablero enterrado no muere")
             continue
-        run(core, 30)
+        run(core, 20)                 # the plaque alone
         early = page(core)
-        run(core, 50)                 # 80 after: the curtain some rows down
+        early_bricks = tiles(core, PAGE_TX, PAGE_TX + 10).count(T_BRICK)
+        run(core, 40)                 # 60 after: the wall half way up
+        low = tiles(core, PAGE_TX, PAGE_TX + 10, range(14, PF_H))
+        high = tiles(core, PAGE_TX, PAGE_TX + 10, range(0, 4))
+        run(core, 40)                 # 100 after: the wall whole
+        whole = tiles(core, PAGE_TX, PAGE_TX + 10)
+        run(core, 40)                 # 140 after: the wall half way down
         mid = page(core)
-        mid_blocks = blocks_left(core, PAGE_TX, PAGE_TX + 10)
-        run(core, 120)                # 200 after: all the way
+        mid_bricks = tiles(core, PAGE_TX, PAGE_TX + 10, range(14, PF_H)).count(T_BRICK)
+        run(core, 110)                # 250 after: all the way
         done = page(core)
         lines = dict((r.split()[0], r.split()[-1]) for r in done if r.split())
-        if any(r for i, r in enumerate(early) if not 4 <= i < 8):   # the plaque's
-            failures.append(f"{name}: la pagina sale antes que el cartel solo: "
-                            f"{early}")
+        if any(r for i, r in enumerate(early) if not 4 <= i < 8) or early_bricks:
+            failures.append(f"{name}: la cortinilla o la pagina salen antes que "
+                            f"el cartel solo: {early_bricks} ladrillos, {early}")
+        elif low.count(T_BRICK) != len(low) or T_BRICK in high:
+            failures.append(f"{name}: a media subida no hay ladrillos abajo y la "
+                            f"pila arriba ({low.count(T_BRICK)} de {len(low)} "
+                            f"abajo, {high.count(T_BRICK)} arriba)")
+        elif whole.count(T_BRICK) != len(whole):
+            failures.append(f"{name}: el muro no llega a estar entero "
+                            f"({whole.count(T_BRICK)} de {len(whole)})")
         elif not mid[1].startswith("TIME") or any("DROUGHT" in r for r in mid) \
-                or not mid_blocks:
-            failures.append(f"{name}: a media cortinilla no se ve TIME arriba, "
-                            f"la pila bajada debajo y el resto aun por salir "
-                            f"({mid_blocks} bloques): {mid}")
+                or not mid_bricks:
+            failures.append(f"{name}: a media bajada no se ve TIME arriba, los "
+                            f"ladrillos debajo y el resto aun por salir "
+                            f"({mid_bricks} ladrillos): {mid}")
         elif not re.fullmatch(r"TIME +\d+:\d\d", done[1]):
             failures.append(f"{name}: la linea TIME no es MM:SS: {done[1]!r}")
         elif [r.split()[0] if r.split() else "" for r in
@@ -1069,7 +1085,7 @@ def end_page_check(rom_path):
                 failures.append(f"{name}: RATE {rate}% no es la cuenta de "
                                 f"{counts}")
             else:
-                print(f"  {name}: cartel solo, cortinilla, y la pagina: "
+                print(f"  {name}: cartel solo, el muro sube, baja, y la pagina: "
                       f"{' | '.join(r for r in done if r)}")
         del core, screen
 
@@ -1697,11 +1713,13 @@ def suspend_check(rom_path):
 
     gba_dir = os.path.join(os.path.dirname(rom_path), "..", "gba")
     want = [name for name, header in (("Tengen", "splash_logo.h"),
+                                      ("Mirrorsoft", "splash_mirrorsoft.h"),
                                       ("Tetris", "splash_tetris.h"))
             if os.path.exists(os.path.join(gba_dir, header))]
     if want:
         # The Game Boy Player's logo first, when the build has it (about a
-        # second and a half), then the publisher's — red on white — and the
+        # second and a half), then the publisher's — red on white —,
+        # Mirrorsoft's — red letters on a blue slab, nothing yellow — and the
         # Tetris logo — its blue T and its yellow letters — each on white,
         # and the title (mode 0, lit) after the last. Named frame by frame,
         # in the order they come.
@@ -1726,6 +1744,7 @@ def suspend_check(rom_path):
             blue = count(lambda r, g, b: b > 150 and r < 120)
             red = count(lambda r, g, b: r > 200 and g < 80 and b < 80)
             name = ("Tetris" if yellow > 500 and blue > 2000 else
+                    "Mirrorsoft" if red > 300 and blue > 2000 and yellow < 100 else
                     "Tengen" if red > 1000 and blue < 100 else None)
             if name and (not seen or seen[-1] != name):
                 seen.append(name)
@@ -1738,8 +1757,8 @@ def suspend_check(rom_path):
             print(f"  al encender: {' y '.join(seen)} sobre blanco, y el "
                   f"titulo en el frame {title_at}")
     else:
-        print("  (sin gba/splash_logo.h ni splash_tetris.h: esta construccion "
-              "no tiene logos)")
+        print("  (sin gba/splash_logo.h, splash_mirrorsoft.h ni splash_tetris.h: "
+              "esta construccion no tiene logos)")
 
     for f in failures:
         print(f"FALLA: {f}")

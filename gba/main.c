@@ -282,11 +282,14 @@ int main(void) {
             /* initializeTitleScreen ends with this (main.asm.txt:4489). */
             front_music(FRONT_TITLE_THEME);
             set_offset_layer(TITLE_LOGO_SHIFT_PX);
-            /* L+R FINDS IT; L AND R ALONE DRIVE IT AFTERWARDS.
+            /* L+R FINDS IT; L AND R ALONE DRIVE IT AFTERWARDS — and only
+             * once the game's own chord has been rung (GAME SELECT or LEVEL
+             * SETTINGS), as everything else the port adds is: the
+             * prototypes are no part of the cartridge, so without it the
+             * title is the cartridge's and the shoulders do nothing here.
              *
-             * The chord is the discovery, and it is the only cheat on this
-             * screen: it unlocks NOTHING else — a player who finds the
-             * prototype title has not thereby found the hidden tunes (see
+             * The title's chord unlocks nothing else — finding the
+             * prototype title is not finding the hidden tunes (see
              * unlock_cheats). Until it is rung, a lone shoulder does nothing
              * at all, so the title cannot be changed by accident.
              *
@@ -300,7 +303,9 @@ int main(void) {
                 bool chord = shoulder_chord();
                 bool tap_l = pressed_shoulder(SHOULDER_L);
                 bool tap_r = pressed_shoulder(SHOULDER_R);
-                if (!g_title_skin_found) {
+                if (!g_pause_unlocked) {
+                    /* the cartridge's title, and nothing to find on it */
+                } else if (!g_title_skin_found) {
                     if (chord) { g_title_skin_found = true; skin_step = 1; }
                 } else if (!chord && (tap_l || tap_r)) {
                     skin_step = tap_r ? 1 : TITLE_SKIN_COUNT - 1;
@@ -1407,8 +1412,11 @@ int main(void) {
         /* ...AND ONLY WHERE THERE IS A COSSACK TO RECOLOUR, which is HUD
          * STATS and nowhere else. On any other HUD the chord changed a
          * palette nothing on screen was using and chirped to say so, which is
-         * a control that answers and does nothing. */
-        if (hud_swappable && hud_stats() && !hold_on() && shoulder_chord()) {
+         * a control that answers and does nothing. And only under the
+         * match's chord: a cossack of another colour is the port's toy, not
+         * the cartridge's. */
+        if (hud_swappable && hud_stats() && !hold_on() && shoulder_chord() &&
+            match_chord()) {
             g_idle_palette = (uint8_t)((g_idle_palette + 1) % IDLE_PALETTE_COUNT);
             nes_audio_play(NES_SOUND_CHIRP);
         }

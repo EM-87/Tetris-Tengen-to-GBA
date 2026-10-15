@@ -174,6 +174,17 @@ def press_start(core):
     run(core, 6)
 
 
+def ring_chord_from_title(core, settle=24):
+    """The game's chord, from the title and back to it: START to GAME
+    SELECT, L+R there, B. Everything the port adds waits for it — the
+    prototypes' titles on the title's own L and R among it."""
+    press_start(core); run(core, 10)
+    core.set_keys(KEYS["L"], KEYS["R"]); run(core, 4)
+    core.set_keys(); run(core, 12)
+    core.set_keys(KEYS["B"]); run(core, 4)
+    core.set_keys(); run(core, settle)
+
+
 def start_game(core, tune=0):
     """Gets past the title and the selection screens into a solo game.
 
@@ -315,8 +326,8 @@ KEYS = {"A": 0, "B": 1, "SELECT": 2, "START": 3,
         "RIGHT": 4, "LEFT": 5, "UP": 6, "DOWN": 7,
         # The GBA's two extra buttons. The game proper never reads them —
         # they have no NES equivalent — so they are the port's own switches:
-        # L or R swaps the title skin; in a match L+R changes the cossack
-        # and SELECT swaps the right-hand HUD box.
+        # under the game's chord L or R swaps the title skin and in a match
+        # L+R changes the cossack; SELECT swaps the right-hand HUD box.
         "R": 8, "L": 9}
 CODE_LEVEL_UP = "UP DOWN UP DOWN LEFT RIGHT B B A".split()
 CODE_LONG_BAR = "DOWN DOWN LEFT RIGHT LEFT RIGHT B A".split()
