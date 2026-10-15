@@ -131,6 +131,24 @@ static void rumble_step(TengenStepResult step) {
     if (step.topped_out) gbp_rumble(45);
 }
 
+/* THE GAME'S OWN FIGURES (tengen_stats.h), counted for both players from
+ * the first frame, whatever the chord: it is only the page that is behind
+ * it. Fed beside note_award, wherever a step is taken. */
+TengenStats g_stats[2];
+int8_t g_end_curtain = -1;
+static uint16_t g_end_frames;
+
+void stats_begin_match(void) {
+    tengen_stats_begin(&g_stats[0]);
+    tengen_stats_begin(&g_stats[1]);
+    g_end_frames = 0;
+    g_end_curtain = -1;
+}
+
+static void stats_watch(int slot, TengenStepResult step) {
+    tengen_stats_step(&g_stats[slot], &g_session.game, (TengenPlayerSlot)slot, &step);
+}
+
 /* `level_tune` is whether the LEVEL-UP'S MUSIC plays this step, which is not
  * always this player's level-up: see link_play_frame. */
 static void announce(TengenStepResult step, bool level_tune) {
@@ -300,6 +318,7 @@ static void ai_play_frame(void) {
      * both of them, which is what announce_step already does. */
     TengenStepResult out = tengen_step(&g_session.game, TENGEN_PLAYER_2, buttons);
     note_award(TENGEN_PLAYER_2, out);
+    stats_watch(TENGEN_PLAYER_2, out);
     cossack_watch(TENGEN_PLAYER_2, out);
     if (out.topped_out) leader_record(TENGEN_PLAYER_2);
     announce_step(out);
@@ -1207,6 +1226,8 @@ bool link_play_frame(uint8_t pressed, bool *quit) {
         if (was_paused != g_session.game.paused) pause_toggled(was_paused);
         note_award(0, out[0]);
         note_award(1, out[1]);
+        stats_watch(0, out[0]);
+        stats_watch(1, out[1]);
         cossack_watch(0, out[0]);
         cossack_watch(1, out[1]);
         /* A GAME IS WRITTEN DOWN AS IT ENDS, not at the end of the match:
@@ -1448,6 +1469,7 @@ bool solo_play_frame(uint8_t buttons, uint8_t pressed, bool *quit) {
     if (options_mine() & OPT_SWAP_AB) buttons = pad_swap_ab(buttons);
     TengenStepResult local = tengen_step(&g_session.game, TENGEN_PLAYER_1, buttons);
     note_award(TENGEN_PLAYER_1, local);
+    stats_watch(TENGEN_PLAYER_1, local);
     cossack_watch(TENGEN_PLAYER_1, local);
     if (local.topped_out) leader_record(TENGEN_PLAYER_1);
     announce_step(local);
@@ -1466,7 +1488,10 @@ bool solo_play_frame(uint8_t buttons, uint8_t pressed, bool *quit) {
  * tile and sprite then landed while the screen was being scanned out, so a
  * falling piece could be drawn half in its old position and half in its new
  * one. So: vsync, then draw, then the audio in the time that is left. */
-/* UNDER THE CHORD, A NEW RECORD IS HEARD. The first frame this console's
+/* UNDER THE CHORD, A NEW RECORD IS HEARD. The match's chord: over a cable
+ * the master's, as for the pause menu and the tempo below, so a console
+ * that found it alone neither sings nor speeds up in a match that has
+ * neither. The first frame this console's
  * player's score passes the top of the table as the match began
  * (g_record_bar), the engine's unused level-up jingle plays — once a match.
  * The cartridge's tune is back in step after it on its own (it plays on
@@ -1474,7 +1499,7 @@ bool solo_play_frame(uint8_t buttons, uint8_t pressed, bool *quit) {
  * length with its clock running, so over a cable the two consoles' music
  * stays together. An empty table (a score of 0 at the top) is no record. */
 static void record_watch(void) {
-    if (!g_pause_unlocked || g_record_sung || !g_record_bar || g_demo ||
+    if (!pause_menu_on() || g_record_sung || !g_record_bar || g_demo ||
         g_session.game.paused)
         return;
     if (g_session.game.player[g_view].score <= g_record_bar) return;
@@ -1483,7 +1508,8 @@ static void record_watch(void) {
     handtune_duck(NES_UNUSED_LEVELUP_FRAMES);
 }
 
-/* THE TEMPO BY THE STACK, under the chord: how high the settled cells on
+/* THE TEMPO BY THE STACK, under the match's chord (pause_menu_on; without
+ * it the cartridge's tempo, whatever the stack): how high the settled cells on
  * this console's board reach decides how much faster the music runs, in
  * quarters of an extra step a frame (audio_frame). Twenty rows: below
  * twelve, the cartridge's tempo; from twelve, a quarter faster; from fifteen,
@@ -1538,8 +1564,36 @@ static void ai_think_spare(void) {
     tengen_ai_think_while(&g_ai, &g_session.game, TENGEN_PLAYER_2, ai_time_left);
 }
 
+/* THE PAGE THE BOARD TURNS INTO (see g_end_curtain): once the match is over
+ * — when the main loop stops stepping it, match_over — under the match's
+ * chord, never in the demo and not over a cable gone for good. The plaque
+ * alone for END_PAGE_WAIT_FRAMES, then the figures written out once (this
+ * player's; a coop board's, both players' together, as its BONUS show
+ * counts them) and the curtain let down a row every END_PAGE_ROW_FRAMES.
+ * The game over's own clock (GAMEOVER_HOLD_FRAMES) and its buttons are as
+ * they were: the page is read in the time the plaque already stood. Before
+ * the vertical blank: the writing out is no drawing. */
+static void end_page_frame(void) {
+    if (g_demo || g_link_lost || !pause_menu_on() || !match_over()) {
+        g_end_frames = 0;
+        g_end_curtain = -1;
+        return;
+    }
+    if (g_end_frames < 0xFFFF) g_end_frames++;
+    if (g_end_frames <= END_PAGE_WAIT_FRAMES) return;
+    if (g_end_curtain < 0) {
+        TengenStats s = g_session.game.coop
+                            ? tengen_stats_sum(&g_stats[0], &g_stats[1])
+                            : g_stats[g_view];
+        end_stats_compose(&s);
+    }
+    int rows = (g_end_frames - END_PAGE_WAIT_FRAMES - 1) / END_PAGE_ROW_FRAMES;
+    g_end_curtain = (int8_t)(rows > TENGEN_PF_HEIGHT ? TENGEN_PF_HEIGHT : rows);
+}
+
 void draw_match(bool *sweeping) {
     ai_think_spare();
+    end_page_frame();
     vsync();
     g_turn_vblank = g_vblank_count;
     if (g_repaint) {
@@ -1619,7 +1673,7 @@ void draw_match(bool *sweeping) {
      * and scanning the board put the frame that leaves a pause at line 226
      * of 227 (`--vblank`). A frame late is not something an ear hears. */
     record_watch();
-    if (g_pause_unlocked && !g_session.game.paused && !g_link_waiting &&
+    if (pause_menu_on() && !g_session.game.paused && !g_link_waiting &&
         !g_link_lost && g_session.game.player[g_view].game_active)
         g_tempo_quarters = stack_tempo();
 }

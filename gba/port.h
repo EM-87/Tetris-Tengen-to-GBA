@@ -74,6 +74,7 @@
 #include "../src/tengen_core.h"
 #include "../src/tengen_link.h"
 #include "../src/tengen_ai.h"
+#include "../src/tengen_stats.h"
 
 /* Generated from a cartridge dump by tools/extract_assets.py. */
 #include "tiles_game.h"
@@ -1789,7 +1790,11 @@ typedef enum {
  * all four are drawn at boot in that style (upload_tiles). */
 #define T_HOLD_LABEL (T_CHECK_ON + 2)
 #define HOLD_LABEL_W 4
-typedef char ghost_tiles_fit[T_HOLD_LABEL + HOLD_LABEL_W <= 1024 ? 1 : -1];
+/* ...AND A COLON, for the end page's TIME (MM:SS): the cartridge's lettering
+ * has none — its $3A is a corner of the box art — so it is drawn at boot in
+ * the letters' style (upload_tiles) and ascii_tile sends ':' to it. */
+#define T_COLON (T_HOLD_LABEL + HOLD_LABEL_W)
+typedef char ghost_tiles_fit[T_COLON + 1 <= 1024 ? 1 : -1];
 
 /* The frame's own tiles, out of the plaque the game over is drawn with. */
 #define T_BOX_TL 0x29
@@ -2161,5 +2166,19 @@ uint8_t options_mine(void);
 bool match_chord(void);
 void mend_bevels(bool on);
 bool hold_on(void);
+
+/* THE GAME'S OWN FIGURES ON ITS BOARD, once the match is over, under the
+ * match's chord (match.c, end_page_frame; hud.c, draw_field): the plaque
+ * alone first, as the cartridge has it, then the dead stack let down a row
+ * at a time out of the bottom of the well — the Game Boy Tetris's curtain —
+ * and in the rows it leaves the page, written out once (end_stats_compose).
+ * g_end_curtain is how many rows the stack has gone down, -1 for no page. */
+extern TengenStats g_stats[2];
+extern int8_t g_end_curtain;
+void stats_begin_match(void);
+void end_stats_compose(const TengenStats *s);
+#define END_PAGE_WAIT_FRAMES 60   /* the plaque on its own first */
+#define END_PAGE_ROW_FRAMES  3    /* the curtain: a row every three frames */
+#define END_PAGE_W           10   /* the page: a release board's width */
 
 #endif /* PORT_H */

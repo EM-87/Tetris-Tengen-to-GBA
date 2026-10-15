@@ -158,7 +158,12 @@ es otro START y el mando no vibra. Con el acorde, el crédito del port ocupa
 el sitio del de Mirrorsoft, SELECT en el título abre los récords, el Game Boy
 Player vibra, y además de lo de arriba la música acelera con la pila alta, la
 pausa tapa el tablero con un muro de bloques, un récord nuevo suena con el
-jingle que el cartucho no usa, y se arreglan los fallos propios del cartucho:
+jingle que el cartucho no usa (por cable, todo esto con el acorde del
+maestro), la demo la juega el ordenador del port, al acabar la partida la
+pila muerta baja como una cortinilla (la del Tetris de Game Boy) y en el
+tablero sale la hoja de la partida — TIME, PIECES, SINGLE, DOUBLE, TRIPLE,
+TETRIS, RATE (el % de líneas hechas de cuatro en cuatro) y DROUGHT (la racha
+más larga sin barra) —, y se arreglan los fallos propios del cartucho:
 el reparto en cooperativo que nace dentro de la pieza del compañero, la
 pieza que cae metida en las filas del compañero que se derrumban, los
 estantes del panel que no tocan la cuerda y el bisel de las fichas $01 y $03,
@@ -181,10 +186,13 @@ pasa de pantalla, B vuelve). El logo es de Nintendo y no va en el repo: se gener
 pérdidas (240x160) de un juego que lo muestre; sin él no sale ni se busca el
 Player.
 
-**Al encender sale el logo de Tengen** sobre blanco, como en los juegos de
-GBA, y solo al encender (no tras el reinicio por botones ni en la copia
-Single-Pak). El logo no va en el repo: se genera una vez con
-`python3 tools/make_splash.py logo.png`, y sin él la ROM arranca directa.
+**Al encender salen el logo de Tengen y el de Tetris** sobre blanco, como en
+los juegos de GBA (y como abre todo Tetris con licencia), y solo al encender
+(no tras el reinicio por botones ni en la copia Single-Pak). Los logos no van
+en el repo: se generan una vez con
+`python3 tools/make_splash.py logo.png` y
+`python3 tools/make_splash.py tetris_logo.png --tetris` (este con 256 colores,
+por sus degradados); sin ellos la ROM arranca directa.
 
 Con el juego en pausa entran los tres códigos originales, un botón por
 frame:

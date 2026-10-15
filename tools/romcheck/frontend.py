@@ -12,8 +12,8 @@ from .harness import (
     ONSCREEN_MIN_INK, PALETTE_ADDR, PM_EXIT, PM_L, pmenu_span,
     PM_R, SCREENBLOCK_ADDR, SCREEN_H, SCREEN_TW_TILES,
     SCREEN_W, TENGEN_PF_HEIGHT, TENGEN_PF_WIDTH, TILE,
-    TITLE_PAL_BASE, TITLE_SHOW_FRAMES, game_offsets, game_state_address,
-    load, oam_visible, pixels, press_start,
+    TITLE_PAL_BASE, TITLE_SHOW_FRAMES, check_layout, game_offsets,
+    game_state_address, load, oam_visible, pixels, press_start,
     run, sound_state, tilemap_text, to_music_page,
 )
 
@@ -410,6 +410,16 @@ def demo_check(rom_path):
     else:
         print(f"  juega sola: {cells} celdas asentadas sin tocar el mando")
 
+    # WHOSE COMPUTER: without the chord the cartridge's, TengenAi's knobs off
+    # (`smart` among them); under it the port's, read below.
+    ai, _ = game_state_address(rom_path, "g_ai")
+    smart_at = None if ai is None else ai + check_layout(rom_path)["ai_smart"]
+    if smart_at is not None and core.memory.u8[smart_at]:
+        failures.append("sin el acorde la demo juega con el ordenador del port, "
+                         "no con el del cartucho")
+    elif smart_at is not None:
+        print("  sin el acorde, la juega el ordenador del cartucho")
+
     # ...and START is the way out, to GAME SELECT, not a pause.
     core.set_keys(KEYS["START"])
     run(core, 4)
@@ -472,6 +482,11 @@ def demo_check(rom_path):
         if started is None:
             failures.append("con el acorde la demo no arranca")
         else:
+            if smart_at is not None and not core.memory.u8[smart_at]:
+                failures.append("con el acorde la demo sigue con el ordenador "
+                                 "del cartucho, no con el del port (smart)")
+            elif smart_at is not None:
+                print("  con el acorde, la juega el ordenador del port (smart)")
             run(core, 60)
             heard = sum(1 for _ in range(120)
                         if (core.run_frame() or True) and core.memory.u8[playing])

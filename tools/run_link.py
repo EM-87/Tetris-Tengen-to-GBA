@@ -1533,9 +1533,57 @@ def pause_check(rom):
         return 1
     print("OK: el menu de pausa va por cable y hace lo mismo en las dos consolas.")
     if (menu_list_check(rom) or levelup_music_check(rom) or
-            coop_levelup_music_check(rom) or options_check(rom)):
+            coop_levelup_music_check(rom) or options_check(rom) or
+            tempo_check(rom, start)):
         return 1
     return late_check(rom)
+
+
+def tempo_check(rom, start):
+    """EL TEMPO POR LA PILA ES DEL ACORDE DE LA PARTIDA, no del de cada consola.
+
+    Bajo el acorde la musica corre un cuarto mas desde doce filas y la mitad
+    desde quince (stack_tempo); sin el, el tempo del cartucho por alta que
+    este la pila. Por cable el acorde de la partida es el del maestro: con
+    solo el del esclavo, ninguna de las dos acelera; con solo el del
+    maestro, las dos. Se lee g_tempo_quarters, lo que cada frame deja para
+    el siguiente audio_frame, con dieciseis filas puestas en los dos
+    tableros de las dos consolas (las mismas, para no romper el paso)."""
+    from romcheck.harness import CELL_BLOCK, CELL_WALL, PF_W
+    tempo, why = symbol(rom, "g_tempo_quarters")
+    sym, why2 = symbol(rom, "g_session")
+    if tempo is None or sym is None:
+        print(f"SALTADO: {why or why2}")
+        return 0
+    import run_rom
+    off = run_rom.game_offsets(rom)
+    PF = 20 * PF_W
+    failures = []
+    for chord, want, name in (([False, True], [0, 0], "solo el del esclavo"),
+                              ([True, False], [2, 2], "solo el del maestro")):
+        cores, both, tap = start(chord)
+        for core in cores:
+            for board in (0, 1):
+                at = sym[0] + off["field"] + board * PF
+                for row in range(4, 20):
+                    for col in range(PF_W):
+                        cell = (CELL_WALL if col in (0, PF_W - 1) else
+                                0 if col == 5 else CELL_BLOCK)
+                        core.memory.u8[at + row * PF_W + col] = cell
+        both(6)
+        got = [c.memory.u8[tempo[0]] for c in cores]
+        if got != want:
+            failures.append(f"con {name}, el tempo con la pila a dieciseis "
+                            f"filas es {got} cuartos, no {want}")
+        else:
+            print(f"  con {name}, pila de dieciseis filas: {got[0]} cuartos "
+                  f"de mas en las dos")
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: el tempo por la pila sigue al acorde de la partida en las dos.")
+    return 0
 
 
 def options_check(rom):

@@ -381,12 +381,20 @@ int main(void) {
                                  false, false, false);
                 tengen_ai_reset(&g_ai);
                 /* The cartridge's computer as it ships: TengenAi's knobs
-                 * all left off. */
+                 * all left off — EXCEPT UNDER THE CHORD, where the computer
+                 * of every match is the port's (`smart`, as in VERSUS and
+                 * WITH COMPUTER) and the demo shows that one. Same pad and
+                 * same pace; nobody beside it to read or keep up with, so
+                 * `coop_aware`, `adaptive` and `deep` stay off. And the
+                 * cartridge's bugs mended, as in any match under it. */
+                g_ai.smart = g_pause_unlocked;
+                g_session.game.mended = g_pause_unlocked;
                 g_ai_last_piece = TT_NONE;
                 g_ai_last_partner = TT_NONE;
                 g_ai_frame = 0;
                 points_clear();
                 leader_new_match();
+                stats_begin_match();
                 /* ...and the HUD this mode opens on. See hud_set. */
                 hud_reset();
                 g_demo_over_frames = 0;
@@ -784,6 +792,7 @@ int main(void) {
                 g_ai_frame = 0;
                 points_clear();
                 leader_new_match();
+                stats_begin_match();
                 /* ...and the HUD this mode opens on. See hud_set. */
                 hud_reset();
                 swallow_held_buttons(&g_session.game);
@@ -1107,6 +1116,7 @@ int main(void) {
                 g_shown_piece2 = TT_NONE;
                 points_clear();
                 leader_new_match();
+                stats_begin_match();
                 /* ...and the HUD this mode opens on. See hud_set. */
                 hud_reset();
                 set_piece_palette(g_session.game.player[g_view].piece.current);

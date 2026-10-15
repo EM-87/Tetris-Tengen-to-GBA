@@ -140,6 +140,8 @@ def main():
                          "the skin")
     ap.add_argument("--gameover", action="store_true",
                      help="check every mode ends and lets go of the player")
+    ap.add_argument("--endpage", action="store_true",
+                     help="check the game's page on its board, under the chord")
     ap.add_argument("--counters", action="store_true",
                      help="check the counters blank their leading zeros")
     ap.add_argument("--pausemenu", action="store_true",
@@ -234,6 +236,8 @@ def main():
         sys.exit(demo_check(args.rom))
     if args.gameover:
         sys.exit(gameover_check(args.rom))
+    if args.endpage:
+        sys.exit(end_page_check(args.rom))
     if args.falling:
         sys.exit(falling_piece_check(args.rom))
     if args.points:

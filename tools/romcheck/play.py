@@ -938,6 +938,149 @@ def gameover_check(rom_path):
     return 0
 
 
+def end_page_check(rom_path):
+    """LA PAGINA DE LA PARTIDA, EN SU TABLERO, BAJO EL ACORDE.
+
+    Acabada la partida, el cartel de GAME OVER solo un momento
+    (END_PAGE_WAIT_FRAMES), y luego la pila muerta baja fila a fila por el
+    fondo del pozo -- la cortinilla del Tetris de Game Boy -- y en las filas
+    que deja sale la pagina (hud.c, draw_end_page): TIME y PIECES encima del
+    cartel, SINGLE, DOUBLE, TRIPLE, TETRIS, RATE y DROUGHT debajo, cada una
+    con su cifra a la derecha. Se mira:
+
+      * sin el acorde, nada: el tablero muerto y su cartel, como el cartucho;
+      * con el, a media cortinilla: TIME ya escrito, la pila bajada debajo, y
+        DROUGHT todavia no;
+      * acabada: las ocho lineas, sin un bloque que quede en el pozo, las
+        cifras de las limpiezas las que se jugaron (un TETRIS hecho a mano) y
+        RATE la cuenta de ellas;
+      * en cooperativo, la de los dos, centrada en el tablero de doce.
+    """
+    import re
+    off = game_offsets(rom_path)
+    base, why = game_state_address(rom_path)
+    if base is None:
+        print(f"SALTADO: {why}")
+        return 0
+    failures = []
+    PAGE_TX = COL_FIELD[0]          # the ten columns the page takes, any mode
+
+    def finished(chord, entry):
+        core, screen = load(rom_path)   # `screen` must stay alive; see load()
+        run(core, 8)
+        press_start(core); run(core, 10)
+        if chord:
+            core.set_keys(KEYS["L"], KEYS["R"]); run(core, 4)
+            core.set_keys(); run(core, 12)
+        for _ in range(entry):
+            core.set_keys(KEYS["DOWN"]); run(core, 4); core.set_keys(); run(core, 10)
+        press_start(core); run(core, 12)
+        press_start(core); run(core, 60)
+        coop = entry == 4
+        at = base + off["field"]
+        # A TETRIS: four whole rows, and a piece taken down onto them.
+        fill_rows(core, at, [16, 17, 18, 19])
+        if coop:
+            for row in (16, 17, 18, 19):
+                for col in (0, PF_W - 1):
+                    core.memory.u8[at + row * PF_W + col] = CELL_BLOCK
+        for _ in range(150):
+            core.set_keys(KEYS["DOWN"]); core.run_frame()
+        core.set_keys(); run(core, 90)
+        # ...then buried, all but one column, so the next piece tops out.
+        for row in range(PF_H):
+            for col in range(PF_W):
+                edge = not coop and col in (0, PF_W - 1)
+                core.memory.u8[at + row * PF_W + col] = (
+                    CELL_WALL if edge else 0 if col == 5 else CELL_BLOCK)
+        for _ in range(400):
+            core.run_frame()
+            if not core.memory.u8[base + off["active"]]:
+                return core, screen
+        return None, None
+
+    def page(core):
+        return [tilemap_text(core, r, PAGE_TX, PAGE_TX + 10) for r in range(PF_H)]
+
+    def blocks_left(core, first, last):
+        """Block tiles ($01-$0F) still on the main map in those columns,
+        outside the plaque's rows."""
+        n = 0
+        for row in range(PF_H):
+            if 4 <= row < 8:
+                continue
+            for col in range(first, last):
+                tile = core.memory.u16[SCREENBLOCK_ADDR + (row * 32 + col) * 2] & 0x3FF
+                n += 1 <= tile <= 0x0F
+        return n
+
+    # Without the chord: the cartridge's game over, and nothing written.
+    core, screen = finished(False, 0)
+    if core is None:
+        failures.append("sin el acorde el tablero enterrado no muere")
+    else:
+        run(core, 200)
+        if any(w in " ".join(page(core)) for w in ("TIME", "SINGLE", "DROUGHT")):
+            failures.append(f"sin el acorde sale la pagina: {page(core)}")
+        elif blocks_left(core, PAGE_TX, PAGE_TX + 10) < 100:
+            failures.append("sin el acorde el tablero muerto no sigue ahi")
+        else:
+            print("  sin el acorde: el tablero muerto y su cartel, nada mas")
+    del core, screen
+
+    for name, entry in (("1 PLAYER", 0), ("WITH COMPUTER", 4)):
+        core, screen = finished(True, entry)
+        if core is None:
+            failures.append(f"{name}: el tablero enterrado no muere")
+            continue
+        run(core, 30)
+        early = page(core)
+        run(core, 50)                 # 80 after: the curtain some rows down
+        mid = page(core)
+        mid_blocks = blocks_left(core, PAGE_TX, PAGE_TX + 10)
+        run(core, 120)                # 200 after: all the way
+        done = page(core)
+        lines = dict((r.split()[0], r.split()[-1]) for r in done if r.split())
+        if any(r for i, r in enumerate(early) if not 4 <= i < 8):   # the plaque's
+            failures.append(f"{name}: la pagina sale antes que el cartel solo: "
+                            f"{early}")
+        elif not mid[1].startswith("TIME") or any("DROUGHT" in r for r in mid) \
+                or not mid_blocks:
+            failures.append(f"{name}: a media cortinilla no se ve TIME arriba, "
+                            f"la pila bajada debajo y el resto aun por salir "
+                            f"({mid_blocks} bloques): {mid}")
+        elif not re.fullmatch(r"TIME +\d+:\d\d", done[1]):
+            failures.append(f"{name}: la linea TIME no es MM:SS: {done[1]!r}")
+        elif [r.split()[0] if r.split() else "" for r in
+              (done[2], done[10], done[11], done[12], done[13], done[15], done[17])] != \
+                ["PIECES", "SINGLE", "DOUBLE", "TRIPLE", "TETRIS", "RATE", "DROUGHT"]:
+            failures.append(f"{name}: las lineas de la pagina no son las ocho: {done}")
+        elif blocks_left(core, PAGE_TX - 1, PAGE_TX + 11):
+            failures.append(f"{name}: acabada la cortinilla quedan bloques en el "
+                            f"pozo")
+        else:
+            counts = [int(lines[k]) for k in ("SINGLE", "DOUBLE", "TRIPLE", "TETRIS")]
+            made = counts[0] + 2 * counts[1] + 3 * counts[2] + 4 * counts[3]
+            rate = int(lines["RATE"].rstrip("%"))
+            if counts[3] < 1:
+                failures.append(f"{name}: el TETRIS hecho no esta en la pagina: "
+                                f"{counts}")
+            elif rate != (400 * counts[3] // made if made else 0):
+                failures.append(f"{name}: RATE {rate}% no es la cuenta de "
+                                f"{counts}")
+            else:
+                print(f"  {name}: cartel solo, cortinilla, y la pagina: "
+                      f"{' | '.join(r for r in done if r)}")
+        del core, screen
+
+    for f in failures:
+        print("FALLA:", f)
+    if failures:
+        return 1
+    print("OK: bajo el acorde la partida acabada se lee en su tablero.")
+    return 0
+
+
 def falling_piece_check(rom_path):
     """THE PARTNER'S PIECE HAS TO BE ON THE SCREEN WHILE IT FALLS.
 
@@ -1233,6 +1376,21 @@ def vblank_check(rom_path):
     fill_rows(core, base + off["field"], [16, 17, 18, 19])
     core.set_keys(KEYS["DOWN"])
     results["una limpieza de cuatro filas"] = measure(core, 120)
+    del core, screen
+
+    # The end page under the chord (end_page_check): the board buried, the
+    # top-out, the plaque alone, the curtain and the page, every frame of it.
+    core, screen = load(rom_path)
+    run(core, 8)
+    press_start(core); run(core, 10)
+    core.set_keys(KEYS["L"], KEYS["R"]); run(core, 4); core.set_keys(); run(core, 12)
+    press_start(core); run(core, 12)
+    press_start(core); run(core, 30)
+    for row in range(PF_H):
+        for col in range(PF_W):
+            core.memory.u8[base + off["field"] + row * PF_W + col] = (
+                CELL_WALL if col in (0, PF_W - 1) else 0 if col == 5 else CELL_BLOCK)
+    results["el final con el acorde: cartel, cortinilla y pagina"] = measure(core, 300)
     del core, screen
 
     failures = []
@@ -1537,31 +1695,51 @@ def suspend_check(rom_path):
         else:
             print("  reanudada, el siguiente encendido ya no la trae")
 
-    if os.path.exists(os.path.join(os.path.dirname(rom_path), "..", "gba",
-                                   "splash_logo.h")):
+    gba_dir = os.path.join(os.path.dirname(rom_path), "..", "gba")
+    want = [name for name, header in (("Tengen", "splash_logo.h"),
+                                      ("Tetris", "splash_tetris.h"))
+            if os.path.exists(os.path.join(gba_dir, header))]
+    if want:
+        # The Game Boy Player's logo first, when the build has it (about a
+        # second and a half), then the publisher's — red on white — and the
+        # Tetris logo — its blue T and its yellow letters — each on white,
+        # and the title (mode 0, lit) after the last. Named frame by frame,
+        # in the order they come.
         harness.SHOW_SPLASH[0] = True
         try:
             core2, screen2 = load(rom_path)
-            # The Game Boy Player's logo first, when the build has it
-            # (about a second and a half), then the publisher's.
-            run(core2, 160)
-            px = pixels(screen2)
-            white = px[5][5]
-            reds = sum(1 for row in px for (r, g, b) in row
-                       if r > 200 and g < 80 and b < 80)
-            run(core2, 240)
-            if white[0] < 230 or white[1] < 230 or white[2] < 230 or reds < 500:
-                failures.append(f"al encender no sale el logo sobre blanco "
-                                f"(esquina {white}, {reds} px rojos)")
-            elif core2._native.memory.io[0] & 0x87 != 0:   # mode 0, lit
-                failures.append("tras el logo no llega el titulo")
-            else:
-                print(f"  al encender: el logo sobre blanco ({reds} px rojos), "
-                      f"y luego el titulo")
         finally:
             harness.SHOW_SPLASH[0] = False
+        seen, title_at = [], None
+        for f in range(900):
+            core2.run_frame()
+            if core2._native.memory.io[0] & 0x87 == 0:
+                title_at = f
+                break
+            if f % 4:
+                continue                # a logo is held for 120 frames
+            px = pixels(screen2)
+            if min(px[5][5]) < 230:
+                continue
+            count = lambda test: sum(1 for row in px for p in row if test(*p))
+            yellow = count(lambda r, g, b: r > 200 and g > 170 and b < 110)
+            blue = count(lambda r, g, b: b > 150 and r < 120)
+            red = count(lambda r, g, b: r > 200 and g < 80 and b < 80)
+            name = ("Tetris" if yellow > 500 and blue > 2000 else
+                    "Tengen" if red > 1000 and blue < 100 else None)
+            if name and (not seen or seen[-1] != name):
+                seen.append(name)
+        if seen != want:
+            failures.append(f"al encender los logos sobre blanco son {seen}, "
+                            f"no {want}")
+        elif title_at is None:
+            failures.append("tras los logos no llega el titulo")
+        else:
+            print(f"  al encender: {' y '.join(seen)} sobre blanco, y el "
+                  f"titulo en el frame {title_at}")
     else:
-        print("  (sin gba/splash_logo.h: esta construccion no tiene logo)")
+        print("  (sin gba/splash_logo.h ni splash_tetris.h: esta construccion "
+              "no tiene logos)")
 
     for f in failures:
         print(f"FALLA: {f}")
@@ -1666,6 +1844,17 @@ class FakePlayer:
         self.sent = 0
         self.answers = []
 
+    def to_title(self, settle=60, limit=1200):
+        """Through the logos — the Player's, the publisher's, Tetris's, as
+        many as the build has — to the title (mode 0, lit), and a moment on
+        it."""
+        for _ in range(limit):
+            self.frame()
+            if self.core._native.memory.io[0] & 0x87 == 0:
+                break
+        for _ in range(settle):
+            self.frame()
+
     def frame(self, keys=()):
         from mgba._pylib import lib
         core = self.core
@@ -1737,8 +1926,7 @@ def gbp_check(rom_path):
         harness.SHOW_SPLASH[0] = False
     player = FakePlayer(core, logo)
     player.screen = screen
-    for _ in range(400):
-        player.frame()
+    player.to_title()
     if player.logo_frames < 3:
         failures.append(f"el logo del Game Boy Player no sale entero "
                         f"({player.logo_frames} frames)")
@@ -1811,8 +1999,7 @@ def gbp_check(rom_path):
         harness.SHOW_SPLASH[0] = False
     chorded = FakePlayer(core3, logo)
     chorded.screen = screen3
-    for _ in range(400):
-        chorded.frame()
+    chorded.to_title()
     after = tetris(chorded, True)
     if 0x40000026 not in after:
         failures.append("con el truco, una limpieza no enciende la vibracion")
@@ -1879,8 +2066,7 @@ def tv_menu_check(rom_path, shots=None):
             harness.SHOW_SPLASH[0] = False
         player = FakePlayer(core, Image.open(png).convert("RGB").tobytes())
         player.screen = screen
-        for _ in range(400):
-            player.frame()
+        player.to_title()
         return core, screen, player
 
     def text(core):

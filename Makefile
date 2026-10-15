@@ -18,8 +18,8 @@ CC      ?= gcc
 CFLAGS  ?= -std=c99 -Wall -Wextra -Wpedantic -g -O1
 BUILD   := build
 
-CORE_SRC := src/tengen_core.c src/tengen_link.c src/tengen_ai.c
-CORE_HDR := src/tengen_core.h src/tengen_link.h src/tengen_ai.h
+CORE_SRC := src/tengen_core.c src/tengen_link.c src/tengen_ai.c src/tengen_stats.c
+CORE_HDR := src/tengen_core.h src/tengen_link.h src/tengen_ai.h src/tengen_stats.h
 TEST_SRC := tests/test_tengen.c
 TEST_BIN := $(BUILD)/test_tengen
 
@@ -178,7 +178,7 @@ gba: $(GBA_ROM)
 # still reaches the helpful message below instead of "no rule to make target".
 $(GBA_ELF): $(GBA_SRC) $(CORE_HDR) gba/port.h gba/gba_hw.h gba/link.h \
              gba/crt0.s gba/gba.ld gba/mb_image.s $(GBA_MB) \
-             $(wildcard $(GBA_ASSETS) gba/splash_logo.h gba/gbp_logo.h) | $(BUILD)
+             $(wildcard $(GBA_ASSETS) gba/splash_logo.h gba/splash_tetris.h gba/gbp_logo.h) | $(BUILD)
 	@command -v $(ARMCC) >/dev/null 2>&1 || { \
 	    echo "error: $(ARMCC) not found."; \
 	    echo "Install an arm-none-eabi toolchain (see the Makefile header),"; \
@@ -332,6 +332,7 @@ gba-check: $(GBA_ROM)
 	python3 tools/run_rom.py $(GBA_ROM) --loans
 	python3 tools/run_rom.py $(GBA_ROM) --onscreen
 	python3 tools/run_rom.py $(GBA_ROM) --gameover
+	python3 tools/run_rom.py $(GBA_ROM) --endpage
 	python3 tools/run_rom.py $(GBA_ROM) --link
 	python3 tools/run_link.py $(GBA_ROM)
 	python3 tools/run_wireless.py $(GBA_ROM)
