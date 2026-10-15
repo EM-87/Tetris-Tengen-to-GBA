@@ -9,6 +9,7 @@
 #include "../src/tengen_core.h"
 #include "../src/tengen_link.h"
 #include "../src/tengen_ai.h"
+#include "../src/tengen_stats.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -4393,7 +4394,129 @@ static void test_mended_collapse_lifts_the_falling_piece(void) {
     }
 }
 
+/* THE END-OF-GAME FIGURES (tengen_stats.h), fed by hand: a step result is
+ * what tengen_step would have reported, and piece_total what it would have
+ * counted. */
+static TengenStepResult stats_clear(uint32_t mask) {
+    TengenStepResult r;
+    memset(&r, 0, sizeof r);
+    r.lines_cleared = true;
+    r.rows_cleared_mask = mask;
+    return r;
+}
+
+static void test_stats_count_the_clears_by_their_size(void) {
+    TengenGame g;
+    tengen_new_game(&g, 0x4D2, 0, false, false, false);
+    TengenStats s;
+    tengen_stats_begin(&s);
+    CHECK(tengen_stats_lines(&s) == 0 && tengen_stats_tetris_rate(&s) == 0);
+    TengenStepResult tetris = stats_clear(0xF0000);   /* rows 16-19 */
+    TengenStepResult single = stats_clear(1u << 19);
+    TengenStepResult dbl = stats_clear(3u << 12);
+    TengenStepResult triple = stats_clear(7u << 4);
+    tengen_stats_step(&s, &g, TENGEN_PLAYER_1, &tetris);
+    tengen_stats_step(&s, &g, TENGEN_PLAYER_1, &single);
+    tengen_stats_step(&s, &g, TENGEN_PLAYER_1, &single);
+    CHECK(s.clears[0] == 2 && s.clears[1] == 0 && s.clears[2] == 0 && s.clears[3] == 1);
+    CHECK(tengen_stats_lines(&s) == 6);
+    CHECK(tengen_stats_tetris_rate(&s) == 66);         /* 4 of 6, rounded down */
+    tengen_stats_step(&s, &g, TENGEN_PLAYER_1, &dbl);
+    tengen_stats_step(&s, &g, TENGEN_PLAYER_1, &triple);
+    CHECK(s.clears[1] == 1 && s.clears[2] == 1);
+    CHECK(tengen_stats_lines(&s) == 11 && tengen_stats_tetris_rate(&s) == 36);
+}
+
+static void test_stats_count_the_time_played_and_the_pieces_landed(void) {
+    TengenGame g;
+    tengen_new_game(&g, 0x4D2, 0, false, false, false);
+    TengenStats s;
+    tengen_stats_begin(&s);
+    TengenStepResult none, lock;
+    memset(&none, 0, sizeof none);
+    memset(&lock, 0, sizeof lock);
+    lock.piece_locked = true;
+    for (int f = 0; f < 100; f++) tengen_stats_step(&s, &g, TENGEN_PLAYER_1, &none);
+    tengen_stats_step(&s, &g, TENGEN_PLAYER_1, &lock);
+    CHECK(s.frames == 101 && s.pieces == 1);
+    /* Paused, the clock stands. */
+    g.paused = true;
+    for (int f = 0; f < 50; f++) tengen_stats_step(&s, &g, TENGEN_PLAYER_1, &none);
+    g.paused = false;
+    CHECK(s.frames == 101);
+    /* The frame it tops out is played; the frames after it are not. */
+    TengenStepResult out;
+    memset(&out, 0, sizeof out);
+    out.topped_out = true;
+    g.player[0].game_active = false;
+    tengen_stats_step(&s, &g, TENGEN_PLAYER_1, &out);
+    for (int f = 0; f < 50; f++) tengen_stats_step(&s, &g, TENGEN_PLAYER_1, &none);
+    CHECK(s.frames == 102);
+    /* A board put back on its feet starts again. */
+    g.player[0].game_active = true;
+    TengenStepResult again;
+    memset(&again, 0, sizeof again);
+    again.restarted = true;
+    tengen_stats_step(&s, &g, TENGEN_PLAYER_1, &again);
+    CHECK(s.pieces == 0 && s.clears[3] == 0 && s.frames == 1);
+}
+
+static void test_stats_drought_is_the_longest_run_without_an_i(void) {
+    TengenGame g;
+    tengen_new_game(&g, 0x4D2, 0, false, false, false);
+    memset(g.player[0].piece_total, 0, sizeof g.player[0].piece_total);
+    TengenStats s;
+    tengen_stats_begin(&s);
+    TengenStepResult none;
+    memset(&none, 0, sizeof none);
+    /* Deal a piece a frame: three T's, an I, five S's, an I, two O's. */
+    const TengenTetromino deal[] = { TT_T, TT_T, TT_T, TT_I, TT_S, TT_S, TT_S,
+                                     TT_S, TT_S, TT_I, TT_O, TT_O };
+    for (unsigned i = 0; i < sizeof deal / sizeof deal[0]; i++) {
+        g.player[0].piece_total[deal[i]]++;
+        tengen_stats_step(&s, &g, TENGEN_PLAYER_1, &none);
+        tengen_stats_step(&s, &g, TENGEN_PLAYER_1, &none);   /* no deal */
+    }
+    CHECK(s.drought_max == 5 && s.drought == 2);
+    /* The pieces a game opens with are dealt before its first step. */
+    TengenStats t;
+    tengen_stats_begin(&t);
+    tengen_stats_step(&t, &g, TENGEN_PLAYER_1, &none);
+    CHECK(t.drought_max >= 2);
+}
+
+static void test_stats_of_a_coop_board_are_both_players(void) {
+    TengenStats a, b;
+    tengen_stats_begin(&a);
+    tengen_stats_begin(&b);
+    a.frames = 900; a.pieces = 30; a.clears[0] = 4; a.clears[3] = 1; a.drought_max = 12;
+    b.frames = 905; b.pieces = 28; b.clears[1] = 2; b.clears[3] = 2; b.drought_max = 9;
+    TengenStats s = tengen_stats_sum(&a, &b);
+    CHECK(s.frames == 905 && s.pieces == 58 && s.drought_max == 12);
+    CHECK(s.clears[0] == 4 && s.clears[1] == 2 && s.clears[2] == 0 && s.clears[3] == 3);
+    CHECK(tengen_stats_lines(&s) == 20 && tengen_stats_tetris_rate(&s) == 60);
+}
+
+static void test_stats_saturate(void) {
+    TengenGame g;
+    tengen_new_game(&g, 0x4D2, 0, false, false, false);
+    TengenStats s;
+    tengen_stats_begin(&s);
+    s.pieces = 0xFFFF;
+    s.clears[3] = 0xFFFF;
+    TengenStepResult r = stats_clear(0xF0000);
+    r.piece_locked = true;
+    tengen_stats_step(&s, &g, TENGEN_PLAYER_1, &r);
+    CHECK(s.pieces == 0xFFFF && s.clears[3] == 0xFFFF);
+    CHECK(tengen_stats_tetris_rate(&s) == 100);
+}
+
 int main(void) {
+    test_stats_count_the_clears_by_their_size();
+    test_stats_count_the_time_played_and_the_pieces_landed();
+    test_stats_drought_is_the_longest_run_without_an_i();
+    test_stats_of_a_coop_board_are_both_players();
+    test_stats_saturate();
     test_rng_is_deterministic_and_never_stalls();
     test_rng_zero_seed_does_not_lock_up();
     test_deals_the_pieces_a_real_cartridge_dealt();

@@ -5,7 +5,8 @@
  * What is kept is everything a match starts from and everything it has
  * become: the menu's choices (mode, level, tune, handicaps, the skin, the
  * chord), the whole core game (g_session.game — board, pieces, score, the
- * random number generator) and the computer's state. Everything else — the
+ * random number generator), the computer's state and the game's own
+ * figures so far (g_stats). Everything else — the
  * HUD's bookkeeping, the sprites, the sound engine — is what starting a
  * match lays out anyway, so main starts the match as the menu would and
  * then puts this back over it (suspend_apply).
@@ -38,6 +39,7 @@ typedef struct {
     SuspendMenu menu;
     TengenGame game;
     TengenAi ai;
+    TengenStats stats[2];     /* the game's own figures so far (g_stats) */
 } SuspendBody;
 
 static SuspendBody g_kept;
@@ -69,6 +71,8 @@ void suspend_save(const SuspendMenu *menu) {
     g_kept.menu = *menu;
     g_kept.game = g_session.game;
     g_kept.ai = g_ai;
+    g_kept.stats[0] = g_stats[0];
+    g_kept.stats[1] = g_stats[1];
     const uint8_t *body = (const uint8_t *)&g_kept;
     sram_write(SUSPEND_OFF, 0);
     for (unsigned i = 0; i < sizeof g_kept; i++) sram_write(AT_BODY + i, body[i]);
@@ -99,4 +103,6 @@ bool suspend_load(SuspendMenu *menu) {
 void suspend_apply(void) {
     g_session.game = g_kept.game;
     g_ai = g_kept.ai;
+    g_stats[0] = g_kept.stats[0];
+    g_stats[1] = g_kept.stats[1];
 }

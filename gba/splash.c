@@ -1,24 +1,33 @@
-/* splash.c — THE PUBLISHER'S LOGO ON WHITE, as a GBA game opens: out of
- * white, held, and away to black, before the title. At power-on only — a
- * soft reset (A+B+START+SELECT) goes straight back to the title — and not
- * on the Single-Pak copy, which has just come through the BIOS's own logo
- * and goes straight to its lobby.
+/* splash.c — THE LOGOS ON WHITE, as a GBA game opens: the publisher's and
+ * then Tetris's, each out of white and held, the first back into white and
+ * the last away to black, before the title. At power-on only — a soft reset
+ * (A+B+START+SELECT) goes straight back to the title — and not on the
+ * Single-Pak copy, which has just come through the BIOS's own logo and goes
+ * straight to its lobby.
  *
- * Mode 4, the one 8-bit bitmap, drawn once: the logo (tools/make_splash.py,
- * sixteen colours with white as colour 0) unpacked into the middle of the
- * page and the rest left at colour 0. The fades are the blender's
- * brightness, over the bitmap and the backdrop both. Any button cuts the
- * hold short once the logo is up. Afterwards the video memory the bitmap
- * used is cleared and the registers left as they were found, so main lays
- * out the game's screens exactly as it did without it.
+ * Mode 4, the one 8-bit bitmap, drawn once a logo: the picture
+ * (tools/make_splash.py, white as colour 0 — sixteen colours for the
+ * publisher's, up to 256 for the Tetris logo's gradients) put into the
+ * middle of the page and the rest left at colour 0. The fades are the
+ * blender's brightness, over the bitmap and the backdrop both. Any button
+ * cuts a hold short once the logo is up. Afterwards the video memory the
+ * bitmap used is cleared and the registers left as they were found, so main
+ * lays out the game's screens exactly as it did without it.
  *
- * The logo is not the port's own art, so its header is generated and not
- * committed; a build without it has no splash. */
+ * The logos are not the port's own art, so their headers are generated and
+ * not committed; a build without one simply goes without that splash. */
 #include "port.h"
 
-#if __has_include("splash_logo.h") && !defined(TENGEN_MULTIBOOT)
+#if !defined(TENGEN_MULTIBOOT) && __has_include("splash_logo.h")
 #include "splash_logo.h"
+#define HAVE_TENGEN_LOGO 1
+#endif
+#if !defined(TENGEN_MULTIBOOT) && __has_include("splash_tetris.h")
+#include "splash_tetris.h"
+#define HAVE_TETRIS_LOGO 1
+#endif
 
+#if defined(HAVE_TENGEN_LOGO) || defined(HAVE_TETRIS_LOGO)
 #define REG_BLDCNT (*(vu16 *)0x04000050)
 #define REG_BLDY   (*(vu16 *)0x04000054)
 #define BLD_BG2_BACKDROP 0x0024      /* first target: BG2 and the backdrop */
@@ -39,18 +48,28 @@ static void fade(uint16_t mode, int from, int to) {
     }
 }
 
-static void tengen_logo(void) {
+/* One logo: `pixels` a byte each, or two to a byte (`nibbles`, the left
+ * one low) for a sixteen-colour one; `to_white` when another follows it. */
+static void show_logo(const uint16_t *palette, int colours,
+                      const uint8_t *pixels, int w, int h, bool nibbles,
+                      bool to_white) {
     REG_DISPCNT = DCNT_FORCED_BLANK;
-    for (int i = 0; i < 16; i++) MEM_PALETTE[i] = lcd_colour(kSplashPalette[i]);
+    for (int i = 0; i < colours; i++) MEM_PALETTE[i] = lcd_colour(palette[i]);
     vu16 *page = (vu16 *)0x06000000;
     for (int i = 0; i < 240 * 160 / 2; i++) page[i] = 0;
-    const int x0 = ((240 - SPLASH_W) / 2) & ~1;
-    const int y0 = (160 - SPLASH_H) / 2;
-    for (int y = 0; y < SPLASH_H; y++) {
-        const uint8_t *row = kSplashPixels + y * (SPLASH_W / 2);
+    const int x0 = ((240 - w) / 2) & ~1;
+    const int y0 = (160 - h) / 2;
+    for (int y = 0; y < h; y++) {
         vu16 *dst = page + ((y0 + y) * 240 + x0) / 2;
-        for (int x = 0; x < SPLASH_W / 2; x++)
-            dst[x] = (uint16_t)((row[x] & 0x0F) | ((row[x] >> 4) << 8));
+        if (nibbles) {
+            const uint8_t *row = pixels + y * (w / 2);
+            for (int x = 0; x < w / 2; x++)
+                dst[x] = (uint16_t)((row[x] & 0x0F) | ((row[x] >> 4) << 8));
+        } else {
+            const uint8_t *row = pixels + y * w;
+            for (int x = 0; x < w / 2; x++)
+                dst[x] = (uint16_t)(row[2 * x] | (row[2 * x + 1] << 8));
+        }
     }
 
     /* From white — which the page already is, bar the logo. */
@@ -63,21 +82,40 @@ static void tengen_logo(void) {
         vsync();
         if (f >= HOLD_SKIPPABLE && read_buttons()) break;
     }
-    fade(BLD_DARKEN, 0, 16);
+    fade(to_white ? BLD_BRIGHTEN : BLD_DARKEN, 0, 16);
 
     /* Put everything back: nothing below expects a bitmap, a palette of
      * the logo's, or the blender on. And the button that cut it short is
-     * the title's no more than the splash's. */
+     * the next logo's or the title's no more than this one's. */
     REG_DISPCNT = DCNT_FORCED_BLANK;
     for (vu32 *p = (vu32 *)0x06000000; p < (vu32 *)0x06018000; p++) *p = 0;
-    for (int i = 0; i < 16; i++) MEM_PALETTE[i] = 0;
+    for (int i = 0; i < colours; i++) MEM_PALETTE[i] = 0;
     REG_BLDCNT = 0;
     REG_BLDY = 0;
     while (read_buttons()) vsync();
 }
-#else
-static void tengen_logo(void) {}
 #endif
+
+/* THE PUBLISHER'S, and back into white if Tetris's comes after it. */
+static void tengen_logo(void) {
+#ifdef HAVE_TENGEN_LOGO
+#ifdef HAVE_TETRIS_LOGO
+    const bool more = true;
+#else
+    const bool more = false;
+#endif
+    show_logo(kSplashPalette, 16, kSplashPixels, SPLASH_W, SPLASH_H, true, more);
+#endif
+}
+
+/* THE TETRIS LOGO, as every Tetris since the licence has opened with: after
+ * the publisher's, and to black for the title. */
+static void tetris_logo(void) {
+#ifdef HAVE_TETRIS_LOGO
+    show_logo(kTetrisLogoPalette, TETRIS_LOGO_COLOURS, kTetrisLogoPixels,
+              TETRIS_LOGO_W, TETRIS_LOGO_H, false, false);
+#endif
+}
 
 /* Survives the soft reset (crt0 clears .bss, not this) and not a power
  * cycle: RAM switched off comes back as whatever it comes back as, and
@@ -85,10 +123,10 @@ static void tengen_logo(void) {}
 #define SPLASH_SEEN 0x54454E47u      /* "TENG" */
 __attribute__((section(".ewram"))) static volatile uint32_t g_splash_seen;
 
-/* THE TWO LOGOS AT POWER-ON: the Game Boy Player's first — which is how a
- * Player is found, gbp.c — and the publisher's after it, each out of white
- * and the first back into it. Neither after a soft reset, nor on the
- * Single-Pak copy. */
+/* THE LOGOS AT POWER-ON: the Game Boy Player's first — which is how a
+ * Player is found, gbp.c — then the publisher's and Tetris's, each out of
+ * white and all but the last back into it. None after a soft reset, nor on
+ * the Single-Pak copy. */
 void splash_show(void) {
 #ifdef TENGEN_MULTIBOOT
     return;
@@ -97,4 +135,5 @@ void splash_show(void) {
     g_splash_seen = SPLASH_SEEN;
     gbp_show_logo();
     tengen_logo();
+    tetris_logo();
 }

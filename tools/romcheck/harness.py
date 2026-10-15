@@ -555,9 +555,12 @@ def tilemap_text(core, row, first=0, last=30):
     # ...and its arrow, moved three pixels closer across two tiles
     # (T_ARROW_TAIL / T_ARROW_HEAD): read as "->".
     ARROW = {lay["arrow_tail"]: "-", lay["arrow_head"]: ">"}
+    # ...and the end page's colon, drawn at boot after HOLD's four letters
+    # (T_COLON): the cartridge's $3A is box art.
+    COLON = lay["hold_label"] + 4
 
     def readable(t):
-        return (32 <= t < 127 or t in (QUESTION, PERCENT) or t in ARROW
+        return (32 <= t < 127 or t in (QUESTION, PERCENT, COLON) or t in ARROW
                 or RAISED_BASE <= t < RAISED_BASE + len(RAISED))
 
     out = []
@@ -574,6 +577,8 @@ def tilemap_text(core, row, first=0, last=30):
             out.append("?")
         elif tile == PERCENT:
             out.append("%")
+        elif tile == COLON:
+            out.append(":")
         elif RAISED_BASE <= tile < RAISED_BASE + len(RAISED):
             out.append(RAISED[tile - RAISED_BASE])
         elif tile in ARROW:

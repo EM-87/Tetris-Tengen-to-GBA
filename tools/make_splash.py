@@ -1,66 +1,106 @@
 #!/usr/bin/env python3
-"""THE PUBLISHER'S LOGO FOR THE SPLASH SCREEN, from an image you supply.
+"""THE LOGOS FOR THE SPLASH SCREENS, from images you supply.
 
     python3 tools/make_splash.py logo.png [-o gba/splash_logo.h] [--width 200]
+    python3 tools/make_splash.py tetris_logo.png --tetris [-o gba/splash_tetris.h]
 
-The image (transparent or not) is laid on white, scaled to --width pixels
-wide keeping its shape, and cut down to sixteen colours with white as
-colour 0 (the screen's backdrop). The header holds the palette as GBA
-colours and the picture four bits a pixel, two to a byte, the left one in
-the low nibble. The logo is not the port's own art, so like the
-cartridge's graphics the header is generated, not committed (.gitignore);
-without it the ROM simply has no splash (gba/splash.c).
+The publisher's (the first form): the image (transparent or not) is laid on
+white, scaled to --width pixels wide keeping its shape, and cut down to
+sixteen colours with white as colour 0 (the screen's backdrop). The header
+holds the palette as GBA colours and the picture four bits a pixel, two to
+a byte, the left one in the low nibble.
+
+THE TETRIS LOGO (--tetris), shown after it: the same, but trimmed to what
+is not transparent or white first, 176 pixels wide by default, and up to
+256 colours a byte a pixel. Its letters and its T are gradients, and
+sixteen colours cut them into bands; the GBA's own fifteen-bit colour is
+taken first, so no two entries come out the same on the console.
+
+The logos are not the port's own art, so like the cartridge's graphics the
+headers are generated, not committed (.gitignore); without one the ROM
+simply has no such splash (gba/splash.c).
 """
 import argparse
 import sys
 
-from PIL import Image
+from PIL import Image, ImageChops
+
+
+def gba(c):
+    r, g, b = (v >> 3 for v in c)
+    return r | (g << 5) | (b << 10)
+
+
+def pixels_of(q):
+    return q.get_flattened_data() if hasattr(q, "get_flattened_data") else q.getdata()
+
+
+def white_first(q, count):
+    """The palette of `q` with the entry nearest white moved to index 0 and
+    made white, and the pixels renumbered to match."""
+    pal = q.getpalette()[:3 * count]
+    pal += [255] * (3 * count - len(pal))
+    colours = [tuple(pal[3 * i:3 * i + 3]) for i in range(count)]
+    near = min(range(count), key=lambda i: sum((255 - c) ** 2 for c in colours[i]))
+    order = list(range(count))
+    order[0], order[near] = order[near], order[0]
+    remap = {old: new for new, old in enumerate(order)}
+    colours = [colours[order[i]] for i in range(count)]
+    colours[0] = (255, 255, 255)
+    return colours, [remap[p] for p in pixels_of(q)]
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("image")
-    ap.add_argument("-o", "--out", default="gba/splash_logo.h")
-    ap.add_argument("--width", type=int, default=200)
+    ap.add_argument("-o", "--out")
+    ap.add_argument("--width", type=int)
+    ap.add_argument("--tetris", action="store_true",
+                    help="the Tetris logo: trimmed, 256 colours, gba/splash_tetris.h")
     args = ap.parse_args()
+    out = args.out or ("gba/splash_tetris.h" if args.tetris else "gba/splash_logo.h")
+    width = args.width or (176 if args.tetris else 200)
 
     src = Image.open(args.image).convert("RGBA")
     white = Image.new("RGBA", src.size, (255, 255, 255, 255))
     flat = Image.alpha_composite(white, src).convert("RGB")
-    w = args.width & ~1
+    if args.tetris:
+        box = ImageChops.difference(
+            flat, Image.new("RGB", flat.size, (255, 255, 255))).getbbox()
+        if box:
+            flat = flat.crop(box)
+    w = width & ~1
     h = max(2, round(flat.height * w / flat.width)) & ~1
     small = flat.resize((w, h), Image.LANCZOS)
-    q = small.quantize(colors=16, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE)
-    pal = q.getpalette()[:48]
-    pal += [255] * (48 - len(pal))
-    colours = [tuple(pal[3 * i:3 * i + 3]) for i in range(16)]
-    # White to index 0: the entry nearest it swaps places with whatever is there.
-    near = min(range(16), key=lambda i: sum((255 - c) ** 2 for c in colours[i]))
-    order = list(range(16))
-    order[0], order[near] = order[near], order[0]
-    remap = {old: new for new, old in enumerate(order)}
-    colours = [colours[order[i]] for i in range(16)]
-    colours[0] = (255, 255, 255)
-    px = [remap[p] for p in q.get_flattened_data()] if hasattr(q, "get_flattened_data") \
-        else [remap[p] for p in q.getdata()]
 
-    def gba(c):
-        r, g, b = (v >> 3 for v in c)
-        return r | (g << 5) | (b << 10)
+    if args.tetris:
+        small = small.point(lambda v: (v >> 3) << 3)
+        q = small.quantize(colors=256, method=Image.Quantize.MEDIANCUT,
+                           dither=Image.Dither.NONE)
+        colours, px = white_first(q, max(pixels_of(q)) + 1)
+        data = bytes(px)
+        prefix, sym = "TETRIS_LOGO", "kTetrisLogo"
+    else:
+        q = small.quantize(colors=16, method=Image.Quantize.MEDIANCUT,
+                           dither=Image.Dither.NONE)
+        colours, px = white_first(q, 16)
+        data = bytes(px[i] | (px[i + 1] << 4) for i in range(0, len(px), 2))
+        prefix, sym = "SPLASH", "kSplash"
 
-    data = bytes(px[i] | (px[i + 1] << 4) for i in range(0, len(px), 2))
-    with open(args.out, "w") as f:
+    with open(out, "w") as f:
         f.write("/* Generated by tools/make_splash.py from a logo you supplied. Not\n"
                 " * committed: see .gitignore. */\n")
-        f.write(f"#define SPLASH_W {w}\n#define SPLASH_H {h}\n")
-        f.write("static const unsigned short kSplashPalette[16] = {\n    ")
+        f.write(f"#define {prefix}_W {w}\n#define {prefix}_H {h}\n")
+        if args.tetris:
+            f.write(f"#define {prefix}_COLOURS {len(colours)}\n")
+        f.write(f"static const unsigned short {sym}Palette[{len(colours)}] = {{\n    ")
         f.write(", ".join(f"0x{gba(c):04X}" for c in colours))
         f.write("\n};\n")
-        f.write(f"static const unsigned char kSplashPixels[{len(data)}] = {{\n")
+        f.write(f"static const unsigned char {sym}Pixels[{len(data)}] = {{\n")
         for i in range(0, len(data), 16):
             f.write("    " + ", ".join(f"0x{b:02X}" for b in data[i:i + 16]) + ",\n")
         f.write("};\n")
-    print(f"{args.out}: {w}x{h}, {len(data)} bytes")
+    print(f"{out}: {w}x{h}, {len(colours)} colours, {len(data)} bytes")
     return 0
 
 

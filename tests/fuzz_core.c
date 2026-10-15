@@ -37,6 +37,7 @@
 
 #include "../src/tengen_core.h"
 #include "../src/tengen_ai.h"
+#include "../src/tengen_stats.h"
 
 static unsigned long long g_rs;
 
@@ -120,6 +121,11 @@ int main(int argc, char **argv) {
         TengenTetromino seen[2] = { TT_NONE, TT_NONE };
         uint8_t held[2] = { 0, 0 }, prev[2] = { 0, 0 };
         uint32_t lines_before[2] = { 0, 0 };
+        /* The end page's figures (tengen_stats.h), fed as the GBA feeds
+         * them: their clears must come to the lines the core counted. */
+        TengenStats st[2];
+        tengen_stats_begin(&st[0]);
+        tengen_stats_begin(&st[1]);
         long frames = 20000 + (long)(rnd() % 60000);
         int players = two ? 2 : 1;
         int max_level = xe ? TENGEN_MAX_LEVEL_XE : TENGEN_MAX_LEVEL;
@@ -153,6 +159,7 @@ int main(int argc, char **argv) {
                 TengenGame before = g;
                 TengenStepResult r = tengen_step(&g, (TengenPlayerSlot)p, held[p]);
                 if (r.restarted) lines_before[p] = 0;
+                tengen_stats_step(&st[p], &g, (TengenPlayerSlot)p, &r);
                 /* WHAT THIS STEP MOVED, and only that: the stepping
                  * player's piece, if it was in play before and after and
                  * is the same piece. */
@@ -210,6 +217,10 @@ int main(int argc, char **argv) {
                 CHECK(ps->lines >= lines_before[p], "p%d lines %u -> %u", p,
                       (unsigned)lines_before[p], (unsigned)ps->lines);
                 lines_before[p] = ps->lines;
+                if (!ps->line_clear_timer)
+                    CHECK(tengen_stats_lines(&st[p]) == ps->lines,
+                          "p%d the page's clears make %u lines, the core %u", p,
+                          tengen_stats_lines(&st[p]), (unsigned)ps->lines);
                 CHECK(ps->piece.orientation < 4, "p%d orientation %d", p,
                       ps->piece.orientation);
                 if (ps->game_active && ps->piece.current != TT_NONE) {

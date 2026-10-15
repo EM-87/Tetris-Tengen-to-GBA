@@ -64,6 +64,7 @@ const uint8_t kPauseTiles[PAUSE_H][PAUSE_W] = {
 uint16_t ascii_tile(char c) {
     if (c == '?') return TILES_GAME_QUESTION;
     if (c == '%') return TILES_GAME_PERCENT;
+    if (c == ':') return T_COLON;      /* drawn at boot; see T_COLON */
     return (uint16_t)(unsigned char)c;
 }
 
@@ -545,6 +546,16 @@ void upload_tiles(void) {
             out[row * 2] = (uint16_t)px;
             out[row * 2 + 1] = (uint16_t)(px >> 16);
         }
+    }
+    /* ...and the colon; see T_COLON. Two of the full stop's dots, two by
+     * two in the letters' ink (colour 1), one over the other about the
+     * digits' middle row: rows 2-3 and 5-6, columns 2-3. */
+    vu16 *colon = dst + T_COLON * 16;
+    for (int row = 0; row < 8; row++) {
+        bool dot = row == 2 || row == 3 || row == 5 || row == 6;
+        uint32_t px = dot ? (1u << 8) | (1u << 12) : 0;
+        colon[row * 2] = (uint16_t)px;
+        colon[row * 2 + 1] = (uint16_t)(px >> 16);
     }
 }
 

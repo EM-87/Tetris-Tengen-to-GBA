@@ -71,7 +71,8 @@ running ROM; only the side panels need reflowing).
 
 - **`src/`** — the rules. `tengen_core.c` (the game), `tengen_ai.c`
   (`computerMove`), `tengen_link.c` (the cable's lockstep, lobby and records
-  swap). C99, no GBA headers, tested on the host.
+  swap), `tengen_stats.c` (the end page's figures, which the rules never
+  read). C99, no GBA headers, tested on the host.
 - **`gba/`** — the GBA layer, six files sharing `gba/port.h`:
   `video.c` the hardware (backgrounds, palettes, uploads, keypad, skins, the
   interrupt handler and `vsync`); `hud.c` what a match looks like;
@@ -732,7 +733,8 @@ block tiles $01 and $03 draw their outer bevel corner where the other
 twelve and the lone block do (`mend_bevels`, `--chordfx`); the
 STATS bars, under the chord, scaled to the tallest once one would run off the
 top of the box (`piece_total`, the port's uncapped count; `--statsrel`); and
-under the chord three touches of Tetris DX's (`--chordfx`): the music a
+under the chord — the match's: over a cable the master's — three touches of
+Tetris DX's (`--chordfx`, and over the cable `tempo_check`): the music a
 quarter faster from a stack of twelve rows and a half from fifteen
 (`stack_tempo`, an extra step of the engine in `audio_frame`), the board
 hidden while paused behind a wall of grey bricks — the cartridge's lone
@@ -760,8 +762,11 @@ anywhere but a match in play — a solo match pauses first and sleeps on its
 plaque, a linked one not at all; A, B, START or SELECT wakes it) and soft
 reset (A+B+START+SELECT), as commercial games had; a paused solo game kept
 on the battery through a power cycle, as Tetris DX does (`suspend.c`); the
-publisher's logo on white at power-on (`splash.c`, from an image you supply
-through `tools/make_splash.py`, gitignored like the cartridge's art); every
+publisher's logo on white at power-on and the Tetris logo after it, as the
+licence has every Tetris open (`splash.c`, from images you supply through
+`tools/make_splash.py`, the second with `--tetris`: 256 colours for its
+gradients; both gitignored like the cartridge's art; never on the
+Single-Pak copy, which never shows a splash); every
 colour through one table for the GBA's LCD (`kLcdGamma`, the identity
 today); the Game Boy Player's logo at power-on, its rumble under the chord, and on it the
 cartridge's three settings pages instead of the one (`gbp.c`,
@@ -780,7 +785,18 @@ last name typed on a console already in the next row it makes, START to
 take it, B putting back that and not A (`g_last_name`, on the battery); the
 attract demo playing MUSIC MIX under the chord, where the cartridge's is
 silent but for its effects, the player's tune on LEVEL SETTINGS given back
-as it ends (`demo_music_back`, `--demo`).
+as it ends (`demo_music_back`, `--demo`), and played by the port's computer
+(`smart`) under it as every match's computer is; and, once a match is over
+under its chord, the game's own page on its board: the GAME OVER plaque alone
+for a second, then the dead stack let down a row at a time out of the well,
+Game Boy Tetris's curtain, and in the rows it leaves TIME and PIECES over
+the plaque and SINGLE, DOUBLE, TRIPLE, TETRIS, RATE (the lines made four at a
+time, in a hundred) and DROUGHT (the most pieces dealt with no I) under it —
+a coop board's both players' together, as its BONUS counts them; read in the
+time the plaque already stood (`src/tengen_stats.c`, host-tested and checked
+by `make fuzz` against the core's line count; `draw_end_page`, `--endpage`;
+the colon of MM:SS drawn at boot, T_COLON, the cartridge's $3A being box
+art).
 (There was a seventh credit under the chord, BUILD and the commit; it went,
 and the ROM file's name is what says which build it is.)
 

@@ -2001,6 +2001,84 @@ static void draw_ghosts(void) {
     draw_ghost(g_view, 0, PAL_PIECE_BANK);
 }
 
+/* THE END-OF-GAME PAGE (g_end_curtain), written out once as the curtain
+ * starts down: a row of END_PAGE_W characters for each row of the board, a
+ * label at the left and its figure at the right, in the BONUS show's
+ * lettering and bank. The GAME OVER plaque keeps its rows (GAMEOVER_TY, four
+ * deep); two figures stand over it and six under it. */
+#define END_ROW_TIME     1
+#define END_ROW_PIECES   2
+#define END_ROW_CLEARS  10      /* SINGLE, DOUBLE, TRIPLE, TETRIS */
+#define END_ROW_RATE    15
+#define END_ROW_DROUGHT 17
+static char g_end_rows[TENGEN_PF_HEIGHT][END_PAGE_W];
+
+static int end_digits(char *out, unsigned v) {
+    char tmp[10];
+    int n = 0;
+    do { tmp[n++] = (char)('0' + v % 10); v /= 10; } while (v && n < 10);
+    for (int i = 0; i < n; i++) out[i] = tmp[n - 1 - i];
+    out[n] = 0;
+    return n;
+}
+
+static void end_row(int row, const char *label, const char *value) {
+    char *out = g_end_rows[row];
+    for (int i = 0; label[i] && i < END_PAGE_W; i++) out[i] = label[i];
+    int n = (int)strlen(value);
+    for (int i = 0; i < n && i < END_PAGE_W; i++) out[END_PAGE_W - n + i] = value[i];
+}
+
+static void end_row_number(int row, const char *label, unsigned v, unsigned cap) {
+    char buf[12];
+    end_digits(buf, v > cap ? cap : v);
+    end_row(row, label, buf);
+}
+
+void end_stats_compose(const TengenStats *s) {
+    memset(g_end_rows, ' ', sizeof g_end_rows);
+    /* The GBA's frame: 280896 cycles of a 2^24 Hz clock. Capped at an hour
+     * and forty, which is what MM:SS holds. */
+    uint32_t secs = (uint32_t)(((uint64_t)s->frames * 280896u) >> 24);
+    if (secs > 99 * 60 + 59) secs = 99 * 60 + 59;
+    char time[8];
+    int n = end_digits(time, secs / 60);
+    time[n] = ':';
+    time[n + 1] = (char)('0' + secs % 60 / 10);
+    time[n + 2] = (char)('0' + secs % 10);
+    time[n + 3] = 0;
+    end_row(END_ROW_TIME, "TIME", time);
+    end_row_number(END_ROW_PIECES, "PIECES", s->pieces, 9999);
+    static const char *const kClearName[4] = { "SINGLE", "DOUBLE", "TRIPLE", "TETRIS" };
+    for (int i = 0; i < 4; i++)
+        end_row_number(END_ROW_CLEARS + i, kClearName[i], s->clears[i], 999);
+    char rate[6];
+    n = end_digits(rate, tengen_stats_tetris_rate(s));
+    rate[n] = '%';
+    rate[n + 1] = 0;
+    end_row(END_ROW_RATE, "RATE", rate);
+    end_row_number(END_ROW_DROUGHT, "DROUGHT", s->drought_max, 99);
+}
+
+/* The board under the curtain: the page in the rows it has left, the dead
+ * stack let down by as many below them, and nothing falling. */
+static void draw_end_page(const TengenPlayfield *field) {
+    int curtain = g_end_curtain;
+    int page_tx = (field_cols() - END_PAGE_W) / 2;
+    for (int row = 0; row < TENGEN_PF_HEIGHT; row++) {
+        for (int col = 0; col < field_cols(); col++) {
+            uint16_t entry = WITH_BANK(T_BLANK, 0);
+            if (row >= curtain) {
+                entry = WITH_BANK(field->cell[row - curtain][field_col0() + col], 0);
+            } else if (col >= page_tx && col < page_tx + END_PAGE_W) {
+                char c = g_end_rows[row][col - page_tx];
+                if (c != ' ') entry = WITH_BANK(ascii_tile(c), BANK_LABEL);
+            }
+            set_map_tile(field_tx() + col, FIELD_TY + row, entry);
+        }
+    }
+}
+
 void draw_field(void) {
     /* ...BEHIND A WALL OF BRICKS (board_bricked). It used to be put away
      * into nothing, and an empty board under a pause read as a board that
@@ -2020,6 +2098,11 @@ void draw_field(void) {
      * falling through it. */
     const TengenPlayfield *field =
         &g_session.game.field[g_session.game.coop ? 0 : field_view()];
+    /* ...AND ONCE THE MATCH IS OVER, UNDER THE CHORD, THE PAGE. */
+    if (g_end_curtain >= 0) {
+        draw_end_page(field);
+        return;
+    }
     int clearing_slot = hud_clearing_slot();
     const TengenPlayerState *p = &g_session.game.player[clearing_slot];
 
