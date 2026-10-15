@@ -14,6 +14,7 @@ from .harness import (
     SCREEN_W, TENGEN_PF_HEIGHT, TENGEN_PF_WIDTH, TILE,
     TITLE_PAL_BASE, TITLE_SHOW_FRAMES, check_layout, game_offsets,
     game_state_address, load, oam_visible, pixels, press_start,
+    ring_chord_from_title,
     run, sound_state, tilemap_text, to_music_page,
 )
 
@@ -176,6 +177,16 @@ def skin_check(rom_path):
     if frame_tiles() != release:
         failures.append("R a solas cambia la skin sin haber sonado el acorde")
 
+    # ...Y SIN EL ACORDE DEL JUEGO, NI SIQUIERA L+R: los prototipos no son
+    # del cartucho, y lo que el port anade espera al acorde de GAME SELECT.
+    tap(KEYS["L"], KEYS["R"])
+    if frame_tiles() != release:
+        failures.append("sin el acorde del juego L+R pone una skin en el titulo")
+    else:
+        print("  sin el acorde del juego, L+R en el titulo no hace nada")
+    ring_chord_from_title(core)
+    release = frame_tiles()
+
     tap(KEYS["L"], KEYS["R"])
     proto = frame_tiles()
     if proto == release:
@@ -244,27 +255,10 @@ def skin_check(rom_path):
     else:
         print("  la skin se mantiene al salir del titulo y volver")
 
-    # AND IT OPENS NOTHING ELSE. The skin is its own chord on its own screen:
-    # a player who finds the prototype title has not thereby found the hidden
-    # tunes, which are still four until the chord is rung on a menu.
-    core.set_keys(KEYS["START"]); run(core, 4); core.set_keys(); run(core, 12)
-    core.set_keys(KEYS["START"]); run(core, 4); core.set_keys(); run(core, 16)
-    for _ in range(2):      # the cursor: LEVEL -> HANDICAP -> MUSIC
-        core.set_keys(KEYS["DOWN"]); run(core, 4); core.set_keys(); run(core, 8)
-    if "NO MUSIC" not in tilemap_text(core, MUSIC_ROW):
-        failures.append(f"la fila de MUSIC no dice NO MUSIC: "
-                         f"{tilemap_text(core, MUSIC_ROW)!r}")
-    else:
-        seen = set()
-        for _ in range(12):
-            core.set_keys(KEYS["RIGHT"]); run(core, 4); core.set_keys(); run(core, 8)
-            seen.add(tilemap_text(core, MUSIC_ROW))
-        if len(seen) != 5:
-            failures.append(f"el acorde del titulo destapo las canciones: "
-                             f"el menu ofrece {len(seen)}, no 5")
-        else:
-            print("  ...y no destapa nada mas: el menu sigue ofreciendo las "
-                   "cinco entradas del cartucho")
+    # (IT USED TO OPEN NOTHING ELSE: the title's chord was a discovery of its
+    # own, and the tunes stayed hidden until a menu's. The prototypes are the
+    # port's, though, and now wait for the game's chord like the rest of
+    # what it adds — so by the time they can be found, so has everything.)
 
     # ...AND IT REACHES THE BOARD, which is the half of the feature that was
     # missing for a long time: the skin was the title art and nothing else,
@@ -288,6 +282,8 @@ def skin_check(rom_path):
         this, this_screen = load(rom_path)
         _ = this_screen                      # must stay alive; see load()
         run(this, 40)
+        if chords:
+            ring_chord_from_title(this)
         for _i in range(chords):
             this.set_keys(KEYS["L"], KEYS["R"]); run(this, 4)
             this.set_keys(); run(this, 20)
@@ -312,6 +308,8 @@ def skin_check(rom_path):
         this, this_screen = load(rom_path)
         _ = this_screen
         run(this, 40)
+        if chords:
+            ring_chord_from_title(this)
         for _i in range(chords):
             this.set_keys(KEYS["L"], KEYS["R"]); run(this, 4)
             this.set_keys(); run(this, 20)

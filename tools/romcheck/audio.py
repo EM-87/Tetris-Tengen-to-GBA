@@ -4,6 +4,7 @@ pause, the hand-entered tunes and the menu effects.
 """
 import os
 from .harness import (
+    ring_chord_from_title,
     APU_REGS, AUDIO_ALIGN_SEARCH, AUDIO_GOLDEN_SKIP, EFFECT_WATCH_FRAMES,
     GOLDEN_PATH, KEYS, MUSIC_ROW, REG_SOUND1CNT_H,
     REG_SOUND1CNT_X, REG_SOUND2CNT_L, REG_SOUND3CNT_H, REG_SOUNDCNT_X,
@@ -311,6 +312,7 @@ def effects_check(rom_path):
 
         run(core, 40)
         if skin:
+            ring_chord_from_title(core)       # the prototypes wait for it
             tap("L", "R"); run(core, 20)
             for _ in range(skin - 1):
                 tap("R"); run(core, 20)
@@ -641,12 +643,15 @@ def proto_pause_check(rom_path):
     The list said all the prototypes pause without muting. Measured on the
     dumps (read_skin_pause_music in tools/extract_assets.py) it is proto_a's
     alone: proto_b, proto_c and proto_d go silent like the release. On the
-    title L+R puts on the first skin (A) and R walks on from there.
+    title, once the game's chord is rung, L+R puts on the first skin (A) and
+    R walks on from there; and the pause is then the chord's menu, which
+    keeps the same rule (pause_keeps_music).
     """
     failures = []
     for skin, name, keeps in ((1, "proto_a", True), (2, "proto_b", False)):
         core, screen = load(rom_path)    # `screen` must stay alive; see load()
         run(core, 40)
+        ring_chord_from_title(core)      # the prototypes wait for it
         core.set_keys(KEYS["L"], KEYS["R"]); run(core, 4)
         core.set_keys(); run(core, 32)
         for _ in range(skin - 1):
@@ -1031,4 +1036,50 @@ def chord_extras_check(rom_path):
     print("OK: bajo el acorde, el tempo sube con la pila, el record suena, la "
           "pausa esconde el tablero tras un muro de ladrillos y ARRIBA tira "
           "la pieza cuando HARD DROP esta en ON.")
+    return cossack_colour_check(rom_path)
+
+
+def cossack_colour_check(rom_path):
+    """EL COLOR DEL COSACO ES DEL ACORDE.
+
+    En HUD STATS, L+R cambia la paleta del cosaco que vive en el panel
+    (g_idle_palette): un juguete del port, no del cartucho, asi que espera al
+    acorde como todo lo que el port anade. Sin el, L+R no cambia nada; con el,
+    cada L+R pasa a la siguiente.
+    """
+    pal, why = game_state_address(rom_path, "g_idle_palette")
+    if pal is None:
+        print(f"SALTADO: {why}")
+        return 0
+    failures = []
+    for chord in (False, True):
+        core, screen = load(rom_path)   # `screen` must stay alive; see load()
+        run(core, 8)
+        press_start(core); run(core, 10)
+        if chord:
+            core.set_keys(KEYS["L"], KEYS["R"]); run(core, 4)
+            core.set_keys(); run(core, 12)
+        press_start(core); run(core, 12)
+        press_start(core); run(core, 60)
+        core.set_keys(KEYS["SELECT"]); run(core, 4)      # -> HUD STATS
+        core.set_keys(); run(core, 20)
+        before = core.memory.u8[pal]
+        core.set_keys(KEYS["L"], KEYS["R"]); run(core, 4)
+        core.set_keys(); run(core, 20)
+        after = core.memory.u8[pal]
+        if chord and after == before:
+            failures.append("con el acorde, L+R en HUD STATS no cambia el color "
+                            "del cosaco")
+        elif not chord and after != before:
+            failures.append(f"sin el acorde, L+R en HUD STATS cambia el color "
+                            f"del cosaco ({before} -> {after})")
+        else:
+            print(f"  {'con' if chord else 'sin'} el acorde, L+R en HUD STATS: "
+                  f"paleta {before} -> {after}")
+        del core, screen
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: el color del cosaco solo cambia bajo el acorde.")
     return 0

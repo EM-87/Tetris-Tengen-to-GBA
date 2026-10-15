@@ -178,7 +178,7 @@ gba: $(GBA_ROM)
 # still reaches the helpful message below instead of "no rule to make target".
 $(GBA_ELF): $(GBA_SRC) $(CORE_HDR) gba/port.h gba/gba_hw.h gba/link.h \
              gba/crt0.s gba/gba.ld gba/mb_image.s $(GBA_MB) \
-             $(wildcard $(GBA_ASSETS) gba/splash_logo.h gba/splash_tetris.h gba/gbp_logo.h) | $(BUILD)
+             $(wildcard $(GBA_ASSETS) gba/splash_logo.h gba/splash_mirrorsoft.h gba/splash_tetris.h gba/gbp_logo.h) | $(BUILD)
 	@command -v $(ARMCC) >/dev/null 2>&1 || { \
 	    echo "error: $(ARMCC) not found."; \
 	    echo "Install an arm-none-eabi toolchain (see the Makefile header),"; \

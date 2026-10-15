@@ -1,13 +1,16 @@
-/* splash.c — THE LOGOS ON WHITE, as a GBA game opens: the publisher's and
- * then Tetris's, each out of white and held, the first back into white and
- * the last away to black, before the title. At power-on only — a soft reset
+/* splash.c — THE LOGOS ON WHITE, as a GBA game opens: the publisher's, then
+ * the licensors' — Mirrorsoft's, whose licence the cartridge itself names on
+ * GAME SELECT (ppuPatchLicensedBy, $A1EF), and the Tetris logo, as every
+ * Tetris since has opened with — each out of white and held, all but the
+ * last back into white and the last away to black, before the title. At
+ * power-on only — a soft reset
  * (A+B+START+SELECT) goes straight back to the title — and not on the
  * Single-Pak copy, which has just come through the BIOS's own logo and goes
  * straight to its lobby.
  *
  * Mode 4, the one 8-bit bitmap, drawn once a logo: the picture
  * (tools/make_splash.py, white as colour 0 — sixteen colours for the
- * publisher's, up to 256 for the Tetris logo's gradients) put into the
+ * publisher's, up to 256 for the licensors' gradients) put into the
  * middle of the page and the rest left at colour 0. The fades are the
  * blender's brightness, over the bitmap and the backdrop both. Any button
  * cuts a hold short once the logo is up. Afterwards the video memory the
@@ -22,12 +25,17 @@
 #include "splash_logo.h"
 #define HAVE_TENGEN_LOGO 1
 #endif
+#if !defined(TENGEN_MULTIBOOT) && __has_include("splash_mirrorsoft.h")
+#include "splash_mirrorsoft.h"
+#define HAVE_MIRRORSOFT_LOGO 1
+#endif
 #if !defined(TENGEN_MULTIBOOT) && __has_include("splash_tetris.h")
 #include "splash_tetris.h"
 #define HAVE_TETRIS_LOGO 1
 #endif
 
-#if defined(HAVE_TENGEN_LOGO) || defined(HAVE_TETRIS_LOGO)
+#if defined(HAVE_TENGEN_LOGO) || defined(HAVE_MIRRORSOFT_LOGO) || \
+    defined(HAVE_TETRIS_LOGO)
 #define REG_BLDCNT (*(vu16 *)0x04000050)
 #define REG_BLDY   (*(vu16 *)0x04000054)
 #define BLD_BG2_BACKDROP 0x0024      /* first target: BG2 and the backdrop */
@@ -96,10 +104,10 @@ static void show_logo(const uint16_t *palette, int colours,
 }
 #endif
 
-/* THE PUBLISHER'S, and back into white if Tetris's comes after it. */
+/* THE PUBLISHER'S, and back into white if a licensor's comes after it. */
 static void tengen_logo(void) {
 #ifdef HAVE_TENGEN_LOGO
-#ifdef HAVE_TETRIS_LOGO
+#if defined(HAVE_MIRRORSOFT_LOGO) || defined(HAVE_TETRIS_LOGO)
     const bool more = true;
 #else
     const bool more = false;
@@ -108,8 +116,24 @@ static void tengen_logo(void) {
 #endif
 }
 
-/* THE TETRIS LOGO, as every Tetris since the licence has opened with: after
- * the publisher's, and to black for the title. */
+/* MIRRORSOFT'S: the cartridge's licence, "LICENSED BY MIRRORSOFT LTD." on
+ * its GAME SELECT, as the licensor's own logo; back into white if the
+ * Tetris logo follows. */
+static void mirrorsoft_logo(void) {
+#ifdef HAVE_MIRRORSOFT_LOGO
+#ifdef HAVE_TETRIS_LOGO
+    const bool more = true;
+#else
+    const bool more = false;
+#endif
+    show_logo(kMirrorsoftLogoPalette, MIRRORSOFT_LOGO_COLOURS,
+              kMirrorsoftLogoPixels, MIRRORSOFT_LOGO_W, MIRRORSOFT_LOGO_H,
+              false, more);
+#endif
+}
+
+/* THE TETRIS LOGO, as every Tetris since the licence has opened with: the
+ * last, and to black for the title. */
 static void tetris_logo(void) {
 #ifdef HAVE_TETRIS_LOGO
     show_logo(kTetrisLogoPalette, TETRIS_LOGO_COLOURS, kTetrisLogoPixels,
@@ -124,9 +148,9 @@ static void tetris_logo(void) {
 __attribute__((section(".ewram"))) static volatile uint32_t g_splash_seen;
 
 /* THE LOGOS AT POWER-ON: the Game Boy Player's first — which is how a
- * Player is found, gbp.c — then the publisher's and Tetris's, each out of
- * white and all but the last back into it. None after a soft reset, nor on
- * the Single-Pak copy. */
+ * Player is found, gbp.c — then the publisher's, Mirrorsoft's and Tetris's,
+ * each out of white and all but the last back into it. None after a soft
+ * reset, nor on the Single-Pak copy. */
 void splash_show(void) {
 #ifdef TENGEN_MULTIBOOT
     return;
@@ -135,5 +159,6 @@ void splash_show(void) {
     g_splash_seen = SPLASH_SEEN;
     gbp_show_logo();
     tengen_logo();
+    mirrorsoft_logo();
     tetris_logo();
 }

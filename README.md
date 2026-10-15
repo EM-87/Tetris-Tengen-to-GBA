@@ -127,9 +127,9 @@ Lo que el GBA tiene de más:
 | Dónde | Botón | Qué hace |
 |---|---|---|
 | Partida | SELECT | cambia de HUD (dos por modo); con HOLD, guarda la pieza |
-| Partida, HUD Stats | L+R | cambia el color del cosaco; con HOLD, cambia de HUD (en cualquier HUD) |
+| Partida, HUD Stats, con el acorde | L+R | cambia el color del cosaco; con HOLD, cambia de HUD (en cualquier HUD) |
 | GAME SELECT o LEVEL SETTINGS | L+R | el acorde: destapa las canciones ocultas (Korobeiniki, Katiuska, MUSIC MIX), los niveles 18-19, el menú de pausa y lo demás que añade el port (abajo) |
-| Título | L+R | recorre los títulos de los prototipos (su skin llega al juego) |
+| Título, con el acorde | L+R, y luego L o R | recorre los títulos de los prototipos (su skin llega al juego) |
 | Título, con el acorde | SELECT | las tablas de HIGH SCORES, una por modo (Izquierda/Derecha las recorren); sin el acorde, SELECT es otro START, como en el cartucho |
 | Pantalla LINK CABLE | SELECT | Single-Pak: envía el juego a una GBA sin cartucho |
 | Carrera, tablero muerto | A+B | se levanta y sigue, como en el cartucho |
@@ -154,14 +154,17 @@ partida; GHOST y SWAP A-B son de cada jugador.
 
 **Sin el acorde, el cartucho tal cual** en lo que se ve y se oye: los
 créditos son los suyos (con LICENSED BY MIRRORSOFT LTD.), SELECT en el título
-es otro START y el mando no vibra. Con el acorde, el crédito del port ocupa
+es otro START, el mando no vibra y el título y el cosaco son los del
+cartucho (L y R no hacen nada). Con el acorde, el crédito del port ocupa
 el sitio del de Mirrorsoft, SELECT en el título abre los récords, el Game Boy
 Player vibra, y además de lo de arriba la música acelera con la pila alta, la
 pausa tapa el tablero con un muro de bloques, un récord nuevo suena con el
 jingle que el cartucho no usa (por cable, todo esto con el acorde del
-maestro), la demo la juega el ordenador del port, al acabar la partida la
-pila muerta baja como una cortinilla (la del Tetris de Game Boy) y en el
-tablero sale la hoja de la partida — TIME, PIECES, SINGLE, DOUBLE, TRIPLE,
+maestro), la demo la juega el ordenador del port, en el título L+R pone los
+prototipos y en HUD STATS cambia el color del cosaco, y al acabar la partida
+la cortinilla del Tetris de Game Boy — un muro de ladrillos sube tapando la
+pila muerta y luego baja vaciando el pozo — deja en el tablero la hoja de la
+partida — TIME, PIECES, SINGLE, DOUBLE, TRIPLE,
 TETRIS, RATE (el % de líneas hechas de cuatro en cuatro) y DROUGHT (la racha
 más larga sin barra) —, y se arreglan los fallos propios del cartucho:
 el reparto en cooperativo que nace dentro de la pieza del compañero, la
@@ -186,13 +189,16 @@ pasa de pantalla, B vuelve). El logo es de Nintendo y no va en el repo: se gener
 pérdidas (240x160) de un juego que lo muestre; sin él no sale ni se busca el
 Player.
 
-**Al encender salen el logo de Tengen y el de Tetris** sobre blanco, como en
-los juegos de GBA (y como abre todo Tetris con licencia), y solo al encender
-(no tras el reinicio por botones ni en la copia Single-Pak). Los logos no van
-en el repo: se generan una vez con
-`python3 tools/make_splash.py logo.png` y
-`python3 tools/make_splash.py tetris_logo.png --tetris` (este con 256 colores,
-por sus degradados); sin ellos la ROM arranca directa.
+**Al encender salen los logos de Tengen, Mirrorsoft y Tetris** sobre blanco,
+como en los juegos de GBA: el editor, la licencia que el propio cartucho
+nombra (LICENSED BY MIRRORSOFT LTD.) y la de Tetris, como abre todo Tetris con
+licencia. Solo al encender (no tras el reinicio por botones ni en la copia
+Single-Pak), y cada uno se salta con un botón. Los logos no van en el repo: se
+generan una vez con
+`python3 tools/make_splash.py logo.png`,
+`python3 tools/make_splash.py mirrorsoft.jpg --mirrorsoft` y
+`python3 tools/make_splash.py tetris_logo.png --tetris` (estos dos con 256
+colores, por sus degradados); sin ellos la ROM arranca directa.
 
 Con el juego en pausa entran los tres códigos originales, un botón por
 frame:
@@ -284,6 +290,49 @@ Tetris-Tengen-to-GBA/
 ├── CLAUDE.md             cómo trabajar en este proyecto
 └── PROMPT_ARRANQUE.md    resumen para retomar el trabajo en una sesión nueva
 ```
+
+## La versión 2 (o «Tengen Tetris 2», entre nosotros)
+
+Esto es un port, y en pantalla nunca dice otra cosa: sin el acorde es el
+cartucho de 1989, regla a regla y nota a nota — las trazas lo comparan con
+el cartucho real frame a frame — con lo justo que pide una GBA (una pantalla
+más estrecha, logos al encender, reposo, partida guardada, cable y adaptador
+inalámbrico). Pero el acorde destapa tanto que, puertas adentro, a la
+versión con truco la llamamos la versión 2.
+
+Lo que hay detrás del acorde no es un modo: es el juego terminado.
+
+- **Los fallos del propio cartucho, arreglados** (sin el acorde se quedan,
+  porque son suyos): en cooperativo, la pieza que se reparte dentro de la del
+  compañero; los bloques que, al hundirse las filas del compañero, caen
+  dentro de la pieza que está bajando; los estantes del panel izquierdo que
+  no llegan a la cuerda (el tile `$6A` tiene la primera columna vacía); y el
+  bisel de las fichas `$01` y `$03`, que dibujan su esquina un píxel más
+  abajo que las otras doce. Cuatro del cartucho, y dos más del parche XE
+  (dos errores de uno).
+- **Lo que el cartucho dejó a medias, acabado**: el jingle de subir de nivel
+  que el motor de sonido trae y nadie toca suena con un récord nuevo; la
+  música corre más con la pila alta, la pausa tapa el tablero y la partida
+  acabada se lee en el propio tablero, con la cortinilla del Tetris de Game
+  Boy. (Dos de estas cosas ni siquiera esperan al acorde, porque completan
+  el original sin cambiarlo: cada modo tiene su tabla de récords, y el
+  nombre que escribiste vuelve solo.)
+- **Un juego moderno sobre el viejo**: menú de pausa con música y opciones
+  (HARD DROP, FAST DOWN, FAST SHIFT, GHOST, SWAP A-B, HOLD), dos canciones
+  que el cartucho no tenía, los niveles 18 y 19 de Tetris Tengen XE, y un
+  ordenador nuevo — El-Tetris sobre un tablero de bits, con pesos propios
+  hallados por evolución para el cooperativo — que juega VERSUS, WITH
+  COMPUTER y la demo.
+- **Los prototipos**: los títulos y las reglas de tres versiones previas del
+  cartucho, como pieles que llegan hasta el tablero.
+
+En cifras: unas 5.400 líneas de reglas en C (`src/`, probadas en el PC con
+146 tests y un fuzzer), 15.800 de capa GBA y 25.000 de herramientas y
+comprobaciones — 53 baterías en `make gba-check`, más de ochenta
+comprobaciones que arrancan la ROM en un emulador, la juegan y miran la
+pantalla, el sonido y la memoria —, todo contrastado contra el disassembly
+del cartucho, línea citada a línea citada. Nada de eso se ve desde fuera, y
+así tiene que ser: lo que se ve es Tetris de Tengen.
 
 ## Créditos del disassembly
 

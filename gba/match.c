@@ -135,6 +135,7 @@ static void rumble_step(TengenStepResult step) {
  * the first frame, whatever the chord: it is only the page that is behind
  * it. Fed beside note_award, wherever a step is taken. */
 TengenStats g_stats[2];
+int8_t g_end_rise = -1;
 int8_t g_end_curtain = -1;
 static uint16_t g_end_frames;
 
@@ -142,6 +143,7 @@ void stats_begin_match(void) {
     tengen_stats_begin(&g_stats[0]);
     tengen_stats_begin(&g_stats[1]);
     g_end_frames = 0;
+    g_end_rise = -1;
     g_end_curtain = -1;
 }
 
@@ -340,7 +342,7 @@ static void refresh_palettes(void) {
      * are up, and the piece's colours put back with the board. What is
      * remembered as shown is then no piece at all, so the first frame with
      * a board in it reinstalls the piece's whichever it is. */
-    if (board_bricked()) {
+    if (board_bricked() || g_end_rise > 0) {    /* ...and the end page's wall */
         set_brick_palette();
         g_shown_piece = TENGEN_TETROMINO_COUNT;
     } else if (p->piece.current != g_shown_piece) {
@@ -1564,31 +1566,38 @@ static void ai_think_spare(void) {
     tengen_ai_think_while(&g_ai, &g_session.game, TENGEN_PLAYER_2, ai_time_left);
 }
 
-/* THE PAGE THE BOARD TURNS INTO (see g_end_curtain): once the match is over
+/* THE PAGE THE BOARD TURNS INTO (see g_end_rise): once the match is over
  * — when the main loop stops stepping it, match_over — under the match's
  * chord, never in the demo and not over a cable gone for good. The plaque
- * alone for END_PAGE_WAIT_FRAMES, then the figures written out once (this
+ * alone for END_PAGE_WAIT_FRAMES; then the figures written out once (this
  * player's; a coop board's, both players' together, as its BONUS show
- * counts them) and the curtain let down a row every END_PAGE_ROW_FRAMES.
+ * counts them), the wall risen a row every END_PAGE_ROW_FRAMES, stood
+ * whole END_PAGE_FULL_FRAMES, and let down a row every END_PAGE_ROW_FRAMES.
  * The game over's own clock (GAMEOVER_HOLD_FRAMES) and its buttons are as
  * they were: the page is read in the time the plaque already stood. Before
  * the vertical blank: the writing out is no drawing. */
 static void end_page_frame(void) {
     if (g_demo || g_link_lost || !pause_menu_on() || !match_over()) {
         g_end_frames = 0;
+        g_end_rise = -1;
         g_end_curtain = -1;
         return;
     }
     if (g_end_frames < 0xFFFF) g_end_frames++;
     if (g_end_frames <= END_PAGE_WAIT_FRAMES) return;
-    if (g_end_curtain < 0) {
+    if (g_end_rise < 0) {
         TengenStats s = g_session.game.coop
                             ? tengen_stats_sum(&g_stats[0], &g_stats[1])
                             : g_stats[g_view];
         end_stats_compose(&s);
     }
-    int rows = (g_end_frames - END_PAGE_WAIT_FRAMES - 1) / END_PAGE_ROW_FRAMES;
-    g_end_curtain = (int8_t)(rows > TENGEN_PF_HEIGHT ? TENGEN_PF_HEIGHT : rows);
+    const int rise = TENGEN_PF_HEIGHT * END_PAGE_ROW_FRAMES;
+    int t = g_end_frames - END_PAGE_WAIT_FRAMES - 1;
+    int risen = t / END_PAGE_ROW_FRAMES + 1;
+    g_end_rise = (int8_t)(risen > TENGEN_PF_HEIGHT ? TENGEN_PF_HEIGHT : risen);
+    int down = t < rise + END_PAGE_FULL_FRAMES ? 0
+             : (t - rise - END_PAGE_FULL_FRAMES) / END_PAGE_ROW_FRAMES + 1;
+    g_end_curtain = (int8_t)(down > TENGEN_PF_HEIGHT ? TENGEN_PF_HEIGHT : down);
 }
 
 void draw_match(bool *sweeping) {

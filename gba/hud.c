@@ -397,7 +397,9 @@ int field_view(void) {
  * RIVAL'S — a paused race under the chord shows the other one (field_view),
  * and that is what the pause is for there. */
 bool board_bricked(void) {
-    return g_session.game.paused && g_pause_unlocked && field_view() == g_view;
+    /* The match's chord (over a cable the master's): with this console's it
+     * was a wall on one screen and the plaque over the board on the other. */
+    return g_session.game.paused && match_chord() && field_view() == g_view;
 }
 
 void draw_line_clear_sweep(void) {
@@ -1309,7 +1311,8 @@ static void draw_stats(const TengenPlayerState *p, int base_tx) {
      * touches the top and the rest stand in proportion. A piece dealt at all
      * keeps at least one step. */
     uint32_t room = (uint32_t)bar_rows * 8, top = 0;
-    if (g_pause_unlocked)
+    bool uncapped = match_chord();     /* over a cable, the master's */
+    if (uncapped)
         for (int i = 0; i < SCREEN_1P_STATS_PIECES; i++)
             if (p->piece_total[TT_I + i] > top) top = p->piece_total[TT_I + i];
 
@@ -1326,7 +1329,7 @@ static void draw_stats(const TengenPlayerState *p, int base_tx) {
         }
 
         uint32_t n = p->piece_stats[TT_I + i];
-        if (g_pause_unlocked) {
+        if (uncapped) {
             n = p->piece_total[TT_I + i];
             if (top > room) {
                 uint32_t scaled = n * room / top;
@@ -1538,7 +1541,7 @@ static void draw_coop_stats_panel(const TengenPlayerState *me) {
      * open now and the CELLS answer to the chord instead: your own score and
      * lines until it is rung, the board's two after. */
     g_panel_layer = true;
-    if (g_pause_unlocked) {
+    if (match_chord()) {               /* over a cable, the master's */
         draw_coop_text_counter(COOP_L_TX, COOP_COUNTER_TY, "T.SCORE",
                                 coop_total_score(), 6);
         draw_coop_text_counter(COOP_L_TX, COOP_LOWER_TY, "T.LINES",
@@ -1699,7 +1702,7 @@ static void draw_coop_panel(void) {
     draw_coop_counter(COOP_R_TX, COOP_LOWER_TY, HUD_LABEL_LINES, right->lines, 4);
     draw_coop_text_counter(COOP_R_TX, COOP_THIRD_TY, "HIGH", g_high_score, 6);
 
-    if (g_pause_unlocked) {
+    if (match_chord()) {               /* over a cable, the master's */
         draw_coop_text_counter(COOP_L_TX, COOP_TOTAL_TY, "T.LINES",
                                 coop_total_lines(), 4);
         draw_coop_text_counter(COOP_R_TX, COOP_TOTAL_TY, "T.SCORE",
@@ -2060,16 +2063,19 @@ void end_stats_compose(const TengenStats *s) {
     end_row_number(END_ROW_DROUGHT, "DROUGHT", s->drought_max, 99);
 }
 
-/* The board under the curtain: the page in the rows it has left, the dead
- * stack let down by as many below them, and nothing falling. */
+/* The board under the curtain: the wall from its top row down, the dead
+ * stack above it while it rises, the page above it as it is let down, and
+ * nothing falling. */
 static void draw_end_page(const TengenPlayfield *field) {
-    int curtain = g_end_curtain;
+    int wall = g_end_curtain > 0 ? g_end_curtain : TENGEN_PF_HEIGHT - g_end_rise;
     int page_tx = (field_cols() - END_PAGE_W) / 2;
     for (int row = 0; row < TENGEN_PF_HEIGHT; row++) {
         for (int col = 0; col < field_cols(); col++) {
             uint16_t entry = WITH_BANK(T_BLANK, 0);
-            if (row >= curtain) {
-                entry = WITH_BANK(field->cell[row - curtain][field_col0() + col], 0);
+            if (row >= wall) {
+                entry = WITH_BANK(T_BRICK, PAL_PIECE_BANK);
+            } else if (g_end_curtain <= 0) {
+                entry = WITH_BANK(field->cell[row][field_col0() + col], 0);
             } else if (col >= page_tx && col < page_tx + END_PAGE_W) {
                 char c = g_end_rows[row][col - page_tx];
                 if (c != ' ') entry = WITH_BANK(ascii_tile(c), BANK_LABEL);
@@ -2099,7 +2105,7 @@ void draw_field(void) {
     const TengenPlayfield *field =
         &g_session.game.field[g_session.game.coop ? 0 : field_view()];
     /* ...AND ONCE THE MATCH IS OVER, UNDER THE CHORD, THE PAGE. */
-    if (g_end_curtain >= 0) {
+    if (g_end_rise >= 0) {
         draw_end_page(field);
         return;
     }

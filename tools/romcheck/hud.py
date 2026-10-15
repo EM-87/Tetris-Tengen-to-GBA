@@ -3,6 +3,7 @@ The panels either side of the board: the four HUDs, NEXT, the
 braid, the histogram and the level-up show.
 """
 from .harness import (
+    ring_chord_from_title,
     BRAID_BLUE, CELL_BLOCK, CELL_WALL, HUD_LABEL_TILE_BASE,
     HUD_LABEL_TILE_END, KEYS, OAM_ADDR, PAL_NEXT_BANK,
     PAL_PIECE_BANK, PLAQUE_CORNERS, SCREENBLOCK_ADDR, SCREENBLOCK_OFFSET_ADDR,
@@ -728,8 +729,11 @@ def coop_hud_check(rom_path):
     LEFT, RIGHT = (0, 7), (30 - 7, 30)
 
     def start(cheat):
+        # THE SCREEN GOES BACK WITH THE CORE, and is kept as long as it is:
+        # it is the emulator's video buffer (see load()), and this returned the
+        # core alone, so the buffer was freed under a core still drawing into
+        # it — a segfault that waited until the memory happened to be reused.
         core, screen = load(rom_path)
-        _ = screen
         run(core, 8)
         press_start(core); run(core, 20)          # title -> GAME SELECT
         if cheat:
@@ -745,14 +749,14 @@ def coop_hud_check(rom_path):
             at = base + off["lines"] + who * off["stride"]
             for k in range(4): core.memory.u8[at + k] = (lines >> (8 * k)) & 0xFF
         run(core, 60)
-        return core
+        return core, screen
 
     def panel(core, cols, first=9, last=20):
         return " ".join(t for t in
                          (tilemap_text(core, ty, *cols) for ty in range(first, last))
                          if t)
 
-    core = start(cheat=False)
+    core, screen = start(cheat=False)
     left, right = panel(core, LEFT), panel(core, RIGHT)
     if "12345" not in left or "27" not in left:
         failures.append(f"el panel izquierdo no lleva lo del jugador: {left!r}")
@@ -775,7 +779,8 @@ def coop_hud_check(rom_path):
     else:
         print("  ...y sin el acorde SELECT no cambia nada: WITH tiene un HUD")
 
-    core = start(cheat=True)
+    del core, screen
+    core, screen = start(cheat=True)
     left, right = panel(core, LEFT), panel(core, RIGHT)
     # 27 + 14 = 41 lines, and 12345 + 6789 = 19134 plus whatever the computer
     # scored while the frames above ran.
@@ -841,6 +846,7 @@ def stats_check(rom_path):
 
         run(core, 40)
         if skin:
+            ring_chord_from_title(core)       # the prototypes wait for it
             tap("L", "R"); run(core, 20)
         press_start(core); run(core, 24)
         press_start(core); run(core, 24)
@@ -851,9 +857,12 @@ def stats_check(rom_path):
         if base is None:
             print(f"SALTADO: {why}")
             return 0
-        # piece_stats es uint8_t[8] y la entrada 0 es TT_NONE.
+        # piece_stats es uint8_t[8] y la entrada 0 es TT_NONE. Y lo mismo en
+        # piece_total (uint16_t[8]), que es lo que lee el histograma bajo el
+        # acorde -- y las skins ya solo se ponen con el acorde.
         for i, n in enumerate(counts):
             core.memory.u8[base + off["stats"] + 1 + i] = n
+            core.memory.u16[base + off["total"] + 2 * (1 + i)] = n
         run(core, 30)
 
         used = {}

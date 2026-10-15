@@ -1328,6 +1328,12 @@ def skin_check(rom):
             both(10, [[], []])
 
         both(60)
+        # THE GAME'S CHORD FIRST — GAME SELECT, L+R, and B back — on whichever
+        # console is asked to wear a skin: the prototypes wait for it.
+        wants = (master_chord, slave_chord)
+        for keys, settle in ((["START"], 10), (["L", "R"], 12), (["B"], 24)):
+            both(4, [[KEYS[k] for k in keys] if w else [] for w in wants])
+            both(settle, [[], []])
         # THE TITLE'S CHORD, on whichever console is asked to wear a skin.
         chord = [[KEYS["L"], KEYS["R"]] if want else []
                  for want in (master_chord, slave_chord)]
@@ -1367,6 +1373,16 @@ def skin_check(rom):
         return "release" if b > r + 40 and b > g + 20 else "prototipo"
 
     cores, screens, titles = match(True, False)
+    # Skipped only if the BUILD has none: a build with prototypes whose title
+    # did not put one on is a failure, not a skip (this check once skipped
+    # silently when the title stopped answering without the game's chord).
+    proto_h = os.path.join(os.path.dirname(rom), "..", "gba", "screen_proto.h")
+    has_protos = (os.path.exists(proto_h) and
+                  "#define SCREEN_PROTO_AVAILABLE 1" in open(proto_h).read())
+    if not titles[0] and has_protos:
+        print("FALLA: la ROM trae prototipos y el titulo del maestro no se puso "
+              "ninguno")
+        return 1
     if not titles[0]:
         print("SALTADO: esta ROM no trae prototipos (make assets PROTO=...)")
         return 0
@@ -1518,15 +1534,24 @@ def pause_check(rom):
     else:
         print("  y EXIT las saca a las dos a la vez")
 
-    # Only the slave found the chord: the plaque, on both.
+    # Only the slave found the chord: the plaque, on both — and the board
+    # behind it on both, not the chord's wall of bricks (T_BRICK, $0F) on the
+    # slave's alone, which is what this console's chord drew there.
     cores, both, tap = start([False, True])
     tap("START", who=0)
     both(20)
     widths = read(cores, "g_pmenu_drawn_w")
+    bricks = [sum(1 for r in range(20) for col in range(10, 20)
+                  if c.memory.u16[0x0600E000 + (r * 32 + col) * 2] & 0x3FF == 0x0F)
+              for c in cores]
     if widths != [0, 0]:
         failures.append(f"sin el acorde del maestro hubo menu: anchos {widths}")
+    elif bricks != [0, 0]:
+        failures.append(f"sin el acorde del maestro, ladrillos en la pausa: "
+                        f"{bricks}")
     else:
-        print("  sin el acorde del maestro, la placa en las dos")
+        print("  sin el acorde del maestro, la placa en las dos, y el tablero "
+              "detras sin ladrillos")
     for f in failures:
         print(f"FALLA: {f}")
     if failures:

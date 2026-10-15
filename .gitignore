@@ -16,8 +16,10 @@ gba/audio_golden.bin
 # The publisher's logo for the splash screen, from an image you supply:
 #   python3 tools/make_splash.py logo.png
 gba/splash_logo.h
-# ...and the Tetris logo after it:
+# ...and the licensors' after it, Mirrorsoft's and the Tetris logo:
+#   python3 tools/make_splash.py mirrorsoft.jpg --mirrorsoft
 #   python3 tools/make_splash.py tetris_logo.png --tetris
+gba/splash_mirrorsoft.h
 gba/splash_tetris.h
 # The Game Boy Player's logo (Nintendo's), from a picture you supply:
 #   python3 tools/make_gbp_logo.py gbp_logo.png

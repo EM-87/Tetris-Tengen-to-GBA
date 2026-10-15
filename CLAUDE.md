@@ -171,6 +171,13 @@ story behind each; the item number is in brackets.
   one thing lockstep cannot carry is what a person typed: names cross in
   `TengenNameSwap`. The lobby is stop-and-wait; its SKIN stage agrees on a
   skin by a fingerprint of the art. [14, 25, 31]
+- **In a match, the chord is the MATCH'S** (`match_chord()`, pause_menu_on):
+  over a cable the master's. `g_pause_unlocked` is this console's, and is
+  for the front end and solo set-up only. Five things in a match asked it
+  and came apart over the cable — the tempo by the stack, the record jingle,
+  the pause's wall of bricks, the STATS bars' scale and the coop totals —
+  each on one screen and not the other. And whatever the port adds waits for
+  the chord: without it the screen and the speaker are the cartridge's.
 - **The Single-Pak slave is the same program, linked for EWRAM**
   (`gba/mb.ld`, `-DTENGEN_MULTIBOOT`, crt0's multiboot entries under
   MULTIBOOT) and carried inside the cartridge's ROM (`gba/mb_image.s`),
@@ -711,7 +718,9 @@ the tune under the arrow playing as it moves and the menu around it silent,
 A to take one and B to leave it; MUSIC and not CHANGE MUSIC, whose box
 would cover the panels' last column of figures) and those Stats,
 and turns the menus' text from blue to white and the credits from the
-cartridge's orange to dark grey to say so; the title's L+R cycling the prototype skins;
+cartridge's orange to dark grey to say so; the title's L+R cycling the prototype skins, once the
+chord is rung (the prototypes are no part of the cartridge), and under it
+the HUD STATS cossack's colour on L+R;
 credits rotating every four seconds — the cartridge's six, GAME SELECT's
 LICENSED BY MIRRORSOFT LTD. among them (`ppuPatchLicensedBy`, $A1EF), and
 under the chord the port's own line in Mirrorsoft's place (`--credits`);
@@ -762,11 +771,13 @@ anywhere but a match in play — a solo match pauses first and sleeps on its
 plaque, a linked one not at all; A, B, START or SELECT wakes it) and soft
 reset (A+B+START+SELECT), as commercial games had; a paused solo game kept
 on the battery through a power cycle, as Tetris DX does (`suspend.c`); the
-publisher's logo on white at power-on and the Tetris logo after it, as the
-licence has every Tetris open (`splash.c`, from images you supply through
-`tools/make_splash.py`, the second with `--tetris`: 256 colours for its
-gradients; both gitignored like the cartridge's art; never on the
-Single-Pak copy, which never shows a splash); every
+publisher's logo on white at power-on, then the licensors': Mirrorsoft's,
+whose licence the cartridge names on GAME SELECT ($A1EF), and the Tetris
+logo, as the licence has every Tetris open (`splash.c`, from images you
+supply through `tools/make_splash.py`, `--mirrorsoft` and `--tetris` for
+those two: 256 colours for their gradients; all gitignored like the
+cartridge's art; never on the Single-Pak copy, which never shows a
+splash); every
 colour through one table for the GBA's LCD (`kLcdGamma`, the identity
 today); the Game Boy Player's logo at power-on, its rumble under the chord, and on it the
 cartridge's three settings pages instead of the one (`gbp.c`,
@@ -788,8 +799,10 @@ silent but for its effects, the player's tune on LEVEL SETTINGS given back
 as it ends (`demo_music_back`, `--demo`), and played by the port's computer
 (`smart`) under it as every match's computer is; and, once a match is over
 under its chord, the game's own page on its board: the GAME OVER plaque alone
-for a second, then the dead stack let down a row at a time out of the well,
-Game Boy Tetris's curtain, and in the rows it leaves TIME and PIECES over
+for half a second, then Game Boy Tetris's curtain — a wall of the pause's
+bricks risen a row at a time from the floor over the dead stack, standing a
+moment, and let down a row at a time out of the well — and in the rows it
+leaves TIME and PIECES over
 the plaque and SINGLE, DOUBLE, TRIPLE, TETRIS, RATE (the lines made four at a
 time, in a hundred) and DROUGHT (the most pieces dealt with no I) under it —
 a coop board's both players' together, as its BONUS counts them; read in the

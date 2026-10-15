@@ -2169,16 +2169,21 @@ bool hold_on(void);
 
 /* THE GAME'S OWN FIGURES ON ITS BOARD, once the match is over, under the
  * match's chord (match.c, end_page_frame; hud.c, draw_field): the plaque
- * alone first, as the cartridge has it, then the dead stack let down a row
- * at a time out of the bottom of the well — the Game Boy Tetris's curtain —
- * and in the rows it leaves the page, written out once (end_stats_compose).
- * g_end_curtain is how many rows the stack has gone down, -1 for no page. */
+ * alone first, as the cartridge has it; then Game Boy Tetris's curtain, a
+ * wall of the pause's bricks (T_BRICK, in its greys) rising a row at a time
+ * from the floor over the dead stack, standing a moment, and let down a row
+ * at a time out of the bottom of the well, the page written out once
+ * (end_stats_compose) in the rows it leaves. g_end_rise is how many rows of
+ * the wall have risen, -1 for none of it; g_end_curtain how many it has
+ * been let down. */
 extern TengenStats g_stats[2];
+extern int8_t g_end_rise;
 extern int8_t g_end_curtain;
 void stats_begin_match(void);
 void end_stats_compose(const TengenStats *s);
-#define END_PAGE_WAIT_FRAMES 60   /* the plaque on its own first */
+#define END_PAGE_WAIT_FRAMES 30   /* the plaque on its own first */
 #define END_PAGE_ROW_FRAMES  3    /* the curtain: a row every three frames */
+#define END_PAGE_FULL_FRAMES 20   /* ...and the wall whole between the two */
 #define END_PAGE_W           10   /* the page: a release board's width */
 
 #endif /* PORT_H */
