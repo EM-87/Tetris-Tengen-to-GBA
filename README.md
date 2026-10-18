@@ -146,7 +146,7 @@ silueta de dónde va a caer la pieza, y en cooperativo también la del
 compañero), **SWAP A-B** (A y B giran al revés) y **HOLD** (SELECT guarda la
 pieza que cae, y la cambia por la guardada; una vez por pieza). Con HOLD, el
 HUD se cambia con L+R y en HUD STATS la pieza guardada sale donde estaba el
-cosaco. Cada uno tiene su casilla: vacía apagado, con punto encendido. A,
+cosaco. Cada uno tiene su casilla, en blanco: vacía apagado, llena encendido. A,
 Izquierda o Derecha cambian el de la flecha; B vuelve. Por cable, HARD DROP,
 FAST DOWN, FAST SHIFT y HOLD son reglas de la partida: las del maestro, para
 los dos, y cualquiera las cambia desde el menú compartido solo para esa
@@ -158,7 +158,8 @@ es otro START, el mando no vibra y el título y el cosaco son los del
 cartucho (L y R no hacen nada). Con el acorde, el crédito del port ocupa
 el sitio del de Mirrorsoft, SELECT en el título abre los récords, el Game Boy
 Player vibra, y además de lo de arriba la música acelera con la pila alta, la
-pausa tapa el tablero con un muro de bloques, un récord nuevo suena con el
+pausa tapa el tablero con un muro de bloques que sube desde el suelo (y al
+seguir baja desde arriba), un récord nuevo suena con el
 jingle que el cartucho no usa (por cable, todo esto con el acorde del
 maestro), la demo la juega el ordenador del port, en el título L+R pone los
 prototipos y en HUD STATS cambia el color del cosaco, y al acabar la partida

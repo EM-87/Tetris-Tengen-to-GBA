@@ -402,6 +402,30 @@ bool board_bricked(void) {
     return g_session.game.paused && match_chord() && field_view() == g_view;
 }
 
+/* ...AND THE WALL GOES UP AND COMES DOWN: see PAUSE_WALL_UP_FRAMES. How many
+ * rows of it stand, from the floor; and the first row it covers, which the
+ * falling pieces and the ghost are not drawn over (g_wall_top). */
+static int8_t g_pause_wall;
+static uint8_t g_pause_wall_tick;
+static int g_wall_top = TENGEN_PF_HEIGHT;
+
+void pause_wall_step(void) {
+    if (board_bricked()) {
+        if (g_pause_wall < TENGEN_PF_HEIGHT &&
+            ++g_pause_wall_tick >= PAUSE_WALL_UP_FRAMES) {
+            g_pause_wall_tick = 0;
+            g_pause_wall++;
+        }
+    } else {
+        g_pause_wall_tick = 0;
+        if (g_pause_wall > 0) g_pause_wall--;
+    }
+}
+
+bool bricks_shown(void) {
+    return g_pause_wall > 0 || board_bricked() || g_end_rise > 0;
+}
+
 void draw_line_clear_sweep(void) {
     int slot = hud_clearing_slot();
     const TengenPlayerState *p = &g_session.game.player[slot];
@@ -633,6 +657,9 @@ static uint8_t g_hud_choice[HUD_MODE_COUNT] = {
 };
 
 void hud_reset(void) {
+    /* A match starts with no wall standing: a pause left by EXIT left it up. */
+    g_pause_wall = 0;
+    g_pause_wall_tick = 0;
     /* A choice made behind the chord does not outlive it. */
     int n;
     const uint8_t *set = hud_set(&n);
@@ -1990,7 +2017,8 @@ static void draw_ghost(int slot, int which, int bank) {
     for (int i = 0; i < count; i++) {
         int row = cells[i].row + d;
         int col = cells[i].col - field_col0();
-        if (row < 0 || col < 0 || col >= field_cols()) continue;
+        if (row < 0 || row >= g_wall_top || col < 0 || col >= field_cols())
+            continue;
         set_map_tile(field_tx() + col, FIELD_TY + row,
                       WITH_BANK(T_GHOST + which * GHOST_TILES + i, bank));
     }
@@ -2073,7 +2101,7 @@ static void draw_end_page(const TengenPlayfield *field) {
         for (int col = 0; col < field_cols(); col++) {
             uint16_t entry = WITH_BANK(T_BLANK, 0);
             if (row >= wall) {
-                entry = WITH_BANK(T_BRICK, PAL_PIECE_BANK);
+                entry = WITH_BANK(T_BRICK, PAL_BRICK_BANK);
             } else if (g_end_curtain <= 0) {
                 entry = WITH_BANK(field->cell[row][field_col0() + col], 0);
             } else if (col >= page_tx && col < page_tx + END_PAGE_W) {
@@ -2090,13 +2118,15 @@ void draw_field(void) {
      * into nothing, and an empty board under a pause read as a board that
      * had gone; a cell of the cartridge's grey block in every cell reads as
      * one put away. See T_BRICK for the tile and its colours. */
-    if (board_bricked()) {
+    if (g_pause_wall >= TENGEN_PF_HEIGHT) {
         for (int row = 0; row < TENGEN_PF_HEIGHT; row++)
             for (int col = 0; col < field_cols(); col++)
                 set_map_tile(field_tx() + col, FIELD_TY + row,
-                              WITH_BANK(T_BRICK, PAL_PIECE_BANK));
+                              WITH_BANK(T_BRICK, PAL_BRICK_BANK));
         return;
     }
+    /* ...and on its way up or down, the rows it has reached. */
+    g_wall_top = TENGEN_PF_HEIGHT - g_pause_wall;
     /* THE COOP BOARD IS field[0] FOR BOTH PLAYERS — the core shares it the
      * way the cartridge does (tengen_core.c, `game->coop ? 0 : slot`) — and
      * the guest views slot 1, so indexing by view showed the guest the
@@ -2136,6 +2166,8 @@ void draw_field(void) {
              * main.asm.txt:1508-1530). */
             if (clearing && col <= written)
                 entry = WITH_BANK(ascii_tile(word[col]), 0);
+            if (row >= g_wall_top)
+                entry = WITH_BANK(T_BRICK, PAL_BRICK_BANK);
 
             set_map_tile(field_tx() + col, FIELD_TY + row, entry);
         }
@@ -2174,7 +2206,7 @@ void draw_field(void) {
         TengenTetromino current = sp->piece.current;
         int bank = pass == 0 ? PAL_PIECE2_BANK : PAL_PIECE_BANK;
         for (int i = 0; i < count; i++) {
-            if (cells[i].row < 0) continue;
+            if (cells[i].row < 0 || cells[i].row >= g_wall_top) continue;
             int col = cells[i].col - field_col0();
             if (col < 0 || col >= field_cols()) continue;
             uint8_t tile = piece_cell_tile(current, sp->piece.orientation, i);
