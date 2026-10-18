@@ -877,8 +877,8 @@ def chord_extras_check(rom_path):
     # cartridge's lone shaded block ($0F, the handicap's garbage) in every
     # cell, grey whatever the level — in the falling piece's bank, which
     # gets the piece's colours back with the board.
-    from .harness import COL_FIELD, PAL_PIECE_BANK, PALETTE_ADDR, PMENU_H, \
-        PMENU_TY, pixels
+    from .harness import COL_FIELD, PAL_BRICK_BANK, PAL_PIECE_BANK, \
+        PALETTE_ADDR, PMENU_H, PMENU_TY, pixels
     T_BRICK = 0x0F
 
     def shown_cells(core):
@@ -886,16 +886,16 @@ def chord_extras_check(rom_path):
         # stand in the middle of the board and are tiles too.
         return sum(map_row_text(core, r)[0:5].count("#") for r in range(14, 20))
 
-    def not_bricks(core):
+    def not_bricks(core, rows=range(20)):
         """The board's cells, outside the menu's rows, that are not a brick
         in the bricks' bank."""
         odd = []
-        for r in range(20):
+        for r in rows:
             if PMENU_TY <= r < PMENU_TY + PMENU_H:
                 continue
             for c in range(COL_FIELD[0], COL_FIELD[1]):
                 e = core.memory.u16[0x0600E000 + (r * 32 + c) * 2]
-                if (e & 0x3FF) != T_BRICK or e >> 12 != PAL_PIECE_BANK:
+                if (e & 0x3FF) != T_BRICK or e >> 12 != PAL_BRICK_BANK:
                     odd.append((c, r))
         return odd
 
@@ -904,11 +904,12 @@ def chord_extras_check(rom_path):
         return max((max(p) - min(p) for y in range(112, 160)
                     for p in rows[y][80:160] if p != (0, 0, 0)), default=-1)
 
-    def bank_spread(core):
-        """...and the bricks' bank, entries 1-3, as the GBA holds them."""
+    def bank_spread(core, bank=PAL_BRICK_BANK):
+        """...and a bank's entries 1-3 as the GBA holds them, as far from
+        grey as they get: the bricks' own, or the falling piece's."""
         worst = 0
         for i in (1, 2, 3):
-            c = core.memory.u16[PALETTE_ADDR + (PAL_PIECE_BANK * 16 + i) * 2]
+            c = core.memory.u16[PALETTE_ADDR + (bank * 16 + i) * 2]
             rgb = (c & 31, (c >> 5) & 31, (c >> 10) & 31)
             worst = max(worst, max(rgb) - min(rgb))
         return worst
@@ -936,9 +937,21 @@ def chord_extras_check(rom_path):
             for col in range(1, 6):
                 core.memory.u8[base + off["field"] + board * PF + row * PF_W + col] = CELL_BLOCK
         press_start(core); run(core, 12)
+        # THE WALL GOES UP A ROW EVERY TWO FRAMES (PAUSE_WALL_UP_FRAMES): a
+        # few rows of it twelve frames in, the board above them still the
+        # board, and the falling piece in its colours, not the bricks' grey.
+        rising_low = not_bricks(core, range(17, 20))
+        rising_high = len(not_bricks(core, range(0, 4)))
+        piece_coloured = bank_spread(core, PAL_PIECE_BANK) > 3
+        run(core, 40)
         cells = shown_cells(core)
         odd = not_bricks(core)
-        if not want_bricks:
+        if want_bricks and (rising_low or rising_high < 30 or not piece_coloured):
+            failures.append(f"{name}: el muro no sube desde el suelo dejando la "
+                            f"pieza en sus colores ({len(rising_low)} sin ladrillo "
+                            f"abajo, {rising_high} libres arriba, pieza en color "
+                            f"{piece_coloured})")
+        elif not want_bricks:
             if cells == 0 or len(odd) < 100:
                 failures.append(f"{name}: en pausa el tablero no se ve "
                                 f"({cells} celdas, {200 - len(odd)} ladrillos)")
@@ -953,15 +966,25 @@ def chord_extras_check(rom_path):
                             f"{grey_spread(pixels(screen))}, banco "
                             f"{bank_spread(core)})")
         else:
-            # ...and with the pause gone, the board and the piece's colours.
-            press_start(core); run(core, 12)
+            # ...and with the pause gone it comes down, a row a frame from
+            # the top, the game running under it: some frames in, the top
+            # rows the board's and the bottom still bricks; then the board.
+            press_start(core); run(core, 4)
+            top_free = len(not_bricks(core, range(0, 4)))
+            low_bricks = not not_bricks(core, range(17, 20))
+            run(core, 30)
             back = shown_cells(core)
-            if back == 0 or bank_spread(core) <= 3:
+            if top_free < 30 or not low_bricks:
+                failures.append(f"{name}: al reanudar el muro no baja desde "
+                                f"arriba ({top_free} libres arriba, ladrillos "
+                                f"abajo {low_bricks})")
+            elif back == 0 or bank_spread(core, PAL_PIECE_BANK) <= 3:
                 failures.append(f"{name}: al reanudar no vuelve el tablero "
                                 f"({back} celdas) o la pieza sigue gris")
             else:
-                print(f"  {name}: en pausa un muro de ladrillos grises; al "
-                      f"reanudar, el tablero y la pieza en sus colores")
+                print(f"  {name}: en pausa el muro sube desde el suelo, gris, "
+                      f"con la pieza en sus colores; al reanudar baja desde "
+                      f"arriba y vuelve el tablero")
         del core, screen
 
     # UP DROPS THE PIECE once HARD DROP is ON in the pause menu's OPTIONS

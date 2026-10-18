@@ -198,6 +198,8 @@ void clear_screen(void) {
         for (int tx = 0; tx < MAP_W; tx++) set_histogram_tile(tx, ty, T_BLANK);
     g_panel_layer = was;
     g_title_dirty = true;
+    /* ...and the bank a match's bricks borrowed (PAL_BRICK_BANK). */
+    restore_brick_bank();
 }
 
 /* No two screens are ever up at once, so whichever prototype is showing puts

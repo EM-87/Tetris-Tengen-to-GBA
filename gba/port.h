@@ -328,10 +328,11 @@
  * lone shaded block — tile $0F, which is what the wall nibble and the
  * handicap's garbage draw ("a lone shaded block", reference/NOTES.md) — in
  * every cell. It takes the level's colours on the board, though, and is
- * grey only at level 0; so the bricks are drawn in the falling piece's bank,
- * which has no piece to colour while the board is put away, loaded with
- * piecePaletteIndex0 — the level-0 greys — for as long as they are up
- * (set_brick_palette, refresh_palettes). */
+ * grey only at level 0; so the bricks are drawn in a bank of their own
+ * (PAL_BRICK_BANK), loaded with piecePaletteIndex0 — the level-0 greys —
+ * for as long as any stand (set_brick_palette, refresh_palettes). It was the
+ * falling piece's bank once, which was safe while the wall went up all at
+ * once; a wall that rises and comes down passes the piece in its colours. */
 #define T_BRICK 0x0F
 
 /* ...AND THE PARTNER'S PREVIEW, on a coop board, which needs a fourth set of
@@ -808,6 +809,14 @@
 /* ...and the credits: the cartridge's orange, dark grey once the chord is
  * found (set_credit_colour). */
 #define BANK_CREDIT (PAL_MENU_BASE + 1)
+/* ...AND THE BRICKS' OWN BANK IN A MATCH, borrowed from the credits: no
+ * match draws in bank 9, and with a bank of their own the pause's wall and
+ * the end page's (T_BRICK) leave the falling piece its colours while they
+ * rise or come down past it — they used to borrow the piece's, which was
+ * only safe while nothing moved. Loaded with the level-0 greys while bricks
+ * stand (set_brick_palette); clear_screen gives the credits theirs back
+ * (restore_brick_bank), whatever screen comes next. */
+#define PAL_BRICK_BANK BANK_CREDIT
 
 /* ----------------------------------------------------------------------- *
  * The level's BONUS tally
@@ -1779,7 +1788,7 @@ typedef enum {
 #define GHOST_TILES 4       /* per ghost: one per cell */
 #define GHOST_INK   1       /* the colour of the piece's bank it is drawn in */
 /* ...AND THE OPTIONS WINDOW'S BOXES, after them: a switch's state as a box
- * of the letters' size, empty for OFF and with a dot in it for ON. Two
+ * of the letters' size, empty for OFF and filled for ON. Two
  * tiles each, the box moved across the pair so its right side is as far
  * from the frame as the arrow's tail is on the left (see draw_options_box). */
 #define T_CHECK_OFF (T_GHOST + 2 * GHOST_TILES)   /* and +1, its right half */
@@ -2185,5 +2194,17 @@ void end_stats_compose(const TengenStats *s);
 #define END_PAGE_ROW_FRAMES  3    /* the curtain: a row every three frames */
 #define END_PAGE_FULL_FRAMES 20   /* ...and the wall whole between the two */
 #define END_PAGE_W           10   /* the page: a release board's width */
+
+/* THE PAUSE'S WALL GOES UP AND COMES DOWN (board_bricked; hud.c,
+ * pause_wall_step): the end page's curtain at a pause's pace. While the
+ * board is to be hidden it rises from the floor a row every
+ * PAUSE_WALL_UP_FRAMES; when it no longer is, it comes down a row a frame —
+ * the game is running again under it, so the board comes back quickly, and
+ * from the top, where the falling piece is. Drawing only: the pause itself
+ * starts and ends on the frame it always did, on both consoles of a cable. */
+#define PAUSE_WALL_UP_FRAMES 2
+void pause_wall_step(void);
+bool bricks_shown(void);
+void restore_brick_bank(void);
 
 #endif /* PORT_H */

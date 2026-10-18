@@ -783,6 +783,8 @@ def to_music_page(core, settle=10):
 # setPiecePalette (main.asm.txt:5338) indexes kRomPiecePalettes by PIECE ID,
 # so the two banks must differ exactly when the two pieces do.
 PAL_PIECE_BANK, PAL_NEXT_BANK = 12, 13
+# ...and the bricks' own in a match (PAL_BRICK_BANK, the credits' bank 9).
+PAL_BRICK_BANK = 9
 
 
 # TengenAi's fields the checks read: out of the ROM (kCheckProbe, through

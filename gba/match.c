@@ -338,14 +338,11 @@ static void refresh_palettes(void) {
         g_shown_level = p->level;
         set_field_palette_for_level(g_shown_level);
     }
-    /* THE PAUSE'S BRICKS BORROW THE PIECE'S BANK (T_BRICK): grey while they
-     * are up, and the piece's colours put back with the board. What is
-     * remembered as shown is then no piece at all, so the first frame with
-     * a board in it reinstalls the piece's whichever it is. */
-    if (board_bricked() || g_end_rise > 0) {    /* ...and the end page's wall */
-        set_brick_palette();
-        g_shown_piece = TENGEN_TETROMINO_COUNT;
-    } else if (p->piece.current != g_shown_piece) {
+    /* THE BRICKS HAVE A BANK OF THEIR OWN (PAL_BRICK_BANK): grey while any
+     * stand, the pause's wall or the end page's, and the piece's colours
+     * left alone beside them. */
+    if (bricks_shown()) set_brick_palette();
+    if (p->piece.current != g_shown_piece) {
         g_shown_piece = p->piece.current;
         set_piece_palette(g_shown_piece);
     }
@@ -714,9 +711,9 @@ static void draw_pmenu(const char *const *lines, int count, int cursor) {
 /* THE OPTIONS' WINDOW IS A TABLE, NOT A LIST, so its lines do not centre:
  * the switch's name stands at the left, after the arrow's two columns, and
  * its box at the right, in a column of its own (T_CHECK_OFF): empty for
- * OFF, a dot in it for ON, and ON in the heading's colour — which switches
- * are on is what a player opens it to see. The box stands as far in from
- * the frame on the right as the arrow's tail does on the left.
+ * OFF and filled for ON, both in the names' white — a second colour said
+ * no more than the fill does, and less clearly. The box stands as far in
+ * from the frame on the right as the arrow's tail does on the left.
  *
  * SIXTEEN WIDE, the menu's own width. ON and OFF were words once, and the
  * longest name with OFF after it needed eighteen: the tunes' window's,
@@ -743,9 +740,8 @@ static void draw_options_box(void) {
         }
         bool on = option_value(i);
         uint16_t box = on ? T_CHECK_ON : T_CHECK_OFF;
-        int bank = on ? BANK_NOTE : BANK_LABEL;
-        set_map_tile(tx + w - 3, y, WITH_BANK(box, bank));
-        set_map_tile(tx + w - 2, y, WITH_BANK(box + 1, bank));
+        set_map_tile(tx + w - 3, y, WITH_BANK(box, BANK_LABEL));
+        set_map_tile(tx + w - 2, y, WITH_BANK(box + 1, BANK_LABEL));
     }
 }
 
@@ -1645,6 +1641,7 @@ void draw_match(bool *sweeping) {
         oam_hide_all();
         *sweeping = false;
     }
+    pause_wall_step();
     draw_field();
     draw_panel();
     /* THE CABLE IS QUIET: said in the rival's cell for as long as the

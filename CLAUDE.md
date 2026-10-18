@@ -747,8 +747,11 @@ Tetris DX's (`--chordfx`, and over the cable `tempo_check`): the music a
 quarter faster from a stack of twelve rows and a half from fifteen
 (`stack_tempo`, an extra step of the engine in `audio_frame`), the board
 hidden while paused behind a wall of grey bricks — the cartridge's lone
-block $0F in every cell, in the level-0 greys whatever the level (`T_BRICK`;
-not the rival's board a paused race shows) — and the engine's
+block $0F in every cell, in the level-0 greys whatever the level, in a bank
+of their own (`T_BRICK`, `PAL_BRICK_BANK`; not the rival's board a paused
+race shows), rising from the floor a row every two frames and coming down
+from the top a row a frame once the game runs again, the end page's curtain
+at a pause's pace (`pause_wall_step`) — and the engine's
 unused level-up jingle ($0C) the first time a score passes the top of the
 table (`record_watch`); the pause menu's OPTIONS, all OFF until set and
 kept on the battery: UP dropping the piece at once, as later Tetrises do,

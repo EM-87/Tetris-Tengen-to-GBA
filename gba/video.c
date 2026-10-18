@@ -508,8 +508,8 @@ void upload_tiles(void) {
         head[row * 2] = (uint16_t)h; head[row * 2 + 1] = (uint16_t)(h >> 16);
     }
     /* ...and the options' boxes; see T_CHECK_OFF. Seven by seven, on the
-     * letters' rows (ink 1-7 under a blank row 0) and in their ink; ON has
-     * a three-by-three dot in the middle. A row of the pair is sixteen
+     * letters' rows (ink 1-7 under a blank row 0) and in their ink: OFF the
+     * box's edge alone, ON the box filled. A row of the pair is sixteen
      * nibbles, the leftmost pixel the lowest. */
     for (int on = 0; on < 2; on++) {
         vu16 *l = dst + ((on ? T_CHECK_ON : T_CHECK_OFF)) * 16;
@@ -518,8 +518,7 @@ void upload_tiles(void) {
             uint64_t px = 0;
             for (int x = 0; x < 7; x++) {
                 bool edge = row == 1 || row == 7 || x == 0 || x == 6;
-                bool dot = on && row >= 3 && row <= 5 && x >= 2 && x <= 4;
-                if (row >= 1 && (edge || dot))
+                if (row >= 1 && (edge || on))
                     px |= (uint64_t)1 << (4 * (CHECK_SHIFT_PX + x));
             }
             l[row * 2] = (uint16_t)px;
@@ -653,8 +652,17 @@ void set_piece_palette(TengenTetromino piece) {
  * wears at level 0 — its greys — in the falling piece's bank. See T_BRICK. */
 void set_brick_palette(void) {
     const uint8_t *entry = kRomPiecePalettes[0];
-    vu16 *bank = MEM_PALETTE + PAL_PIECE_BANK * 16;
+    vu16 *bank = MEM_PALETTE + PAL_BRICK_BANK * 16;
     for (int i = 0; i < 3; i++) bank[1 + i] = nes_colour_to_gba(entry[i]);
+}
+
+/* ...and the credits' bank as it was: the menu set's bank 1, and the
+ * credits' own colour over its ink (set_credit_colour). */
+void restore_brick_bank(void) {
+    vu16 *bank = MEM_PALETTE + PAL_BRICK_BANK * 16;
+    for (int i = 1; i < 4; i++)
+        bank[i] = nes_colour_to_gba(kRomPalette_bg_menu[(PAL_BRICK_BANK - PAL_MENU_BASE) * 4 + i]);
+    set_credit_colour();
 }
 
 /* The preview's, from the SAME table and the same rule — only indexed by the
