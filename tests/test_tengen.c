@@ -228,6 +228,27 @@ static void test_score_is_awarded_per_piece_and_rewards_height(void) {
     CHECK(high.player[0].score > low.player[0].score);
 }
 
+static void test_score_wraps_like_the_cartridge_or_stops_mended(void) {
+    /* main.asm.txt:3942-3946: past 999999 the hundred-thousands digit comes
+     * back as '1', so the score drops to 100000-and-change. Mended (the
+     * chord), it stops at 999999 instead, and stays there. */
+    CHECK(tengen_score_add(999000, 2500, false) == 101500);
+    CHECK(tengen_score_add(999999, 1, false) == 100000);
+    CHECK(tengen_score_add(999000, 2500, true) == 999999);
+    CHECK(tengen_score_add(999999, 999, true) == 999999);
+    CHECK(tengen_score_add(5000, 2500, true) == 7500);
+
+    /* ...and a piece locked on a mended board goes through it: a score one
+     * short of the top stays at the top. */
+    TengenGame game;
+    tengen_new_game(&game, 21, 0, false, false, false);
+    game.mended = true;
+    game.player[0].score = 999998;
+    for (int frame = 0; frame < 2000 && game.player[0].score == 999998; frame++)
+        tengen_step(&game, TENGEN_PLAYER_1, 0);
+    CHECK(game.player[0].score == 999999);
+}
+
 static void test_o_piece_never_needs_a_kick(void) {
     /* O is the same in every orientation, at every x, so any wall-kick bug
      * that accidentally *requires* movement to succeed would show up here
@@ -4554,6 +4575,7 @@ int main(void) {
     test_walls_block_movement_in_1p_but_not_coop();
     test_top_out_when_piece_rests_above_the_field();
     test_score_is_awarded_per_piece_and_rewards_height();
+    test_score_wraps_like_the_cartridge_or_stops_mended();
     test_completed_rows_wait_before_they_collapse();
     test_line_clear_sweep_advances_every_other_frame();
     test_start_pauses_and_stops_the_game();

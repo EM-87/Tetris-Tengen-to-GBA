@@ -163,7 +163,8 @@ Player vibra, y además de lo de arriba la música acelera con la pila alta, la
 pausa tapa el tablero con un muro de bloques que sube desde el suelo (y al
 seguir baja desde arriba), un récord nuevo suena con el
 jingle que el cartucho no usa (por cable, todo esto con el acorde del
-maestro), la demo la juega el ordenador del port, en el título L y R recorren
+maestro), la demo la juega el ordenador del port, y sube hasta el nivel 19
+como cualquier partida con el acorde, en el título L y R recorren
 los prototipos y en HUD STATS cambia el color del cosaco, y al acabar la partida
 la cortinilla del Tetris de Game Boy — un muro de ladrillos sube tapando la
 pila muerta y luego baja vaciando el pozo — deja en el tablero la hoja de la
@@ -174,9 +175,10 @@ la tabla de récords se queda cinco segundos y no diecisiete si la partida
 no metió a nadie en ella; y se arreglan los fallos propios del cartucho:
 el reparto en cooperativo que nace dentro de la pieza del compañero, la
 pieza que cae metida en las filas del compañero que se derrumban, los
-estantes del panel que no tocan la cuerda y el bisel de las fichas $01 y $03,
+estantes del panel que no tocan la cuerda, el bisel de las fichas $01 y $03,
 que dibujan su esquina un píxel más abajo que las demás (es el arte del
-cartucho, byte a byte).
+cartucho, byte a byte), y la puntuación que al pasar de 999999 vuelve a
+100000 (con el acorde se para en 999999, y las líneas en 9999).
 
 **Apagar en pausa no pierde la partida**, como en Tetris DX: una partida en
 solitario en pausa se guarda en la memoria del cartucho, y al encender vuelve
@@ -313,8 +315,10 @@ Lo que hay detrás del acorde no es un modo: es el juego terminado.
   dentro de la pieza que está bajando; los estantes del panel izquierdo que
   no llegan a la cuerda (el tile `$6A` tiene la primera columna vacía); y el
   bisel de las fichas `$01` y `$03`, que dibujan su esquina un píxel más
-  abajo que las otras doce. Cuatro del cartucho, y dos más del parche XE
-  (dos errores de uno).
+  abajo que las otras doce; y la puntuación, que al pasar de 999999 vuelve
+  a 100000 y deja el HIGH en lo que llevaba (se para en 999999, y las
+  líneas en 9999). Cinco del cartucho, y dos más del parche XE (dos errores
+  de uno).
 - **Lo que el cartucho dejó a medias, acabado**: el jingle de subir de nivel
   que el motor de sonido trae y nadie toca suena con un récord nuevo; la
   música corre más con la pila alta, la pausa tapa el tablero y la partida

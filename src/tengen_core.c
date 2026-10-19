@@ -1028,7 +1028,7 @@ static uint8_t level_for_lines(uint32_t lines, uint8_t start_level, bool xe,
  * ever 0 or 1, so it works out to exactly level + 1 across the whole range.
  * XE's 18 and 19 do not change that: the tens digit is still 1. */
 static uint32_t add_lock_score(uint32_t score, uint8_t level, int lowest_hit_row,
-                                uint8_t drop_rate_possible,
+                                uint8_t drop_rate_possible, bool stop,
                                 TengenStepResult *result) {
     if (lowest_hit_row < 0) return score;
 
@@ -1055,14 +1055,16 @@ static uint32_t add_lock_score(uint32_t score, uint8_t level, int lowest_hit_row
         result->award_rows_above_floor = (uint8_t)rows_above_floor;
     }
 
-    return tengen_score_add(score, award);
+    return tengen_score_add(score, award, stop);
 }
 
-uint32_t tengen_score_add(uint32_t score, uint32_t amount) {
+uint32_t tengen_score_add(uint32_t score, uint32_t amount, bool stop) {
     score += amount;
     /* main.asm.txt:3942-3946: the hundred-thousands digit is replaced by '1'
      * rather than carrying when it would pass '9', so the score wraps to
-     * 100000 instead of rolling over to 0 or sticking at 999999. */
+     * 100000 instead of rolling over to 0 or sticking at 999999 — unless
+     * mended, when sticking at 999999 is exactly what it does. */
+    if (stop) return score > 999999 ? 999999 : score;
     while (score > 999999) score = 100000 + (score % 100000);
     return score;
 }
@@ -1706,7 +1708,8 @@ TengenStepResult tengen_step(TengenGame *game, TengenPlayerSlot slot, uint8_t he
              * deciding whether this was a normal lock or a top-out
              * (main.asm.txt:582-590). */
             p->score = add_lock_score(p->score, p->level, lowest_hit_row,
-                                       p->drop_rate_possible, &result);
+                                       p->drop_rate_possible, game->mended,
+                                       &result);
 
             /* main.asm.txt:588-590: resting with the box top still above the
              * visible field ends the game — the piece is not planted. */

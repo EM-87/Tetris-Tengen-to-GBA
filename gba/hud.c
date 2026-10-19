@@ -1093,7 +1093,8 @@ void bonus_step(void) {
             if (!g_session.game.player[slot].game_active) continue;
             g_session.game.player[slot].score =
                 tengen_score_add(g_session.game.player[slot].score,
-                                  TENGEN_BONUS_PER_CLEAR[i]);
+                                  TENGEN_BONUS_PER_CLEAR[i],
+                                  g_session.game.mended);
         }
         draw_bonus_numbers();
         return;
@@ -1129,7 +1130,8 @@ void bonus_end(void) {
                 if (!g_session.game.player[slot].game_active) continue;
                 g_session.game.player[slot].score =
                     tengen_score_add(g_session.game.player[slot].score,
-                                      TENGEN_BONUS_PER_CLEAR[i]);
+                                      TENGEN_BONUS_PER_CLEAR[i],
+                                      g_session.game.mended);
             }
         }
     }
@@ -1139,7 +1141,8 @@ void bonus_end(void) {
             g_session.game.player[other].score =
                 tengen_score_add(g_session.game.player[other].score,
                                   tengen_level_bonus(&g_session.game,
-                                                      (TengenPlayerSlot)other));
+                                                      (TengenPlayerSlot)other),
+                                  g_session.game.mended);
         }
     }
 }
@@ -1499,6 +1502,13 @@ static void draw_coop_next(int tx, int slot, int bank) {
     g_panel_layer = was;
 }
 
+/* ...AND A PLAYER'S LINES STOP AT 9999 under the chord (TengenGame.mended),
+ * as the score stops at 999999: four digits of a count that has run past
+ * them read as a count that started again. */
+static uint32_t shown_lines(uint32_t lines) {
+    return g_session.game.mended && lines > 9999 ? 9999 : lines;
+}
+
 /* Both boards' numbers added up, which is the only figure a shared board
  * cannot read off either panel. Clamped where the counters are: six digits of
  * score and four of lines is what every other counter on this screen shows,
@@ -1579,7 +1589,7 @@ static void draw_coop_stats_panel(const TengenPlayerState *me) {
         draw_coop_counter(COOP_L_TX, COOP_COUNTER_TY, HUD_LABEL_SCORE,
                            me->score, 6);
         draw_coop_counter(COOP_L_TX, COOP_LOWER_TY, HUD_LABEL_LINES,
-                           me->lines, 4);
+                           shown_lines(me->lines), 4);
     }
     draw_coop_counter(COOP_L_TX, COOP_THIRD_TY, HUD_LABEL_LEVEL, me->level, 2);
     draw_coop_text_counter(COOP_L_TX, COOP_TOTAL_TY, "HIGH", g_high_score, 6);
@@ -1673,7 +1683,7 @@ static void draw_rival_panel(void) {
     g_panel_layer = true;
 
     draw_rival_counter(ROW_SCORE, HUD_LABEL_SCORE, them->score, 6);
-    draw_rival_counter(ROW_LINES, HUD_LABEL_LINES, them->lines, 4);
+    draw_rival_counter(ROW_LINES, HUD_LABEL_LINES, shown_lines(them->lines), 4);
     draw_rival_counter(ROW_LEVEL, HUD_LABEL_LEVEL, them->level, 2);
     /* THE FOURTH CELL STAYS EMPTY. It carried RIVAL for a while, which is a
      * label with nothing to label: the panel IS the rival's, and saying so
@@ -1724,11 +1734,11 @@ static void draw_coop_panel(void) {
 
     g_panel_layer = true;
     draw_coop_counter(COOP_L_TX, COOP_COUNTER_TY, HUD_LABEL_SCORE, left->score, 6);
-    draw_coop_counter(COOP_L_TX, COOP_LOWER_TY, HUD_LABEL_LINES, left->lines, 4);
+    draw_coop_counter(COOP_L_TX, COOP_LOWER_TY, HUD_LABEL_LINES, shown_lines(left->lines), 4);
     draw_coop_counter(COOP_L_TX, COOP_THIRD_TY, HUD_LABEL_LEVEL, left->level, 2);
 
     draw_coop_counter(COOP_R_TX, COOP_COUNTER_TY, HUD_LABEL_SCORE, right->score, 6);
-    draw_coop_counter(COOP_R_TX, COOP_LOWER_TY, HUD_LABEL_LINES, right->lines, 4);
+    draw_coop_counter(COOP_R_TX, COOP_LOWER_TY, HUD_LABEL_LINES, shown_lines(right->lines), 4);
     draw_coop_text_counter(COOP_R_TX, COOP_THIRD_TY, "HIGH", g_high_score, 6);
 
     if (match_chord()) {               /* over a cable, the master's */
@@ -1798,7 +1808,7 @@ void draw_panel(void) {
     g_panel_layer = true;
 
     draw_counter(ROW_SCORE, HUD_LABEL_SCORE, p->score, 6, 0);
-    draw_counter(ROW_LINES, HUD_LABEL_LINES, p->lines, 4, 1);
+    draw_counter(ROW_LINES, HUD_LABEL_LINES, shown_lines(p->lines), 4, 1);
     draw_counter(ROW_LEVEL, HUD_LABEL_LEVEL, p->level, 2, 2);
 
     if (g_session.game.two_player && !hud_versus()) {
