@@ -4,6 +4,7 @@ pause, the hand-entered tunes and the menu effects.
 """
 import os
 from .harness import (
+    skip, TENGEN_ROM_ROW_ORIGIN,
     ring_chord_from_title,
     APU_REGS, AUDIO_ALIGN_SEARCH, AUDIO_GOLDEN_SKIP, EFFECT_WATCH_FRAMES,
     GOLDEN_PATH, KEYS, MUSIC_ROW, REG_SOUND1CNT_H,
@@ -70,10 +71,10 @@ def pause_audio_check(rom_path):
 def audio_check(rom_path):
     base, why = game_state_address(rom_path, "g_cpu")
     if base is None:
-        print(f"SALTADO: {why}")
+        skip(f"{why}")
         return 0
     if not os.path.exists(GOLDEN_PATH):
-        print(f"SALTADO: falta {GOLDEN_PATH} (lo genera `make assets ROM=...`)")
+        skip(f"falta {GOLDEN_PATH} (lo genera `make assets ROM=...`)")
         return 0
 
     raw = open(GOLDEN_PATH, "rb").read()
@@ -82,7 +83,7 @@ def audio_check(rom_path):
     core, screen = load(rom_path)   # `screen` must stay alive; see load()
     probe, why = nes6502_probe(rom_path, core)
     if probe is None:
-        print(f"SALTADO: {why}")
+        skip(f"{why}")
         return 0
     apu_offset, fault_offset, apu_regs = probe
     if apu_regs != APU_REGS:
@@ -105,7 +106,7 @@ def audio_check(rom_path):
     # line-clear check.
     ram, why = game_state_address(rom_path, "g_nes_ram")
     if ram is None:
-        print(f"SALTADO: {why}")
+        skip(f"{why}")
         return 0
     fireworks_timer = ram + 0x6B
 
@@ -711,7 +712,7 @@ def levelup_tune_check(rom_path):
         out = subprocess.check_output(
             [os.environ.get("NM", "arm-none-eabi-nm"), elf]).decode()
     except (OSError, subprocess.CalledProcessError) as exc:
-        print(f"SALTADO: no pude leer {elf}: {exc}")
+        skip(f"no pude leer {elf}: {exc}")
         return 0
     sym = {l.split()[2]: int(l.split()[0], 16) & ~1
            for l in out.splitlines() if len(l.split()) == 3}
@@ -719,7 +720,7 @@ def levelup_tune_check(rom_path):
     cpu, why = game_state_address(rom_path, "g_cpu")
     base, why2 = game_state_address(rom_path)
     if call is None or cpu is None or base is None:
-        print(f"SALTADO: {why or why2 or 'el ELF no exporta nes6502_call'}")
+        skip(f"{why or why2 or 'el ELF no exporta nes6502_call'}")
         return 0
     off = game_offsets(rom_path)
     SET_TRACK, INTRO, SILENCE, LOOP = 0xCFB1, 0x0B, 0x08, 0x0D
@@ -803,7 +804,7 @@ def chord_extras_check(rom_path):
         out = subprocess.check_output(
             [os.environ.get("NM", "arm-none-eabi-nm"), elf]).decode()
     except (OSError, subprocess.CalledProcessError) as exc:
-        print(f"SALTADO: no pude leer {elf}: {exc}")
+        skip(f"no pude leer {elf}: {exc}")
         return 0
     call = next((int(l.split()[0], 16) & ~1 for l in out.splitlines()
                  if len(l.split()) == 3 and l.split()[2].startswith("nes6502_call")),
@@ -811,7 +812,7 @@ def chord_extras_check(rom_path):
     base, why = game_state_address(rom_path)
     bar, why2 = game_state_address(rom_path, "g_record_bar")
     if call is None or base is None or bar is None:
-        print(f"SALTADO: {why or why2 or 'el ELF no exporta nes6502_call'}")
+        skip(f"{why or why2 or 'el ELF no exporta nes6502_call'}")
         return 0
     off = game_offsets(rom_path)
     PF = 20 * PF_W
@@ -875,8 +876,8 @@ def chord_extras_check(rom_path):
 
     # The pause: under the chord the board goes behind a wall of BRICKS, the
     # cartridge's lone shaded block ($0F, the handicap's garbage) in every
-    # cell, grey whatever the level — in the falling piece's bank, which
-    # gets the piece's colours back with the board.
+    # cell, grey whatever the level — in a bank of their own (PAL_BRICK_BANK,
+    # the credits'), the falling piece keeping its colours beside them.
     from .harness import COL_FIELD, PAL_BRICK_BANK, PAL_PIECE_BANK, \
         PALETTE_ADDR, PMENU_H, PMENU_TY, pixels
     T_BRICK = 0x0F
@@ -898,6 +899,30 @@ def chord_extras_check(rom_path):
                 if (e & 0x3FF) != T_BRICK or e >> 12 != PAL_BRICK_BANK:
                     odd.append((c, r))
         return odd
+
+    def ragged(core):
+        """Rows, outside the menu's, that are bricks in part: the wall stands
+        on whole rows, and a falling piece drawn over it — the piece is not
+        drawn on the rows it has reached (g_wall_top) — makes one."""
+        bad = []
+        for r in range(20):
+            if PMENU_TY <= r < PMENU_TY + PMENU_H:
+                continue
+            row = [core.memory.u16[0x0600E000 + (r * 32 + c) * 2]
+                   for c in range(COL_FIELD[0], COL_FIELD[1])]
+            bricks = sum((e & 0x3FF) == T_BRICK and e >> 12 == PAL_BRICK_BANK
+                         for e in row)
+            if 0 < bricks < len(row):
+                bad.append(r)
+        return bad
+
+    def frames_ragged(core, n):
+        """n frames, and every row found ragged in any of them."""
+        seen = set()
+        for _ in range(n):
+            core.run_frame()
+            seen.update(ragged(core))
+        return sorted(seen)
 
     def grey_spread(rows):
         """How far from grey the board's lit pixels get, below the menu."""
@@ -936,6 +961,10 @@ def chord_extras_check(rom_path):
         for row in range(14, 20):
             for col in range(1, 6):
                 core.memory.u8[base + off["field"] + board * PF + row * PF_W + col] = CELL_BLOCK
+        # ...and the falling piece put a few rows down the well, where the
+        # wall will pass it: at the pause it is still above the field, and a
+        # piece drawn over the bricks would never be seen to be.
+        core.memory.u8[base + off["y"] + board * off["stride"]] = TENGEN_ROM_ROW_ORIGIN + 3
         press_start(core); run(core, 12)
         # THE WALL GOES UP A ROW EVERY TWO FRAMES (PAUSE_WALL_UP_FRAMES): a
         # few rows of it twelve frames in, the board above them still the
@@ -943,7 +972,9 @@ def chord_extras_check(rom_path):
         rising_low = not_bricks(core, range(17, 20))
         rising_high = len(not_bricks(core, range(0, 4)))
         piece_coloured = bank_spread(core, PAL_PIECE_BANK) > 3
-        run(core, 40)
+        # ...and frame by frame on its way up, over the falling piece too,
+        # nothing drawn on the rows it stands on.
+        rising_ragged = frames_ragged(core, 40)
         cells = shown_cells(core)
         odd = not_bricks(core)
         if want_bricks and (rising_low or rising_high < 30 or not piece_coloured):
@@ -951,6 +982,9 @@ def chord_extras_check(rom_path):
                             f"pieza en sus colores ({len(rising_low)} sin ladrillo "
                             f"abajo, {rising_high} libres arriba, pieza en color "
                             f"{piece_coloured})")
+        elif want_bricks and rising_ragged:
+            failures.append(f"{name}: al subir el muro hay filas a medias de "
+                            f"ladrillos (algo dibujado encima): {rising_ragged}")
         elif not want_bricks:
             if cells == 0 or len(odd) < 100:
                 failures.append(f"{name}: en pausa el tablero no se ve "
@@ -969,15 +1003,20 @@ def chord_extras_check(rom_path):
             # ...and with the pause gone it comes down, a row a frame from
             # the top, the game running under it: some frames in, the top
             # rows the board's and the bottom still bricks; then the board.
-            press_start(core); run(core, 4)
+            press_start(core)
+            falling_ragged = frames_ragged(core, 4)
             top_free = len(not_bricks(core, range(0, 4)))
             low_bricks = not not_bricks(core, range(17, 20))
-            run(core, 30)
+            falling_ragged += frames_ragged(core, 30)
             back = shown_cells(core)
             if top_free < 30 or not low_bricks:
                 failures.append(f"{name}: al reanudar el muro no baja desde "
                                 f"arriba ({top_free} libres arriba, ladrillos "
                                 f"abajo {low_bricks})")
+            elif falling_ragged:
+                failures.append(f"{name}: al bajar el muro hay filas a medias "
+                                f"de ladrillos, la pieza pintada encima: "
+                                f"{sorted(set(falling_ragged))}")
             elif back == 0 or bank_spread(core, PAL_PIECE_BANK) <= 3:
                 failures.append(f"{name}: al reanudar no vuelve el tablero "
                                 f"({back} celdas) o la pieza sigue gris")
@@ -1072,7 +1111,7 @@ def cossack_colour_check(rom_path):
     """
     pal, why = game_state_address(rom_path, "g_idle_palette")
     if pal is None:
-        print(f"SALTADO: {why}")
+        skip(f"{why}")
         return 0
     failures = []
     for chord in (False, True):

@@ -64,6 +64,88 @@ def _reset_past_splash(self):
 mgba.core.load_path = _load_path_kept
 mgba.core.Core.reset = _reset_past_splash
 
+
+# L+R ON THE TITLE WITHOUT THE CHORD, the audit (ROMCHECK_AUDIT=1). Since the
+# prototypes went behind the game's chord, L+R on the title does nothing
+# until the chord has been rung at GAME SELECT or LEVEL SETTINGS, and a
+# check that still pressed it there to put a skin on went on passing,
+# checking the cartridge's title twice. This says where: on the frame after
+# a press of both shoulders, if the title's clock moved (g_title_frame) and
+# the chord is not rung (g_pause_unlocked), the check's own line.
+_set_keys = mgba.core.Core.set_keys
+_run_frame = mgba.core.Core.run_frame
+_AUDIT = os.environ.get("ROMCHECK_AUDIT") == "1"
+_audit_syms = {}
+
+
+def _audit_addr(core, name):
+    rom = getattr(core, "_tengen_rom", "")
+    if (rom, name) not in _audit_syms:
+        _audit_syms[rom, name] = game_state_address(rom, name)[0]
+    return _audit_syms[rom, name]
+
+
+def _set_keys_audited(self, *keys):
+    _set_keys(self, *keys)
+    if 8 in keys and 9 in keys:
+        import traceback
+        here = [f for f in traceback.extract_stack()[:-1]
+                if "harness.py" not in f.filename]
+        clock = _audit_addr(self, "g_title_frame")
+        self._tengen_audit = (here[-2:],
+                              clock is not None and self.memory.u16[clock])
+
+
+def _run_frame_audited(self):
+    _run_frame(self)
+    pending = getattr(self, "_tengen_audit", None)
+    if pending is None:
+        return
+    self._tengen_audit = None
+    where, before = pending
+    clock = _audit_addr(self, "g_title_frame")
+    chord = _audit_addr(self, "g_pause_unlocked")
+    if clock is None or chord is None:
+        return
+    if self.memory.u16[clock] != before and not self.memory.u8[chord]:
+        print("AUDITORIA: L+R en el titulo sin el acorde, en " +
+              " <- ".join(f"{os.path.basename(f.filename)}:{f.lineno}"
+                          for f in reversed(where)))
+
+
+if _AUDIT:
+    mgba.core.Core.set_keys = _set_keys_audited
+    mgba.core.Core.run_frame = _run_frame_audited
+
+# SALTADO, AND THE STRICT RUN. A check that cannot run here — a symbol the
+# ELF lacks, a file the build was not given — says SALTADO and passes. On a
+# build that has everything that hides a check that has stopped checking:
+# skin_check went on passing that way, looking for a skin it never put on.
+# So every skip goes through skip(), and under ROMCHECK_STRICT=1, which
+# `make gba-check` sets unless it is given STRICT=0, a run that skipped
+# anything fails (strict_verdict, at each script's end). A check that did
+# not REACH what it checks — the cable's match never starting, a board that
+# would not die — is no skip at all but a failure, and says FALLA.
+STRICT = os.environ.get("ROMCHECK_STRICT") == "1"
+SKIPPED = []
+
+
+def skip(why):
+    print(f"SALTADO: {why}")
+    SKIPPED.append(why)
+
+
+def strict_verdict(code):
+    """A script's exit status, failed if it skipped anything in a strict
+    run."""
+    if code in (0, None) and STRICT and SKIPPED:
+        for why in SKIPPED:
+            print(f"FALLA: saltado en una pasada estricta (STRICT=0 lo "
+                  f"permite): {why}")
+        return 1
+    return code
+
+
 SCREEN_W, SCREEN_H = 240, 160
 TILE = 8
 SCREEN_TW_TILES = SCREEN_W // TILE
@@ -183,6 +265,30 @@ def ring_chord_from_title(core, settle=24):
     core.set_keys(); run(core, 12)
     core.set_keys(KEYS["B"]); run(core, 4)
     core.set_keys(); run(core, settle)
+
+
+def build_has_protos(rom_path):
+    """Whether this build was given the prototype dumps (make assets
+    PROTO=...): gba/screen_proto.h, beside the ROM's build directory, says
+    so. A check that wants a skin and finds none skips on a build without
+    them and fails on one with them."""
+    proto_h = os.path.join(os.path.dirname(rom_path), "..", "gba", "screen_proto.h")
+    return (os.path.exists(proto_h) and
+            "#define SCREEN_PROTO_AVAILABLE 1" in open(proto_h).read())
+
+
+def put_skin_on(core, settle=24):
+    """From the title, a prototype's title on it: the game's chord rung
+    (ring_chord_from_title) and then L+R, which finds the skins. True when
+    one went on (g_title_skin), False on a build without them. Pressed on
+    the title without the chord, L+R does nothing at all — which a check or
+    two went on doing, and checked the cartridge's title twice."""
+    ring_chord_from_title(core)
+    core.set_keys(KEYS["L"], KEYS["R"]); run(core, 4)
+    core.set_keys(); run(core, settle)
+    rom = getattr(core, "_tengen_rom", "")
+    skin, _ = game_state_address(rom, "g_title_skin")
+    return skin is not None and core.memory.u8[skin] != 0
 
 
 def start_game(core, tune=0):

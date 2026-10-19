@@ -3,6 +3,7 @@ The panels either side of the board: the four HUDs, NEXT, the
 braid, the histogram and the level-up show.
 """
 from .harness import (
+    skip,
     ring_chord_from_title,
     BRAID_BLUE, CELL_BLOCK, CELL_WALL, HUD_LABEL_TILE_BASE,
     HUD_LABEL_TILE_END, KEYS, OAM_ADDR, PAL_NEXT_BANK,
@@ -172,7 +173,7 @@ def next_palette_check(rom_path):
     off = game_offsets(rom_path)
     base, why = game_state_address(rom_path)
     if base is None:
-        print(f"SALTADO: {why}")
+        skip(f"{why}")
         return 0
     core, screen = load(rom_path)   # `screen` must stay alive; see load()
     start_game(core)
@@ -239,7 +240,7 @@ def stats_show_check(rom_path):
     off = game_offsets(rom_path)
     base, why = game_state_address(rom_path)
     if base is None:
-        print(f"SALTADO: {why}")
+        skip(f"{why}")
         return 0
 
     IDLE_OAM_BASE = 124           # gba/port.h
@@ -354,7 +355,7 @@ def show_frame_check(rom_path):
     off = game_offsets(rom_path)
     base, why = game_state_address(rom_path)
     if base is None:
-        print(f"SALTADO: {why}")
+        skip(f"{why}")
         return 0
 
     BRAID_BANK = 2                # gba/screen_1p.h
@@ -453,7 +454,7 @@ def versus_hud_check(rom_path):
     off = game_offsets(rom_path)
     base, why = game_state_address(rom_path)
     if base is None:
-        print(f"SALTADO: {why}")
+        skip(f"{why}")
         return 0
 
     failures = []
@@ -723,7 +724,7 @@ def coop_hud_check(rom_path):
     failures = []
     base, why = game_state_address(rom_path)
     if base is None:
-        print(f"SALTADO: {why}")
+        skip(f"{why}")
         return 0
     off = game_offsets(rom_path)
     LEFT, RIGHT = (0, 7), (30 - 7, 30)
@@ -855,7 +856,7 @@ def stats_check(rom_path):
         off = game_offsets(rom_path)
         base, why = game_state_address(rom_path)
         if base is None:
-            print(f"SALTADO: {why}")
+            skip(f"{why}")
             return 0
         # piece_stats es uint8_t[8] y la entrada 0 es TT_NONE. Y lo mismo en
         # piece_total (uint16_t[8]), que es lo que lee el histograma bajo el
@@ -1092,7 +1093,7 @@ def stats_relative_check(rom_path):
     off = game_offsets(rom_path)
     base, why = game_state_address(rom_path)
     if base is None:
-        print(f"SALTADO: {why}")
+        skip(f"{why}")
         return 0
     counts = [300, 150, 75, 40, 10, 0, 120]        # I T O J L S Z
     ROOM, SB, TX, TOP, FLOOR = 72, 31, 22, 9, 17

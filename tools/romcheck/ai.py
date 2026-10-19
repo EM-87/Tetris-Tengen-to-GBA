@@ -4,6 +4,7 @@ The computer player, alone and as a partner.
 import os
 
 from .harness import (
+    skip,
     DEMO_START_FRAME, check_layout,
     KEYS, LEADER_HEAD_TY, TENGEN_PF_HEIGHT, TENGEN_PF_WIDTH,
     game_offsets, game_state_address, load, press_start,
@@ -23,7 +24,7 @@ def computer_check(rom_path):
     off = game_offsets(rom_path)
     base, why = game_state_address(rom_path)
     if base is None:
-        print(f"SALTADO: {why}")
+        skip(f"{why}")
         return 0
 
     failures = []
@@ -165,12 +166,12 @@ def coop_ai_check(rom_path):
     off = game_offsets(rom_path)
     base, why = game_state_address(rom_path)
     if base is None:
-        print(f"SALTADO: {why}")
+        skip(f"{why}")
         return 0
     ai, why = game_state_address(rom_path, "g_ai")
     last_piece, why2 = game_state_address(rom_path, "g_ai_last_piece")
     if ai is None or last_piece is None:
-        print(f"SALTADO: {why or why2}")
+        skip(f"{why or why2}")
         return 0
 
     failures = []
@@ -315,12 +316,12 @@ def ai_frame_check(rom_path):
         out = subprocess.check_output(
             [os.environ.get("NM", "arm-none-eabi-nm"), elf]).decode()
     except (OSError, subprocess.CalledProcessError) as exc:
-        print(f"SALTADO: no pude leer {elf}: {exc}")
+        skip(f"no pude leer {elf}: {exc}")
         return 0
     dm = next((int(l.split()[0], 16) & ~1 for l in out.splitlines()
                if l.endswith(" draw_match")), None)
     if dm is None:
-        print("SALTADO: el ELF no exporta draw_match")
+        skip("el ELF no exporta draw_match")
         return 0
     failures = []
     for entry, name in ((3, "VERSUS COMPUTER"), (4, "WITH COMPUTER")):

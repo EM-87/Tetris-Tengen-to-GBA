@@ -2,6 +2,7 @@
 The HIGH SCORES table and its per-build pages.
 """
 from .harness import (
+    skip,
     ring_chord_from_title,
     CELL_BLOCK, CELL_WALL, KEYS, LEADER_FIRST_TY,
     TENGEN_PF_HEIGHT, TENGEN_PF_WIDTH, game_offsets, game_state_address,
@@ -34,7 +35,7 @@ def leaderboard_check(rom_path):
     off = game_offsets(rom_path)
     base, why = game_state_address(rom_path)
     if base is None:
-        print(f"SALTADO: {why}")
+        skip(f"{why}")
         return 0
 
     failures = []
@@ -223,7 +224,7 @@ def tables_check(rom_path):
     _ = screen
     base, why = game_state_address(rom_path)
     if base is None:
-        print(f"SALTADO: {why}")
+        skip(f"{why}")
         return 0
     off = game_offsets(rom_path)
 
@@ -324,7 +325,7 @@ def mode_tables_check(rom_path):
     """
     base, why = game_state_address(rom_path)
     if base is None:
-        print(f"SALTADO: {why}")
+        skip(f"{why}")
         return 0
     off = game_offsets(rom_path)
     failures = []

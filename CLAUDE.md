@@ -135,7 +135,20 @@ fails if the probe is missing or a constant left in harness.py disagrees.
 A single check runs on its own: `python3 tools/run_rom.py build/tengen.gba
 --pausemenu` (the flags are listed in `tools/run_rom.py --help`). A new
 check goes in the `tools/romcheck/` module of its family, gets a flag in
-`run_rom.py`, and a line in the Makefile's `gba-check`.
+`run_rom.py`, and a line in the Makefile's `gba-check` (`--counters` had the
+flag and not the line, and read three empty rows for months).
+
+**A skip is a failure unless the build lacks the thing.** A check that
+cannot run here says why through `skip()` (harness.py), and `make
+gba-check` is strict: a skip fails it (`STRICT=0` lets a build without the
+prototypes or the logos through). A check that did not REACH what it checks
+— the cable's match never starting, a board that would not die, a skin that
+did not go on — prints FALLA, not SALTADO. Reach the port's extras the way
+the player does: `ring_chord_from_title`, then `put_skin_on` for a
+prototype's title (L+R on the title without the chord does nothing; `--loans`
+and `--demo` pressed it there and checked the cartridge's title twice).
+`ROMCHECK_AUDIT=1` prints every L+R pressed on the title without the chord,
+with the check's line; `--skin` is the one that does it on purpose.
 
 ## Traps
 

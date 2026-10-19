@@ -48,6 +48,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import romcheck.harness  # noqa: E402,F401 - skips the splash; see there
+from romcheck.harness import skip, strict_verdict  # noqa: E402
 
 try:
     import mgba.core
@@ -400,7 +401,7 @@ def main():
 
     sym, why = symbol(rom, "g_session")
     if sym is None:
-        print(f"SALTADO: {why}")
+        skip(f"{why}")
         return 0
     session_addr, session_size = sym
     # TengenLink is the TengenGame followed by this console's own slot, its
@@ -677,7 +678,7 @@ def coop_check(rom):
     """
     sym, why = symbol(rom, "g_session")
     if sym is None:
-        print(f"SALTADO: {why}")
+        skip(f"{why}")
         return 0
     session_addr, session_size = sym
     game_size = session_size - 4
@@ -914,7 +915,7 @@ def records_check(rom):
 
     sym, why = symbol(rom, "g_session")
     if sym is None:
-        print(f"SALTADO: {why}")
+        skip(f"{why}")
         return 0
     session_addr, session_size = sym
     game_size = session_size - 4
@@ -954,8 +955,8 @@ def records_check(rom):
     tap("START", who=0)     # the master releases the lobby
     both(60)
     if read_bytes(master, session_addr, game_size) == bytes(game_size):
-        print("SALTADO: la partida por cable no arranco")
-        return 0
+        print("FALLA: la partida por cable no arranco")
+        return 1
 
     # TWO SCORES THAT BOTH BELONG ON THE TABLE, planted identically on both
     # cores — the only way to touch memory here without breaking the lockstep
@@ -993,8 +994,8 @@ def records_check(rom):
     blind = [i for i, core in enumerate(cores)
              if "-LINES" not in run_rom.tilemap_text(core, 2, 0, 30)]
     if blind:
-        print(f"SALTADO: la(s) consola(s) {blind} no llegan a la tabla")
-        return 0
+        print(f"FALLA: la(s) consola(s) {blind} no llegan a la tabla")
+        return 1
 
     def rows(core):
         return [run_rom.tilemap_text(core, run_rom.LEADER_FIRST_TY + i, 0, 30)
@@ -1086,7 +1087,7 @@ def restart_check(rom):
 
     sym, why = symbol(rom, "g_session")
     if sym is None:
-        print(f"SALTADO: {why}")
+        skip(f"{why}")
         return 0
     session_addr, session_size = sym
     game_size = session_size - 4
@@ -1136,8 +1137,8 @@ def restart_check(rom):
     tap("START", who=0)
     both(60)
     if read_bytes(master, session_addr, game_size) == bytes(game_size):
-        print("SALTADO: la partida por cable no arranco")
-        return 0
+        print("FALLA: la partida por cable no arranco")
+        return 1
 
     # Player 2's board alone, buried identically on both cores — the only way
     # to touch memory without breaking the lockstep this check is about.
@@ -1158,8 +1159,8 @@ def restart_check(rom):
     both(240, [[], []])
 
     if alive(master, 1):
-        print("SALTADO: el tablero del jugador 2 no llego a morir")
-        return 0
+        print("FALLA: el tablero del jugador 2 no llego a morir")
+        return 1
     if not alive(master, 0):
         failures.append("el jugador 1 murio tambien: el otro tablero deberia "
                          "seguir corriendo")
@@ -1295,7 +1296,7 @@ def skin_check(rom):
     sym, why = symbol(rom, "g_session")
     title_sym, why2 = symbol(rom, "g_title_skin")
     if sym is None or title_sym is None:
-        print(f"SALTADO: {why or why2}")
+        skip(f"{why or why2}")
         return 0
     session_addr, session_size = sym
     game_size = session_size - 4
@@ -1384,7 +1385,7 @@ def skin_check(rom):
               "ninguno")
         return 1
     if not titles[0]:
-        print("SALTADO: esta ROM no trae prototipos (make assets PROTO=...)")
+        skip("esta ROM no trae prototipos (make assets PROTO=...)")
         return 0
     if titles[1]:
         failures.append("el acorde del maestro cambio el titulo del esclavo")
@@ -1456,7 +1457,7 @@ def pause_check(rom):
     names = ["g_pmenu_drawn_w", "g_music", "g_linked"]
     syms = {n: symbol(rom, n)[0] for n in names}
     if sym is None or None in syms.values():
-        print(f"SALTADO: {why or 'faltan simbolos del menu de pausa'}")
+        skip(f"{why or 'faltan simbolos del menu de pausa'}")
         return 0
     import run_rom
     off = run_rom.game_offsets(rom)
@@ -1578,7 +1579,7 @@ def tempo_check(rom, start):
     tempo, why = symbol(rom, "g_tempo_quarters")
     sym, why2 = symbol(rom, "g_session")
     if tempo is None or sym is None:
-        print(f"SALTADO: {why or why2}")
+        skip(f"{why or why2}")
         return 0
     import run_rom
     off = run_rom.game_offsets(rom)
@@ -1628,7 +1629,7 @@ def options_check(rom):
     sym, why = symbol(rom, "g_session")
     syms = {n: symbol(rom, n)[0] for n in ("g_options", "g_pad_swap")}
     if sym is None or None in syms.values():
-        print(f"SALTADO: {why or 'faltan simbolos de las opciones'}")
+        skip(f"{why or 'faltan simbolos de las opciones'}")
         return 0
     import run_rom
     off = run_rom.game_offsets(rom)
@@ -1767,7 +1768,7 @@ def menu_list_check(rom):
     """
     sym, _ = symbol(rom, "g_music")
     if sym is None:
-        print("SALTADO: falta g_music")
+        skip("falta g_music")
         return 0
     cores, cable, both, tap = _pair(rom)
     both(8)
@@ -1811,7 +1812,7 @@ def levelup_music_check(rom):
     """
     sym, why = symbol(rom, "g_session")
     if sym is None:
-        print(f"SALTADO: {why}")
+        skip(f"{why}")
         return 0
     import run_rom
     from romcheck.harness import fill_rows
@@ -1869,7 +1870,7 @@ def coop_levelup_music_check(rom):
     sym, why = symbol(rom, "g_session")
     mix, why2 = symbol(rom, "g_mix_step")
     if sym is None or mix is None:
-        print(f"SALTADO: {why or why2}")
+        skip(f"{why or why2}")
         return 0
     import run_rom
     from romcheck.harness import fill_rows
@@ -1938,7 +1939,7 @@ def late_check(rom):
     LATE = 1200
     sym, why = symbol(rom, "g_session")
     if sym is None:
-        print(f"SALTADO: {why}")
+        skip(f"{why}")
         return 0
     session_addr, session_size = sym
     game_size = session_size - 4
@@ -1998,7 +1999,7 @@ def _disturbed_match(rom, name, mute_at=(), glitch_at=()):
     """The match mute_check and glitch_check play; returns failures."""
     sym, why = symbol(rom, "g_session")
     if sym is None:
-        print(f"SALTADO: {why}")
+        skip(f"{why}")
         return None
     session_addr, session_size = sym
     game_size = session_size - 4
@@ -2180,7 +2181,7 @@ def jitter_check(rom):
     judges by the two words instead.
     """
     if symbol(rom, "g_session")[0] is None:
-        print("SALTADO: el ELF no exporta g_session")
+        skip("el ELF no exporta g_session")
         return 0
     cores, cable, both, tap = _pair(rom, sd_lags=True)
     both(8)
@@ -2211,7 +2212,7 @@ def role_check(rom):
     Then the master comes back and they play.
     """
     if symbol(rom, "g_session")[0] is None:
-        print("SALTADO: el ELF no exporta g_session")
+        skip("el ELF no exporta g_session")
         return 0
     cores, cable, both, tap = _pair(rom)
     failures = []
@@ -2259,7 +2260,7 @@ def churn_check(rom):
     its own seed.
     """
     if symbol(rom, "g_session")[0] is None:
-        print("SALTADO: el ELF no exporta g_session")
+        skip("el ELF no exporta g_session")
         return 0
     cores, cable, both, tap = _pair(rom)
     failures = []
@@ -2312,7 +2313,7 @@ def lost_check(rom):
     waiting, why = symbol(rom, "g_link_waiting")
     lost, why2 = symbol(rom, "g_link_lost")
     if waiting is None or lost is None or symbol(rom, "g_session")[0] is None:
-        print(f"SALTADO: {why or why2}")
+        skip(f"{why or why2}")
         return 0
     import run_rom
     cores, cable, both, tap = _pair(rom)
@@ -2406,7 +2407,7 @@ def storm_check(rom):
     master out and back once; then they have to meet and play.
     """
     if symbol(rom, "g_session")[0] is None:
-        print("SALTADO: el ELF no exporta g_session")
+        skip("el ELF no exporta g_session")
         return 0
     cores, cable, both, tap = _pair(rom)
     both(8)
@@ -2447,7 +2448,7 @@ def race_check(rom):
     Then the same the other way round.
     """
     if symbol(rom, "g_session")[0] is None:
-        print("SALTADO: el ELF no exporta g_session")
+        skip("el ELF no exporta g_session")
         return 0
     failures = []
     for first, name in ((0, "el maestro"), (1, "el esclavo")):
@@ -2508,7 +2509,7 @@ def mode_check(rom):
     """
     sym = symbol(rom, "g_session")[0]
     if sym is None:
-        print("SALTADO: el ELF no exporta g_session")
+        skip("el ELF no exporta g_session")
         return 0
     import run_rom
     off = run_rom.game_offsets(rom)
@@ -2566,12 +2567,12 @@ def singlepak_check(rom):
     """
     mb = os.path.splitext(rom)[0] + "_mb.mb"
     if not os.path.exists(mb):
-        print(f"SALTADO: no encuentro {mb}")
+        skip(f"no encuentro {mb}")
         return 0
     msym, why = symbol(rom, "g_session")
     ssym, why2 = symbol(mb, "g_session")
     if msym is None or ssym is None:
-        print(f"SALTADO: {why or why2}")
+        skip(f"{why or why2}")
         return 0
     import run_rom
     off = run_rom.game_offsets(rom)
@@ -2673,7 +2674,7 @@ def records_dump_check(rom):
     tables_s, why2 = symbol(mb, "g_tables")
     unsent_s, why3 = symbol(mb, "g_unsent")
     if not os.path.exists(mb) or tables_m is None or tables_s is None or unsent_s is None:
-        print(f"SALTADO: {why or why2 or why3 or 'no encuentro ' + mb}")
+        skip(f"{why or why2 or why3 or 'no encuentro ' + mb}")
         return 0
     import run_rom
     entry = tables_s[1] // unsent_s[1]           # bytes per row
@@ -2764,7 +2765,7 @@ def clone_reset_check(rom):
     """
     mb = os.path.splitext(rom)[0] + "_mb.mb"
     if not os.path.exists(mb):
-        print(f"SALTADO: no encuentro {mb}")
+        skip(f"no encuentro {mb}")
         return 0
     image = open(mb, "rb").read()
     cores, cable, both, tap = _pair(rom, slow=True, slave_rom=mb)
@@ -2991,7 +2992,7 @@ def mb_send_check(rom):
     """
     mb = os.path.splitext(rom)[0] + "_mb.mb"
     if not os.path.exists(mb):
-        print(f"SALTADO: no encuentro {mb}")
+        skip(f"no encuentro {mb}")
         return 0
     image = open(mb, "rb").read()
     failures = []
@@ -3138,7 +3139,7 @@ def peer_check(rom):
 
 
 if __name__ == "__main__":
-    code = main()
+    code = strict_verdict(main())
     # TWO CORES CANNOT BE LET GO OF NORMALLY. mgba/gba.py's GBA.__del__ frees
     # the core, and with two of them plus a Python GBASIODriver still attached
     # to both, the interpreter's shutdown collection frees a core out from

@@ -662,7 +662,8 @@ void set_piece_palette(TengenTetromino piece) {
 }
 
 /* The paused board's bricks: piecePaletteIndex0, which is what the field
- * wears at level 0 — its greys — in the falling piece's bank. See T_BRICK. */
+ * wears at level 0 — its greys — in a bank of their own, the credits'
+ * (PAL_BRICK_BANK), given back by restore_brick_bank. See T_BRICK. */
 void set_brick_palette(void) {
     const uint8_t *entry = kRomPiecePalettes[0];
     vu16 *bank = MEM_PALETTE + PAL_BRICK_BANK * 16;

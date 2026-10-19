@@ -281,7 +281,14 @@ assets-check:
 # with a simulated cable between them playing the same match byte for byte.
 # Needs: pip install pygba (plus the mGBA shared library, e.g. apt-get install
 # libmgba0.10).
+#
+# STRICT: a check that skips (SALTADO: a symbol the ELF lacks, a file the
+# build was not given) fails the run, since on a build with everything a skip
+# is a check that has stopped checking. STRICT=0 lets a build without the
+# prototypes or the logos through (tools/romcheck/harness.py, skip()).
+STRICT ?= 1
 .PHONY: gba-check
+gba-check: export ROMCHECK_STRICT = $(STRICT)
 gba-check: $(GBA_ROM)
 	python3 tools/check_header.py $(GBA_ROM)
 	python3 tools/run_rom.py $(GBA_ROM) --selftest
@@ -299,6 +306,7 @@ gba-check: $(GBA_ROM)
 	python3 tools/run_rom.py $(GBA_ROM) --handicap
 	python3 tools/run_rom.py $(GBA_ROM) --system
 	python3 tools/run_rom.py $(GBA_ROM) --panel
+	python3 tools/run_rom.py $(GBA_ROM) --counters
 	python3 tools/run_rom.py $(GBA_ROM) --next-palette
 	python3 tools/run_rom.py $(GBA_ROM) --menu
 	python3 tools/run_rom.py $(GBA_ROM) --computer

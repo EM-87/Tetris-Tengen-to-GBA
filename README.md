@@ -331,7 +331,7 @@ Lo que hay detrás del acorde no es un modo: es el juego terminado.
 
 En cifras: unas 5.400 líneas de reglas en C (`src/`, probadas en el PC con
 146 tests y un fuzzer), 15.800 de capa GBA y 25.000 de herramientas y
-comprobaciones — 53 baterías en `make gba-check`, más de ochenta
+comprobaciones — 54 baterías en `make gba-check`, más de ochenta
 comprobaciones que arrancan la ROM en un emulador, la juegan y miran la
 pantalla, el sonido y la memoria —, todo contrastado contra el disassembly
 del cartucho, línea citada a línea citada. Nada de eso se ve desde fuera, y
