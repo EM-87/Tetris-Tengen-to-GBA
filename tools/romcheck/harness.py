@@ -964,7 +964,7 @@ PM_ANSWER = PMENU_TY + 2     # YES, with NO under it
 # rest of the row is the HUD, and the braid decodes as stray letters. The box
 # is as wide as its lines need (pmenu_width in gba/match.c), so these are the
 # WIDEST it gets and pmenu_span reads the one actually on screen.
-PMENU_W_T = 18                # PMENU_W_MAX in gba/port.h
+PMENU_W_T = 16                # PMENU_W_MAX in gba/port.h
 PMENU_TX = (SCREEN_TW_TILES - PMENU_W_T) // 2
 PM_L = PMENU_TX + 1
 PM_R = PMENU_TX + PMENU_W_T - 1

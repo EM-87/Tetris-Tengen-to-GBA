@@ -144,6 +144,8 @@ def main():
                      help="check the game's page on its board, under the chord")
     ap.add_argument("--counters", action="store_true",
                      help="check the counters blank their leading zeros")
+    ap.add_argument("--handshare", action="store_true",
+                     help="check the hand-entered tunes give way to the effects")
     ap.add_argument("--pausemenu", action="store_true",
                      help="check the L+R pause menu")
     ap.add_argument("--quit-audio", action="store_true",
@@ -258,6 +260,8 @@ def main():
         sys.exit(effects_check(args.rom))
     if args.stats:
         sys.exit(stats_check(args.rom))
+    if args.handshare:
+        sys.exit(handtune_share_check(args.rom))
     if args.pausemenu:
         sys.exit(pausemenu_check(args.rom))
     if args.counters:

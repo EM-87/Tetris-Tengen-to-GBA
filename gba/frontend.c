@@ -542,8 +542,8 @@ static void draw_menu_frame(void) {
 #endif
 }
 
-/* THE CARTRIDGE'S SIX, ITS COPYRIGHT LINES AFTER THEM, AND UNDER THE CHORD
- * THE PORT IN MIRRORSOFT'S PLACE.
+/* THE CARTRIDGE'S SIX AND ITS COPYRIGHT LINES; UNDER THE CHORD THE PORT IN
+ * MIRRORSOFT'S PLACE, AND ITS VERSION IN THE COPYRIGHTS'.
  * GAME SELECT's line (ppuPatchLicensedBy, $A1EF: "LICENSED BY MIRRORSOFT
  * LTD." on one row, two here) was a licensing notice for a company that has
  * not existed since 1991; behind the chord, as everything else the port adds
@@ -567,21 +567,38 @@ static const char *const kCredits[][2] = {
  * and nothing outside this file reads it. */
 #define CREDIT_COUNT (sizeof kCredits / sizeof kCredits[0])
 
+/* ...WHICH UNDER THE CHORD GIVE WAY TO WHICH PORT THIS IS: the version (2,
+ * and the batch), the build (the commit) and the year, from the Makefile
+ * (BUILD_TAG). Those are the cartridge's notices, and they stand where the
+ * cartridge stands; behind the chord the screen is the port's. */
+#ifndef TENGEN_VERSION
+#define TENGEN_VERSION "2"
+#endif
+#ifndef TENGEN_BUILD
+#define TENGEN_BUILD "LOCAL"
+#endif
+#ifndef TENGEN_YEAR
+#define TENGEN_YEAR "2026"
+#endif
+static const char *const kCreditVersion[2] = {
+    "VERSION " TENGEN_VERSION "  " TENGEN_YEAR, "BUILD " TENGEN_BUILD
+};
+
 static uint8_t g_credit;
 static uint16_t g_credit_timer;
 
 /* One frame of it, and the drawing with it: this is called from a screen that
  * redraws itself every frame, so writing the two rows every time costs nothing
- * and needs no dirty flag. (Under the chord a seventh line once said which
- * build this was, the commit; it went: the ROM file's name says so.) */
+ * and needs no dirty flag. */
 static void draw_credits(void) {
     if (g_credit >= CREDIT_COUNT) g_credit = 0;
     if (++g_credit_timer >= CREDIT_FRAMES) {
         g_credit_timer = 0;
         g_credit = (uint8_t)((g_credit + 1) % CREDIT_COUNT);
     }
-    const char *const *line = g_credit == 0 && !g_pause_unlocked
-                                  ? kCreditCartridge : kCredits[g_credit];
+    const char *const *line = kCredits[g_credit];
+    if (g_credit == 0 && !g_pause_unlocked) line = kCreditCartridge;
+    if (g_credit == CREDIT_COUNT - 1 && g_pause_unlocked) line = kCreditVersion;
     set_credit_layer(true);
     draw_text_lifted(CREDIT_TY, line[0], BANK_CREDIT);
     draw_text_lifted(CREDIT_TY + 1, line[1], BANK_CREDIT);

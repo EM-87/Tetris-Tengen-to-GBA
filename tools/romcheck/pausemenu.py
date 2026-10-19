@@ -3,7 +3,7 @@ The pause menu the chord uncovers: its lines, its box, its tune
 and its way out.
 """
 from .harness import (
-    skip,
+    skip, ring_chord_from_title,
     KEYS, LEADER_HEAD_TY, MUSIC_COUNT_MAX, MUSIC_ROW, check_layout,
     PMENU_H, PMENU_TX, PMENU_TY, PMENU_W_T, pmenu_span,
     PM_EXIT, PM_HEAD, PM_L, PM_MUSIC, PM_OPTIONS,
@@ -385,6 +385,7 @@ def pausemenu_check(rom_path):
     failures += pause_options(rom_path)
     failures += pause_ticks_hold_the_tune(rom_path)
     failures += pause_hold(rom_path)
+    failures += pause_b_and_layout(rom_path)
 
     for f in failures:
         print("FALLA:", f)
@@ -588,7 +589,29 @@ def pause_options(rom_path):
         print(f"  mover la flecha suena ({down} frames), como en los menus")
 
     # A on HARD DROP, then DOWN to GHOST and RIGHT, LEFT, RIGHT: ON, OFF, ON.
-    tap("A")
+    # ...AND A SWITCH THROWN RINGS THE ENGINE'S BELL (NES_SOUND_DING: pulse
+    # 2, one high note, about 2000 on the GBA's scale), where a move ticks a
+    # low swept thud that never climbs past 1500.
+    io = core._native.memory.io
+
+    def highest(key):
+        core.set_keys(KEYS[key])
+        top = 0
+        for f in range(20):
+            if f == 4:
+                core.set_keys()
+            core.run_frame()
+            if (io[(0x04000068 - 0x04000000) >> 1] >> 12) & 0xF:
+                top = max(top, io[(0x0400006C - 0x04000000) >> 1] & 0x7FF)
+        return top
+    ring = highest("A")
+    tick = highest("UP")
+    tap("DOWN")
+    if ring < 1900 or tick >= 1900:
+        failures.append(f"el interruptor no suena a campanilla distinta del tic: "
+                        f"el mas agudo del interruptor {ring}, del tic {tick}")
+    else:
+        print(f"  el interruptor suena a campanilla ({ring}), el tic no ({tick})")
     for _ in range(3):
         tap("DOWN")
     tap("RIGHT"); tap("LEFT")
@@ -1041,3 +1064,72 @@ def tune_notes(rom_path, want, pause_at, frames):
     run(core, 120)                        # un rato sobre el cartel
     tap("START", settle=30)               # reanuda
     return heard, notes(frames)
+
+
+def pause_b_and_layout(rom_path):
+    """B SACA DEL MENU, Y EL MENU SE CINE A LO QUE LLEVA.
+
+    En la columna del menu no hay nada a lo que volver con B salvo la
+    partida: B quita la pausa como START, y la pieza no gira por ese B (el
+    nucleo lo toma por ya pulsado). El menu, con la flecha a un pixel de la
+    palabra (PMENU_ARROW_GAP_PX), mide catorce de ancho y no dieciseis; y la
+    ventana de canciones va alineada a la izquierda: cada nombre empieza en
+    la misma columna, la de las opciones.
+    """
+    off = game_offsets(rom_path)
+    base, why = game_state_address(rom_path)
+    if base is None:
+        skip(f"{why}")
+        return []
+    failures = []
+    core, screen = load(rom_path)   # `screen` must stay alive; see load()
+
+    def tap(*names, hold=4, settle=12):
+        core.set_keys(*[KEYS[n] for n in names]); run(core, hold)
+        core.set_keys(); run(core, settle)
+
+    def entry(r, c):
+        return core.memory.u16[SCREENBLOCK_ADDR + (r * 32 + c) * 2] & 0x3FF
+
+    run(core, 8)
+    ring_chord_from_title(core)
+    start_game(core)
+    run(core, 40)
+    tap("START", settle=40)
+    left, right = pmenu_span(core)
+    width = right - left + 2
+    if width != 14:
+        failures.append(f"el menu de pausa mide {width} de ancho, no 14")
+    else:
+        print("  el menu de pausa mide 14 de ancho, la flecha a un pixel")
+
+    # The tunes' window: every name in one column.
+    tap("A", settle=30)
+    starts = set()
+    for i in range(8):
+        r = PMT_FIRST + i
+        cols = [c for c in range(30) if 0x41 <= entry(r, c) <= 0x5A]
+        if cols:
+            starts.add(cols[0])
+    if len(starts) != 1:
+        failures.append(f"las canciones no empiezan en la misma columna: {sorted(starts)}")
+    else:
+        print(f"  la ventana de canciones, alineada a la izquierda (columna {starts.pop()})")
+    tap("B", settle=20)
+
+    # B on the menu's column: unpaused, and the piece as it was.
+    orientation = core.memory.u8[base + off["orientation"]]
+    core.set_keys(KEYS["B"]); run(core, 30)      # held, as a thumb would
+    paused = core.memory.u8[base + off["paused"]]
+    turned = core.memory.u8[base + off["orientation"]] != orientation
+    core.set_keys(); run(core, 10)
+    if paused:
+        failures.append("B en el menu de pausa no quita la pausa")
+    elif turned:
+        failures.append("el B que quita la pausa gira la pieza")
+    else:
+        print("  B quita la pausa desde el menu, sin girar la pieza")
+    del core, screen
+    for f in failures:
+        print(f"FALLA: {f}")
+    return failures

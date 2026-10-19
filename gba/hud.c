@@ -1207,8 +1207,14 @@ static void draw_preview_piece(int tx, int ty, TengenTetromino next, int bank) {
     }
 }
 
+/* ...AND BEHIND THE PAUSE'S WALL (board_bricked) THE PREVIEW GOES TOO: the
+ * wall is there so that a pause is a rest and not a long look at the game,
+ * and the piece coming next is the other half of that look. The cell stays,
+ * empty, until the game does. */
 static void draw_next_piece(int tx, int ty, int slot, int bank) {
-    draw_preview_piece(tx, ty, g_session.game.player[slot].piece.next, bank);
+    draw_preview_piece(tx, ty, board_bricked() ? TT_NONE
+                                               : g_session.game.player[slot].piece.next,
+                       bank);
 }
 
 /* HOLD'S CELL (OPT_HOLD): where HUD STATS's cossack stands, the piece put

@@ -691,7 +691,21 @@ story behind each; the item number is in brackets.
 - **The NES pulse sweep is emulated** (`gba/nes_audio.c`, PulseSweep): the
   line clear is a rising sweep on pulse 2, and without it it was one low
   note. A period byte written replaces that byte of the SWEPT period, so the
-  6502 core records writes (`apu_written`), not just values.
+  6502 core records writes (`apu_written`), not just values. The sweep
+  reaches the GBA only on a channel the ENGINE is sounding (`g_audible`): it
+  goes on clocking a let-go channel, as the NES's does, and its retunes
+  used to reach a channel a hand-entered tune had taken (Korobeiniki's
+  melody gliding up in the MUSIC window). And a sweep's mute is compared
+  with what the GBA channel was left doing, not with the sweep's state after
+  the writes, or a note back on the registers the dive had muted was never
+  sounded again.
+- **A hand-entered tune makes way for the engine's effects** (`handtune_frame`,
+  `nes_audio_engine_channels`): while the engine sounds a channel — and with
+  the engine's tunes stopped for a hand-entered one, what it sounds is an
+  effect — the tune counts on and writes nothing there, then sounds the
+  note it is on again. Under Korobeiniki and Katiuska the bass's next note
+  went over the line clear's zip on pulse 2, and half the clears were a
+  frame of it or nothing (`--handshare`).
 - **Against the computer there is ONE handicap**, and it buries both
   boards (`bcs @computerIsPlaying`, main.asm.txt:3539). Only 2 PLAYER has
   two — and VERSUS COMPUTER behind the chord, the second for the
@@ -726,11 +740,18 @@ Versus; WITH: Coop; 2 PLAYER: Versus; COOPERATIVE: Coop — and under the
 chord Stats as VERSUS's and WITH's second), remembered per mode; no HIGH in a
 race, as on the cartridge's 2P screen; one chord (L+R on GAME SELECT,
 LEVEL SETTINGS or the title) that uncovers Korobeiniki, Katiuska, MUSIC MIX, the XE
-levels 18-19, the pause menu (PAUSE, MUSIC, OPTIONS, EXIT GAME, and A on MUSIC
-opening a window with every tune on a line, the cursor on the one playing,
+levels 18-19, the pause menu (PAUSE, MUSIC, OPTIONS, EXIT GAME, START or B
+on its column leaving it and the pause — B kept from the board until it is
+let go, `menu_b_swallow`, or the game's auto-rotate turned the piece — the
+arrow one pixel from its word, PMENU_ARROW_GAP_PX, so the menu is fourteen
+wide; A on MUSIC
+opening a window with every tune on a line, flush left (`draw_pmenu_list`),
+the cursor on the one playing,
 the tune under the arrow playing as it moves and the menu around it silent,
-A to take one and B to leave it; MUSIC and not CHANGE MUSIC, whose box
-would cover the panels' last column of figures) and those Stats,
+A to take one and B to leave it; a switch in OPTIONS ringing the engine's
+unused bell, $11, NES_SOUND_DING, where a move ticks; MUSIC and not CHANGE
+MUSIC, whose box would cover the panels' last column of figures; NEXT gone
+from its cell while the pause's wall hides the board) and those Stats,
 and turns the menus' text from blue to white and the credits from the
 cartridge's orange to dark grey to say so; the prototype skins on the
 title, which the same chord finds (the prototypes are no part of the
@@ -744,7 +765,10 @@ LICENSED BY MIRRORSOFT LTD. among them (`ppuPatchLicensedBy`, $A1EF), then
 the title screen's last two rows, which the port's title has no room for
 (©1987 ACADEMYSOFT-ELORG. and ©1988 TENGEN, the © the title font's own tile
 $DF copied at boot into T_COPYRIGHT, the game font having none), and
-under the chord the port's own line in Mirrorsoft's place (`--credits`);
+under the chord the port's own line in Mirrorsoft's place and its version
+in the copyrights' — VERSION 2.N (the merges in the history), BUILD and the
+commit (-DEV with changes not committed), the year, from the Makefile's
+BUILD_TAG (`--credits`);
 the cossacks staged on the panels'
 ledges where the cartridge uses a middle strip the port does not have; a
 second cossack for the rival in HUD VERSUS; a paused race under the chord

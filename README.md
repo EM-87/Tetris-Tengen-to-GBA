@@ -137,7 +137,9 @@ Lo que el GBA tiene de más:
 | En cualquier momento | A+B+START+SELECT | reinicia el juego (en la EZ-Flash IV lo intercepta el propio cartucho) |
 | Al encender, mantenidos | L+R+B | borra los récords (pregunta dos veces, con NO elegido) |
 
-**El menú de pausa** (con el acorde) es PAUSE, MUSIC, OPTIONS y EXIT GAME.
+**El menú de pausa** (con el acorde) es PAUSE, MUSIC, OPTIONS y EXIT GAME;
+START o B lo cierran y siguen la partida. MUSIC abre la lista de canciones,
+alineada a la izquierda, y suena la que tiene la flecha.
 OPTIONS tiene seis interruptores, todos en OFF hasta que los toqués, que se
 guardan en el cartucho y vuelven cada vez que hacés el acorde: **HARD DROP**
 (Arriba tira la pieza de golpe), **FAST DOWN** (Abajo baja una fila por
@@ -147,7 +149,8 @@ compañero), **SWAP A-B** (A y B giran al revés) y **HOLD** (SELECT guarda la
 pieza que cae, y la cambia por la guardada; una vez por pieza). Con HOLD, el
 HUD se cambia con L+R y en HUD STATS la pieza guardada sale donde estaba el
 cosaco. Cada uno tiene su casilla, en blanco: vacía apagado, con punto encendido. A,
-Izquierda o Derecha cambian el de la flecha; B vuelve. Por cable, HARD DROP,
+Izquierda o Derecha cambian el de la flecha, con una campanilla (un efecto
+que el motor del cartucho trae y nunca usa); B vuelve. Por cable, HARD DROP,
 FAST DOWN, FAST SHIFT y HOLD son reglas de la partida: las del maestro, para
 los dos, y cualquiera las cambia desde el menú compartido solo para esa
 partida; GHOST y SWAP A-B son de cada jugador.
@@ -158,13 +161,14 @@ líneas de copyright de su título, ©1987 ACADEMYSOFT-ELORG. y ©1988 TENGEN,
 con su propio ©), SELECT en el título
 es otro START, el mando no vibra y el título y el cosaco son los del
 cartucho (L y R no hacen nada). Con el acorde, el crédito del port ocupa
-el sitio del de Mirrorsoft, SELECT en el título abre los récords, el Game Boy
+el sitio del de Mirrorsoft y la versión, el build y el año el de los
+copyrights, SELECT en el título abre los récords, el Game Boy
 Player vibra, y además de lo de arriba la música acelera con la pila alta, la
 pausa tapa el tablero con un muro de bloques que sube desde el suelo (y al
-seguir baja desde arriba), un récord nuevo suena con el
+seguir baja desde arriba) y esconde NEXT, un récord nuevo suena con el
 jingle que el cartucho no usa (por cable, todo esto con el acorde del
-maestro), la demo la juega el ordenador del port, y sube hasta el nivel 19
-como cualquier partida con el acorde, en el título L y R recorren
+maestro), la demo la juega el ordenador del port, en HUD STATS, y sube
+hasta el nivel 19 como cualquier partida con el acorde, en el título L y R recorren
 los prototipos y en HUD STATS cambia el color del cosaco, y al acabar la partida
 la cortinilla del Tetris de Game Boy — un muro de ladrillos sube tapando la
 pila muerta y luego baja vaciando el pozo — deja en el tablero la hoja de la

@@ -191,6 +191,8 @@ typedef struct {
     bool muted;
 } PulseSweep;
 static PulseSweep g_sweep[2];
+/* ...and whether each GBA channel was last left sounding by the engine. */
+static bool g_audible[2];
 
 static uint16_t sweep_target(int channel, uint16_t period, uint8_t reg) {
     uint16_t change = (uint16_t)(period >> (reg & 7));
@@ -350,6 +352,16 @@ void nes_audio_gag_lower(uint8_t floor, uint8_t frames) {
     }
 }
 
+/* THE CHANNELS THE ENGINE IS SOUNDING NOW, $4015's four bits as its last
+ * frame left them. While a hand-entered tune plays the engine's own tunes
+ * are stopped, so these are its effects: the line clear's zip on pulse 2,
+ * the drop, the cursor's tick — which the tune makes way for (see
+ * handtune_frame), as the cartridge's tunes make way for its effects. */
+uint8_t nes_audio_engine_channels(void) {
+    if (!g_ready) return 0;
+    return (uint8_t)(g_cpu.bus.apu[R_SND_CHN] & 0x0F);
+}
+
 /* The rest of the cartridge, for callers that are not the sound engine; see
  * the note in nes_audio.h. One machine, one RAM — deliberately. */
 bool nes_rom_call(uint16_t addr, uint8_t a, uint32_t max_steps) {
@@ -415,16 +427,28 @@ void nes_audio_frame(void) {
         uint8_t bit = (uint8_t)(1 << c);
         int base = c == 0 ? R_SQ1_VOL : R_SQ2_VOL;
         sweep_take_writes(c, apu, written);
-        bool was_muted = g_sweep[c].muted;
         bool restart = changed(apu, base, base + 3, bit);
         /* The sweep moves the note between the engine's writes, on the
          * NES's clock; see PulseSweep. A new note restarts as before, with
          * whatever period the clocks leave it on. */
         bool moved = sweep_clock(c, apu);
-        if (restart || (moved && g_sweep[c].muted != was_muted))
+        /* WHAT THE GBA'S CHANNEL IS DOING, NOT WHAT THE SWEEP WAS: on the
+         * NES a sweep's mute is worked out afresh from the period at every
+         * moment, where here it is a volume written with a restart, and it
+         * stays written. Compared with the sweep's own state after the
+         * writes, a note that came back to the same registers the dive had
+         * muted was never sounded again. And NOT ON A CHANNEL THE ENGINE IS
+         * NOT PLAYING: the sweep goes on clocking a let-go channel, as the
+         * NES's does, and its retuning went on reaching a GBA channel that a
+         * hand-entered tune had taken — Korobeiniki's melody gliding up
+         * under the last effect's sweep. */
+        bool audible = (enables & bit) && !g_sweep[c].muted;
+        if (restart || audible != g_audible[c]) {
             apply_pulse(c, apu, enables & bit);
-        else if (moved)
+            g_audible[c] = audible;
+        } else if (moved && audible) {
             sweep_retune(c);
+        }
     }
     if (changed(apu, R_TRI_LIN, R_TRI_HI, 0x04)) apply_triangle(apu, enables & 0x04);
     if (changed(apu, R_NOISE_VOL, 0x0F, 0x08)) apply_noise(apu, enables & 0x08);

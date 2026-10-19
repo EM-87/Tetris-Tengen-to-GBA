@@ -1707,7 +1707,7 @@ typedef enum {
  * narrower than the question's. Even, always, for the reason above. See
  * pmenu_width in gba/match.c. */
 #define PMENU_W_MIN 10
-#define PMENU_W_MAX 18        /* KOROBEINIKI, in the tunes' window */
+#define PMENU_W_MAX 16        /* KOROBEINIKI's window, CABLE LOST's, OPTIONS' */
 /* FIVE ROWS, AND THE WORD MUSIC IS GONE.
  *
  * The cartridge's own PAUSE is eight columns by two (`pauseColsRows1`,
@@ -1775,8 +1775,13 @@ typedef enum {
  * (made at boot, like the raised letters): TAIL goes two columns before the
  * word and HEAD one before, on the word's own layer, and the tip stops three
  * pixels short of the first letter — the same three for every line, whichever
- * layer centring put it on. */
-#define PMENU_ARROW_GAP_PX 3
+ * layer centring put it on.
+ *
+ * ONE PIXEL NOW, NOT THREE. Three left the boxes a column wider each side
+ * than their words: EXIT GAME with the arrow's room before it needed a box
+ * of sixteen, and the menu was a tall narrow thing in a wide frame. One
+ * pixel still keeps the tip off the letter, and the menu is fourteen. */
+#define PMENU_ARROW_GAP_PX 1
 #define TILE_PX 8
 /* Right after the raised letters, however many there are: an R added for
  * SURE? once landed on the arrow's tail, and the menu lost its cursor. */

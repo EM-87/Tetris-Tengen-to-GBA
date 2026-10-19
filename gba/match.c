@@ -561,7 +561,7 @@ static int g_pmenu_drawn_w, g_pmenu_drawn_h;
  * SAVED AS IT IS FIRST COVERED. What is held is the centred rectangle round
  * every box since the screen was last whole (g_pmenu_saved_w, _h); a box
  * that reaches past it saves the difference before it is drawn, and nothing
- * has covered that yet. Eleven rows of eighteen, four layers deep, on the
+ * has covered that yet. Eleven rows of sixteen, four layers deep, on the
  * frame the pause goes up was the heaviest way to have it.
  *
  * THE FOUR LAYERS ARE FOUR SCREENBLOCKS IN A ROW — the main map, the
@@ -722,6 +722,37 @@ static void draw_pmenu(const char *const *lines, int count, int cursor) {
                          i == cursor);
 }
 
+/* ...AND A LIST FLUSH LEFT: the tunes' window. Eight names of three to
+ * eleven letters centred one under another made a ragged edge down both
+ * sides, which reads as eight separate things and not as a list. Flush left
+ * they start in one column — the options' window's, after the arrow's two
+ * columns — the heading still centred over them; the box as narrow as the
+ * longest name and a column clear of the frame allow, and even. */
+static void draw_pmenu_list(const char *const *lines, int count, int cursor) {
+    int longest = 0;
+    for (int i = 1; i < count; i++) {
+        int len = (int)text_len(lines[i]);
+        if (len > longest) longest = len;
+    }
+    int w = longest + 5;                 /* frame, arrow, name, a column, frame */
+    w += w & 1;
+    if (w < PMENU_W_MIN) w = PMENU_W_MIN;
+    if (w > PMENU_W_MAX) w = PMENU_W_MAX;
+    int h = count + 2;
+    pmenu_frame(w, h);
+    int tx = (SCREEN_TW - w) / 2, ty = (SCREEN_TH - h) / 2;
+    draw_pmenu_line(tx + 1, w - 2, ty + 1, lines[0], BANK_NOTE, PL_HEADING, false);
+    for (int i = 1; i < count; i++) {
+        int y = ty + 1 + i;
+        for (int c = 0; lines[i][c]; c++)
+            set_map_tile(tx + 3 + c, y, WITH_BANK(ascii_tile(lines[i][c]), BANK_LABEL));
+        if (i == cursor) {
+            set_map_tile(tx + 1, y, WITH_BANK(T_ARROW_TAIL, BANK_LABEL));
+            set_map_tile(tx + 2, y, WITH_BANK(T_ARROW_HEAD, BANK_LABEL));
+        }
+    }
+}
+
 /* THE OPTIONS' WINDOW IS A TABLE, NOT A LIST, so its lines do not centre:
  * the switch's name stands at the left, after the arrow's two columns, and
  * its box at the right, in a column of its own (T_CHECK_OFF): empty for
@@ -791,9 +822,9 @@ static void draw_pause_menu(void) {
     /* "EXIT GAME", not "EXIT": a player took the bare word for closing the
      * menu and walked out of the game. */
     /* "MUSIC", not "CHANGE MUSIC": twelve letters and the arrow need a box
-     * of eighteen, and EXIT GAME's sixteen is the most that leaves the
-     * panels' last column of figures showing — the score's digits, and a
-     * paused race's rival numbers (`--versushud`). */
+     * of sixteen, and EXIT GAME's fourteen leaves the panels' figures
+     * showing with a column to spare — the score's digits, and a paused
+     * race's rival numbers (`--versushud`). */
     static const char *const menu[] = { "PAUSE", "MUSIC", "OPTIONS", "EXIT GAME" };
     if (g_pause_confirm) {
         draw_pmenu(ask, 3, g_pause_yes ? 1 : 2);
@@ -803,7 +834,7 @@ static void draw_pause_menu(void) {
         const char *tunes[1 + MUSIC_UNLOCKED_COUNT] = { "MUSIC" };
         int count = pause_tune_count();
         for (int i = 0; i < count; i++) tunes[1 + i] = kMusicNames[i];
-        draw_pmenu(tunes, 1 + count, 1 + g_tune_row);
+        draw_pmenu_list(tunes, 1 + count, 1 + g_tune_row);
     } else {
         draw_pmenu(menu, 1 + PMENU_ROWS, 1 + g_pause_row);
     }
@@ -894,6 +925,15 @@ static void pause_tick(void) {
     cursor_blip();
 }
 
+/* ...AND A SWITCH THROWN RINGS, which a move does not: the tick for both
+ * said "something moved" twice and nothing about the switch. The engine's
+ * own bell, which the cartridge never rings (NES_SOUND_DING), let through
+ * the gag as the tick is. */
+static void pause_ding(void) {
+    nes_audio_gag_lower(NES_GAG_TICK_FLOOR, NES_GAG_TICK_FRAMES);
+    nes_audio_play(NES_SOUND_DING);
+}
+
 /* One frame of it. Returns true if the menu ate the input, which is what
  * keeps the cheat codes out of it — they are entered on the pad while paused
  * too, and a Down meant for this menu is the first byte of one of them. */
@@ -901,7 +941,20 @@ static bool pause_menu_on(void);
 
 /* `mine` is what of `pressed` this console's own player pressed: all of it
  * solo, over the cable this console's half (see option_toggle). */
-static bool pause_menu_input(uint8_t pressed, uint8_t mine, bool *leaving) {
+/* THE B THAT LEFT THE MENU IS THE MENU'S UNTIL IT IS LET GO. Handed to the
+ * board it turned the piece on the frame the game came back; taken as held
+ * already it did not, but a thumb still on it was a held turn, and this game
+ * turns a held B again and again (the auto-rotate). So the board does not
+ * see it at all until it has been released. Per player, as over the cable
+ * either can leave the menu: both consoles strip the same player's B. */
+static bool g_menu_b_held[2];
+static uint8_t menu_b_swallow(int player, uint8_t buttons) {
+    if (!(buttons & TENGEN_BTN_B)) g_menu_b_held[player] = false;
+    return g_menu_b_held[player] ? (uint8_t)(buttons & ~TENGEN_BTN_B) : buttons;
+}
+
+static bool pause_menu_input(uint8_t pressed, uint8_t mine, bool *leaving,
+                             bool *resume) {
     if (!pause_menu_on() || !g_session.game.paused) return false;
 
     /* START IS ALWAYS RESUME, EVERYWHERE IN THIS MENU — on the EXIT line and
@@ -928,8 +981,8 @@ static bool pause_menu_input(uint8_t pressed, uint8_t mine, bool *leaving) {
      * back to the menu. Nothing waits to be confirmed — a switch is thrown
      * as it is pressed (option_toggle). */
     /* ...AND IT TICKS as the settings screen does: the cursor's tick for a
-     * move and for a switch thrown, which is a value changed and not a
-     * screen; the screen's blip for B. */
+     * move, the engine's bell for a switch thrown (pause_ding), the
+     * screen's blip for B. */
     if (g_pause_options) {
         bool moved = true;
         if (pressed & TENGEN_BTN_UP)
@@ -941,7 +994,7 @@ static bool pause_menu_input(uint8_t pressed, uint8_t mine, bool *leaving) {
         if (pressed & (TENGEN_BTN_A | TENGEN_BTN_LEFT | TENGEN_BTN_RIGHT)) {
             option_toggle(g_option_row,
                           (mine & (TENGEN_BTN_A | TENGEN_BTN_LEFT | TENGEN_BTN_RIGHT)) != 0);
-            pause_tick();
+            pause_ding();
         } else if (pressed & TENGEN_BTN_B) {
             g_pause_options = false;
             screen_blip();
@@ -1011,6 +1064,16 @@ static bool pause_menu_input(uint8_t pressed, uint8_t mine, bool *leaving) {
             screen_blip();
         }
         return true;
+    }
+
+    /* B LEAVES THE MENU, AND THE PAUSE WITH IT, as START does: on the
+     * menu's own column there is nothing to back out to but the game, and B
+     * is what backs out of everything else in it. Handed on as a START
+     * (`resume`): it is the core that unpauses; and the B itself is kept
+     * from the board until it is let go (menu_b_swallow). */
+    if (pressed & TENGEN_BTN_B) {
+        *resume = true;
+        return false;
     }
 
     /* SELECT MOVES THE CURSOR, the way it does on the settings screen — the
@@ -1219,11 +1282,22 @@ bool link_play_frame(uint8_t pressed, bool *quit) {
         g_link_prev[0] = b0;
         g_link_prev[1] = b1;
         if (g_session.game.paused && pause_menu_on()) {
-            bool leaving = false;
+            bool leaving = false, resume = false;
             if (pause_menu_input(menu_pressed, link_is_master() ? new0 : new1,
-                                 &leaving)) {
+                                 &leaving, &resume)) {
                 local_buttons = 0;
                 remote = (uint16_t)(remote & ~TENGEN_LINK_BUTTON_MASK);
+            } else if (resume) {
+                /* B as START, for whichever player pressed it — the same
+                 * on both consoles, which both have both presses. */
+                for (int p = 0; p < 2; p++) {
+                    if (!((p == 0 ? new0 : new1) & TENGEN_BTN_B)) continue;
+                    if ((p == 0) == link_is_master())
+                        local_buttons |= TENGEN_BTN_START;
+                    else
+                        remote |= TENGEN_BTN_START;
+                    g_menu_b_held[p] = true;
+                }
             }
             if (leaving) {
                 *quit = true;
@@ -1231,6 +1305,13 @@ bool link_play_frame(uint8_t pressed, bool *quit) {
             }
         }
 
+        /* ...and that B is the menu's until it is let go, on both. */
+        {
+            int me = link_is_master() ? 0 : 1;
+            local_buttons = menu_b_swallow(me, local_buttons);
+            remote = (uint16_t)((remote & ~TENGEN_LINK_BUTTON_MASK) |
+                                menu_b_swallow(me ^ 1, tengen_link_buttons(remote)));
+        }
         TengenStepResult out[2];
         bool was_paused = g_session.game.paused;
         if (!tengen_link_step(&g_session, local_buttons, remote, out))
@@ -1464,7 +1545,16 @@ bool solo_play_frame(uint8_t buttons, uint8_t pressed, bool *quit) {
         pressed = TENGEN_BTN_START;
         sleep_next = true;
     }
-    if (pause_menu_input(pressed, pressed, quit)) { buttons = 0; pressed = 0; }
+    bool resume = false;
+    if (pause_menu_input(pressed, pressed, quit, &resume)) {
+        buttons = 0;
+        pressed = 0;
+    } else if (resume) {
+        pressed = (uint8_t)(pressed | TENGEN_BTN_START);
+        g_menu_b_held[0] = true;
+    }
+    buttons = menu_b_swallow(0, buttons);
+    if (g_menu_b_held[0]) pressed = (uint8_t)(pressed & ~TENGEN_BTN_B);
     if (g_session.game.player[0].game_active) {
         uint8_t presses[2] = { pressed, 0 };
         TengenCheat cheat[2];

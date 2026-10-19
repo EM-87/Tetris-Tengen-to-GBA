@@ -525,6 +525,13 @@ def demo_check(rom_path):
                                  "del cartucho, no con el del port (smart)")
             elif smart_at is not None:
                 print("  con el acorde, la juega el ordenador del port (smart)")
+            # ...EN HUD STATS (g_hud 1), el histograma que escala.
+            hud, _ = game_state_address(rom_path, "g_hud")
+            if hud is not None and core.memory.u8[hud] != 1:
+                failures.append(f"con el acorde la demo no va en HUD STATS "
+                                f"(g_hud {core.memory.u8[hud]})")
+            elif hud is not None:
+                print("  con el acorde, la demo va en HUD STATS")
             run(core, 60)
             heard = sum(1 for _ in range(120)
                         if (core.run_frame() or True) and core.memory.u8[playing])
@@ -869,18 +876,14 @@ def credits_check(rom_path):
             print(f"  el simbolo de copyright es el del titulo ($DF): "
                   f"{sum(got)} pixeles de tinta")
 
-    # NO BUILD LINE, with the chord or without: there was a seventh credit
-    # under the chord with the commit, and it went (the ROM's file name says
-    # which build it is). Six credits, the chord or no chord — and under it
-    # the port's in Mirrorsoft's place.
+    # UNDER THE CHORD, THE PORT'S: its line in Mirrorsoft's place, and in
+    # the cartridge's copyright lines' its version, build and year (the
+    # Makefile's BUILD_TAG). Without it, neither.
+    import re
     core.set_keys(KEYS["L"], KEYS["R"]); run(core, 4)
     core.set_keys(); run(core, 10)
-    build = False
     chorded = []
     for _ in range((len(CREDITS) + 1) * CREDIT_FRAMES):
-        if "BUILD" in tilemap_text(core, CREDIT_TY).split():
-            build = True
-            break
         pair = (tilemap_text(core, CREDIT_TY).strip(),
                 tilemap_text(core, CREDIT_TY + 1).strip())
         if not chorded or pair != chorded[-1]:
@@ -892,10 +895,22 @@ def credits_check(rom_path):
                         f"de Mirrorsoft: {later}")
     else:
         print("  con el acorde, el credito del port en el sitio de Mirrorsoft")
-    if build or any("BUILD" in a.split() for a, b in seen):
-        failures.append("los creditos aun dicen BUILD")
+
+    def version(pairs):
+        return [(a, b) for a, b in pairs
+                if re.search(r"\bVERSION 2\.\d+  \d{4}\b", a)
+                and re.search(r"\bBUILD ([0-9A-F]{7}|LOCAL)(-DEV)?\b", b)]
+    if not version(later):
+        failures.append(f"con el acorde no sale la version y el build al final: "
+                        f"{later}")
+    elif shown(*CREDITS[-1], among=later):
+        failures.append("con el acorde siguen saliendo los copyrights del cartucho")
+    elif any("VERSION" in a or "BUILD" in b for a, b in seen):
+        failures.append("sin el acorde sale la version del port")
     else:
-        print("  ni con el acorde sale una linea BUILD: los del cartucho y nada mas")
+        a, b = (" ".join(x.split()[1:-1]) for x in version(later)[0])
+        print(f"  con el acorde, al final '{a}' / '{b}' en lugar de los "
+              f"copyrights; sin el, los copyrights y ninguna version")
 
     # The invented line is gone: the cartridge spells him PAZHITNOV, on its
     # own level screen, and the port used to print a PAJITNOV of its own.

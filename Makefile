@@ -138,6 +138,23 @@ ARMFLAGS := -mcpu=arm7tdmi -mtune=arm7tdmi -mthumb -mthumb-interwork \
 # in newlib's syscall-backed side (no malloc, no stdio), so no stubs needed.
 ARMLDFLAGS := -T gba/gba.ld -nostartfiles -Wl,--gc-sections
 
+# THE VERSION, THE BUILD AND THE YEAR, ON THE SCREEN: the last of the
+# title's credits once the chord is found (draw_credits), so a ROM on a
+# flash cart can be told from another without its file name. The version is
+# 2 — what the chord makes of the cartridge is the port's second — and the
+# merges in the history, one a batch; the build the commit, in capitals (the
+# font has no lower case), -DEV with changes not committed; the year the
+# commit's. build/build_tag holds them and is rewritten only when they
+# change, so a new commit rebuilds the ROM and nothing else does.
+BUILD_TAG := $(shell git rev-parse --short=7 HEAD 2>/dev/null | tr a-f A-F)
+BUILD_TAG := $(if $(BUILD_TAG),$(BUILD_TAG),LOCAL)$(shell git diff --quiet HEAD -- . 2>/dev/null || echo -DEV)
+BUILD_VERSION := 2.$(or $(shell git rev-list --count --merges HEAD 2>/dev/null),0)
+BUILD_YEAR := $(or $(shell git log -1 --format=%cd --date=format:%Y 2>/dev/null),2026)
+BUILD_TAG_FILE := $(BUILD)/build_tag
+$(shell mkdir -p $(BUILD); echo '$(BUILD_VERSION) $(BUILD_TAG) $(BUILD_YEAR)' | cmp -s - $(BUILD_TAG_FILE) || echo '$(BUILD_VERSION) $(BUILD_TAG) $(BUILD_YEAR)' > $(BUILD_TAG_FILE))
+ARMFLAGS += -DTENGEN_VERSION='"$(BUILD_VERSION)"' -DTENGEN_BUILD='"$(BUILD_TAG)"' \
+            -DTENGEN_YEAR='"$(BUILD_YEAR)"'
+
 # THE COMPUTER'S INNER LOOPS IN INTERNAL WRAM, AS ARM (TENGEN_AI_HOT in
 # src/tengen_ai.c): the collision, the drop, the placement and the board's
 # terms, a kilobyte or so, which every placement it weighs runs dozens of
@@ -177,7 +194,7 @@ gba: $(GBA_ROM)
 # directly: that way regenerating assets rebuilds the ROM, while a missing one
 # still reaches the helpful message below instead of "no rule to make target".
 $(GBA_ELF): $(GBA_SRC) $(CORE_HDR) gba/port.h gba/gba_hw.h gba/link.h \
-             gba/crt0.s gba/gba.ld gba/mb_image.s $(GBA_MB) \
+             gba/crt0.s gba/gba.ld gba/mb_image.s $(GBA_MB) $(BUILD_TAG_FILE) \
              $(wildcard $(GBA_ASSETS) gba/splash_logo.h gba/splash_mirrorsoft.h gba/splash_tetris.h gba/gbp_logo.h) | $(BUILD)
 	@command -v $(ARMCC) >/dev/null 2>&1 || { \
 	    echo "error: $(ARMCC) not found."; \
@@ -193,7 +210,7 @@ $(GBA_ELF): $(GBA_SRC) $(CORE_HDR) gba/port.h gba/gba_hw.h gba/link.h \
 	$(ARMCC) $(ARMFLAGS) $(AI_HOT_FLAGS) $(ARMLDFLAGS) gba/crt0.s gba/mb_image.s $(GBA_SRC) -o $@
 
 $(GBA_MB_ELF): $(GBA_SRC) $(CORE_HDR) gba/port.h gba/gba_hw.h gba/link.h \
-                gba/crt0.s gba/mb.ld $(wildcard $(GBA_ASSETS)) | $(BUILD)
+                gba/crt0.s gba/mb.ld $(BUILD_TAG_FILE) $(wildcard $(GBA_ASSETS)) | $(BUILD)
 	@for h in $(GBA_ASSETS); do test -f $$h || { \
 	    echo "error: $$h is missing (make assets ROM=...)"; exit 1; }; done
 	$(ARMCC) $(ARMFLAGS) $(AI_HOT_FLAGS) -DTENGEN_MULTIBOOT -Wa,--defsym,MULTIBOOT=1 \
@@ -299,6 +316,7 @@ gba-check: $(GBA_ROM)
 	python3 tools/run_rom.py $(GBA_ROM) --title
 	python3 tools/run_rom.py $(GBA_ROM) --skin
 	python3 tools/run_rom.py $(GBA_ROM) --handtunes
+	python3 tools/run_rom.py $(GBA_ROM) --handshare
 	python3 tools/run_rom.py $(GBA_ROM) --xe
 	python3 tools/run_rom.py $(GBA_ROM) --credits
 	python3 tools/run_rom.py $(GBA_ROM) --leave-title
