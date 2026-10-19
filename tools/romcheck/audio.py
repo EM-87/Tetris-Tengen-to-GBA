@@ -4,7 +4,8 @@ pause, the hand-entered tunes and the menu effects.
 """
 import os
 from .harness import (
-    skip, TENGEN_ROM_ROW_ORIGIN, put_skin_on,
+    skip, TENGEN_ROM_ROW_ORIGIN, PAL_NEXT_BANK, put_skin_on, ring_chord_from_title,
+    PM_MUSIC, pmenu_span,
     APU_REGS, AUDIO_ALIGN_SEARCH, AUDIO_GOLDEN_SKIP, EFFECT_WATCH_FRAMES,
     GOLDEN_PATH, KEYS, MUSIC_ROW, REG_SOUND1CNT_H,
     REG_SOUND1CNT_X, REG_SOUND2CNT_L, REG_SOUND3CNT_H, REG_SOUNDCNT_X,
@@ -912,6 +913,18 @@ def chord_extras_check(rom_path):
                 bad.append(r)
         return bad
 
+    def next_cells(core):
+        """The left box's tiles in the preview's bank (PAL_NEXT_BANK), on
+        the main map and the offset one: NEXT's piece."""
+        n = 0
+        for addr in (0x0600E000, 0x0600E800):
+            for r in range(20):
+                for c in range(0, 10):
+                    e = core.memory.u16[addr + (r * 32 + c) * 2]
+                    if (e >> 12) == PAL_NEXT_BANK and e & 0x3FF:
+                        n += 1
+        return n
+
     def frames_ragged(core, n):
         """n frames, and every row found ragged in any of them."""
         seen = set()
@@ -961,6 +974,7 @@ def chord_extras_check(rom_path):
         # wall will pass it: at the pause it is still above the field, and a
         # piece drawn over the bricks would never be seen to be.
         core.memory.u8[base + off["y"] + board * off["stride"]] = TENGEN_ROM_ROW_ORIGIN + 3
+        next_before = next_cells(core)
         press_start(core); run(core, 12)
         # THE WALL GOES UP A ROW EVERY TWO FRAMES (PAUSE_WALL_UP_FRAMES): a
         # few rows of it twelve frames in, the board above them still the
@@ -972,6 +986,7 @@ def chord_extras_check(rom_path):
         # nothing drawn on the rows it stands on.
         rising_ragged = frames_ragged(core, 40)
         cells = shown_cells(core)
+        next_paused = next_cells(core)
         odd = not_bricks(core)
         if want_bricks and (rising_low or rising_high < 30 or not piece_coloured):
             failures.append(f"{name}: el muro no sube desde el suelo dejando la "
@@ -981,6 +996,12 @@ def chord_extras_check(rom_path):
         elif want_bricks and rising_ragged:
             failures.append(f"{name}: al subir el muro hay filas a medias de "
                             f"ladrillos (algo dibujado encima): {rising_ragged}")
+        elif want_bricks and (not next_before or next_paused):
+            failures.append(f"{name}: tras el muro NEXT sigue a la vista "
+                            f"({next_before} celdas antes, {next_paused} en pausa)")
+        elif not want_bricks and next_paused != next_before:
+            failures.append(f"{name}: sin muro NEXT no deberia irse "
+                            f"({next_before} -> {next_paused})")
         elif not want_bricks:
             if cells == 0 or len(odd) < 100:
                 failures.append(f"{name}: en pausa el tablero no se ve "
@@ -1016,10 +1037,12 @@ def chord_extras_check(rom_path):
             elif back == 0 or bank_spread(core, PAL_PIECE_BANK) <= 3:
                 failures.append(f"{name}: al reanudar no vuelve el tablero "
                                 f"({back} celdas) o la pieza sigue gris")
+            elif not next_cells(core):
+                failures.append(f"{name}: al reanudar no vuelve NEXT")
             else:
                 print(f"  {name}: en pausa el muro sube desde el suelo, gris, "
-                      f"con la pieza en sus colores; al reanudar baja desde "
-                      f"arriba y vuelve el tablero")
+                      f"con la pieza en sus colores, y NEXT se va; al reanudar "
+                      f"baja desde arriba y vuelven el tablero y NEXT")
         del core, screen
 
     # UP DROPS THE PIECE once HARD DROP is ON in the pause menu's OPTIONS
@@ -1140,4 +1163,124 @@ def cossack_colour_check(rom_path):
     if failures:
         return 1
     print("OK: el color del cosaco solo cambia bajo el acorde.")
+    return 0
+
+
+def handtune_share_check(rom_path):
+    """LAS MELODIAS METIDAS A MANO COMPARTEN LOS CANALES CON EL MOTOR, Y CEDEN.
+
+    Korobeiniki y Katiuska suenan en los mismos tres canales de la GBA que
+    el motor del cartucho, y cada uno escribia encima del otro:
+
+      * el bajo, en el pulso 2, pisaba el zip de la limpieza de lineas, que
+        es del pulso 2: con estas dos melodias la mitad de las limpiezas eran
+        un frame o dos del zip, o nada ("a veces algunas lineas no suenan");
+      * y el barrido del pulso que el port emula para ese zip seguia
+        reafinando un canal que el motor ya habia soltado: en la ventana
+        MUSIC, de KATIUSKA a KOROBEINIKI, la melodia subia de tono sola.
+
+    Se mira lo que llega a la GBA: el zip entero (frame a frame la frecuencia
+    del pulso 2 moviendose, con volumen) en cada limpieza bajo Korobeiniki; y
+    en la ventana, el pulso 1 sin deslizarse entre una nota y la siguiente.
+    """
+    base, why = game_state_address(rom_path)
+    if base is None:
+        skip(f"{why}")
+        return 0
+    off = game_offsets(rom_path)
+    failures = []
+    core, screen = load(rom_path)   # `screen` must stay alive; see load()
+    io = core._native.memory.io
+
+    def reg(a):
+        return io[(a - 0x04000000) >> 1]
+
+    def lines():
+        return sum(core.memory.u8[base + off["lines"] + i] << (8 * i) for i in range(4))
+
+    # KOROBEINIKI IS BEHIND THE CHORD: without it the fifth step along the
+    # list comes round to NO MUSIC, and this measured a silent game.
+    music, why = game_state_address(rom_path, "g_music")
+    if music is None:
+        skip(f"{why}")
+        return 0
+    run(core, 8)
+    ring_chord_from_title(core)
+    start_game(core, tune=5)            # KOROBEINIKI
+    run(core, 30)
+    if core.memory.u8[music] != 5:
+        print(f"FALLA: la partida no suena con KOROBEINIKI (g_music "
+              f"{core.memory.u8[music]}): esto no mediria nada")
+        return 1
+    # AT EVERY POINT OF THE TUNE'S BAR, not one: the same drop again and
+    # again lands each clear at the same moment of the bass line, which can
+    # be a moment the bass is holding a note and writes nothing.
+    zips = []
+    for n in range(16):
+        run(core, 13 * n % 97)
+        fill_rows(core, base + off["field"], [19])
+        before = lines()
+        for _f in range(400):
+            core.set_keys(KEYS["DOWN"]); core.run_frame()
+            if lines() != before:
+                break
+        core.set_keys()
+        moving, last = 0, None
+        for _f in range(20):
+            core.run_frame()
+            fq = reg(0x0400006C) & 0x7FF
+            if (reg(0x04000068) >> 12) & 0xF and fq != last:
+                moving += 1
+            last = fq
+        zips.append(moving)
+    if min(zips) < 12:
+        failures.append(f"bajo KOROBEINIKI el zip de la limpieza se corta: "
+                        f"frames de zip por limpieza {zips} (15 entero)")
+    else:
+        print(f"  bajo KOROBEINIKI cada limpieza suena entera: {zips} frames de zip")
+    del core, screen
+
+    # ...Y EN LA VENTANA MUSIC: de KATIUSKA, ARRIBA a KOROBEINIKI.
+    core, screen = load(rom_path)   # `screen` must stay alive; see load()
+    io = core._native.memory.io
+
+    def tap(key, settle=14):
+        core.set_keys(KEYS[key]); run(core, 4); core.set_keys(); run(core, settle)
+
+    run(core, 40)
+    ring_chord_from_title(core)
+    to_music_page(core)
+    for _ in range(6):                  # NO MUSIC ... KATIUSKA
+        tap("RIGHT")
+    press_start(core); run(core, 60)
+    tap("START", 30)
+    for _ in range(4):
+        if ">" in tilemap_text(core, PM_MUSIC, *pmenu_span(core)):
+            break
+        tap("DOWN")
+    tap("A", 30)
+    core.set_keys(KEYS["UP"])
+    glides, last = 0, None
+    for f in range(70):
+        if f == 4:
+            core.set_keys()
+        core.run_frame()
+        vol = (reg(0x04000062) >> 12) & 0xF
+        fq = reg(0x04000064) & 0x7FF
+        if last and vol and last[0] and 0 < abs(fq - last[1]) <= 12:
+            glides += 1
+        last = (vol, fq)
+    if glides:
+        failures.append(f"en la ventana MUSIC, de KATIUSKA a KOROBEINIKI la "
+                        f"melodia se desliza: {glides} frames subiendo de tono")
+    else:
+        print("  en la ventana MUSIC, de KATIUSKA a KOROBEINIKI, la melodia "
+              "no se mueve de sus notas")
+    del core, screen
+
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: las melodias a mano ceden los canales a los efectos del cartucho.")
     return 0

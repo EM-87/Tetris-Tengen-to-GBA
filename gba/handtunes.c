@@ -29,6 +29,7 @@
 #include "handtunes.h"
 
 #include "gba_hw.h"
+#include "nes_audio.h"
 
 /* The same registers nes_audio.c drives; declared again here rather than
  * shared, because these two are meant to stay independent. */
@@ -412,8 +413,21 @@ void handtune_frame(void) {
         return;
     }
 
+    /* AN EFFECT HAS THE CHANNEL WHILE IT SOUNDS, as the cartridge's own
+     * tunes give way to its effects. The two share the GBA's three channels
+     * and each wrote over the other: the bass's next note went over the line
+     * clear's zip on pulse 2 — half the clears under these two tunes were a
+     * frame or two of it, or nothing — and the tick and the drop the same
+     * on pulse 1. While the engine sounds a channel (its tunes are stopped
+     * for these, so what it sounds is an effect) the voice counts on and
+     * writes nothing there, and when the channel is let go the note it is
+     * on is sounded again (`restart`, as after a pause). */
+    uint8_t busy = nes_audio_engine_channels();
+
     int lead = voice_step(&g_lead, g_tune->melody, false);
-    if (lead == NOTE_RELEASE || lead == REST) {
+    if (busy & 0x01) {
+        g_lead.restart = true;
+    } else if (lead == NOTE_RELEASE || lead == REST) {
         silence_pulse1();
     } else if (lead != NOTE_HOLD) {
         REG_SOUND1CNT_L = 0;                     /* no sweep */
@@ -439,15 +453,23 @@ void handtune_frame(void) {
      * effect that wants the triangle takes it, and the next bass note takes
      * it back. */
     int bass = voice_step(&g_bass, g_tune->bass, true);
+    /* ...the bass's two halves each making way for their own channel. */
+    if (busy & 0x06) g_bass.restart = true;
     if (bass == NOTE_RELEASE || bass == REST) {
-        silence_pulse2();
-        REG_SOUND3CNT_L = 0;
-        REG_SOUND3CNT_H = 0;
+        if (!(busy & 0x02)) silence_pulse2();
+        if (!(busy & 0x04)) {
+            REG_SOUND3CNT_L = 0;
+            REG_SOUND3CNT_H = 0;
+        }
     } else if (bass != NOTE_HOLD) {
-        REG_SOUND2CNT_L = BASS_ENVELOPE;
-        REG_SOUND2CNT_H = (uint16_t)(kNoteReg[bass] | 0x8000);
-        REG_SOUND3CNT_L = 0x0080;                /* one bank of 32, channel on */
-        REG_SOUND3CNT_H = (uint16_t)(1 << 13);   /* volume code 1 = 100% */
-        REG_SOUND3CNT_X = (uint16_t)(kNoteReg[bass] | 0x8000);
+        if (!(busy & 0x02)) {
+            REG_SOUND2CNT_L = BASS_ENVELOPE;
+            REG_SOUND2CNT_H = (uint16_t)(kNoteReg[bass] | 0x8000);
+        }
+        if (!(busy & 0x04)) {
+            REG_SOUND3CNT_L = 0x0080;                /* one bank of 32, channel on */
+            REG_SOUND3CNT_H = (uint16_t)(1 << 13);   /* volume code 1 = 100% */
+            REG_SOUND3CNT_X = (uint16_t)(kNoteReg[bass] | 0x8000);
+        }
     }
 }

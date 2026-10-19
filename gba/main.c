@@ -404,8 +404,12 @@ int main(void) {
                 points_clear();
                 leader_new_match();
                 stats_begin_match();
-                /* ...and the HUD this mode opens on. See hud_set. */
+                /* ...and the HUD this mode opens on. See hud_set. UNDER THE
+                 * CHORD, HUD STATS: the port's computer playing to a
+                 * histogram that scales, rather than to the cartridge's
+                 * banner, which says nothing about how it is playing. */
                 hud_reset();
+                if (g_pause_unlocked) g_hud = HUD_STATS;
                 g_demo_over_frames = 0;
                 g_mix_step = 0;
                 g_shown_level = 0xFF;

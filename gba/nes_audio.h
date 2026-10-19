@@ -80,6 +80,12 @@
  * skin easter egg uses CHIRP, so the egg has a voice nothing else in the game
  * uses, and it is still the ROM's voice. */
 #define NES_SOUND_CHIRP        0x10
+/* ...and $11, the other of them nothing in the game asks for: measured on
+ * the engine, eight frames of pulse 2 on one high note (G#7, about 3.3kHz),
+ * the volume falling 14 to 3 — a little bell. The pause menu's OPTIONS ring
+ * it as a switch is thrown, where the cursor's tick (MENU_SELECT, a low
+ * swept thud) is a move. */
+#define NES_SOUND_DING         0x11
 /* SOUND_ALARM, which the cartridge never plays — constants.asm.txt:54 marks
  * it "maybe unused" — and which is exactly the noise a refusal wants. */
 #define NES_SOUND_ALARM        0x12
@@ -108,6 +114,10 @@ void nes_audio_play(uint8_t track_id);
 /* Runs one frame of the engine and applies what it wrote. Call once per
  * frame, at the same rate the NES called it from its NMI. */
 void nes_audio_frame(void);
+
+/* The channels the engine is sounding: $4015's low four bits (pulse 1,
+ * pulse 2, triangle, noise) as its last frame left them. */
+uint8_t nes_audio_engine_channels(void);
 
 /* ----------------------------------------------------------------------- *
  * THE CARTRIDGE'S MACHINE, for the other things that run on it.
