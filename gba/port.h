@@ -963,6 +963,15 @@ typedef struct {
  * cuts either short. */
 #define GAMEOVER_HOLD_FRAMES 498
 #define LEADER_HOLD_FRAMES 1020
+/* ...AND UNDER THE CHORD, the port's own measure of both. The game over
+ * holds five seconds more while the game's page is on the board (g_end_rise;
+ * see END_PAGE_WAIT_FRAMES): risen and let down it is whole a hundred and
+ * seventy frames in, and the cartridge's clock left five and a half seconds
+ * to read eight lines. And the table a game leads to holds five seconds and
+ * not seventeen when that game put nobody on it from this console: there is
+ * nothing on it to look at but what was there before. */
+#define END_PAGE_READ_FRAMES 300
+#define LEADER_NOTHING_NEW_FRAMES 300
 #define LEADER_DAS 10
 
 #define NEXT_CELL_W 4
@@ -2213,6 +2222,8 @@ void end_stats_compose(const TengenStats *s);
  * starts and ends on the frame it always did, on both consoles of a cable. */
 #define PAUSE_WALL_UP_FRAMES 2
 void pause_wall_step(void);
+/* ...and the pause's box, and what it covered, forgotten as a match starts. */
+void pause_box_forget(void);
 bool bricks_shown(void);
 void restore_brick_bank(void);
 

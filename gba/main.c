@@ -125,6 +125,9 @@ int main(void) {
     /* The page came off the title's SELECT, so LEFT and RIGHT walk the
      * tables (leader_browse); after a game it is that game's table. */
     bool leader_browsing = false;
+    /* ...and the game it follows put nobody on it from here, under the
+     * chord: it holds LEADER_NOTHING_NEW_FRAMES. */
+    bool leader_nothing_new = false;
     int over_frames = 0;
     uint8_t start_level = 0;
     /* menuPlayer1Handicap / menuPlayer2Handicap ($04F3-$04F4). */
@@ -342,6 +345,7 @@ int main(void) {
                 g_leader_row = -1;
                 leader_frames = 0;
                 leader_browsing = true;
+                leader_nothing_new = false;
                 /* Opening on the title's own table, 1 PLAYER under its skin:
                  * the last match's (VERSUS, say) is still the one chosen. */
                 leader_use_table(front_skin());
@@ -1168,7 +1172,9 @@ int main(void) {
             }
             if (typing) {
                 leader_frames = 0;
-            } else if (++leader_frames >= LEADER_HOLD_FRAMES ||
+            } else if (++leader_frames >= (leader_nothing_new
+                                                ? LEADER_NOTHING_NEW_FRAMES
+                                                : LEADER_HOLD_FRAMES) ||
                         (pressed & (TENGEN_BTN_START | TENGEN_BTN_A |
                                      TENGEN_BTN_B))) {
                 /* ...and the title's HIGH SCORE is its own table's again. */
@@ -1562,9 +1568,12 @@ int main(void) {
          * — the ROM enters $F9 on `player1GameActive ORA player2GameActive`
          * reaching zero (main.asm.txt:599-607), so in VERSUS the winner plays
          * on and nothing is counting. */
+        /* ...LONGER WITH THE GAME'S PAGE ON THE BOARD (END_PAGE_READ_FRAMES),
+         * which only the chord puts there. */
         bool over_expired = false;
         if (!g_demo && !match_running && !quit_match && !g_link_lost)
-            over_expired = ++over_frames >= GAMEOVER_HOLD_FRAMES;
+            over_expired = ++over_frames >= GAMEOVER_HOLD_FRAMES +
+                                            (g_end_rise >= 0 ? END_PAGE_READ_FRAMES : 0);
         /* ...and EXIT on the pause menu takes the same road, so a game you
          * quit still puts its score on the board. */
         if (!g_demo && (quit_match || over_expired ||
@@ -1608,6 +1617,7 @@ int main(void) {
                 restart_title_sprites();
             } else {
                 leader_submit();
+                leader_nothing_new = g_pause_unlocked && g_leader_row < 0;
                 screen = SCREEN_LEADERBOARD;
             }
             leader_frames = 0;
