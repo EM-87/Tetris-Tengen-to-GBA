@@ -7,7 +7,7 @@ import os
 import subprocess
 
 from .harness import (
-    skip, GAME_SELECT_TY,
+    skip, GAME_SELECT_TY, ring_chord_from_title,
     CELL_BLOCK, CELL_WALL, CHARBLOCK_ADDR, CLEAR_WORDS,
     CODE_LEVEL_UP, CODE_LONG_BAR, CODE_UNDO, COL_BOX_L,
     COL_BOX_R, COL_FIELD, COL_FRAME_L, COL_FRAME_R,
@@ -780,6 +780,46 @@ def counters_check(rom_path):
         if box[last] != want:
             failures.append(f"{name} sale como {box[last]!r}, el cartucho lo "
                             f"pinta como {want!r}")
+    del core, screen
+
+    # ...AND WHERE THEY RUN OUT OF ROOM. The cartridge's score, past 999999,
+    # comes back as 100000 and change (main.asm.txt:3942-3946) and the HIGH
+    # keeps what it had reached; under the chord (TengenGame.mended) it stops
+    # at 999999, and the lines, which have four digits, at 9999.
+    def u32(core, key):
+        return sum(core.memory.u8[base + off[key] + i] << (8 * i) for i in range(4))
+
+    for chord in (False, True):
+        core, screen = load(rom_path)   # `screen` must stay alive; see load()
+        run(core, 8)
+        if chord:
+            ring_chord_from_title(core)
+        start_game(core)
+        run(core, 20)
+        for i in range(4):
+            core.memory.u8[base + off["score"] + i] = (999998 >> (8 * i)) & 0xFF
+            core.memory.u8[base + off["lines"] + i] = (12345 >> (8 * i)) & 0xFF
+        for _ in range(1500):
+            core.set_keys(KEYS["DOWN"]); core.run_frame()
+            if u32(core, "score") != 999998:
+                break
+        core.set_keys(); run(core, 20)
+        score = u32(core, "score")
+        box = [tilemap_text(core, ty, 0, 8).strip() for ty in range(20)]
+        if not chord and not 100000 <= score < 200000:
+            failures.append(f"sin el acorde la puntuacion pasada de 999999 es "
+                            f"{score}, no 100000 y pico como en el cartucho")
+        elif chord and score != 999999:
+            failures.append(f"con el acorde la puntuacion pasada de 999999 es "
+                            f"{score}, no 999999")
+        elif chord and "9999" not in box:
+            failures.append(f"con el acorde 12345 lineas no salen como 9999: "
+                            f"{[line for line in box if line]}")
+        else:
+            print(f"  {'con' if chord else 'sin'} el acorde, pasada de 999999 la "
+                  f"puntuacion es {score}" + (", y las lineas se paran en 9999"
+                                              if chord else ""))
+        del core, screen
     if failures:
         for f in failures:
             print("FALLA:", f)

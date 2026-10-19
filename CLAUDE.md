@@ -821,7 +821,12 @@ take it, B putting back that and not A (`g_last_name`, on the battery); the
 attract demo playing MUSIC MIX under the chord, where the cartridge's is
 silent but for its effects, the player's tune on LEVEL SETTINGS given back
 as it ends (`demo_music_back`, `--demo`), and played by the port's computer
-(`smart`) under it as every match's computer is; and, once a match is over
+(`smart`) under it as every match's computer is, up to XE's 19 as every
+game under it goes (at 17 the port's computer played on for ever; at 19 it
+falls, some fifteen minutes in); the score stopping at 999999 under the
+chord where the cartridge's drops back to 100000 (TengenGame.mended,
+`tengen_score_add`), the lines at 9999 (`shown_lines`; `--counters`); and,
+once a match is over
 under its chord, the game's own page on its board: the GAME OVER plaque alone
 for half a second, then Game Boy Tetris's curtain — a wall of the pause's
 bricks risen a row at a time from the floor over the dead stack, standing a

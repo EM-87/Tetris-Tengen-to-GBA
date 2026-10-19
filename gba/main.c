@@ -383,8 +383,11 @@ int main(void) {
                 g_view = 0;
                 g_ai_active = true;
                 g_ai_slot = TENGEN_PLAYER_1;   /* the demo's computer is P1 */
+                /* ...UP TO XE'S 19 UNDER THE CHORD, as any game under it:
+                 * the port's computer does not top out at 17, and a demo
+                 * held there played on for ever. */
                 tengen_new_game(&g_session.game, seed, DEMO_START_LEVEL,
-                                 false, false, false);
+                                 false, false, g_xe);
                 tengen_ai_reset(&g_ai);
                 /* The cartridge's computer as it ships: TengenAi's knobs
                  * all left off — EXCEPT UNDER THE CHORD, where the computer

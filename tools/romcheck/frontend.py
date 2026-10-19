@@ -547,6 +547,37 @@ def demo_check(rom_path):
                       "jugador intacta")
         del core, screen
 
+    # ...Y BAJO EL ACORDE PASA DEL 17, como cualquier partida bajo el: hasta
+    # el 19 de XE. El ordenador del port no se cae en el 17, y una demo
+    # topada ahi jugaba para siempre. Cuatrocientas lineas plantadas, que
+    # desde el nivel 9 de la demo son diez umbrales: la limpieza siguiente la
+    # sube al 19 con el acorde, y sin el se queda en el 17 del cartucho.
+    for chord, want in ((False, 17), (True, 19)):
+        core, screen = load(rom_path)   # `screen` must stay alive; see load()
+        run(core, 40)
+        if chord:
+            ring_chord_from_title(core)
+        for _ in range(DEMO_WATCH_FRAMES):
+            core.run_frame()
+            if core.memory.u8[flag]:
+                break
+        at = base + off["lines"]
+        for i in range(4):
+            core.memory.u8[at + i] = (400 >> (8 * i)) & 0xFF
+        level = core.memory.u8[base + off["level"]]
+        for _ in range(6000):
+            core.run_frame()
+            if core.memory.u8[base + off["level"]] != level or not core.memory.u8[flag]:
+                break
+        level = core.memory.u8[base + off["level"]]
+        if level != want:
+            failures.append(f"{'con' if chord else 'sin'} el acorde, la demo con "
+                            f"400 lineas esta en el nivel {level}, no en el {want}")
+        else:
+            print(f"  {'con' if chord else 'sin'} el acorde, con 400 lineas la "
+                  f"demo sube al {level}")
+        del core, screen
+
     for f in failures:
         print("FALLA:", f)
     if failures:

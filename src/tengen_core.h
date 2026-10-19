@@ -363,7 +363,11 @@ typedef struct {
      *   - rows collapsing under the partner's clear bring settled blocks down
      *     with no thought for the falling piece, which is not in the field
      *     (INFERRED from the same split; seen by `make fuzz`). Mended, the
-     *     falling piece is lifted the least it takes to be clear again. */
+     *     falling piece is lifted the least it takes to be clear again.
+     *
+     * ...and one that is everybody's: the score, run past 999999, drops back
+     * to 100000 (main.asm.txt:3942-3946, tengen_score_add) and the HIGH keeps
+     * whatever it had reached on the way. Mended, it stops at 999999. */
     bool mended;
     /* UP DROPS THE PIECE — the port's, set by the GBA layer from the pause
      * menu's OPTIONS (HARD DROP; the master's over a cable, see
@@ -703,8 +707,10 @@ TengenStepResult tengen_step(TengenGame *game, TengenPlayerSlot slot, uint8_t he
  * replaced by '1' rather than carrying when it would pass '9', so a score that
  * runs out of room comes back to 100000 instead of to zero
  * (main.asm.txt:3942-3946). Exposed because the level's bonus tally adds
- * through it too, not just a locked piece. */
-uint32_t tengen_score_add(uint32_t score, uint32_t amount);
+ * through it too, not just a locked piece. `stop` (TengenGame.mended) stops
+ * it at 999999 instead: a counter that has run out of room says so, where
+ * one that drops back nine hundred thousand says the player lost them. */
+uint32_t tengen_score_add(uint32_t score, uint32_t amount, bool stop);
 
 /* What the level's tally is worth: singles x100, doubles x400, triples x900
  * and a tetris x2500, which are the cartridge's own printed multipliers
