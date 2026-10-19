@@ -274,4 +274,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # ...and in a strict run, a check that skipped anything has failed.
+    try:
+        main()
+    except SystemExit as done:
+        sys.exit(strict_verdict(done.code))

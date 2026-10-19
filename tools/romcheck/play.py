@@ -7,6 +7,7 @@ import os
 import subprocess
 
 from .harness import (
+    skip,
     CELL_BLOCK, CELL_WALL, CHARBLOCK_ADDR, CLEAR_WORDS,
     CODE_LEVEL_UP, CODE_LONG_BAR, CODE_UNDO, COL_BOX_L,
     COL_BOX_R, COL_FIELD, COL_FRAME_L, COL_FRAME_R,
@@ -163,7 +164,7 @@ def sweep_sprites(core):
 def lineclear_check(rom_path, row_count):
     base, why = game_state_address(rom_path)
     if base is None:
-        print(f"SALTADO: {why}")
+        skip(f"{why}")
         return 0
 
     core, screen = load(rom_path)
@@ -242,7 +243,7 @@ def pause_box(core, row):
 def pause_check(rom_path):
     base, why = game_state_address(rom_path)
     if base is None:
-        print(f"SALTADO: {why}")
+        skip(f"{why}")
         return 0
 
     core, screen = load(rom_path)   # `screen` must stay alive; see load()
@@ -375,7 +376,7 @@ def pause_check(rom_path):
 def handicap_check(rom_path):
     base, why = game_state_address(rom_path)
     if base is None:
-        print(f"SALTADO: {why}")
+        skip(f"{why}")
         return 0
     failures = []
     for steps, expect_rows in ((0, 0), (1, 3), (3, 9)):
@@ -448,7 +449,7 @@ def handicap_two_check(rom_path):
     failures = []
     base, why = game_state_address(rom_path)
     if base is None:
-        print(f"SALTADO: {why}")
+        skip(f"{why}")
         return failures
     off = game_offsets(rom_path)
     core, screen = load(rom_path)    # `screen` must stay alive; see load()
@@ -564,7 +565,7 @@ def sleep_check(rom_path):
     """
     addr, why = game_state_address(rom_path, "irq_handler")
     if addr is None:
-        print(f"SALTADO: {why}")
+        skip(f"{why}")
         return 0
     failures = []
     core, screen = load(rom_path)   # `screen` must stay alive; see load()
@@ -636,7 +637,7 @@ def points_check(rom_path):
     off = game_offsets(rom_path)
     base, why = game_state_address(rom_path)
     if base is None:
-        print(f"SALTADO: {why}")
+        skip(f"{why}")
         return 0
 
     failures = []
@@ -747,7 +748,7 @@ def counters_check(rom_path):
     off = game_offsets(rom_path)
     base, why = game_state_address(rom_path)
     if base is None:
-        print(f"SALTADO: {why}")
+        skip(f"{why}")
         return 0
 
     core, screen = load(rom_path)   # `screen` must stay alive; see load()
@@ -759,15 +760,26 @@ def counters_check(rom_path):
     core.memory.u8[base + off["level"]] = 2
     run(core, 20)
 
+    # THE ROWS ARE LOOKED FOR, not written down: they were 3, 6 and 9 until
+    # the panel became the coop screen's (NEXT on top, the counters in four
+    # cells under it), and this check, which `make gba-check` did not run,
+    # went on reading three empty rows. Each counter is the row of the box
+    # (columns 0-7; the braid's tiles from 8 read as letters) whose digits
+    # end in its figure, and they come in the panel's order.
     failures = []
-    for name, ty, want in (("SCORE", 3, "8294"), ("LINES", 6, "30"),
-                            ("LEVEL", 9, "2")):
-        # columns 2-8 are the counter's own; 0-1 and 9 are the braid,
-        # whose tiles happen to fall in the printable range.
-        line = tilemap_text(core, ty, 2, 8).strip()
-        if line != want:
-            failures.append(f"{name} sale como {line!r}, el cartucho lo pinta "
-                             f"como {want!r}")
+    box = [tilemap_text(core, ty, 0, 8).strip() for ty in range(20)]
+    last = -1
+    for name, want in (("SCORE", "8294"), ("LINES", "30"), ("LEVEL", "2")):
+        found = [ty for ty, line in enumerate(box)
+                 if ty > last and line.isdigit() and line.endswith(want)]
+        if not found:
+            failures.append(f"{name} ({want}) no sale en el cajon izquierdo: "
+                            f"{[line for line in box if line]}")
+            continue
+        last = found[0]
+        if box[last] != want:
+            failures.append(f"{name} sale como {box[last]!r}, el cartucho lo "
+                            f"pinta como {want!r}")
     if failures:
         for f in failures:
             print("FALLA:", f)
@@ -797,7 +809,7 @@ def gameover_check(rom_path):
     off = game_offsets(rom_path)
     base, why = game_state_address(rom_path)
     if base is None:
-        print(f"SALTADO: {why}")
+        skip(f"{why}")
         return 0
 
     failures = []
@@ -963,7 +975,7 @@ def end_page_check(rom_path):
     off = game_offsets(rom_path)
     base, why = game_state_address(rom_path)
     if base is None:
-        print(f"SALTADO: {why}")
+        skip(f"{why}")
         return 0
     failures = []
     PAGE_TX = COL_FIELD[0]          # the ten columns the page takes, any mode
@@ -978,8 +990,39 @@ def end_page_check(rom_path):
         for _ in range(entry):
             core.set_keys(KEYS["DOWN"]); run(core, 4); core.set_keys(); run(core, 10)
         press_start(core); run(core, 12)
-        press_start(core); run(core, 60)
         coop = entry == 4
+
+        # WHAT THE PAGE SHOULD SAY, watched from outside, a frame at a time
+        # from the press that starts the game: the frames each player's game
+        # ran (TIME; the one it topped out on among them), and the longest run
+        # of pieces dealt with no I, off the game's own count of the deals
+        # (piece_total; DROUGHT). The page's labels alone let a page showing
+        # the wrong figure through.
+        seen = {p: {"frames": 0, "dealt": 0, "i": 0, "run": 0, "most": 0}
+                for p in ((0, 1) if coop else (0,))}
+
+        def active(p):
+            return core.memory.u8[base + off["active"] + p * off["stride"]]
+
+        def frame(*keys):
+            core.set_keys(*keys)
+            before = {p: active(p) for p in seen}
+            core.run_frame()
+            for p, w in seen.items():
+                if before[p] or active(p):
+                    w["frames"] += 1
+                total = base + off["total"] + p * off["stride"]
+                counts = [core.memory.u16[total + 2 * t] for t in range(1, 8)]
+                dealt, i = sum(counts), counts[0]
+                if dealt > w["dealt"]:
+                    fresh, fresh_i = dealt - w["dealt"], min(max(i - w["i"], 0),
+                                                             dealt - w["dealt"])
+                    w["run"] = fresh - fresh_i if fresh_i else w["run"] + fresh
+                    w["most"] = max(w["most"], w["run"])
+                w["dealt"], w["i"] = dealt, i
+
+        for f in range(70):                 # START, and the game under way
+            frame(*([KEYS["START"]] if f < 4 else []))
         at = base + off["field"]
         # A TETRIS: four whole rows, and a piece taken down onto them.
         fill_rows(core, at, [16, 17, 18, 19])
@@ -988,8 +1031,9 @@ def end_page_check(rom_path):
                 for col in (0, PF_W - 1):
                     core.memory.u8[at + row * PF_W + col] = CELL_BLOCK
         for _ in range(150):
-            core.set_keys(KEYS["DOWN"]); core.run_frame()
-        core.set_keys(); run(core, 90)
+            frame(KEYS["DOWN"])
+        for _ in range(90):
+            frame()
         # ...then buried, all but one column, so the next piece tops out.
         for row in range(PF_H):
             for col in range(PF_W):
@@ -997,10 +1041,11 @@ def end_page_check(rom_path):
                 core.memory.u8[at + row * PF_W + col] = (
                     CELL_WALL if edge else 0 if col == 5 else CELL_BLOCK)
         for _ in range(400):
-            core.run_frame()
+            frame()
             if not core.memory.u8[base + off["active"]]:
-                return core, screen
-        return None, None
+                secs = max(w["frames"] for w in seen.values()) * 280896 >> 24
+                return core, screen, (secs, min(99, max(w["most"] for w in seen.values())))
+        return None, None, None
 
     def page(core):
         return [tilemap_text(core, r, PAGE_TX, PAGE_TX + 10) for r in range(PF_H)]
@@ -1018,7 +1063,7 @@ def end_page_check(rom_path):
         return sum(1 <= t <= 0x0F for t in tiles(core, first, last, rows))
 
     # Without the chord: the cartridge's game over, and nothing written.
-    core, screen = finished(False, 0)
+    core, screen, _ = finished(False, 0)
     if core is None:
         failures.append("sin el acorde el tablero enterrado no muere")
     else:
@@ -1032,7 +1077,7 @@ def end_page_check(rom_path):
     del core, screen
 
     for name, entry in (("1 PLAYER", 0), ("WITH COMPUTER", 4)):
-        core, screen = finished(True, entry)
+        core, screen, (secs, drought) = finished(True, entry)
         if core is None:
             failures.append(f"{name}: el tablero enterrado no muere")
             continue
@@ -1078,9 +1123,17 @@ def end_page_check(rom_path):
             counts = [int(lines[k]) for k in ("SINGLE", "DOUBLE", "TRIPLE", "TETRIS")]
             made = counts[0] + 2 * counts[1] + 3 * counts[2] + 4 * counts[3]
             rate = int(lines["RATE"].rstrip("%"))
+            mm, ss = lines["TIME"].split(":")
+            shown = int(mm) * 60 + int(ss)
             if counts[3] < 1:
                 failures.append(f"{name}: el TETRIS hecho no esta en la pagina: "
                                 f"{counts}")
+            elif abs(shown - secs) > 1:
+                failures.append(f"{name}: TIME {lines['TIME']} no es lo que duro "
+                                f"la partida, {secs // 60}:{secs % 60:02d}")
+            elif int(lines["DROUGHT"]) != drought:
+                failures.append(f"{name}: DROUGHT {lines['DROUGHT']} no es la "
+                                f"racha mas larga sin I, {drought}")
             elif rate != (400 * counts[3] // made if made else 0):
                 failures.append(f"{name}: RATE {rate}% no es la cuenta de "
                                 f"{counts}")
@@ -1113,7 +1166,7 @@ def falling_piece_check(rom_path):
     off = game_offsets(rom_path)
     base, why = game_state_address(rom_path)
     if base is None:
-        print(f"SALTADO: {why}")
+        skip(f"{why}")
         return 0
 
     PF = TENGEN_PF_HEIGHT * TENGEN_PF_WIDTH
@@ -1232,7 +1285,7 @@ def falling_piece_check(rom_path):
 def xe_check(rom_path):
     base, why = game_state_address(rom_path)
     if base is None:
-        print(f"SALTADO: {why}")
+        skip(f"{why}")
         return 0
     core, screen = load(rom_path)   # `screen` must stay alive; see load()
     failures = []
@@ -1317,13 +1370,13 @@ def vblank_check(rom_path):
         out = subprocess.check_output(
             [os.environ.get("NM", "arm-none-eabi-nm"), elf]).decode()
     except (OSError, subprocess.CalledProcessError) as exc:
-        print(f"SALTADO: no pude leer {elf}: {exc}")
+        skip(f"no pude leer {elf}: {exc}")
         return 0
     audio = next((int(l.split()[0], 16) for l in out.splitlines()
                   if l.endswith(" audio_frame")), None)
     base, why = game_state_address(rom_path)
     if audio is None or base is None:
-        print(f"SALTADO: {why or 'el ELF no exporta audio_frame'}")
+        skip(f"{why or 'el ELF no exporta audio_frame'}")
         return 0
     off = game_offsets(rom_path)
 
@@ -1443,7 +1496,7 @@ def unpause_check(rom_path):
     """
     repaint, why = game_state_address(rom_path, "g_repaint")
     if repaint is None:
-        print(f"SALTADO: {why}")
+        skip(f"{why}")
         return 0
 
     def tap(core, key, after):
@@ -1536,13 +1589,13 @@ def idle_blink_check(rom_path):
         out = subprocess.check_output(
             [os.environ.get("NM", "arm-none-eabi-nm"), elf]).decode()
     except (OSError, subprocess.CalledProcessError) as exc:
-        print(f"SALTADO: no pude leer {elf}: {exc}")
+        skip(f"no pude leer {elf}: {exc}")
         return 0
     audio = next((int(l.split()[0], 16) for l in out.splitlines()
                   if l.endswith(" audio_frame")), None)
     base, why = game_state_address(rom_path)
     if audio is None or base is None:
-        print(f"SALTADO: {why or 'el ELF no exporta audio_frame'}")
+        skip(f"{why or 'el ELF no exporta audio_frame'}")
         return 0
     off = game_offsets(rom_path)
     IDLE = 124                       # IDLE_OAM_BASE, gba/port.h
@@ -1592,7 +1645,7 @@ def system_check(rom_path):
     """
     base, why = game_state_address(rom_path)
     if base is None:
-        print(f"SALTADO: {why}")
+        skip(f"{why}")
         return 0
     off = game_offsets(rom_path)
     core, screen = load(rom_path)    # `screen` must stay alive; see load()
@@ -1665,7 +1718,7 @@ def suspend_check(rom_path):
     from . import harness
     base, why = game_state_address(rom_path)
     if base is None:
-        print(f"SALTADO: {why}")
+        skip(f"{why}")
         return 0
     off = game_offsets(rom_path)
     core, screen = load(rom_path)    # `screen` must stay alive; see load()
@@ -1757,8 +1810,8 @@ def suspend_check(rom_path):
             print(f"  al encender: {' y '.join(seen)} sobre blanco, y el "
                   f"titulo en el frame {title_at}")
     else:
-        print("  (sin gba/splash_logo.h, splash_mirrorsoft.h ni splash_tetris.h: "
-              "esta construccion no tiene logos)")
+        skip("sin gba/splash_logo.h, splash_mirrorsoft.h ni splash_tetris.h "
+             "esta construccion no tiene logos que mirar")
 
     for f in failures:
         print(f"FALLA: {f}")
@@ -1780,7 +1833,7 @@ def erase_check(rom_path):
     """
     base, why = game_state_address(rom_path)
     if base is None:
-        print(f"SALTADO: {why}")
+        skip(f"{why}")
         return 0
     off = game_offsets(rom_path)
     core, screen = load(rom_path)
@@ -1922,18 +1975,18 @@ def gbp_check(rom_path):
     import os as _os
     root = _os.path.join(_os.path.dirname(rom_path), "..")
     if not _os.path.exists(_os.path.join(root, "gba", "gbp_logo.h")):
-        print("SALTADO: sin gba/gbp_logo.h esta construccion no busca un "
+        skip("sin gba/gbp_logo.h esta construccion no busca un "
               "Game Boy Player")
         return 0
     png = _os.path.join(_os.path.dirname(rom_path), "gbp_logo.png")
     if not _os.path.exists(png):
-        print(f"SALTADO: no encuentro {png} para reconocer el logo")
+        skip(f"no encuentro {png} para reconocer el logo")
         return 0
     from PIL import Image
     logo = Image.open(png).convert("RGB").tobytes()
     base, why = game_state_address(rom_path)
     if base is None:
-        print(f"SALTADO: {why}")
+        skip(f"{why}")
         return 0
     off = game_offsets(rom_path)
     failures = []
@@ -2067,12 +2120,12 @@ def tv_menu_check(rom_path, shots=None):
     root = _os.path.join(_os.path.dirname(rom_path), "..")
     if not (_os.path.exists(png) and
             _os.path.exists(_os.path.join(root, "gba", "gbp_logo.h"))):
-        print("SALTADO: sin el logo no hay Game Boy Player que encontrar")
+        skip("sin el logo no hay Game Boy Player que encontrar")
         return 0
     from PIL import Image
     base, why = game_state_address(rom_path)
     if base is None:
-        print(f"SALTADO: {why}")
+        skip(f"{why}")
         return 0
     off = game_offsets(rom_path)
     failures = []

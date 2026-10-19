@@ -3,6 +3,7 @@ The pause menu the chord uncovers: its lines, its box, its tune
 and its way out.
 """
 from .harness import (
+    skip,
     KEYS, LEADER_HEAD_TY, MUSIC_COUNT_MAX, MUSIC_ROW, check_layout,
     PMENU_H, PMENU_TX, PMENU_TY, PMENU_W_T, pmenu_span,
     PM_EXIT, PM_HEAD, PM_L, PM_MUSIC, PM_OPTIONS,
@@ -36,7 +37,7 @@ def pausemenu_check(rom_path):
     off = game_offsets(rom_path)
     base, why = game_state_address(rom_path)
     if base is None:
-        print(f"SALTADO: {why}")
+        skip(f"{why}")
         return 0
 
     failures = []
@@ -495,7 +496,7 @@ def pause_options(rom_path):
     off = game_offsets(rom_path)
     base, why = game_state_address(rom_path)
     if base is None:
-        print(f"SALTADO: {why}")
+        skip(f"{why}")
         return []
     lay = check_layout(rom_path)
     ghost0, check_off = lay["ghost"], lay["check_off"]

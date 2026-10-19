@@ -4,6 +4,7 @@ GAME SELECT, the credits, the demo, the cable lobby alone.
 """
 import os
 from .harness import (
+    skip, put_skin_on, build_has_protos, PAL_BRICK_BANK, CHARBLOCK_ADDR,
     CATHEDRAL_SPRITES, CELL_BLOCK, CREDITS, CREDIT_FRAMES, CREDIT_PORT, CREDIT_TY,
     DEMO_START_FRAME, DEMO_WATCH_FRAMES, GAME_SELECT_LONGEST, GAME_SELECT_ROWS,
     GAME_SELECT_TX, GAME_SELECT_TY, HANDICAP_ROW, KEYS,
@@ -190,7 +191,13 @@ def skin_check(rom_path):
     tap(KEYS["L"], KEYS["R"])
     proto = frame_tiles()
     if proto == release:
-        print("  esta ROM se construyo sin prototipo: L+R no tiene skin que poner")
+        # ...which on a build WITH the prototypes is no skip: it went on
+        # passing here while the skins could not be reached at all.
+        if build_has_protos(rom_path):
+            failures.append("la ROM trae prototipos y con el acorde L+R no "
+                            "pone ninguno en el titulo")
+        else:
+            skip("esta ROM se construyo sin prototipo: L+R no tiene skin que poner")
         for f in failures:
             print(f"FALLA: {f}")
         if failures:
@@ -370,12 +377,12 @@ def demo_check(rom_path):
     """
     flag, why = game_state_address(rom_path, "g_demo")
     if flag is None:
-        print(f"SALTADO: {why}")
+        skip(f"{why}")
         return 0
     off = game_offsets(rom_path)
     base, why = game_state_address(rom_path)
     if base is None:
-        print(f"SALTADO: {why}")
+        skip(f"{why}")
         return 0
 
     failures = []
@@ -438,21 +445,30 @@ def demo_check(rom_path):
     # se movia y la demo no llegaba nunca: el titulo del release se ponia a
     # jugar solo a los veintidos segundos y el del prototipo se quedaba ahi
     # para siempre.
+    # LA SKIN, CON EL ACORDE DEL JUEGO, que sin el L+R en el titulo no pone
+    # ninguna (put_skin_on): durante un tiempo esto miro el titulo del
+    # cartucho otra vez.
     core, screen = load(rom_path)   # `screen` must stay alive; see load()
     _ = screen
     run(core, 40)
-    core.set_keys(KEYS["L"], KEYS["R"]); run(core, 4); core.set_keys(); run(core, 20)
-    started = None
-    for f in range(DEMO_WATCH_FRAMES):
-        core.run_frame()
-        if core.memory.u8[flag]:
-            started = f
-            break
-    if started is None:
-        failures.append(f"con skin la demo no arranca en {DEMO_WATCH_FRAMES} "
-                         f"frames: el reloj del titulo no corre bajo ella")
+    if not put_skin_on(core, settle=20):
+        if build_has_protos(rom_path):
+            failures.append("la ROM trae prototipos y el acorde y L+R no "
+                            "ponen ninguno en el titulo")
+        else:
+            skip("esta ROM no trae skins: la demo bajo una no se mira")
     else:
-        print(f"  y con la skin puesta arranca igual, en el frame {started}")
+        started = None
+        for f in range(DEMO_WATCH_FRAMES):
+            core.run_frame()
+            if core.memory.u8[flag]:
+                started = f
+                break
+        if started is None:
+            failures.append(f"con skin la demo no arranca en {DEMO_WATCH_FRAMES} "
+                             f"frames: el reloj del titulo no corre bajo ella")
+        else:
+            print(f"  y con la skin puesta arranca igual, en el frame {started}")
 
     # ...Y BAJO EL ACORDE, CON MUSIC MIX. La demo del cartucho es muda (sus
     # efectos y nada mas); con el acorde encontrado suena MUSIC MIX, que abre
@@ -462,7 +478,7 @@ def demo_check(rom_path):
     music, why = game_state_address(rom_path, "g_music")
     playing = _symbol_prefix(rom_path, "g_playing")
     if music is None or playing is None:
-        print(f"SALTADO (musica de la demo): {why or 'el ELF no exporta g_playing'}")
+        skip(f"musica de la demo: {why or 'el ELF no exporta g_playing'}")
     else:
         core, screen = load(rom_path)   # `screen` must stay alive; see load()
         _ = screen
@@ -565,15 +581,29 @@ def loans_check(rom_path):
         return [core.memory.u16[PALETTE_ADDR + ((TITLE_PAL_BASE + b) * 16 + i) * 2]
                 for b in range(4) for i in range(4)]
 
+    def bank(b):
+        return [core.memory.u16[PALETTE_ADDR + (b * 16 + i) * 2] for i in range(4)]
+
+    # UNA SKIN PUESTA, que sin el acorde del juego L+R en el titulo no pone
+    # ninguna: esto miro durante un tiempo el titulo del cartucho dos veces.
     run(core, 40)
-    tap("L", "R"); run(core, 24)          # una skin puesta
-    first = title_banks()
-    if not any(first):
-        print("SALTADO: esta ROM no trae skins")
+    release = title_banks()
+    if not put_skin_on(core):
+        if build_has_protos(rom_path):
+            print("FALLA: la ROM trae prototipos y el acorde y L+R no ponen "
+                  "ninguno en el titulo")
+            return 1
+        skip("esta ROM no trae skins (make assets PROTO=...)")
         return 0
+    first = title_banks()
+    if first == release:
+        print("FALLA: con la skin puesta el titulo tiene los bancos del "
+              "cartucho: no los ha pedido prestados")
+        return 1
 
     tap("START"); run(core, 30)            # -> GAME SELECT
     menu_first = title_banks()
+    credit_bank = bank(PAL_BRICK_BANK)
     tap("B"); run(core, 60)                # -> titulo
     if title_banks() != first:
         failures.append("el titulo no recupera sus bancos al volver de los menus")
@@ -588,13 +618,12 @@ def loans_check(rom_path):
         print("  ...y los menus reponen los suyos en cada visita")
 
     # ...y lo mismo pasando por una partida, que pide prestados otros dos.
-    # EL ACORDE, AQUI: el del titulo cambia la skin y no destapa nada mas, asi
-    # que sin este el cartel de pausa es un cartel y no hay por donde salir.
-    tap("L", "R"); run(core, 20)
+    # El acorde ya sono (put_skin_on): el menu de pausa tiene por donde salir.
     press_start(core); run(core, 24)
     press_start(core); run(core, 60)       # -> jugando
     run(core, 60)
-    tap("START"); run(core, 20)            # pausa, que dibuja el cartel
+    tap("START"); run(core, 60)            # pausa: el muro de ladrillos
+    paused_bank = bank(PAL_BRICK_BANK)
     tap("L", "R"); run(core, 20)           # ...y el acorde lo vuelve menu
     # EXIT, y SI. START aqui seria reanudar, no salir.
     for _ in range(3):
@@ -608,6 +637,19 @@ def loans_check(rom_path):
         failures.append("el titulo no recupera sus bancos al volver de una partida")
     else:
         print("  ...y tambien al volver de una partida")
+
+    # ...Y EL DE LOS LADRILLOS. La pausa los pinta en un banco que pide a los
+    # creditos (PAL_BRICK_BANK), y clear_screen se lo devuelve: sin eso, tras
+    # una partida pausada los creditos de GAME SELECT salian en sus grises.
+    tap("START"); run(core, 30)            # -> GAME SELECT
+    if paused_bank == credit_bank:
+        failures.append("en pausa los ladrillos no piden el banco de los "
+                        "creditos: esto no mira nada")
+    elif bank(PAL_BRICK_BANK) != credit_bank:
+        failures.append(f"tras una partida pausada el banco de los creditos "
+                        f"no vuelve: {bank(PAL_BRICK_BANK)}, no {credit_bank}")
+    else:
+        print("  ...y el de los creditos, que la pausa presta a los ladrillos")
 
     for f in failures:
         print("FALLA:", f)
@@ -749,6 +791,28 @@ def credits_check(rom_path):
     else:
         print(f"  sin el acorde, los creditos del cartucho, Mirrorsoft y sus "
               f"lineas de copyright incluidos, uno a uno ({len(seen)} cambios)")
+
+    # ...AND THE COPYRIGHT SIGN IS THE CARTRIDGE'S. tilemap_text reads the
+    # tile's NUMBER, and a T_COPYRIGHT left blank reads as a © all the same;
+    # so the tile's art, in video memory, against the title font's own tile
+    # $DF out of the ROM: ink where it has ink, and nowhere else.
+    sign = check_layout(rom_path)["hold_label"] + 5
+    titles, why = game_state_address(rom_path, "kTitleTiles")
+    if titles is None:
+        skip(f"{why}: el arte del simbolo de copyright no se mira")
+    else:
+        data = open(rom_path, "rb").read()
+        at = titles - 0x08000000 + 0xDF * 32
+        want = [(data[at + i // 2] >> (4 * (i & 1))) & 0xF != 0 for i in range(64)]
+        got = [(core.memory.u8[CHARBLOCK_ADDR + sign * 32 + i // 2]
+                >> (4 * (i & 1))) & 0xF != 0 for i in range(64)]
+        if not any(got) or got != want:
+            failures.append(f"el simbolo de copyright (tile {sign}) no es el del "
+                            f"titulo del cartucho: {sum(got)} pixeles de tinta, "
+                            f"{sum(want)} en el $DF")
+        else:
+            print(f"  el simbolo de copyright es el del titulo ($DF): "
+                  f"{sum(got)} pixeles de tinta")
 
     # NO BUILD LINE, with the chord or without: there was a seventh credit
     # under the chord with the commit, and it went (the ROM's file name says

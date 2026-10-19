@@ -35,6 +35,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import romcheck.harness  # noqa: E402,F401 - skips the splash; see there
+from romcheck.harness import skip, strict_verdict  # noqa: E402
 from run_link import (KEYS, SCREEN_W, SCREEN_H, symbol, read_bytes,  # noqa: E402
                       _KEEP)
 
@@ -473,7 +474,7 @@ def plain_check(rom):
     cores, air, fakes, both, tap = _pair(rom, adapters=0)
     present, why = symbol(rom, "g_wl_present")
     if present is None:
-        print(f"SALTADO: {why}")
+        skip(f"{why}")
         return 0
     both(60)
     if cores[0].memory.u8[present[0]]:
@@ -498,7 +499,7 @@ def _play(rom, coop):
     sym, why = symbol(rom, "g_session")
     present, why_present = symbol(rom, "g_wl_present")
     if sym is None or present is None:
-        print(f"SALTADO: {why or why_present}")
+        skip(f"{why or why_present}")
         return 0
     addr, size = sym
     game_size = size - 4
@@ -648,7 +649,7 @@ def gone_check(rom):
     cores, air, fakes, both, tap = _pair(rom)
     lost, why = symbol(rom, "g_link_lost")
     if lost is None:
-        print(f"SALTADO: {why}")
+        skip(f"{why}")
         return 0
     host = _into_match(cores, both, tap)
     if host is None:
@@ -694,7 +695,7 @@ def drop_check(rom):
     waiting, why_waiting = symbol(rom, "g_link_waiting")
     lost, why_lost = symbol(rom, "g_link_lost")
     if sym is None or waiting is None or lost is None:
-        print(f"SALTADO: {why or why_waiting or why_lost}")
+        skip(f"{why or why_waiting or why_lost}")
         return 0
     addr, size = sym
     game_size = size - 4
@@ -821,7 +822,7 @@ def exit_check(rom):
     import run_rom
     lost, why = symbol(rom, "g_link_lost")
     if lost is None:
-        print(f"SALTADO: {why}")
+        skip(f"{why}")
         return 0
     failures = []
     from romcheck import harness
@@ -960,7 +961,7 @@ def air_send_check(rom, shots=None):
     import run_rom
     mb_path = os.path.join(os.path.dirname(rom), "tengen_mb.mb")
     if not os.path.exists(mb_path):
-        print(f"SALTADO: no encuentro {mb_path}")
+        skip(f"no encuentro {mb_path}")
         return 0
     image = open(mb_path, "rb").read()
     random.seed(12)
@@ -1068,7 +1069,7 @@ def main():
 
 
 if __name__ == "__main__":
-    code = main()
+    code = strict_verdict(main())
     # See the end of run_link.py: two cores and their drivers cannot be
     # let go of normally.
     sys.stdout.flush()
