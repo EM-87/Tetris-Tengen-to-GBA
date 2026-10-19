@@ -567,12 +567,14 @@ def tilemap_text(core, row, first=0, last=30):
     # (T_ARROW_TAIL / T_ARROW_HEAD): read as "->".
     ARROW = {lay["arrow_tail"]: "-", lay["arrow_head"]: ">"}
     # ...and the end page's colon, drawn at boot after HOLD's four letters
-    # (T_COLON): the cartridge's $3A is box art.
+    # (T_COLON): the cartridge's $3A is box art; and after it the title
+    # font's copyright sign (T_COPYRIGHT).
     COLON = lay["hold_label"] + 4
+    COPYRIGHT = lay["hold_label"] + 5
 
     def readable(t):
-        return (32 <= t < 127 or t in (QUESTION, PERCENT, COLON) or t in ARROW
-                or RAISED_BASE <= t < RAISED_BASE + len(RAISED))
+        return (32 <= t < 127 or t in (QUESTION, PERCENT, COLON, COPYRIGHT)
+                or t in ARROW or RAISED_BASE <= t < RAISED_BASE + len(RAISED))
 
     out = []
     for x in range(first, last):
@@ -590,6 +592,8 @@ def tilemap_text(core, row, first=0, last=30):
             out.append("%")
         elif tile == COLON:
             out.append(":")
+        elif tile == COPYRIGHT:
+            out.append("\u00a9")
         elif RAISED_BASE <= tile < RAISED_BASE + len(RAISED):
             out.append(RAISED[tile - RAISED_BASE])
         elif tile in ARROW:
@@ -883,5 +887,9 @@ CREDITS = [
     ("PROGRAMMED BY", "ED LOGG"),
     ("VIDEO GRAPHICS BY", "KRIS MOSER"),
     ("AUDIO BY", "BRAD FULLER"),
+    # ...and the title screen's two copyright lines, which the port's title
+    # has no room for, with the cartridge's own copyright sign (T_COPYRIGHT).
+    ("\u00a91987 ACADEMYSOFT-ELORG.", "\u00a91988 TENGEN"),
 ]
+CREDIT_FRAMES = 240     # each credit's time on screen (gba/port.h)
 CREDIT_TY = 16

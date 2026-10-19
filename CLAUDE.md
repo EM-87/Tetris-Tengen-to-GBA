@@ -722,7 +722,10 @@ cartridge's orange to dark grey to say so; the title's L+R cycling the prototype
 chord is rung (the prototypes are no part of the cartridge), and under it
 the HUD STATS cossack's colour on L+R;
 credits rotating every four seconds — the cartridge's six, GAME SELECT's
-LICENSED BY MIRRORSOFT LTD. among them (`ppuPatchLicensedBy`, $A1EF), and
+LICENSED BY MIRRORSOFT LTD. among them (`ppuPatchLicensedBy`, $A1EF), then
+the title screen's last two rows, which the port's title has no room for
+(©1987 ACADEMYSOFT-ELORG. and ©1988 TENGEN, the © the title font's own tile
+$DF copied at boot into T_COPYRIGHT, the game font having none), and
 under the chord the port's own line in Mirrorsoft's place (`--credits`);
 the cossacks staged on the panels'
 ledges where the cartridge uses a middle strip the port does not have; a

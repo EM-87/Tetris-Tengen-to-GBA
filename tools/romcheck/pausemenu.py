@@ -482,7 +482,7 @@ def pause_options(rom_path):
     OPTIONS, entre MUSIC y EXIT GAME, abre una ventana de dieciseis de ancho
     con un interruptor por linea -- HARD DROP, FAST DOWN, FAST SHIFT, GHOST,
     SWAP A-B, HOLD --, el nombre a la izquierda y su casilla a la derecha (vacia OFF,
-    llena ON, las dos en el blanco de los nombres). Todos en OFF la primera vez. A, o IZQUIERDA y DERECHA,
+    con punto ON, las dos en el blanco de los nombres). Todos en OFF la primera vez. A, o IZQUIERDA y DERECHA,
     cambian el de la flecha, y mover la flecha suena como en los menus; B
     vuelve al menu sin dejar nada de la ventana. Lo que cambian se nota en la
     partida al momento: la sombra de la pieza donde caera -- el contorno de la
