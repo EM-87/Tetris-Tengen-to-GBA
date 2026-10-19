@@ -829,8 +829,11 @@ moment, and let down a row at a time out of the well — and in the rows it
 leaves TIME and PIECES over
 the plaque and SINGLE, DOUBLE, TRIPLE, TETRIS, RATE (the lines made four at a
 time, in a hundred) and DROUGHT (the most pieces dealt with no I) under it —
-a coop board's both players' together, as its BONUS counts them; read in the
-time the plaque already stood (`src/tengen_stats.c`, host-tested and checked
+a coop board's both players' together, as its BONUS counts them; the
+plaque's clock five seconds longer for it (END_PAGE_READ_FRAMES), and the
+table after a game that put nobody on it from this console five seconds
+and not seventeen (LEADER_NOTHING_NEW_FRAMES; `--gameover` times both, and
+the cartridge's 498 and 1020 without the chord) (`src/tengen_stats.c`, host-tested and checked
 by `make fuzz` against the core's line count; `draw_end_page`, `--endpage`;
 the colon of MM:SS drawn at boot, T_COLON, the cartridge's $3A being box
 art).

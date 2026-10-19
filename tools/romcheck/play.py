@@ -7,7 +7,7 @@ import os
 import subprocess
 
 from .harness import (
-    skip,
+    skip, GAME_SELECT_TY,
     CELL_BLOCK, CELL_WALL, CHARBLOCK_ADDR, CLEAR_WORDS,
     CODE_LEVEL_UP, CODE_LONG_BAR, CODE_UNDO, COL_BOX_L,
     COL_BOX_R, COL_FIELD, COL_FRAME_L, COL_FRAME_R,
@@ -832,11 +832,14 @@ def gameover_check(rom_path):
                 value = CELL_WALL if edge else (0 if col == gap else CELL_BLOCK)
                 core.memory.u8[addr + row * TENGEN_PF_WIDTH + col] = value
 
-    def enter(entry):
+    def enter(entry, chord=False):
         core, screen = load(rom_path)   # `screen` must stay alive; see load()
         run(core, 8)
         press_start(core)               # title -> GAME SELECT
         run(core, 10)
+        if chord:
+            core.set_keys(KEYS["L"], KEYS["R"]); run(core, 4)
+            core.set_keys(); run(core, 12)
         for _ in range(entry):
             core.set_keys(KEYS["DOWN"]); run(core, 4); core.set_keys(); run(core, 10)
         press_start(core); run(core, 12)   # -> LEVEL SETTINGS
@@ -914,33 +917,53 @@ def gameover_check(rom_path):
     #
     # Counted in blocks of 30 frames, so the tolerance below is a block and a
     # half either way rather than a promise about a single frame.
-    core, _screen = enter(0)
-    bury(core, 0, False)
-    dead_at = None
-    to_table = to_title = None
-    for tick in range(120):                   # 3600 frames, sixty seconds
-        run(core, 30)
-        if dead_at is None:
-            if not player(core, 0, "active"):
-                dead_at = tick * 30
-            continue
-        if to_table is None:
-            if "-LINES" in tilemap_text(core, LEADER_HEAD_TY, 0, 30):
-                to_table = tick * 30 - dead_at
-            continue
-        if title_face(core) == face:
-            to_title = tick * 30 - dead_at - to_table
-            break
+    #
+    # UNDER THE CHORD, the port's measure (END_PAGE_READ_FRAMES,
+    # LEADER_NOTHING_NEW_FRAMES): the game over five seconds longer, the
+    # game's page being on the board to read; and the table five seconds and
+    # not seventeen when the game put nobody on it — and the seventeen when
+    # it did, counted once the name is in.
+    def measure(chord, score):
+        core, _screen = enter(0, chord)
+        if score:
+            for i in range(4):
+                core.memory.u8[base + off["score"] + i] = (score >> (8 * i)) & 0xFF
+        bury(core, 0, False)
+        dead_at = None
+        to_table = to_title = None
+        typed = False
+        for tick in range(120):               # 3600 frames, sixty seconds
+            run(core, 30)
+            if dead_at is None:
+                if not player(core, 0, "active"):
+                    dead_at = tick * 30
+                continue
+            if to_table is None:
+                if "-LINES" in tilemap_text(core, LEADER_HEAD_TY, 0, 30):
+                    to_table = tick * 30 - dead_at
+                    if score:                 # the name as it stands: START
+                        press_start(core)
+                        typed = tick * 30 + 10
+                continue
+            if title_face(core) == face:
+                to_title = tick * 30 - (typed or dead_at + to_table)
+                break
+        del core, _screen
+        return to_table, to_title
 
-    for what, got, want in (("el game over", to_table, 498),
-                             ("la tabla", to_title, 1020)):
-        if got is None:
-            failures.append(f"{what} no se va solo, hay que pulsar algo")
-        elif abs(got - want) > 45:
-            failures.append(f"{what} dura {got} frames y el cartucho {want}")
-        else:
-            print(f"  {what} se va solo tras {got} frames "
-                  f"(el cartucho, {want})")
+    for label, chord, score, want_over, want_table in (
+            ("", False, 0, 498, 1020),
+            ("con el acorde y sin record, ", True, 0, 498 + 300, 300),
+            ("con el acorde y con record, ", True, 900000, 498 + 300, 1020)):
+        to_table, to_title = measure(chord, score)
+        for what, got, want in ((f"{label}el game over", to_table, want_over),
+                                 (f"{label}la tabla", to_title, want_table)):
+            if got is None:
+                failures.append(f"{what} no se va solo, hay que pulsar algo")
+            elif abs(got - want) > 45:
+                failures.append(f"{what} dura {got} frames y deberia {want}")
+            else:
+                print(f"  {what} se va solo tras {got} frames ({want})")
 
     for f in failures:
         print("FALLA:", f)
@@ -1542,14 +1565,7 @@ def unpause_check(rom_path):
         ("WITH acorde, el menu", 4, True, 0, ()),
         ("WITH acorde, la ventana de canciones", 4, True, 0, ("A",)),
     )
-    for what, downs, chord, selects, keys in cases:
-        core, screen = load(rom_path)   # `screen` must stay alive; see load()
-        start(core, downs, chord)
-        for _ in range(selects):
-            tap(core, "SELECT", 10)
-        tap(core, "START", 20)
-        for k in keys:
-            tap(core, k, 20)
+    def compare(what, core, screen):
         paused = pixels(screen)
         state = core.save_raw_state()
         patched = leave(core, screen, False)
@@ -1565,7 +1581,46 @@ def unpause_check(rom_path):
                             f"de un repintado entero")
         else:
             print(f"  {what}: identica ({moved} pixeles cambiados por la pausa)")
+
+    for what, downs, chord, selects, keys in cases:
+        core, screen = load(rom_path)   # `screen` must stay alive; see load()
+        start(core, downs, chord)
+        for _ in range(selects):
+            tap(core, "SELECT", 10)
+        tap(core, "START", 20)
+        for k in keys:
+            tap(core, k, 20)
+        compare(what, core, screen)
         del core, screen
+
+    # ...AND THE FIRST PAUSE AFTER A MATCH LEFT THROUGH EXIT GAME. That match
+    # left its box up, and the record of what the box covered; the next
+    # match's first box took the record for its own and saved nothing, and
+    # on the way down put back the last match's cells — after WITH COMPUTER,
+    # the coop board's twelve-wide frame across a solo board's box, for good
+    # (pause_box_forget).
+    core, screen = load(rom_path)       # `screen` must stay alive; see load()
+    start(core, 4, True)
+    for k in ("START", "UP", "A", "UP", "A"):   # the menu, EXIT GAME, YES
+        tap(core, k, 20)
+    run(core, 120)
+    press_start(core); run(core, 10)    # GAME SELECT, on WITH COMPUTER still
+    for _ in range(5):
+        if "> 1 PLAYER" in tilemap_text(core, GAME_SELECT_TY, 0, 30):
+            break
+        tap(core, "UP", 6)
+    if "> 1 PLAYER" not in tilemap_text(core, GAME_SELECT_TY, 0, 30):
+        failures.append("tras salir de WITH COMPUTER con EXIT GAME no se llega "
+                        "a GAME SELECT")
+    else:
+        press_start(core); run(core, 12)
+        press_start(core); run(core, 30)
+        for i in range(6):
+            core.set_keys(KEYS["DOWN"]); run(core, 20); core.set_keys(); run(core, 2)
+            tap(core, "LEFT" if i % 2 else "RIGHT", 2)
+        tap(core, "START", 20)
+        compare("1P acorde, la primera pausa tras salir de WITH COMPUTER", core, screen)
+    del core, screen
     for f in failures:
         print(f"FALLA: {f}")
     if failures:

@@ -169,7 +169,9 @@ la cortinilla del Tetris de Game Boy — un muro de ladrillos sube tapando la
 pila muerta y luego baja vaciando el pozo — deja en el tablero la hoja de la
 partida — TIME, PIECES, SINGLE, DOUBLE, TRIPLE,
 TETRIS, RATE (el % de líneas hechas de cuatro en cuatro) y DROUGHT (la racha
-más larga sin barra) —, y se arreglan los fallos propios del cartucho:
+más larga sin barra) —, con el GAME OVER cinco segundos más para leerla, y
+la tabla de récords se queda cinco segundos y no diecisiete si la partida
+no metió a nadie en ella; y se arreglan los fallos propios del cartucho:
 el reparto en cooperativo que nace dentro de la pieza del compañero, la
 pieza que cae metida en las filas del compañero que se derrumban, los
 estantes del panel que no tocan la cuerda y el bisel de las fichas $01 y $03,

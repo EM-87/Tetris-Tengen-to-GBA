@@ -641,6 +641,20 @@ static void plaque_restore(void) {
  * pmenu_restore_box); g_repaint, the whole static screen, wins over it. */
 static bool g_unpause_patch;
 
+/* A MATCH LEFT THROUGH EXIT GAME LEAVES ITS BOX UP, and with it the record
+ * of what the box covered. The next match's first box took that record for
+ * its own — "drawn already, and saved" — saved nothing, and on the way down
+ * put back the last match's cells: after WITH COMPUTER, the coop board's
+ * twelve-wide frame across the rows of a solo board's box, there for good.
+ * Forgotten as a match starts (hud_reset), with the wall that went up with
+ * it. */
+void pause_box_forget(void) {
+    g_pmenu_drawn_w = g_pmenu_drawn_h = 0;
+    g_pmenu_saved_w = g_pmenu_saved_h = 0;
+    g_plaque_drawn = false;
+    g_unpause_patch = false;
+}
+
 /* WHAT THE BOX LEAVES BEHIND WHEN IT GOES. The frame and the rows that centre
  * exactly are on the main background, and a repaint of the static screen
  * covers those; the rest of the menu is on the offset and counter layers,
@@ -1569,8 +1583,9 @@ static void ai_think_spare(void) {
  * player's; a coop board's, both players' together, as its BONUS show
  * counts them), the wall risen a row every END_PAGE_ROW_FRAMES, stood
  * whole END_PAGE_FULL_FRAMES, and let down a row every END_PAGE_ROW_FRAMES.
- * The game over's own clock (GAMEOVER_HOLD_FRAMES) and its buttons are as
- * they were: the page is read in the time the plaque already stood. Before
+ * The game over's buttons are as they were, and its clock
+ * (GAMEOVER_HOLD_FRAMES) runs END_PAGE_READ_FRAMES longer to read it by
+ * (main.c, over_expired, on g_end_rise). Before
  * the vertical blank: the writing out is no drawing. */
 static void end_page_frame(void) {
     if (g_demo || g_link_lost || !pause_menu_on() || !match_over()) {

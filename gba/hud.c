@@ -657,9 +657,11 @@ static uint8_t g_hud_choice[HUD_MODE_COUNT] = {
 };
 
 void hud_reset(void) {
-    /* A match starts with no wall standing: a pause left by EXIT left it up. */
+    /* A match starts with no wall standing: a pause left by EXIT left it up
+     * — and with no box, nor the cells it covered (pause_box_forget). */
     g_pause_wall = 0;
     g_pause_wall_tick = 0;
+    pause_box_forget();
     /* A choice made behind the chord does not outlive it. */
     int n;
     const uint8_t *set = hud_set(&n);
