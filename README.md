@@ -146,14 +146,16 @@ silueta de dónde va a caer la pieza, y en cooperativo también la del
 compañero), **SWAP A-B** (A y B giran al revés) y **HOLD** (SELECT guarda la
 pieza que cae, y la cambia por la guardada; una vez por pieza). Con HOLD, el
 HUD se cambia con L+R y en HUD STATS la pieza guardada sale donde estaba el
-cosaco. Cada uno tiene su casilla, en blanco: vacía apagado, llena encendido. A,
+cosaco. Cada uno tiene su casilla, en blanco: vacía apagado, con punto encendido. A,
 Izquierda o Derecha cambian el de la flecha; B vuelve. Por cable, HARD DROP,
 FAST DOWN, FAST SHIFT y HOLD son reglas de la partida: las del maestro, para
 los dos, y cualquiera las cambia desde el menú compartido solo para esa
 partida; GHOST y SWAP A-B son de cada jugador.
 
 **Sin el acorde, el cartucho tal cual** en lo que se ve y se oye: los
-créditos son los suyos (con LICENSED BY MIRRORSOFT LTD.), SELECT en el título
+créditos son los suyos (con LICENSED BY MIRRORSOFT LTD., y al final las dos
+líneas de copyright de su título, ©1987 ACADEMYSOFT-ELORG. y ©1988 TENGEN,
+con su propio ©), SELECT en el título
 es otro START, el mando no vibra y el título y el cosaco son los del
 cartucho (L y R no hacen nada). Con el acorde, el crédito del port ocupa
 el sitio del de Mirrorsoft, SELECT en el título abre los récords, el Game Boy

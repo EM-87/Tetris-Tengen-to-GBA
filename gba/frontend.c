@@ -539,7 +539,8 @@ static void draw_menu_frame(void) {
 #endif
 }
 
-/* THE CARTRIDGE'S SIX, AND UNDER THE CHORD THE PORT IN MIRRORSOFT'S PLACE.
+/* THE CARTRIDGE'S SIX, ITS COPYRIGHT LINES AFTER THEM, AND UNDER THE CHORD
+ * THE PORT IN MIRRORSOFT'S PLACE.
  * GAME SELECT's line (ppuPatchLicensedBy, $A1EF: "LICENSED BY MIRRORSOFT
  * LTD." on one row, two here) was a licensing notice for a company that has
  * not existed since 1991; behind the chord, as everything else the port adds
@@ -553,6 +554,11 @@ static const char *const kCredits[][2] = {
     { "PROGRAMMED BY",     "ED LOGG"          },
     { "VIDEO GRAPHICS BY", "KRIS MOSER"       },
     { "AUDIO BY",          "BRAD FULLER"      },
+    /* ...and the title screen's last two rows, which the port's title has no
+     * room for (its cathedral is the screen): the cartridge's words as it
+     * writes them, the copyright sign its own (T_COPYRIGHT), TENGEN without
+     * a full stop. */
+    { COPYRIGHT_SIGN "1987 ACADEMYSOFT-ELORG.", COPYRIGHT_SIGN "1988 TENGEN" },
 };
 /* Here and not in port.h: sizeof needs the table's own definition in sight,
  * and nothing outside this file reads it. */

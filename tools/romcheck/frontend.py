@@ -4,7 +4,7 @@ GAME SELECT, the credits, the demo, the cable lobby alone.
 """
 import os
 from .harness import (
-    CATHEDRAL_SPRITES, CELL_BLOCK, CREDITS, CREDIT_PORT, CREDIT_TY,
+    CATHEDRAL_SPRITES, CELL_BLOCK, CREDITS, CREDIT_FRAMES, CREDIT_PORT, CREDIT_TY,
     DEMO_START_FRAME, DEMO_WATCH_FRAMES, GAME_SELECT_LONGEST, GAME_SELECT_ROWS,
     GAME_SELECT_TX, GAME_SELECT_TY, HANDICAP_ROW, KEYS,
     LEVEL_ROW, LIMIT_SKINS, LINK_MSG_ROW, LINK_TIMEOUT_FRAMES,
@@ -728,9 +728,9 @@ def credits_check(rom_path):
     press_start(core)               # title -> game select
     run(core, 20)
 
-    # Long enough for every one of them to come round twice over.
+    # Long enough for every one of them to come round, and some.
     seen = []
-    for _ in range(1600):
+    for _ in range((len(CREDITS) + 1) * CREDIT_FRAMES):
         pair = (tilemap_text(core, CREDIT_TY).strip(),
                 tilemap_text(core, CREDIT_TY + 1).strip())
         if not seen or pair != seen[-1]:
@@ -747,8 +747,8 @@ def credits_check(rom_path):
     elif shown(*CREDIT_PORT):
         failures.append("sin el acorde sale el credito del port")
     else:
-        print(f"  sin el acorde, los seis creditos del cartucho, Mirrorsoft "
-              f"incluido, uno a uno ({len(seen)} cambios en 1600 frames)")
+        print(f"  sin el acorde, los creditos del cartucho, Mirrorsoft y sus "
+              f"lineas de copyright incluidos, uno a uno ({len(seen)} cambios)")
 
     # NO BUILD LINE, with the chord or without: there was a seventh credit
     # under the chord with the commit, and it went (the ROM's file name says
@@ -758,7 +758,7 @@ def credits_check(rom_path):
     core.set_keys(); run(core, 10)
     build = False
     chorded = []
-    for _ in range(1800):
+    for _ in range((len(CREDITS) + 1) * CREDIT_FRAMES):
         if "BUILD" in tilemap_text(core, CREDIT_TY).split():
             build = True
             break
@@ -776,7 +776,7 @@ def credits_check(rom_path):
     if build or any("BUILD" in a.split() for a, b in seen):
         failures.append("los creditos aun dicen BUILD")
     else:
-        print("  ni con el acorde sale una linea BUILD: los seis y nada mas")
+        print("  ni con el acorde sale una linea BUILD: los del cartucho y nada mas")
 
     # The invented line is gone: the cartridge spells him PAZHITNOV, on its
     # own level screen, and the port used to print a PAJITNOV of its own.

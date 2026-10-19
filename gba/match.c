@@ -711,8 +711,8 @@ static void draw_pmenu(const char *const *lines, int count, int cursor) {
 /* THE OPTIONS' WINDOW IS A TABLE, NOT A LIST, so its lines do not centre:
  * the switch's name stands at the left, after the arrow's two columns, and
  * its box at the right, in a column of its own (T_CHECK_OFF): empty for
- * OFF and filled for ON, both in the names' white — a second colour said
- * no more than the fill does, and less clearly. The box stands as far in
+ * OFF and a dot in it for ON, both in the names' white — ON in a second
+ * colour said no more than the dot does, and less clearly. The box stands as far in
  * from the frame on the right as the arrow's tail does on the left.
  *
  * SIXTEEN WIDE, the menu's own width. ON and OFF were words once, and the

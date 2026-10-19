@@ -65,6 +65,7 @@ uint16_t ascii_tile(char c) {
     if (c == '?') return TILES_GAME_QUESTION;
     if (c == '%') return TILES_GAME_PERCENT;
     if (c == ':') return T_COLON;      /* drawn at boot; see T_COLON */
+    if (c == COPYRIGHT_SIGN[0]) return T_COPYRIGHT;   /* ...and T_COPYRIGHT */
     return (uint16_t)(unsigned char)c;
 }
 
@@ -508,8 +509,8 @@ void upload_tiles(void) {
         head[row * 2] = (uint16_t)h; head[row * 2 + 1] = (uint16_t)(h >> 16);
     }
     /* ...and the options' boxes; see T_CHECK_OFF. Seven by seven, on the
-     * letters' rows (ink 1-7 under a blank row 0) and in their ink: OFF the
-     * box's edge alone, ON the box filled. A row of the pair is sixteen
+     * letters' rows (ink 1-7 under a blank row 0) and in their ink; ON has
+     * a three-by-three dot in the middle. A row of the pair is sixteen
      * nibbles, the leftmost pixel the lowest. */
     for (int on = 0; on < 2; on++) {
         vu16 *l = dst + ((on ? T_CHECK_ON : T_CHECK_OFF)) * 16;
@@ -518,7 +519,8 @@ void upload_tiles(void) {
             uint64_t px = 0;
             for (int x = 0; x < 7; x++) {
                 bool edge = row == 1 || row == 7 || x == 0 || x == 6;
-                if (row >= 1 && (edge || on))
+                bool dot = on && row >= 3 && row <= 5 && x >= 2 && x <= 4;
+                if (row >= 1 && (edge || dot))
                     px |= (uint64_t)1 << (4 * (CHECK_SHIFT_PX + x));
             }
             l[row * 2] = (uint16_t)px;
@@ -555,6 +557,17 @@ void upload_tiles(void) {
         uint32_t px = dot ? (1u << 8) | (1u << 12) : 0;
         colon[row * 2] = (uint16_t)px;
         colon[row * 2 + 1] = (uint16_t)(px >> 16);
+    }
+    /* ...and the copyright sign, the title font's own (T_COPYRIGHT): its
+     * pixels as the cartridge draws them, any ink put in the letters'
+     * colour 1. */
+    const uint8_t *sign = kTitleTiles + TITLE_COPYRIGHT_TILE * 32;
+    vu16 *copy = dst + T_COPYRIGHT * 16;
+    for (int i = 0; i < 16; i++) {
+        uint16_t px = (uint16_t)(sign[2 * i] | (sign[2 * i + 1] << 8)), out = 0;
+        for (int n = 0; n < 4; n++)
+            if ((px >> (4 * n)) & 0xF) out |= (uint16_t)(1u << (4 * n));
+        copy[i] = out;
     }
 }
 

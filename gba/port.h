@@ -1788,7 +1788,7 @@ typedef enum {
 #define GHOST_TILES 4       /* per ghost: one per cell */
 #define GHOST_INK   1       /* the colour of the piece's bank it is drawn in */
 /* ...AND THE OPTIONS WINDOW'S BOXES, after them: a switch's state as a box
- * of the letters' size, empty for OFF and filled for ON. Two
+ * of the letters' size, empty for OFF and with a dot in it for ON. Two
  * tiles each, the box moved across the pair so its right side is as far
  * from the frame as the arrow's tail is on the left (see draw_options_box). */
 #define T_CHECK_OFF (T_GHOST + 2 * GHOST_TILES)   /* and +1, its right half */
@@ -1803,7 +1803,15 @@ typedef enum {
  * has none — its $3A is a corner of the box art — so it is drawn at boot in
  * the letters' style (upload_tiles) and ascii_tile sends ':' to it. */
 #define T_COLON (T_HOLD_LABEL + HOLD_LABEL_W)
-typedef char ghost_tiles_fit[T_COLON + 1 <= 1024 ? 1 : -1];
+/* ...AND THE CARTRIDGE'S OWN COPYRIGHT SIGN, for its two copyright lines in
+ * the credits (kCredits): the title's font has one (its tile $DF, which the
+ * title screen's last two rows open with) and the game's does not, so it is
+ * copied from there at boot in the letters' ink. A string asks for it with
+ * COPYRIGHT_SIGN, which ascii_tile sends here. */
+#define T_COPYRIGHT (T_COLON + 1)
+#define TITLE_COPYRIGHT_TILE 0xDF
+#define COPYRIGHT_SIGN "\x7F"
+typedef char ghost_tiles_fit[T_COPYRIGHT + 1 <= 1024 ? 1 : -1];
 
 /* The frame's own tiles, out of the plaque the game over is drawn with. */
 #define T_BOX_TL 0x29
