@@ -65,17 +65,20 @@ mgba.core.load_path = _load_path_kept
 mgba.core.Core.reset = _reset_past_splash
 
 
-# L+R ON THE TITLE WITHOUT THE CHORD, the audit (ROMCHECK_AUDIT=1). Since the
-# prototypes went behind the game's chord, L+R on the title does nothing
-# until the chord has been rung at GAME SELECT or LEVEL SETTINGS, and a
-# check that still pressed it there to put a skin on went on passing,
-# checking the cartridge's title twice. This says where: on the frame after
-# a press of both shoulders, if the title's clock moved (g_title_frame) and
-# the chord is not rung (g_pause_unlocked), the check's own line.
+# L+R ON THE TITLE THAT DOES NOTHING, the audit (ROMCHECK_AUDIT=1). The
+# title's L+R is the game's chord and finds the prototypes, once: rung
+# already, on the title or the menus, it stands down and L and R alone step
+# the skins. A check that pressed it where it does nothing went on passing
+# without what it pressed it for — while the title's chord waited for the
+# menus', --loans and --demo checked the cartridge's title twice that way.
+# This says where: on the frame after a press of both shoulders, if the
+# title's clock moved (g_title_frame) and neither the skin (g_title_skin)
+# nor the chord (g_pause_unlocked) changed, the check's own line.
 _set_keys = mgba.core.Core.set_keys
 _run_frame = mgba.core.Core.run_frame
 _AUDIT = os.environ.get("ROMCHECK_AUDIT") == "1"
 _audit_syms = {}
+_AUDIT_WATCH = ("g_title_frame", "g_title_skin", "g_pause_unlocked")
 
 
 def _audit_addr(core, name):
@@ -85,15 +88,21 @@ def _audit_addr(core, name):
     return _audit_syms[rom, name]
 
 
+def _audit_read(core):
+    addrs = [_audit_addr(core, n) for n in _AUDIT_WATCH]
+    if None in addrs:
+        return None
+    return (core.memory.u16[addrs[0]], core.memory.u8[addrs[1]],
+            core.memory.u8[addrs[2]])
+
+
 def _set_keys_audited(self, *keys):
     _set_keys(self, *keys)
     if 8 in keys and 9 in keys:
         import traceback
         here = [f for f in traceback.extract_stack()[:-1]
                 if "harness.py" not in f.filename]
-        clock = _audit_addr(self, "g_title_frame")
-        self._tengen_audit = (here[-2:],
-                              clock is not None and self.memory.u16[clock])
+        self._tengen_audit = (here[-2:], _audit_read(self))
 
 
 def _run_frame_audited(self):
@@ -103,12 +112,11 @@ def _run_frame_audited(self):
         return
     self._tengen_audit = None
     where, before = pending
-    clock = _audit_addr(self, "g_title_frame")
-    chord = _audit_addr(self, "g_pause_unlocked")
-    if clock is None or chord is None:
+    after = _audit_read(self)
+    if before is None or after is None:
         return
-    if self.memory.u16[clock] != before and not self.memory.u8[chord]:
-        print("AUDITORIA: L+R en el titulo sin el acorde, en " +
+    if after[0] != before[0] and after[1:] == before[1:]:
+        print("AUDITORIA: L+R en el titulo que no cambia nada, en " +
               " <- ".join(f"{os.path.basename(f.filename)}:{f.lineno}"
                           for f in reversed(where)))
 
@@ -259,7 +267,8 @@ def press_start(core):
 def ring_chord_from_title(core, settle=24):
     """The game's chord, from the title and back to it: START to GAME
     SELECT, L+R there, B. Everything the port adds waits for it — the
-    prototypes' titles on the title's own L and R among it."""
+    prototypes' titles among it: after it, L and R alone step them on the
+    title, and L+R there stands down (put_skin_on)."""
     press_start(core); run(core, 10)
     core.set_keys(KEYS["L"], KEYS["R"]); run(core, 4)
     core.set_keys(); run(core, 12)
@@ -278,15 +287,19 @@ def build_has_protos(rom_path):
 
 
 def put_skin_on(core, settle=24):
-    """From the title, a prototype's title on it: the game's chord rung
-    (ring_chord_from_title) and then L+R, which finds the skins. True when
-    one went on (g_title_skin), False on a build without them. Pressed on
-    the title without the chord, L+R does nothing at all — which a check or
-    two went on doing, and checked the cartridge's title twice."""
-    ring_chord_from_title(core)
-    core.set_keys(KEYS["L"], KEYS["R"]); run(core, 4)
-    core.set_keys(); run(core, settle)
+    """From the title, a prototype's title on it, the game's chord rung by
+    the way: L+R on the title, which is that chord and finds the skins, or —
+    rung already, on the title or the menus, when L+R stands down — R, which
+    steps to the next. True when one went on (g_title_skin), False on a
+    build without them."""
     rom = getattr(core, "_tengen_rom", "")
+    found, _ = game_state_address(rom, "g_title_skin_found")
+    if found is not None and core.memory.u8[found]:
+        core.set_keys(KEYS["R"])
+    else:
+        core.set_keys(KEYS["L"], KEYS["R"])
+    run(core, 4)
+    core.set_keys(); run(core, settle)
     skin, _ = game_state_address(rom, "g_title_skin")
     return skin is not None and core.memory.u8[skin] != 0
 

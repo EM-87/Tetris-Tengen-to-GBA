@@ -1925,7 +1925,8 @@ void suspend_clear(void);
 bool suspend_load(SuspendMenu *menu);
 void suspend_apply(void);
 void match_resumed_paused(void);
-/* The chord's three doors, opened without its chirp: for a game put back. */
+/* The chord's doors, the prototypes' among them, opened without its chirp:
+ * for a game put back. */
 void cheats_restore(void);
 /* The Player's logo and the publisher's, at power-on only (splash.c). */
 void splash_show(void);

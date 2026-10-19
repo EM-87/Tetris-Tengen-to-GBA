@@ -282,16 +282,14 @@ int main(void) {
             /* initializeTitleScreen ends with this (main.asm.txt:4489). */
             front_music(FRONT_TITLE_THEME);
             set_offset_layer(TITLE_LOGO_SHIFT_PX);
-            /* L+R FINDS IT; L AND R ALONE DRIVE IT AFTERWARDS — and only
-             * once the game's own chord has been rung (GAME SELECT or LEVEL
-             * SETTINGS), as everything else the port adds is: the
-             * prototypes are no part of the cartridge, so without it the
-             * title is the cartridge's and the shoulders do nothing here.
-             *
-             * The title's chord unlocks nothing else — finding the
-             * prototype title is not finding the hidden tunes (see
-             * unlock_cheats). Until it is rung, a lone shoulder does nothing
-             * at all, so the title cannot be changed by accident.
+            /* L+R FINDS IT; L AND R ALONE DRIVE IT AFTERWARDS. And L+R here
+             * is the game's own chord as much as on GAME SELECT or LEVEL
+             * SETTINGS (unlock_cheats): rung here it opens the tunes, the
+             * pause menu and the rest, and puts the first prototype on; rung
+             * there, it has found the prototypes too, and L and R alone step
+             * them here. Until it is rung, anywhere, the title is the
+             * cartridge's and a lone shoulder does nothing at all, so the
+             * title cannot be changed by accident.
              *
              * After it, though, the chord is a poor control. There are four
              * skins and it only ever went forwards, so going back to the one
@@ -299,15 +297,14 @@ int main(void) {
              * exactly what was reported. So once found, R steps forward and L
              * steps back, and the chord itself stands down. */
             int skin_step = 0;
-            if (TITLE_SKIN_COUNT > 1) {
+            {
                 bool chord = shoulder_chord();
                 bool tap_l = pressed_shoulder(SHOULDER_L);
                 bool tap_r = pressed_shoulder(SHOULDER_R);
-                if (!g_pause_unlocked) {
-                    /* the cartridge's title, and nothing to find on it */
-                } else if (!g_title_skin_found) {
-                    if (chord) { g_title_skin_found = true; skin_step = 1; }
-                } else if (!chord && (tap_l || tap_r)) {
+                if (!g_title_skin_found) {
+                    if (chord && unlock_cheats() && TITLE_SKIN_COUNT > 1)
+                        skin_step = 1;
+                } else if (TITLE_SKIN_COUNT > 1 && !chord && (tap_l || tap_r)) {
                     skin_step = tap_r ? 1 : TITLE_SKIN_COUNT - 1;
                 }
             }

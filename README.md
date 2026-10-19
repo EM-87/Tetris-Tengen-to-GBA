@@ -128,8 +128,8 @@ Lo que el GBA tiene de más:
 |---|---|---|
 | Partida | SELECT | cambia de HUD (dos por modo); con HOLD, guarda la pieza |
 | Partida, HUD Stats, con el acorde | L+R | cambia el color del cosaco; con HOLD, cambia de HUD (en cualquier HUD) |
-| GAME SELECT o LEVEL SETTINGS | L+R | el acorde: destapa las canciones ocultas (Korobeiniki, Katiuska, MUSIC MIX), los niveles 18-19, el menú de pausa y lo demás que añade el port (abajo) |
-| Título, con el acorde | L+R, y luego L o R | recorre los títulos de los prototipos (su skin llega al juego) |
+| GAME SELECT, LEVEL SETTINGS o el título | L+R | el acorde, el mismo en las tres: destapa las canciones ocultas (Korobeiniki, Katiuska, MUSIC MIX), los niveles 18-19, el menú de pausa, los títulos de los prototipos y lo demás que añade el port (abajo); hecho en el título, además pone el primer prototipo |
+| Título, con el acorde | L o R | recorre los títulos de los prototipos (su skin llega al juego) |
 | Título, con el acorde | SELECT | las tablas de HIGH SCORES, una por modo (Izquierda/Derecha las recorren); sin el acorde, SELECT es otro START, como en el cartucho |
 | Pantalla LINK CABLE | SELECT | Single-Pak: envía el juego a una GBA sin cartucho |
 | Carrera, tablero muerto | A+B | se levanta y sigue, como en el cartucho |
@@ -163,8 +163,8 @@ Player vibra, y además de lo de arriba la música acelera con la pila alta, la
 pausa tapa el tablero con un muro de bloques que sube desde el suelo (y al
 seguir baja desde arriba), un récord nuevo suena con el
 jingle que el cartucho no usa (por cable, todo esto con el acorde del
-maestro), la demo la juega el ordenador del port, en el título L+R pone los
-prototipos y en HUD STATS cambia el color del cosaco, y al acabar la partida
+maestro), la demo la juega el ordenador del port, en el título L y R recorren
+los prototipos y en HUD STATS cambia el color del cosaco, y al acabar la partida
 la cortinilla del Tetris de Game Boy — un muro de ladrillos sube tapando la
 pila muerta y luego baja vaciando el pozo — deja en el tablero la hoja de la
 partida — TIME, PIECES, SINGLE, DOUBLE, TRIPLE,

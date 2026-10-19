@@ -2,8 +2,7 @@
 The HIGH SCORES table and its per-build pages.
 """
 from .harness import (
-    skip,
-    ring_chord_from_title,
+    skip, put_skin_on,
     CELL_BLOCK, CELL_WALL, KEYS, LEADER_FIRST_TY,
     TENGEN_PF_HEIGHT, TENGEN_PF_WIDTH, game_offsets, game_state_address,
     load, press_start, run, start_game,
@@ -266,10 +265,8 @@ def tables_check(rom_path):
         failures.append(f"el 80000 no entro en la tabla del release: "
                          f"{release_first[0]!r}")
 
-    # The chord uncovers the skins — the game's first, which they wait for,
-    # then the title's; L walks to the first prototype.
-    ring_chord_from_title(core)
-    tap(KEYS["L"], KEYS["R"]); run(core, 30)
+    # The title's chord, which is the game's, puts on the first prototype.
+    put_skin_on(core, settle=42)
     proto_first = play_and_lose(60000)
     # The TOP ROW, not the whole table: 8000 is one of the cartridge's own
     # fifteen, so the score is read as a number from that row alone. If the two
