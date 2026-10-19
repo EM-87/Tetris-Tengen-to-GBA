@@ -178,24 +178,27 @@ def skin_check(rom_path):
     if frame_tiles() != release:
         failures.append("R a solas cambia la skin sin haber sonado el acorde")
 
-    # ...Y SIN EL ACORDE DEL JUEGO, NI SIQUIERA L+R: los prototipos no son
-    # del cartucho, y lo que el port anade espera al acorde de GAME SELECT.
-    tap(KEYS["L"], KEYS["R"])
-    if frame_tiles() != release:
-        failures.append("sin el acorde del juego L+R pone una skin en el titulo")
-    else:
-        print("  sin el acorde del juego, L+R en el titulo no hace nada")
-    ring_chord_from_title(core)
-    release = frame_tiles()
-
+    # L+R EN EL TITULO ES EL ACORDE DEL JUEGO, el mismo que en GAME SELECT o
+    # LEVEL SETTINGS (unlock_cheats): pone el primer prototipo y destapa lo
+    # demas que el port anade, el menu de pausa entre ello (g_pause_unlocked).
+    unlocked, why = game_state_address(rom_path, "g_pause_unlocked")
+    if unlocked is None:
+        skip(f"{why}: no se mira que el acorde del titulo sea el del juego")
+    elif core.memory.u8[unlocked]:
+        failures.append("el acorde del juego suena sin que nadie lo haya hecho")
     tap(KEYS["L"], KEYS["R"])
     proto = frame_tiles()
+    if unlocked is not None and not core.memory.u8[unlocked]:
+        failures.append("L+R en el titulo no hace el acorde del juego: el "
+                        "menu de pausa sigue escondido")
+    elif unlocked is not None:
+        print("  L+R en el titulo es el acorde del juego: destapa lo demas")
     if proto == release:
         # ...which on a build WITH the prototypes is no skip: it went on
         # passing here while the skins could not be reached at all.
         if build_has_protos(rom_path):
-            failures.append("la ROM trae prototipos y con el acorde L+R no "
-                            "pone ninguno en el titulo")
+            failures.append("la ROM trae prototipos y L+R en el titulo no pone "
+                            "ninguno")
         else:
             skip("esta ROM se construyo sin prototipo: L+R no tiene skin que poner")
         for f in failures:
@@ -206,6 +209,32 @@ def skin_check(rom_path):
         return 0
     print("  L+R pone el marco del prototipo, que es de otros tiles; "
            "antes del acorde un hombro suelto no hace nada")
+
+    # ...Y AL REVES: el acorde de los menus encuentra tambien los prototipos.
+    # De vuelta al titulo, R a solas pone el primero, y L+R ya no hace nada.
+    other, other_screen = load(rom_path)    # `other_screen` must stay alive
+    run(other, 40)
+    other_release = [other.memory.u16[SCREENBLOCK_ADDR + (r * 32 + c) * 2]
+                     for r in range(SCREEN_H // TILE) for c in range(SCREEN_TW_TILES)]
+    ring_chord_from_title(other)
+    other.set_keys(KEYS["L"], KEYS["R"]); run(other, 4)
+    other.set_keys(); run(other, 12)
+    still = [other.memory.u16[SCREENBLOCK_ADDR + (r * 32 + c) * 2]
+             for r in range(SCREEN_H // TILE) for c in range(SCREEN_TW_TILES)]
+    other.set_keys(KEYS["R"]); run(other, 4)
+    other.set_keys(); run(other, 12)
+    stepped = [other.memory.u16[SCREENBLOCK_ADDR + (r * 32 + c) * 2]
+               for r in range(SCREEN_H // TILE) for c in range(SCREEN_TW_TILES)]
+    if still != other_release:
+        failures.append("tras el acorde de los menus, L+R en el titulo aun "
+                        "cambia la skin: deberia haberse retirado")
+    elif stepped != proto:
+        failures.append("el acorde de los menus no encuentra los prototipos: "
+                        "R a solas no pone el primero en el titulo")
+    else:
+        print("  y el acorde de los menus los encuentra tambien: R a solas pone "
+              "el primero en el titulo")
+    del other, other_screen
 
     # The release's fireworks and cathedral overlay belong to the release
     # picture; on the prototype's they must be gone.
@@ -263,9 +292,8 @@ def skin_check(rom_path):
         print("  la skin se mantiene al salir del titulo y volver")
 
     # (IT USED TO OPEN NOTHING ELSE: the title's chord was a discovery of its
-    # own, and the tunes stayed hidden until a menu's. The prototypes are the
-    # port's, though, and now wait for the game's chord like the rest of
-    # what it adds — so by the time they can be found, so has everything.)
+    # own, and the tunes stayed hidden until a menu's; then it waited for the
+    # menus' chord. Now the two are one, wherever it is rung.)
 
     # ...AND IT REACHES THE BOARD, which is the half of the feature that was
     # missing for a long time: the skin was the title art and nothing else,
@@ -289,9 +317,7 @@ def skin_check(rom_path):
         this, this_screen = load(rom_path)
         _ = this_screen                      # must stay alive; see load()
         run(this, 40)
-        if chords:
-            ring_chord_from_title(this)
-        for _i in range(chords):
+        for _i in range(chords):              # the title's chord: the first skin
             this.set_keys(KEYS["L"], KEYS["R"]); run(this, 4)
             this.set_keys(); run(this, 20)
         press_start(this); run(this, 20)      # title -> GAME SELECT
@@ -315,9 +341,7 @@ def skin_check(rom_path):
         this, this_screen = load(rom_path)
         _ = this_screen
         run(this, 40)
-        if chords:
-            ring_chord_from_title(this)
-        for _i in range(chords):
+        for _i in range(chords):              # the title's chord: the first skin
             this.set_keys(KEYS["L"], KEYS["R"]); run(this, 4)
             this.set_keys(); run(this, 20)
         press_start(this); run(this, 24)          # -> GAME SELECT

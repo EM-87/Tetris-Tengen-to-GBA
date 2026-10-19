@@ -31,8 +31,12 @@ static bool g_music_unlocked;
  * start of every game. The high scores are the only thing that outlives a
  * power cycle.
  *
- * The title's skin is NOT behind this one. See the note where it is swapped:
- * it is its own chord on its own screen and opens nothing else. */
+ * ...AND THE TITLE'S IS THE SAME CHORD. L+R on the title finds the
+ * prototypes' titles, and the two used to be two secrets, then one behind
+ * the other (the title's waited for this one); now either is both. Rung on
+ * the title it opens everything here and puts the first prototype on; rung
+ * on the menus it opens everything here and the prototypes with it, L and R
+ * alone stepping through them on the title (g_title_skin_found). */
 bool g_pause_unlocked;
 
 /* THE THIRD THING THE CHORD OPENS. See TENGEN_MAX_LEVEL_XE in
@@ -44,11 +48,9 @@ bool g_pause_unlocked;
 bool g_xe;
 
 bool unlock_cheats(void) {
-    if (g_music_unlocked && g_pause_unlocked && g_xe) return false;
-    g_music_unlocked = true;
-    g_pause_unlocked = true;
-    g_xe = true;
-    set_credit_colour();
+    if (g_music_unlocked && g_pause_unlocked && g_xe && g_title_skin_found)
+        return false;
+    cheats_restore();
     nes_audio_play(NES_SOUND_CHIRP);
     return true;
 }
@@ -57,6 +59,7 @@ void cheats_restore(void) {
     g_music_unlocked = true;
     g_pause_unlocked = true;
     g_xe = true;
+    g_title_skin_found = true;
     set_credit_colour();
 }
 

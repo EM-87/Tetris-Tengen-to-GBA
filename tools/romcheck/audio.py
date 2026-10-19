@@ -4,8 +4,7 @@ pause, the hand-entered tunes and the menu effects.
 """
 import os
 from .harness import (
-    skip, TENGEN_ROM_ROW_ORIGIN,
-    ring_chord_from_title,
+    skip, TENGEN_ROM_ROW_ORIGIN, put_skin_on,
     APU_REGS, AUDIO_ALIGN_SEARCH, AUDIO_GOLDEN_SKIP, EFFECT_WATCH_FRAMES,
     GOLDEN_PATH, KEYS, MUSIC_ROW, REG_SOUND1CNT_H,
     REG_SOUND1CNT_X, REG_SOUND2CNT_L, REG_SOUND3CNT_H, REG_SOUNDCNT_X,
@@ -313,8 +312,7 @@ def effects_check(rom_path):
 
         run(core, 40)
         if skin:
-            ring_chord_from_title(core)       # the prototypes wait for it
-            tap("L", "R"); run(core, 20)
+            put_skin_on(core, settle=32)      # the title's chord: the first
             for _ in range(skin - 1):
                 tap("R"); run(core, 20)
         press_start(core); run(core, 30)      # -> GAME SELECT
@@ -644,17 +642,15 @@ def proto_pause_check(rom_path):
     The list said all the prototypes pause without muting. Measured on the
     dumps (read_skin_pause_music in tools/extract_assets.py) it is proto_a's
     alone: proto_b, proto_c and proto_d go silent like the release. On the
-    title, once the game's chord is rung, L+R puts on the first skin (A) and
-    R walks on from there; and the pause is then the chord's menu, which
+    title, L+R — the game's chord — puts on the first skin (A) and R walks
+    on from there; and the pause is then the chord's menu, which
     keeps the same rule (pause_keeps_music).
     """
     failures = []
     for skin, name, keeps in ((1, "proto_a", True), (2, "proto_b", False)):
         core, screen = load(rom_path)    # `screen` must stay alive; see load()
         run(core, 40)
-        ring_chord_from_title(core)      # the prototypes wait for it
-        core.set_keys(KEYS["L"], KEYS["R"]); run(core, 4)
-        core.set_keys(); run(core, 32)
+        put_skin_on(core, settle=32)     # the title's chord: proto_a
         for _ in range(skin - 1):
             core.set_keys(KEYS["R"]); run(core, 4)
             core.set_keys(); run(core, 32)

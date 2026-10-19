@@ -144,11 +144,12 @@ gba-check` is strict: a skip fails it (`STRICT=0` lets a build without the
 prototypes or the logos through). A check that did not REACH what it checks
 — the cable's match never starting, a board that would not die, a skin that
 did not go on — prints FALLA, not SALTADO. Reach the port's extras the way
-the player does: `ring_chord_from_title`, then `put_skin_on` for a
-prototype's title (L+R on the title without the chord does nothing; `--loans`
-and `--demo` pressed it there and checked the cartridge's title twice).
-`ROMCHECK_AUDIT=1` prints every L+R pressed on the title without the chord,
-with the check's line; `--skin` is the one that does it on purpose.
+the player does: `ring_chord_from_title`, and `put_skin_on` for a
+prototype's title (L+R on the title once, R after the chord has been rung:
+rung already, L+R there stands down and does nothing — while the title's
+chord waited for the menus', `--loans` and `--demo` pressed it where it did
+nothing and checked the cartridge's title twice). `ROMCHECK_AUDIT=1` prints
+every L+R on the title that changes nothing, with the check's line.
 
 ## Traps
 
@@ -723,17 +724,21 @@ cartridge does and the port does not is a bug. The reasons are in
 (level, handicap, music); four HUDs (1 PLAYER: Banner, Stats; VERSUS:
 Versus; WITH: Coop; 2 PLAYER: Versus; COOPERATIVE: Coop — and under the
 chord Stats as VERSUS's and WITH's second), remembered per mode; no HIGH in a
-race, as on the cartridge's 2P screen; one chord (L+R on GAME SELECT or
-LEVEL SETTINGS) that uncovers Korobeiniki, Katiuska, MUSIC MIX, the XE
+race, as on the cartridge's 2P screen; one chord (L+R on GAME SELECT,
+LEVEL SETTINGS or the title) that uncovers Korobeiniki, Katiuska, MUSIC MIX, the XE
 levels 18-19, the pause menu (PAUSE, MUSIC, OPTIONS, EXIT GAME, and A on MUSIC
 opening a window with every tune on a line, the cursor on the one playing,
 the tune under the arrow playing as it moves and the menu around it silent,
 A to take one and B to leave it; MUSIC and not CHANGE MUSIC, whose box
 would cover the panels' last column of figures) and those Stats,
 and turns the menus' text from blue to white and the credits from the
-cartridge's orange to dark grey to say so; the title's L+R cycling the prototype skins, once the
-chord is rung (the prototypes are no part of the cartridge), and under it
-the HUD STATS cossack's colour on L+R;
+cartridge's orange to dark grey to say so; the prototype skins on the
+title, which the same chord finds (the prototypes are no part of the
+cartridge): rung on the title it puts the first on, and after it, rung
+anywhere, L and R alone step them (`unlock_cheats`, `g_title_skin_found`;
+the title's L+R and the menus' used to be two secrets, and then one
+waiting for the other); and under the chord the HUD STATS cossack's colour
+on L+R;
 credits rotating every four seconds — the cartridge's six, GAME SELECT's
 LICENSED BY MIRRORSOFT LTD. among them (`ppuPatchLicensedBy`, $A1EF), then
 the title screen's last two rows, which the port's title has no room for

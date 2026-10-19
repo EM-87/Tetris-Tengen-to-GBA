@@ -3,8 +3,7 @@ The panels either side of the board: the four HUDs, NEXT, the
 braid, the histogram and the level-up show.
 """
 from .harness import (
-    skip,
-    ring_chord_from_title,
+    skip, put_skin_on,
     BRAID_BLUE, CELL_BLOCK, CELL_WALL, HUD_LABEL_TILE_BASE,
     HUD_LABEL_TILE_END, KEYS, OAM_ADDR, PAL_NEXT_BANK,
     PAL_PIECE_BANK, PLAQUE_CORNERS, SCREENBLOCK_ADDR, SCREENBLOCK_OFFSET_ADDR,
@@ -847,8 +846,7 @@ def stats_check(rom_path):
 
         run(core, 40)
         if skin:
-            ring_chord_from_title(core)       # the prototypes wait for it
-            tap("L", "R"); run(core, 20)
+            put_skin_on(core, settle=32)      # the title's chord: the first
         press_start(core); run(core, 24)
         press_start(core); run(core, 24)
         press_start(core); run(core, 60)

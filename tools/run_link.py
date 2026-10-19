@@ -1329,13 +1329,8 @@ def skin_check(rom):
             both(10, [[], []])
 
         both(60)
-        # THE GAME'S CHORD FIRST — GAME SELECT, L+R, and B back — on whichever
-        # console is asked to wear a skin: the prototypes wait for it.
-        wants = (master_chord, slave_chord)
-        for keys, settle in ((["START"], 10), (["L", "R"], 12), (["B"], 24)):
-            both(4, [[KEYS[k] for k in keys] if w else [] for w in wants])
-            both(settle, [[], []])
-        # THE TITLE'S CHORD, on whichever console is asked to wear a skin.
+        # THE TITLE'S CHORD, which is the game's, on whichever console is
+        # asked to wear a skin: it puts the first prototype on.
         chord = [[KEYS["L"], KEYS["R"]] if want else []
                  for want in (master_chord, slave_chord)]
         both(4, chord)

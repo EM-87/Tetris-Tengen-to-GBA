@@ -868,11 +868,12 @@ void mend_bevels(bool on) {
  * which is the whole of "the skin does not stop at the title". */
 uint8_t g_title_skin;
 
-/* ...and whether the chord has been rung on the title yet. A shoulder on its
- * own does NOTHING until it has: the skin is a thing to find, and a player
- * who has not found it should not be able to change the title by resting a
- * finger on L. Once found, L and R alone step the list backwards and forwards
- * — with four skins, going back one used to mean going round three. */
+/* ...and whether the chord has been rung yet, on the title or on the menus
+ * (unlock_cheats: they are one chord). A shoulder on its own does NOTHING
+ * until it has: the skin is a thing to find, and a player who has not found
+ * it should not be able to change the title by resting a finger on L. Once
+ * found, L and R alone step the list backwards and forwards — with four
+ * skins, going back one used to mean going round three. */
 bool g_title_skin_found;
 
 /* Puts the board into (or back out of) a prototype's clothes. Cheap enough to
