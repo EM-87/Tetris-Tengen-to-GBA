@@ -2177,6 +2177,46 @@ def gbp_check(rom_path):
         print(f"  con el truco, un TETRIS: vibracion encendida {n} frames, "
               f"y apagada luego")
 
+    # ...AND THE PLAYER'S OWN SWITCH FOR IT, in the title's EXTRAS, on a
+    # Player and only there (gba/extras.c): SETTINGS has a fourth line,
+    # RUMBLE, ON; A puts it OFF, and the same TETRIS under the chord leaves
+    # the motor alone.
+    harness.SHOW_SPLASH[0] = True
+    try:
+        core4, screen4 = load(rom_path)
+    finally:
+        harness.SHOW_SPLASH[0] = False
+    switched = FakePlayer(core4, logo)
+    switched.screen = screen4
+    switched.to_title()
+
+    def ptap(key, settle=12):
+        for _ in range(4):
+            switched.frame([KEYS[k] for k in key.split("+")])
+        for _ in range(settle):
+            switched.frame()
+
+    ptap("START"); ptap("L+R"); ptap("B", 24)
+    ptap("R")
+    for _ in range(2 if harness.build_has_protos(rom_path) else 1):
+        ptap("DOWN", 6)
+    ptap("A", 20)
+    rumble_row = " ".join(tilemap_text(core4, 13, 7, 23).split())
+    for _ in range(3):
+        ptap("DOWN", 6)
+    ptap("A", 20)
+    settings, _ = game_state_address(rom_path, "g_settings")
+    off_now = settings is not None and core4.memory.u8[settings + 3] & 1
+    ptap("B"); ptap("B", 24)
+    after = tetris(switched, False)
+    if not rumble_row.startswith("RUMBLE") or not off_now:
+        failures.append(f"en un Player SETTINGS no trae RUMBLE ({rumble_row!r}) "
+                        f"o A no lo apaga ({off_now})")
+    elif 0x40000026 in after:
+        failures.append("con RUMBLE apagado una limpieza sigue vibrando")
+    else:
+        print("  en un Player, SETTINGS trae RUMBLE; apagado, el TETRIS no vibra")
+
     # And a plain GBA: nobody answers the logo, the port stays the cable's.
     harness.SHOW_SPLASH[0] = True
     try:

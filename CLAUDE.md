@@ -368,14 +368,16 @@ story behind each; the item number is in brackets.
   console that reaches the title at once; `suspend_check` is the one that
   looks at it.
 - **Every colour goes through the screen's curve** (`kLcdGamma`,
-  `lcd_colour` in gba/palette.h) on its way to palette memory, and today
-  that curve is the identity. A brightening one (x^(1/1.6), build 822ac6c)
-  washed everything out on the backlit SP: emulators DARKEN to imitate the
-  unlit panels (an LCD gamma of about 4 against a monitor's 2.2), games of
-  the day drew bright art to make up for them, and the NES palette was
-  made for a television. The table is the one place to put a curve back.
-  A check that names a colour passes the NES one through the same table
-  (`on_screen` in romcheck/harness.py: keep the two in step).
+  `lcd_colour` in gba/palette.h) on its way to palette memory, and by
+  default that curve is the identity. A brightening one (x^(1/1.6), build
+  822ac6c) washed everything out on the backlit SP: emulators DARKEN to
+  imitate the unlit panels (an LCD gamma of about 4 against a monitor's
+  2.2), games of the day drew bright art to make up for them, and the NES
+  palette was made for a television. So the brighter two (x^(1/1.3) and
+  822ac6c's) are the player's choice, SETTINGS' BRIGHT in the title's
+  EXTRAS, kept on the battery. A check that names a colour passes the NES
+  one through the same table (`on_screen` in romcheck/harness.py: keep the
+  two in step), on a console that has not chosen one.
 - **Sleep waits for the keys to settle** (`wait_keys_settled`): every key
   up for four frames, both before the Stop and after the wake, and the PSG
   silenced before that wait, not after (a note held through it and cut
@@ -750,16 +752,35 @@ the cursor on the one playing,
 the tune under the arrow playing as it moves and the menu around it silent,
 A to take one and B to leave it; a switch in OPTIONS ringing the engine's
 unused bell, $11, NES_SOUND_DING, where a move ticks; MUSIC and not CHANGE
-MUSIC, whose box would cover the panels' last column of figures; NEXT gone
-from its cell while the pause's wall hides the board) and those Stats,
+MUSIC, whose box would cover the panels' last column of figures; NEXT and
+HOLD's piece gone from their cells while the pause's wall hides the board)
+and those Stats,
 and turns the menus' text from blue to white and the credits from the
 cartridge's orange to dark grey to say so; the prototype skins on the
 title, which the same chord finds (the prototypes are no part of the
 cartridge): rung on the title it puts the first on, and after it, rung
-anywhere, L and R alone step them (`unlock_cheats`, `g_title_skin_found`;
-the title's L+R and the menus' used to be two secrets, and then one
-waiting for the other); and under the chord the HUD STATS cossack's colour
-on L+R;
+anywhere, L or R alone — let go with nothing else pressed, so neither the
+chord nor the sleep's L+R+SELECT, which both begin with one shoulder,
+counts (`released_shoulder_alone`) — puts up the title's EXTRAS
+(`extras.c`): a box like the pause's, the title still behind it (the
+cathedral's sprites holed out by a window, `title_window_hole`; no
+fireworks, no clock, no demo), with PROTOTYPES, the skins as a list
+(names from the recipes, `kSkinMenuNames`); SOUND TEST, the five sounds
+the engine carries and the cartridge never asks for ($0C and $0F-$12), the
+title's tune standing down; SETTINGS, the tunes' volume and the effects'
+apart, the screen's curve and, on a Game Boy Player only, its rumble; and
+ERASE SCORES in the credits' grey, which the arrow never reaches and only
+SELECT opens — the power-on's two questions (`--extras`). The settings
+(`g_settings`, SAVE_SETTINGS_OFF) are the console's, in force from
+power-on chord or not; only the box is behind the chord. The volumes need
+the engine to say who is writing a channel, which is asked AS IT WRITES
+(Nes6502Bus.channel_written): the voice at the chain node in $03F2, its
+number at $03DC,node and its class at $0292,voice — tunes $1D-$23, effects
+$74 and over, measured; the chain's head is not the writer four times in
+ten. (`unlock_cheats`, `g_title_skin_found`; the title's L+R and the
+menus' used to be two secrets, and then one waiting for the other; L and R
+used to step the skins.) And under the chord the HUD STATS cossack's
+colour on L+R;
 credits rotating every four seconds — the cartridge's six, GAME SELECT's
 LICENSED BY MIRRORSOFT LTD. among them (`ppuPatchLicensedBy`, $A1EF), then
 the title screen's last two rows, which the port's title has no room for
@@ -826,8 +847,9 @@ supply through `tools/make_splash.py`, `--mirrorsoft` and `--tetris` for
 those two: 256 colours for their gradients; all gitignored like the
 cartridge's art; never on the Single-Pak copy, which never shows a
 splash); every
-colour through one table for the GBA's LCD (`kLcdGamma`, the identity
-today); the Game Boy Player's logo at power-on, its rumble under the chord, and on it the
+colour through one table for the GBA's LCD (`kLcdGamma`: the identity
+unless SETTINGS' BRIGHT picks one of the two brighter curves for an unlit
+screen, `lcd_set_curve` loading the power-on palettes again through it); the Game Boy Player's logo at power-on, its rumble under the chord, and on it the
 cartridge's three settings pages instead of the one (`gbp.c`,
 `draw_tv_page`); 2 PLAYER and COOPERATIVE over the Wireless Adapter, found by
 itself at power-on or plugged in later, the LINK CABLE screen saying

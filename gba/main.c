@@ -62,6 +62,10 @@ int main(void) {
     /* ...and otherwise the cable answers from the start, wherever the
      * player is: see link_rest. */
     link_rest();
+    /* THE CONSOLE'S SETTINGS before the first thing is drawn or heard: the
+     * screen's curve the splash's colours go through, and the volumes. See
+     * g_settings (extras.c). */
+    settings_load();
     /* The publisher's logo, at power-on only; see splash.c. */
     splash_show();
     /* A Game Boy Player answered its logo — now, or at power-on before a
@@ -282,38 +286,76 @@ int main(void) {
         }
 
         if (screen == SCREEN_TITLE) {
-            /* initializeTitleScreen ends with this (main.asm.txt:4489). */
-            front_music(FRONT_TITLE_THEME);
+            /* initializeTitleScreen ends with this (main.asm.txt:4489). The
+             * EXTRAS' sound test has it stand down (extras_quiet). */
+            front_music(extras_quiet() ? FRONT_SILENCE : FRONT_TITLE_THEME);
             set_offset_layer(TITLE_LOGO_SHIFT_PX);
-            /* L+R FINDS IT; L AND R ALONE DRIVE IT AFTERWARDS. And L+R here
-             * is the game's own chord as much as on GAME SELECT or LEVEL
-             * SETTINGS (unlock_cheats): rung here it opens the tunes, the
-             * pause menu and the rest, and puts the first prototype on; rung
-             * there, it has found the prototypes too, and L and R alone step
-             * them here. Until it is rung, anywhere, the title is the
-             * cartridge's and a lone shoulder does nothing at all, so the
-             * title cannot be changed by accident.
-             *
-             * After it, though, the chord is a poor control. There are four
-             * skins and it only ever went forwards, so going back to the one
-             * you just passed meant going round the other three — which is
-             * exactly what was reported. So once found, R steps forward and L
-             * steps back, and the chord itself stands down. */
-            int skin_step = 0;
-            {
-                bool chord = shoulder_chord();
-                bool tap_l = pressed_shoulder(SHOULDER_L);
-                bool tap_r = pressed_shoulder(SHOULDER_R);
-                if (!g_title_skin_found) {
-                    if (chord && unlock_cheats() && TITLE_SKIN_COUNT > 1)
-                        skin_step = 1;
-                } else if (TITLE_SKIN_COUNT > 1 && !chord && (tap_l || tap_r)) {
-                    skin_step = tap_r ? 1 : TITLE_SKIN_COUNT - 1;
+            /* THE EXTRAS BOX, while it is up, has the buttons and the frame:
+             * the title stands still behind it — no fireworks, no clock, so
+             * no demo — and only what it chose reaches the rest of this. */
+            int skin_to = -1;
+            bool erase = false;
+            if (extras_up()) {
+                vsync();
+                draw_title();
+                int chosen = 0;
+                int what = extras_frame(pressed, &chosen);
+                audio_frame();
+                if (what == EXTRAS_SKIN && chosen != g_title_skin) {
+                    skin_to = chosen;
+                } else if (what == EXTRAS_ERASE) {
+                    erase = true;
+                } else {
+                    /* Closed: the title's clock from the top, as on any
+                     * visit, or the demo was owed the moment it went. */
+                    if (what != EXTRAS_STAY) restart_title_sprites();
+                    continue;
                 }
             }
-            if (skin_step) {
-                g_title_skin = (uint8_t)((g_title_skin + skin_step) %
-                                          TITLE_SKIN_COUNT);
+            /* L+R FINDS IT; L OR R ALONE OPENS THE EXTRAS AFTERWARDS — as it
+             * is let go, and only if nothing else was pressed with it
+             * (released_shoulder_alone). And L+R
+             * here is the game's own chord as much as on GAME SELECT or LEVEL
+             * SETTINGS (unlock_cheats): rung here it opens the tunes, the
+             * pause menu and the rest, and puts the first prototype on; rung
+             * there, it has found the prototypes too. Until it is rung,
+             * anywhere, the title is the cartridge's and a lone shoulder does
+             * nothing at all, so the title cannot be changed by accident.
+             *
+             * After it, though, the chord is a poor control, and so were L
+             * and R stepping through the skins one way and the other: the
+             * skins are a list now, in the EXTRAS box (extras.c), with the
+             * sound test and the settings beside them. */
+            if (!erase && skin_to < 0) {
+                bool chord = shoulder_chord();
+                bool alone = released_shoulder_alone();
+                if (!g_title_skin_found) {
+                    if (chord && unlock_cheats() && TITLE_SKIN_COUNT > 1)
+                        skin_to = 1;
+                } else if (alone) {
+                    extras_open();
+                    screen_blip();
+                    vsync();
+                    draw_title();
+                    audio_frame();
+                    continue;
+                }
+            }
+            /* THE ERASE, from the box's grey line: the power-on's own pages
+             * (erase_records_prompt), asked twice with NO chosen, over a
+             * screen of their own; then the title again, its HIGH SCORE from
+             * whatever table is left. */
+            if (erase) {
+                vsync();
+                clear_screen();
+                oam_hide_all();
+                erase_records_prompt();
+                leader_use_table(front_skin());
+                restart_title_sprites();
+                continue;
+            }
+            if (skin_to >= 0) {
+                g_title_skin = (uint8_t)skin_to;
                 /* ...and the HIGH SCORE the menus print is this build's, from
                  * this build's table. See LEADER_TABLES. */
                 leader_use_table(front_skin());

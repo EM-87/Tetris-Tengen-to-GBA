@@ -17,6 +17,9 @@
  *               order the drawing happens in
  *   main.c      the state machine that walks between them
  *
+ * (and since: records.c, the high scores; extras.c, the title's EXTRAS box
+ * and the settings it keeps; and the hardware's own files beside them)
+ *
  * -- and this header is the seam. It holds the LAYOUT: every constant
  * that says where something is on the screen, which palette bank it is
  * drawn in and which of the four backgrounds it rides, because those
@@ -545,13 +548,6 @@
 #define T_RULE_MID   0x76
 #define T_RULE_RIGHT 0x79
 
-/* ...and ONE of them on its own, for the level screen's handicap: L belongs
- * to player 1's side of the pad and R to player 2's. Each keeps its own held
- * state so neither can swallow the other's press, and the caller checks the
- * chord first so reaching for the hidden tunes buries nobody. */
-#define SHOULDER_L 0
-#define SHOULDER_R 1
-
 /* Which bgPalette1 bank the MENU and HIGH SCORES frames draw their braid in —
  * measured off the generated screens, where every frame tile is in bank 2 and
  * nothing else on them is. */
@@ -935,6 +931,9 @@ typedef struct {
 /* ...and the pause menu's OPTIONS (OPT_HARD_DROP), a byte and its check, in
  * the gap the name leaves before the modes' tables. */
 #define SAVE_OPTIONS_OFF (SAVE_NAME_OFF + LEADER_INITIALS + 1)
+/* ...and after them the title's SETTINGS (extras.c): SET_COUNT bytes and
+ * their check, still in that gap. */
+#define SAVE_SETTINGS_OFF (SAVE_OPTIONS_OFF + 2)
 
 /* HOW LONG EACH OF THE TWO PAGES STANDS THERE, and both are the cartridge's
  * own, counted on its own clock — which nobody would guess at, because both
@@ -1923,7 +1922,8 @@ void system_sleep(void);
 /* True while a match is in play: vsync() does not put the console to sleep
  * then (a solo match does it on its pause plaque; see system_sleep). */
 extern bool g_sleep_blocked;
-bool pressed_shoulder(int which);
+/* L or R pressed and let go with nothing else: the title's EXTRAS. */
+bool released_shoulder_alone(void);
 
 /* THE PAUSED GAME THAT OUTLIVES THE POWER SWITCH (suspend.c). What the
  * menus chose, kept with the game so the match can be started again as the
@@ -1968,8 +1968,16 @@ void gbp_tick(void);
 void upload_tiles(void);
 void upload_palette_set(int base, const uint8_t *set, vu16 *memory);
 void upload_palettes(void);
+void upload_sprite_palettes(void);
+/* The screen's curve (kLcdGamma, palette.h): which of the LCD_CURVES is in
+ * force, and the palettes loaded at power-on loaded again through it. */
+void lcd_set_curve(int curve);
 void set_credit_colour(void);
 void title_window(bool on);
+/* ...and a hole in it the size of the title's EXTRAS box (extras.c), where
+ * the cathedral's sprites are not drawn: the box is on the background they
+ * stand in front of. Pixels; w == 0 closes it. */
+void title_window_hole(int x, int y, int w, int h);
 void set_field_palette_for_level(uint8_t level);
 void set_bank_from_piece(int bank_index, TengenTetromino piece);
 void set_piece_palette(TengenTetromino piece);
@@ -2231,5 +2239,30 @@ void pause_wall_step(void);
 void pause_box_forget(void);
 bool bricks_shown(void);
 void restore_brick_bank(void);
+
+/* extras.c: THE TITLE'S EXTRAS, under the chord — L or R on the title puts
+ * up a box with the prototypes, a sound test of the sounds the cartridge
+ * never plays and the console's SETTINGS, and the high scores' erase, which
+ * only SELECT reaches — and the settings themselves, which are in force from
+ * power-on whatever the chord (see g_settings). */
+#define SET_MUSIC      0       /* the tunes' volume, 0..AUDIO_LEVEL_MAX */
+#define SET_EFFECTS    1       /* ...the effects' */
+#define SET_BRIGHT     2       /* the screen's curve, 0..LCD_CURVES-1 */
+#define SET_FLAGS      3
+#define SET_COUNT      4
+#define SET_RUMBLE_OFF 0x01    /* SET_FLAGS: no rumble on a Game Boy Player */
+#define SET_FLAGS_ALL  0x01
+typedef char save_settings_fit[
+    SAVE_SETTINGS_OFF + SET_COUNT + 1 <= SAVE_MODE_OFF(0) ? 1 : -1];
+extern uint8_t g_settings[SET_COUNT];
+void settings_load(void);
+bool rumble_wanted(void);
+enum { EXTRAS_STAY, EXTRAS_CLOSED, EXTRAS_SKIN, EXTRAS_ERASE };
+void extras_open(void);
+bool extras_up(void);
+bool extras_quiet(void);       /* the title's tune stands down (SOUND TEST) */
+int extras_frame(uint8_t pressed, int *skin);
+/* The title drawn again whole, the next time it is drawn (frontend.c). */
+void title_redraw(void);
 
 #endif /* PORT_H */

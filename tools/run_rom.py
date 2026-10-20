@@ -50,6 +50,7 @@ from romcheck.frontend import *   # noqa: F401,F403
 from romcheck.hud import *        # noqa: F401,F403
 from romcheck.ai import *         # noqa: F401,F403
 from romcheck.records import *    # noqa: F401,F403
+from romcheck.extras import *     # noqa: F401,F403
 
 def main():
     ap = argparse.ArgumentParser()
@@ -146,6 +147,8 @@ def main():
                      help="check the counters blank their leading zeros")
     ap.add_argument("--handshare", action="store_true",
                      help="check the hand-entered tunes give way to the effects")
+    ap.add_argument("--extras", action="store_true",
+                     help="check the title's EXTRAS box, its sound test and settings")
     ap.add_argument("--pausemenu", action="store_true",
                      help="check the L+R pause menu")
     ap.add_argument("--quit-audio", action="store_true",
@@ -266,6 +269,8 @@ def main():
         sys.exit(pausemenu_check(args.rom))
     if args.counters:
         sys.exit(counters_check(args.rom))
+    if args.extras:
+        sys.exit(extras_check(args.rom))
 
     core, screen = load(args.rom)
     start_game(core)

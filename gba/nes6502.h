@@ -45,6 +45,11 @@ typedef struct {
      * a write to a period byte replaces that byte of the period the sweep
      * has already moved, even with the value it held before. */
     uint32_t apu_written;
+    /* Called on every write to a sound channel's registers ($4000-$400F),
+     * with the channel (0-3) and the RAM as the write found it: the program
+     * writing them can be asked, there and then, which of its voices it is
+     * writing for. NULL for nobody. */
+    void (*channel_written)(const uint8_t *ram, unsigned channel);
 } Nes6502Bus;
 
 typedef struct {

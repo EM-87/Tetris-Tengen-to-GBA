@@ -68,16 +68,20 @@ static const uint8_t kNesPaletteRGB[64][3] = {
  * (an LCD gamma of about 4 against a monitor's 2.2). The NES palette was
  * made for a television, and on the backlit SP (AGS-101) a brightening
  * curve (x^(1/1.6), build 822ac6c) washed everything out, so the table is
- * the identity: every colour as the cartridge names it. It stays the one
- * place to put a curve back, should a front-lit screen want one. */
-static const uint8_t kLcdGamma[32] = {
-     0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15,
-    16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
-};
+ * the identity: every colour as the cartridge names it.
+ *
+ * ...AND THE OTHER TWO ARE THE PLAYER'S TO PUT BACK: SETTINGS' BRIGHT
+ * (extras.c), for the front-lit and the unlit screens, x^(1/1.3) and
+ * build 822ac6c's x^(1/1.6), black still black. One table in force at a time
+ * (g_lcd_gamma, video.c); OFF, the first, is the identity, and what a
+ * console that never set one shows. */
+#define LCD_CURVES 3
+extern const uint8_t kLcdGamma[LCD_CURVES][32];
+extern const uint8_t *g_lcd_gamma;
 
 static inline uint16_t lcd_colour(uint16_t c) {
-    return rgb15(kLcdGamma[c & 31], kLcdGamma[(c >> 5) & 31],
-                 kLcdGamma[(c >> 10) & 31]);
+    return rgb15(g_lcd_gamma[c & 31], g_lcd_gamma[(c >> 5) & 31],
+                 g_lcd_gamma[(c >> 10) & 31]);
 }
 
 static inline uint16_t nes_colour_to_gba(uint8_t nes_index) {

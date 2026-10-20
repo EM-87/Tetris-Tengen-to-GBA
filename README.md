@@ -129,7 +129,7 @@ Lo que el GBA tiene de más:
 | Partida | SELECT | cambia de HUD (dos por modo); con HOLD, guarda la pieza |
 | Partida, HUD Stats, con el acorde | L+R | cambia el color del cosaco; con HOLD, cambia de HUD (en cualquier HUD) |
 | GAME SELECT, LEVEL SETTINGS o el título | L+R | el acorde, el mismo en las tres: destapa las canciones ocultas (Korobeiniki, Katiuska, MUSIC MIX), los niveles 18-19, el menú de pausa, los títulos de los prototipos y lo demás que añade el port (abajo); hecho en el título, además pone el primer prototipo |
-| Título, con el acorde | L o R | recorre los títulos de los prototipos (su skin llega al juego) |
+| Título, con el acorde | L o R (soltado solo) | abre EXTRAS: los prototipos, la prueba de sonido y los ajustes (abajo) |
 | Título, con el acorde | SELECT | las tablas de HIGH SCORES, una por modo (Izquierda/Derecha las recorren); sin el acorde, SELECT es otro START, como en el cartucho |
 | Pantalla LINK CABLE | SELECT | Single-Pak: envía el juego a una GBA sin cartucho |
 | Carrera, tablero muerto | A+B | se levanta y sigue, como en el cartucho |
@@ -155,6 +155,36 @@ FAST DOWN, FAST SHIFT y HOLD son reglas de la partida: las del maestro, para
 los dos, y cualquiera las cambia desde el menú compartido solo para esa
 partida; GHOST y SWAP A-B son de cada jugador.
 
+**EXTRAS** (con el acorde, L o R en el título, al soltarlo y sin otro botón
+con él) es una caja como la de la pausa, delante de la catedral y con el
+título quieto detrás (sin fuegos ni demo):
+
+- **PROTOTYPES**: la lista de títulos — RELEASE y los prototipos que tenga la
+  ROM (NINTENDO, PRESENTS, SOVIET MIND) —, con la flecha en el que está
+  puesto; A pone el elegido, y su skin llega al juego.
+- **SOUND TEST**: los cinco sonidos que el motor del cartucho trae y el
+  cartucho nunca pide, por su número: 0C LEVEL UP (la fanfarria de subir de
+  nivel que no usa), 0F SWIPE, 10 CHIRP, 11 DING y 12 ALARM. El tema del
+  título calla mientras tanto. Fuera de estos no queda nada sin usar con
+  contenido: lo demás que el desensamblado marca como unused es código
+  muerto (un borrado de pantalla que ninguna entrada pide, un salto y un
+  vector de reset), la lectura del mando de expansión de Famicom que nadie
+  mira y el canal DMC, que el motor no toca.
+- **SETTINGS**: MUSIC y EFFECTS, el volumen de las canciones y el de los
+  efectos por separado (OFF, 25%, 50%, 75%, 100%; el motor toca las dos
+  cosas por los mismos canales, y el port distingue cuál suena por la voz
+  que escribe en cada uno); BRIGHT, la curva de la pantalla para una GBA sin
+  luz (OFF, LOW, HIGH: aclara los oscuros sin tocar el negro); y RUMBLE,
+  solo en un Game Boy Player, para apagar la vibración. Izquierda/Derecha o
+  A cambian el de la flecha, con la campanilla. Se guardan en el cartucho y
+  valen desde que se enciende, con acorde o sin él (son los mandos de la
+  consola, no el juego); lo que está detrás del acorde es la caja.
+- **ERASE SCORES**, abajo y en el gris oscuro de los créditos: la flecha no
+  llega nunca; solo SELECT lo abre, y son las mismas dos preguntas, con NO
+  elegido, del borrado al encender.
+
+B vuelve atrás y cierra; START cierra.
+
 **Sin el acorde, el cartucho tal cual** en lo que se ve y se oye: los
 créditos son los suyos (con LICENSED BY MIRRORSOFT LTD., y al final las dos
 líneas de copyright de su título, ©1987 ACADEMYSOFT-ELORG. y ©1988 TENGEN,
@@ -165,11 +195,11 @@ el sitio del de Mirrorsoft y la versión, el build y el año el de los
 copyrights, SELECT en el título abre los récords, el Game Boy
 Player vibra, y además de lo de arriba la música acelera con la pila alta, la
 pausa tapa el tablero con un muro de bloques que sube desde el suelo (y al
-seguir baja desde arriba) y esconde NEXT, un récord nuevo suena con el
+seguir baja desde arriba) y esconde NEXT y la pieza de HOLD, un récord nuevo suena con el
 jingle que el cartucho no usa (por cable, todo esto con el acorde del
 maestro), la demo la juega el ordenador del port, en HUD STATS, y sube
-hasta el nivel 19 como cualquier partida con el acorde, en el título L y R recorren
-los prototipos y en HUD STATS cambia el color del cosaco, y al acabar la partida
+hasta el nivel 19 como cualquier partida con el acorde, en el título L o R abren
+los EXTRAS y en HUD STATS cambia el color del cosaco, y al acabar la partida
 la cortinilla del Tetris de Game Boy — un muro de ladrillos sube tapando la
 pila muerta y luego baja vaciando el pozo — deja en el tablero la hoja de la
 partida — TIME, PIECES, SINGLE, DOUBLE, TRIPLE,
@@ -193,7 +223,7 @@ partida de otra: la estructura puede haber cambiado.)
 **Game Boy Player**: al encender sale su logo, como en los juegos que lo
 soportaban, y si el juego corre en un Game Boy Player lo reconoce y, con el
 acorde, el mando de GameCube vibra al hacer líneas (más con un TETRIS), al
-subir de nivel y al perder. Y en la tele los ajustes vuelven a ser las tres pantallas del
+subir de nivel y al perder (RUMBLE, en SETTINGS de los EXTRAS, lo apaga). Y en la tele los ajustes vuelven a ser las tres pantallas del
 cartucho, LEVEL, HANDICAP y MUSIC, cada una con su columna de números (START
 pasa de pantalla, B vuelve). El logo es de Nintendo y no va en el repo: se genera con
 `python3 tools/make_gbp_logo.py captura.png` a partir de una captura sin
@@ -341,7 +371,7 @@ Lo que hay detrás del acorde no es un modo: es el juego terminado.
 
 En cifras: unas 5.400 líneas de reglas en C (`src/`, probadas en el PC con
 146 tests y un fuzzer), 15.800 de capa GBA y 25.000 de herramientas y
-comprobaciones — 54 baterías en `make gba-check`, más de ochenta
+comprobaciones — 55 baterías en `make gba-check`, más de ochenta
 comprobaciones que arrancan la ROM en un emulador, la juegan y miran la
 pantalla, el sonido y la memoria —, todo contrastado contra el disassembly
 del cartucho, línea citada a línea citada. Nada de eso se ve desde fuera, y

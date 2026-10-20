@@ -458,13 +458,26 @@ bool shoulder_chord(void) {
     return pressed;
 }
 
-bool pressed_shoulder(int which) {
-    static bool was_held[2];
+/* ...AND ONE OF THEM LET GO ON ITS OWN: L or R pressed and released with
+ * nothing else down at any moment in between. The press itself will not do:
+ * the chord and the sleep's L+R+SELECT both begin with one shoulder down a
+ * frame before the rest, and on the title that frame put up the EXTRAS —
+ * whose SELECT then took the sleep's to the erase. */
+bool released_shoulder_alone(void) {
+    static bool down, spoilt;
     uint16_t keys = (uint16_t)(~REG_KEYINPUT & KEY_MASK);
-    bool held = (keys & (which == SHOULDER_L ? KEY_L : KEY_R)) != 0;
-    bool pressed = held && !was_held[which];
-    was_held[which] = held;
-    return pressed;
+    uint16_t shoulders = keys & (KEY_L | KEY_R);
+    if (shoulders) {
+        if (!down) {
+            down = true;
+            spoilt = false;
+        }
+        if ((keys & ~shoulders) || shoulders == (KEY_L | KEY_R)) spoilt = true;
+        return false;
+    }
+    bool fired = down && !spoilt;
+    down = false;
+    return fired;
 }
 
 void upload_tiles(void) {
@@ -601,16 +614,62 @@ void upload_palette_set(int base, const uint8_t *set, vu16 *memory) {
  * the release's title is up; clear_screen takes it away with the title. */
 #define TITLE_WIN_L 17
 #define TITLE_WIN_R 224
+/* THE EXTRAS BOX (extras.c) IS A HOLE IN IT: the box is drawn on the
+ * background, and the cathedral's central tower is sprites in front of it.
+ * Window 0 becomes the box, with everything but the sprites, and the frame
+ * moves to window 1, which window 0 wins over where they meet. */
+static uint16_t g_hole_h, g_hole_v;     /* WIN0H/WIN0V for it; 0: none */
+
+void title_window_hole(int x, int y, int w, int h) {
+    g_hole_h = w > 0 ? (uint16_t)((x << 8) | (x + w)) : 0;
+    g_hole_v = w > 0 ? (uint16_t)((y << 8) | (y + h)) : 0;
+}
+
 void title_window(bool on) {
-    if (on) {
-        REG_WIN0H = (uint16_t)((TITLE_WIN_L << 8) | TITLE_WIN_R);
+    if (!on) {
+        REG_DISPCNT &= (uint16_t)~(DCNT_WIN0 | DCNT_WIN1);
+        return;
+    }
+    const uint16_t frame = (uint16_t)((TITLE_WIN_L << 8) | TITLE_WIN_R);
+    REG_WINOUT = 0x002F;                    /* outside: all but the sprites */
+    if (g_hole_h) {
+        REG_WIN0H = g_hole_h;
+        REG_WIN0V = g_hole_v;
+        REG_WIN1H = frame;
+        REG_WIN1V = (uint16_t)((0 << 8) | 160);
+        REG_WININ = 0x3F2F;                 /* the box: no sprites; the frame: all */
+        REG_DISPCNT |= DCNT_WIN0 | DCNT_WIN1;
+    } else {
+        REG_WIN0H = frame;
         REG_WIN0V = (uint16_t)((0 << 8) | 160);
         REG_WININ = 0x003F;                 /* inside: everything */
-        REG_WINOUT = 0x002F;                /* outside: all but the sprites */
-        REG_DISPCNT |= DCNT_WIN0;
-    } else {
-        REG_DISPCNT &= (uint16_t)~DCNT_WIN0;
+        REG_DISPCNT = (uint16_t)((REG_DISPCNT | DCNT_WIN0) & ~DCNT_WIN1);
     }
+}
+
+/* THE SCREEN'S THREE CURVES (palette.h): the identity, x^(1/1.3) and
+ * x^(1/1.6), each channel's five bits rounded to the nearest. */
+const uint8_t kLcdGamma[LCD_CURVES][32] = {
+    {  0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15,
+      16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31 },
+    {  0,  2,  4,  5,  6,  8,  9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
+      19, 20, 20, 21, 22, 23, 24, 25, 25, 26, 27, 28, 29, 29, 30, 31 },
+    {  0,  4,  6,  7,  9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+      21, 21, 22, 23, 24, 24, 25, 26, 26, 27, 28, 28, 29, 30, 30, 31 },
+};
+const uint8_t *g_lcd_gamma = kLcdGamma[0];
+
+/* ANOTHER CURVE, AND THE COLOURS ON SCREEN THROUGH IT AT ONCE. Every palette
+ * is written through the curve as it is loaded, so the ones a screen loads
+ * for itself pick it up the next time it is drawn; these are the ones loaded
+ * once at power-on, and the title's own, which is where BRIGHT is changed. */
+void lcd_set_curve(int curve) {
+    if (curve < 0 || curve >= LCD_CURVES) curve = 0;
+    if (g_lcd_gamma == kLcdGamma[curve]) return;
+    g_lcd_gamma = kLcdGamma[curve];
+    upload_palettes();
+    set_field_palette_for_level(0);
+    upload_sprite_palettes();
 }
 
 void set_credit_colour(void) {
@@ -1130,20 +1189,13 @@ void upload_sprite_tiles(void) {
     for (unsigned i = 0; i < sizeof(kDancerTiles); i += 2) {
         dst[i / 2] = (uint16_t)(kDancerTiles[i] | (kDancerTiles[i + 1] << 8));
     }
-    /* The level-up interlude installs spritePalette2 (main.asm.txt:2044), and
-     * the dancers pick among its four palettes with their own attribute bytes
-     * — which is why the six are not all the same colour. */
-    upload_palette_set(PAL_OBJ_DANCER, kRomPalette_obj_dancers, MEM_PALETTE_OBJ);
-
     /* CHR bank 3, the title screen's sprite bank, above the dancers' 256:
      * the cathedral overlay at tiles $02-$13, the sparkles at $14-$17 and the
-     * firework bursts from $90 up. The title installs spritePalette1 for them
-     * (main.asm.txt:4492-4494). */
+     * firework bursts from $90 up. */
     vu16 *tdst = MEM_OBJ_TILES + TITLE_OBJ_TILE_BASE * 16;
     for (unsigned i = 0; i < sizeof(kTitleObjTiles); i += 2) {
         tdst[i / 2] = (uint16_t)(kTitleObjTiles[i] | (kTitleObjTiles[i + 1] << 8));
     }
-    upload_palette_set(PAL_OBJ_TITLE, kRomPalette_obj_title, MEM_PALETTE_OBJ);
 
     /* The HUD labels, with the header grid's vertical stubs masked out of
      * them; see read_hud_labels in tools/extract_assets.py. */
@@ -1151,9 +1203,6 @@ void upload_sprite_tiles(void) {
     for (unsigned i = 0; i < sizeof(kHudLabelTiles); i += 2) {
         ldst[i / 2] = (uint16_t)(kHudLabelTiles[i] | (kHudLabelTiles[i + 1] << 8));
     }
-
-    /* The gameplay sprite set, for the drop-point digits. See PAL_OBJ_GAME. */
-    upload_palette_set(PAL_OBJ_GAME, kRomPalette_obj_game, MEM_PALETTE_OBJ);
 
     /* ...and their glyphs, which are the GAME bank's own '0'-'9'. The tileset
      * is ASCII-indexed (see ascii_tile), so they sit at $30 and copy straight
@@ -1172,6 +1221,21 @@ void upload_sprite_tiles(void) {
         for (unsigned i = 0; i < 32; i += 2)
             dst2[i / 2] = (uint16_t)(src2[i] | (src2[i + 1] << 8));
     }
+    upload_sprite_palettes();
+}
+
+/* ...and their colours, which a change of the screen's curve loads again
+ * (lcd_set_curve). */
+void upload_sprite_palettes(void) {
+    /* The level-up interlude installs spritePalette2 (main.asm.txt:2044), and
+     * the dancers pick among its four palettes with their own attribute bytes
+     * — which is why the six are not all the same colour. */
+    upload_palette_set(PAL_OBJ_DANCER, kRomPalette_obj_dancers, MEM_PALETTE_OBJ);
+    /* The title installs spritePalette1 for its own (main.asm.txt:4492-4494). */
+    upload_palette_set(PAL_OBJ_TITLE, kRomPalette_obj_title, MEM_PALETTE_OBJ);
+    /* The gameplay sprite set, for the drop-point digits. See PAL_OBJ_GAME. */
+    upload_palette_set(PAL_OBJ_GAME, kRomPalette_obj_game, MEM_PALETTE_OBJ);
+
     vu16 *rim_pal = MEM_PALETTE_OBJ + PAL_OBJ_SPIRE * 16;
     for (int i = 0; i < 4; i++)
         rim_pal[i] = nes_colour_to_gba(

@@ -41,15 +41,22 @@ IWRAM_CODE static uint8_t bus_read(Nes6502 *cpu, uint16_t addr) {
     return cpu->bus.code[addr];
 }
 
+/* The sound chip's registers, out of line: a handful of writes a frame against
+ * every store the program makes, and bus_write is inlined into each of them. */
+IWRAM_CODE __attribute__((noinline))
+static void apu_write(Nes6502 *cpu, unsigned reg, uint8_t value) {
+    cpu->bus.apu[reg] = value;
+    cpu->bus.apu_written |= 1u << reg;
+    if (reg < 0x10 && cpu->bus.channel_written)
+        cpu->bus.channel_written(cpu->bus.ram, reg >> 2);
+}
+
 IWRAM_CODE static void bus_write(Nes6502 *cpu, uint16_t addr, uint8_t value) {
     if (addr < 0x2000) {
         cpu->bus.ram[addr & 0x7FF] = value;
         return;
     }
-    if (addr >= 0x4000 && addr <= 0x4017) {
-        cpu->bus.apu[addr - 0x4000] = value;
-        cpu->bus.apu_written |= 1u << (addr - 0x4000);
-    }
+    if (addr >= 0x4000 && addr <= 0x4017) apu_write(cpu, addr - 0x4000u, value);
 }
 
 void nes6502_init(Nes6502 *cpu, uint8_t *ram, uint8_t *code_view,
@@ -82,6 +89,7 @@ void nes6502_init(Nes6502 *cpu, uint8_t *ram, uint8_t *code_view,
     cpu->bus.code = (const uint8_t *)((uintptr_t)code_view - NES6502_CODE_BASE);
     for (int i = 0; i < 0x18; i++) cpu->bus.apu[i] = 0;
     cpu->bus.apu_written = 0;
+    cpu->bus.channel_written = 0;
     cpu->a = cpu->x = cpu->y = 0;
     cpu->sp = 0xFD;
     cpu->p = F_U | F_I;
