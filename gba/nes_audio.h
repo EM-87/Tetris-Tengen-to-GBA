@@ -79,7 +79,7 @@
  * asks it to — constants.asm.txt marks $0F-$12 "maybe unused". The title's
  * skin easter egg uses CHIRP, so the egg has a voice nothing else in the game
  * uses, and it is still the ROM's voice. SWIPE, fourteen frames of noise, is
- * the one of them the port only plays in the SOUND TEST (extras.c). */
+ * HOLD's: the piece swept aside (announce, match.c). */
 #define NES_SOUND_SWIPE        0x0F
 #define NES_SOUND_CHIRP        0x10
 /* ...and $11, the other of them nothing in the game asks for: measured on

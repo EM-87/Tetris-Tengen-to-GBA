@@ -17,8 +17,9 @@
  *               order the drawing happens in
  *   main.c      the state machine that walks between them
  *
- * (and since: records.c, the high scores; extras.c, the title's EXTRAS box
- * and the settings it keeps; and the hardware's own files beside them)
+ * (and since: records.c, the high scores; extras.c, GAME SELECT's OPTIONS
+ * page, the settings it keeps and the console's lifetime figures; and the
+ * hardware's own files beside them)
  *
  * -- and this header is the seam. It holds the LAYOUT: every constant
  * that says where something is on the screen, which palette bank it is
@@ -504,6 +505,12 @@
 #define POINTS_OBJ_TILE_BASE 512
 /* ...and the tile after the ten digits, for the spire's rim. */
 #define SPIRE_RIM_TILE (POINTS_OBJ_TILE_BASE + 10)
+/* ...and the title's bank once more, every pixel four colours up (1-3 are
+ * 5-7), for the fireworks on a light background: the same palettes, whose
+ * colours 5-7 are the title's own through bg_ink. See ink_sprite_palettes. */
+#define TITLE_OBJ_INKED_BASE 768
+typedef char title_obj_inked_fit[TITLE_OBJ_INKED_BASE >= SPIRE_RIM_TILE + 16 &&
+                                 TITLE_OBJ_INKED_BASE + 256 <= 1024 ? 1 : -1];
 #define PAL_OBJ_TITLE 5           /* banks 5-8: spritePalette1 */
 
 /* spritePalette0, which is the set the cartridge has installed while a game
@@ -1824,7 +1831,12 @@ typedef enum {
 #define T_COPYRIGHT (T_COLON + 1)
 #define TITLE_COPYRIGHT_TILE 0xDF
 #define COPYRIGHT_SIGN "\x7F"
-typedef char ghost_tiles_fit[T_COPYRIGHT + 1 <= 1024 ? 1 : -1];
+/* ...AND THE OPTIONS' BOXES ONE TILE EACH (extras.c): the switches' box,
+ * seven by seven in the letters' ink, empty or lit with its dot, at the
+ * tile's left so a row of them is a bar with a pixel between. */
+#define T_SQ_OFF (T_COPYRIGHT + 1)
+#define T_SQ_ON  (T_SQ_OFF + 1)
+typedef char ghost_tiles_fit[T_SQ_ON + 1 <= 1024 ? 1 : -1];
 
 /* The frame's own tiles, out of the plaque the game over is drawn with. */
 #define T_BOX_TL 0x29
@@ -1922,8 +1934,6 @@ void system_sleep(void);
 /* True while a match is in play: vsync() does not put the console to sleep
  * then (a solo match does it on its pause plaque; see system_sleep). */
 extern bool g_sleep_blocked;
-/* L or R pressed and let go with nothing else: the title's EXTRAS. */
-bool released_shoulder_alone(void);
 
 /* THE PAUSED GAME THAT OUTLIVES THE POWER SWITCH (suspend.c). What the
  * menus chose, kept with the game so the match can be started again as the
@@ -1969,15 +1979,12 @@ void upload_tiles(void);
 void upload_palette_set(int base, const uint8_t *set, vu16 *memory);
 void upload_palettes(void);
 void upload_sprite_palettes(void);
+void ink_sprite_palettes(void);
 /* The screen's curve (kLcdGamma, palette.h): which of the LCD_CURVES is in
  * force, and the palettes loaded at power-on loaded again through it. */
 void lcd_set_curve(int curve);
 void set_credit_colour(void);
 void title_window(bool on);
-/* ...and a hole in it the size of the title's EXTRAS box (extras.c), where
- * the cathedral's sprites are not drawn: the box is on the background they
- * stand in front of. Pixels; w == 0 closes it. */
-void title_window_hole(int x, int y, int w, int h);
 void set_field_palette_for_level(uint8_t level);
 void set_bank_from_piece(int bank_index, TengenTetromino piece);
 void set_piece_palette(TengenTetromino piece);
@@ -1985,6 +1992,7 @@ void set_brick_palette(void);
 void set_next_palette(TengenTetromino piece);
 void upload_title_tiles(void);
 void upload_proto_tiles(int skin);
+bool proto_tiles_loaded(int skin);
 extern uint8_t g_title_skin;
 extern bool g_title_skin_found;
 void apply_skin(int skin);
@@ -2104,6 +2112,10 @@ void leader_new_match(void);
  * at the end of the match, which is what lets a player start again over A+B
  * and keep the game they just finished. See leader_record. */
 void leader_record(int slot);
+/* ...and the demo's, under the chord: on the table to be seen and off it
+ * again, never typed or saved (records.c). */
+void leader_demo_show(void);
+void leader_demo_end(void);
 void leader_submit(void);
 /* Over a cable both players go on the board and only one of them is typed
  * here; these are the other one. See leader_submit and TengenNameSwap. */
@@ -2240,29 +2252,64 @@ void pause_box_forget(void);
 bool bricks_shown(void);
 void restore_brick_bank(void);
 
-/* extras.c: THE TITLE'S EXTRAS, under the chord — L or R on the title puts
- * up a box with the prototypes, a sound test of the sounds the cartridge
- * never plays and the console's SETTINGS, and the high scores' erase, which
- * only SELECT reaches — and the settings themselves, which are in force from
- * power-on whatever the chord (see g_settings). */
+/* extras.c: GAME SELECT'S OPTIONS, under the chord — a sixth line under
+ * WITH COMPUTER and a page of its own: GAMMA, SOUND (the two volumes, in a
+ * box over it), RUMBLE on a Game Boy Player, BACKGROUND, PROTOTYPES and
+ * STATS (each a box), and ERASE SCORES, which only SELECT reaches and which
+ * erases everything kept — and the settings themselves, in force from
+ * power-on whatever the chord (see g_settings), and this console's
+ * lifetime figures. */
 #define SET_MUSIC      0       /* the tunes' volume, 0..AUDIO_LEVEL_MAX */
 #define SET_EFFECTS    1       /* ...the effects' */
 #define SET_BRIGHT     2       /* the screen's curve, 0..LCD_CURVES-1 */
 #define SET_FLAGS      3
-#define SET_COUNT      4
+#define SET_BG         4       /* the background, BG_* */
+#define SET_COUNT      5
 #define SET_RUMBLE_OFF 0x01    /* SET_FLAGS: no rumble on a Game Boy Player */
 #define SET_FLAGS_ALL  0x01
+/* THE BACKGROUND, behind everything the cartridge leaves empty: the
+ * cartridge's black, or white, light grey or ivory; on those the letters
+ * that were white are black (bg_apply, video.c). */
+enum { BG_BLACK, BG_WHITE, BG_GREY, BG_IVORY, BG_COUNT };
 typedef char save_settings_fit[
     SAVE_SETTINGS_OFF + SET_COUNT + 1 <= SAVE_MODE_OFF(0) ? 1 : -1];
 extern uint8_t g_settings[SET_COUNT];
 void settings_load(void);
 bool rumble_wanted(void);
-enum { EXTRAS_STAY, EXTRAS_CLOSED, EXTRAS_SKIN, EXTRAS_ERASE };
+void bg_apply(void);
+bool bg_light(void);            /* anything but black */
+uint8_t bg_ink(uint8_t nes);    /* a word's colour on it */
+/* THE LIFETIME FIGURES, this console's player's, every game added up; on the
+ * battery at SAVE_STATS_OFF, clear of the tables and of the paused game. */
+typedef struct {
+    uint32_t frames;           /* played, at sixty a second */
+    uint32_t games;
+    uint32_t pieces;
+    uint32_t clears[4];        /* singles, doubles, triples, tetrises */
+    uint8_t top_level;
+    uint8_t pad[3];
+} LifetimeStats;
+#define SAVE_STATS_OFF 0x700u
+typedef char save_stats_fit[SAVE_STATS_OFF >= SAVE_MODE_SUMS_OFF + LEADER_MODE_TABLES &&
+                            SAVE_STATS_OFF + 4 + sizeof(LifetimeStats) + 1 <= 0x4000 ? 1 : -1];
+extern LifetimeStats g_lifetime;
+void lifetime_load(void);
+void lifetime_watch(int slot, const TengenStats *was, const TengenStats *now);
+void lifetime_tick(bool still);
 void extras_open(void);
 bool extras_up(void);
-bool extras_quiet(void);       /* the title's tune stands down (SOUND TEST) */
-int extras_frame(uint8_t pressed, int *skin);
+bool extras_frame(uint8_t pressed);   /* false once the last box has gone */
+/* GAME SELECT's own heading, lifted this far under the chord, when its list
+ * has six lines and starts a row higher (draw_game_select). */
+#define GAME_SELECT_LIFT_PX 4
 /* The title drawn again whole, the next time it is drawn (frontend.c). */
 void title_redraw(void);
+/* ...and a page of the menus' own for OPTIONS: its frame and lifted
+ * heading, a line of it, and the menus' words' bank (frontend.c). */
+void draw_menu_page(const char *heading);
+void draw_menu_line(int ty, int tx, const char *text, int bank);
+int menu_text_bank(void);
+/* The pause menu's switches back to OFF and kept so (match.c). */
+void options_erase(void);
 
 #endif /* PORT_H */

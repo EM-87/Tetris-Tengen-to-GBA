@@ -443,6 +443,10 @@ typedef struct {
      * the board, the score, the lines and the level are all new, so a
      * renderer has to repaint rather than update. */
     bool restarted;
+    /* HOLD put the falling piece aside, or swapped it, this frame
+     * (TengenGame.hold); a refused press leaves it false. The port's: the
+     * cartridge has no hold to sound. */
+    bool held;
 
     /* WHAT THE PIECE WAS WORTH, and how high it came to rest — the two things
      * L8129 needs to put the little three-digit total up beside it

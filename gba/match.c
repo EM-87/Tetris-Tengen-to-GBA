@@ -149,7 +149,11 @@ void stats_begin_match(void) {
 }
 
 static void stats_watch(int slot, TengenStepResult step) {
+    /* ...and what they moved by, into this console's lifetime figures
+     * (lifetime_watch). */
+    TengenStats was = g_stats[slot];
     tengen_stats_step(&g_stats[slot], &g_session.game, (TengenPlayerSlot)slot, &step);
+    lifetime_watch(slot, &was, &g_stats[slot]);
 }
 
 /* `level_tune` is whether the LEVEL-UP'S MUSIC plays this step, which is not
@@ -157,6 +161,9 @@ static void stats_watch(int slot, TengenStepResult step) {
 static void announce(TengenStepResult step, bool level_tune) {
     rumble_step(step);
     if (step.piece_locked) nes_audio_play(NES_SOUND_DROP);
+    /* HOLD's SWIPE: the piece swept aside, in the one voice the engine
+     * carries that nothing else of the cartridge's or the port's uses. */
+    if (step.held) nes_audio_play(NES_SOUND_SWIPE);
     /* ONE call per event, and the level-up is one event. A clear that also
      * raises the level used to reach setMusicOrSoundEffect(MUSIC_LEVELUP)
      * twice in the same frame — once for the clear and once for the level —
@@ -390,12 +397,20 @@ static void options_save(void) {
     sram_write(SAVE_OPTIONS_OFF + 1, options_check(g_options));
 }
 
+void options_erase(void) {
+    g_options = 0;
+    options_save();
+}
+
 /* THE PLAYER'S OWN TWO (OPT_GHOST, OPT_SWAP_AB), in force: when the menu
  * that sets them is there — this console's chord, or over the cable the
- * master's — and never in the attract demo, whose pad is the computer's. */
+ * master's. In the attract demo the ghost and not SWAP A-B: the computer
+ * plays to the player's options as a game under the chord would have them,
+ * and a pad's turn is the one thing it has no pad for. */
 static bool pause_menu_on(void);
 uint8_t options_mine(void) {
-    if (g_demo || !pause_menu_on()) return 0;
+    if (!pause_menu_on()) return 0;
+    if (g_demo) return (uint8_t)(g_options & OPT_GHOST);
     return (uint8_t)(g_options & ~OPT_RULES);
 }
 
@@ -1669,7 +1684,7 @@ static void ai_think_spare(void) {
 
 /* THE PAGE THE BOARD TURNS INTO (see g_end_rise): once the match is over
  * — when the main loop stops stepping it, match_over — under the match's
- * chord, never in the demo and not over a cable gone for good. The plaque
+ * chord, the demo's included, and not over a cable gone for good. The plaque
  * alone for END_PAGE_WAIT_FRAMES; then the figures written out once (this
  * player's; a coop board's, both players' together, as its BONUS show
  * counts them), the wall risen a row every END_PAGE_ROW_FRAMES, stood
@@ -1679,7 +1694,7 @@ static void ai_think_spare(void) {
  * (main.c, over_expired, on g_end_rise). Before
  * the vertical blank: the writing out is no drawing. */
 static void end_page_frame(void) {
-    if (g_demo || g_link_lost || !pause_menu_on() || !match_over()) {
+    if (g_link_lost || !pause_menu_on() || !match_over()) {
         g_end_frames = 0;
         g_end_rise = -1;
         g_end_curtain = -1;

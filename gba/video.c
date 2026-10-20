@@ -13,6 +13,9 @@
  * way and the field is nine bits wide, so -n is written as 512-n. */
 void set_offset_layer(int px) {
     REG_BG1HOFS = (uint16_t)(512 - px);
+    /* ...and level with the grid: only GAME SELECT's heading is ever lifted
+     * (GAME_SELECT_LIFT_PX), and every screen sets this as it draws. */
+    REG_BG1VOFS = 0;
 }
 
 /* A LINE THAT SITS TWO PIXELS HIGHER THAN THE GRID, for the credit under
@@ -458,28 +461,6 @@ bool shoulder_chord(void) {
     return pressed;
 }
 
-/* ...AND ONE OF THEM LET GO ON ITS OWN: L or R pressed and released with
- * nothing else down at any moment in between. The press itself will not do:
- * the chord and the sleep's L+R+SELECT both begin with one shoulder down a
- * frame before the rest, and on the title that frame put up the EXTRAS —
- * whose SELECT then took the sleep's to the erase. */
-bool released_shoulder_alone(void) {
-    static bool down, spoilt;
-    uint16_t keys = (uint16_t)(~REG_KEYINPUT & KEY_MASK);
-    uint16_t shoulders = keys & (KEY_L | KEY_R);
-    if (shoulders) {
-        if (!down) {
-            down = true;
-            spoilt = false;
-        }
-        if ((keys & ~shoulders) || shoulders == (KEY_L | KEY_R)) spoilt = true;
-        return false;
-    }
-    bool fired = down && !spoilt;
-    down = false;
-    return fired;
-}
-
 void upload_tiles(void) {
     vu16 *dst = MEM_CHARBLOCK(CHARBLOCK);
     const uint8_t *src = kGameTiles;
@@ -582,6 +563,21 @@ void upload_tiles(void) {
             if ((px >> (4 * n)) & 0xF) out |= (uint16_t)(1u << (4 * n));
         copy[i] = out;
     }
+    /* ...and the options' boxes one tile each (T_SQ_OFF, T_SQ_ON): the
+     * switches' box above, at the tile's left. */
+    for (int on = 0; on < 2; on++) {
+        vu16 *sq = dst + (on ? T_SQ_ON : T_SQ_OFF) * 16;
+        for (int row = 0; row < 8; row++) {
+            uint32_t px = 0;
+            for (int x = 0; x < 7; x++) {
+                bool edge = row == 1 || row == 7 || x == 0 || x == 6;
+                bool dot = on && row >= 3 && row <= 5 && x >= 2 && x <= 4;
+                if (row >= 1 && (edge || dot)) px |= 1u << (4 * x);
+            }
+            sq[row * 2] = (uint16_t)px;
+            sq[row * 2 + 1] = (uint16_t)(px >> 16);
+        }
+    }
 }
 
 uint16_t raised_tile(char c) {
@@ -614,36 +610,15 @@ void upload_palette_set(int base, const uint8_t *set, vu16 *memory) {
  * the release's title is up; clear_screen takes it away with the title. */
 #define TITLE_WIN_L 17
 #define TITLE_WIN_R 224
-/* THE EXTRAS BOX (extras.c) IS A HOLE IN IT: the box is drawn on the
- * background, and the cathedral's central tower is sprites in front of it.
- * Window 0 becomes the box, with everything but the sprites, and the frame
- * moves to window 1, which window 0 wins over where they meet. */
-static uint16_t g_hole_h, g_hole_v;     /* WIN0H/WIN0V for it; 0: none */
-
-void title_window_hole(int x, int y, int w, int h) {
-    g_hole_h = w > 0 ? (uint16_t)((x << 8) | (x + w)) : 0;
-    g_hole_v = w > 0 ? (uint16_t)((y << 8) | (y + h)) : 0;
-}
-
 void title_window(bool on) {
-    if (!on) {
-        REG_DISPCNT &= (uint16_t)~(DCNT_WIN0 | DCNT_WIN1);
-        return;
-    }
-    const uint16_t frame = (uint16_t)((TITLE_WIN_L << 8) | TITLE_WIN_R);
-    REG_WINOUT = 0x002F;                    /* outside: all but the sprites */
-    if (g_hole_h) {
-        REG_WIN0H = g_hole_h;
-        REG_WIN0V = g_hole_v;
-        REG_WIN1H = frame;
-        REG_WIN1V = (uint16_t)((0 << 8) | 160);
-        REG_WININ = 0x3F2F;                 /* the box: no sprites; the frame: all */
-        REG_DISPCNT |= DCNT_WIN0 | DCNT_WIN1;
-    } else {
-        REG_WIN0H = frame;
+    if (on) {
+        REG_WIN0H = (uint16_t)((TITLE_WIN_L << 8) | TITLE_WIN_R);
         REG_WIN0V = (uint16_t)((0 << 8) | 160);
         REG_WININ = 0x003F;                 /* inside: everything */
-        REG_DISPCNT = (uint16_t)((REG_DISPCNT | DCNT_WIN0) & ~DCNT_WIN1);
+        REG_WINOUT = 0x002F;                /* outside: all but the sprites */
+        REG_DISPCNT |= DCNT_WIN0;
+    } else {
+        REG_DISPCNT &= (uint16_t)~DCNT_WIN0;
     }
 }
 
@@ -672,9 +647,64 @@ void lcd_set_curve(int curve) {
     upload_sprite_palettes();
 }
 
+/* ----------------------------------------------------------------------- *
+ * THE BACKGROUND (OPTIONS' BACKGROUND, extras.c)
+ *
+ * Everything the cartridge leaves empty is the backdrop — colour 0 of every
+ * bank is see-through on the GBA, as the NES's universal background is — so
+ * one entry, palette 0's colour 0, is the whole background: the cartridge's
+ * black, the NES's white ($30) or light grey ($10), or ivory, which the NES
+ * has no colour for. A black inside the art is ink and stays.
+ *
+ * ON THE LIGHT ONES — all three — the letters that were white would vanish
+ * into it, so the banks the words are drawn in take their colours through
+ * bg_ink: white and the light greys black, the pale row ($31-$3C) the
+ * middle one under it. A prototype's title keeps its words in its own
+ * banks, and their white goes black (install_title_palette). The NES's
+ * darker grey ($00) was tried and kept the white letters, but the red ones
+ * — the title's, NEXT — all but went into it.
+ * ----------------------------------------------------------------------- */
+bool bg_light(void) {
+    return g_settings[SET_BG] != BG_BLACK;
+}
+
+uint8_t bg_ink(uint8_t c) {
+    if (bg_light()) {
+        if (c == 0x10 || c == 0x20 || c == 0x30 || c == 0x3D) return 0x0F;
+        if (c > 0x30 && c < 0x3D) return (uint8_t)(c - 0x20);
+    }
+    return c;
+}
+
 void set_credit_colour(void) {
     MEM_PALETTE[BANK_CREDIT * 16 + 1] =
-        nes_colour_to_gba(g_pause_unlocked ? 0x00 : kRomPalette_bg_menu[1 * 4 + 1]);
+        nes_colour_to_gba(bg_ink(g_pause_unlocked ? 0x00 : kRomPalette_bg_menu[1 * 4 + 1]));
+}
+
+void bg_apply(void) {
+    static const uint16_t kIvory = 0x6BDF;        /* (31, 30, 26) */
+    switch (g_settings[SET_BG]) {
+    case BG_WHITE: MEM_PALETTE[0] = nes_colour_to_gba(0x30); break;
+    case BG_GREY:  MEM_PALETTE[0] = nes_colour_to_gba(0x10); break;
+    case BG_IVORY: MEM_PALETTE[0] = lcd_colour(kIvory); break;
+    default:       MEM_PALETTE[0] = nes_colour_to_gba(TENGEN_BACKDROP_INDEX); break;
+    }
+    /* The words' banks, from the cartridge's sets every time, so going back
+     * to black puts back what was there. */
+    static const struct { uint8_t bank; bool menu; uint8_t from; } kWords[] = {
+        { BANK_LABEL, false, 3 },        /* the HUD's words and figures, the boxes' */
+        { BANK_MENU, true, 0 },          /* the menus' blue */
+        { BANK_ARROW, true, 3 },         /* ...their white, and the cursor */
+        { BANK_NOTE, true, 2 },          /* the notes, the boxes' headings */
+    };
+    for (unsigned w = 0; w < sizeof kWords / sizeof kWords[0]; w++) {
+        const uint8_t *set = (kWords[w].menu ? kRomPalette_bg_menu : kRomPalette_bg_game) +
+                             kWords[w].from * 4;
+        for (int i = 1; i < 4; i++)
+            MEM_PALETTE[kWords[w].bank * 16 + i] = nes_colour_to_gba(bg_ink(set[i]));
+    }
+    set_credit_colour();
+    ink_sprite_palettes();
 }
 
 void upload_palettes(void) {
@@ -695,6 +725,8 @@ void upload_palettes(void) {
     next[0] = nes_colour_to_gba(TENGEN_BACKDROP_INDEX);
     vu16 *piece2 = MEM_PALETTE + PAL_PIECE2_BANK * 16;
     piece2[0] = nes_colour_to_gba(TENGEN_BACKDROP_INDEX);
+    /* ...and the background, and the words on it. */
+    bg_apply();
 }
 
 /* setPlayfieldPaletteFromLevel (main.asm.txt:5328) recolours the settled
@@ -766,7 +798,15 @@ void upload_title_tiles(void) {
 /* Kept compressed (the Single-Pak copy has 256KB for everything), and
  * unpacked by the BIOS straight into video memory: SWI 12h,
  * LZ77UnCompReadNormalWrite16bit, the halfword-writing one VRAM needs. */
+/* Whose they are now: a skin chosen off the title (OPTIONS' PROTOTYPES)
+ * finds its title's tiles not there yet, and draw_title asks. */
+static int g_proto_tiles = -1;
+bool proto_tiles_loaded(int skin) {
+    return g_proto_tiles == skin;
+}
+
 void upload_proto_tiles(int skin) {
+    g_proto_tiles = skin;
     vu16 *dst = MEM_CHARBLOCK(CHARBLOCK) + PROTO_TILE_BASE * 16;
     register const uint8_t *src __asm__("r0") = kProtoTilesLz[skin];
     register vu16 *out __asm__("r1") = dst;
@@ -844,8 +884,10 @@ static void upload_skin_stats_palette(int skin) {
 static void upload_skin_plaque_palette(int skin) {
     if (skin < 0) return;          /* no skin, no loan: BANK_PAUSE is bank 3 */
     vu16 *dst = MEM_PALETTE + SKIN_PLAQUE_BANK * 16;
+    /* The plaque's words, GAME OVER and PAUSE, are white in it: through
+     * bg_ink, as the release's are (bg_apply). */
     for (int i = 0; i < 4; i++)
-        dst[i] = nes_colour_to_gba(kSkinPlaquePalette[skin][i]);
+        dst[i] = nes_colour_to_gba(bg_ink(kSkinPlaquePalette[skin][i]));
 }
 static void upload_skin_logo_palette(int skin) {
     if (skin < 0) return;
@@ -1196,6 +1238,16 @@ void upload_sprite_tiles(void) {
     for (unsigned i = 0; i < sizeof(kTitleObjTiles); i += 2) {
         tdst[i / 2] = (uint16_t)(kTitleObjTiles[i] | (kTitleObjTiles[i + 1] << 8));
     }
+    /* ...and again with every coloured pixel four up, for the fireworks on
+     * a light background (TITLE_OBJ_INKED_BASE). */
+    _Static_assert(sizeof(kTitleObjTiles) <= 256 * 32, "the title's bank is 256 tiles");
+    vu16 *idst = MEM_OBJ_TILES + TITLE_OBJ_INKED_BASE * 16;
+    for (unsigned i = 0; i < sizeof(kTitleObjTiles); i += 2) {
+        unsigned v = kTitleObjTiles[i] | (kTitleObjTiles[i + 1] << 8), up = 0;
+        for (int n = 0; n < 16; n += 4)
+            if ((v >> n) & 15) up |= (((v >> n) & 15) + 4) << n;
+        idst[i / 2] = (uint16_t)up;
+    }
 
     /* The HUD labels, with the header grid's vertical stubs masked out of
      * them; see read_hud_labels in tools/extract_assets.py. */
@@ -1241,11 +1293,38 @@ void upload_sprite_palettes(void) {
         rim_pal[i] = nes_colour_to_gba(
             kRomPalette_bg_title[kTitleSpire[0].bank * 4 + i]);
 
-    /* piecePaletteIndexA, "Line clears" (main.asm.txt:5394-5396). */
+    MEM_PALETTE_OBJ[PAL_OBJ_CLEAR * 16] = nes_colour_to_gba(TENGEN_BACKDROP_INDEX);
+    ink_sprite_palettes();
+}
+
+/* THE SPRITES DRAWN FOR A BLACK BACKDROP, on a light one (OPTIONS'
+ * BACKGROUND; see bg_apply). Three of them would not read:
+ *
+ *   the line-clear puff, flat black (piecePaletteIndexA, "Line clears",
+ *     main.asm.txt:5394-5396) because the backdrop was: what it does is let
+ *     the backdrop swallow the row, so on a light one it is the backdrop;
+ *   the drop points, pale yellow ($37) in a one-player game: through bg_ink,
+ *     as the words are;
+ *   the title's fireworks, pale on what is now a light sky. Through bg_ink
+ *     too — but the cathedral's own sprites share their four palettes colour
+ *     for colour, so the fireworks draw from a copy of the tiles four colours
+ *     up (TITLE_OBJ_INKED_BASE), and colours 5-7 of those palettes are where
+ *     the inked set goes. The cathedral keeps the picture's colours.
+ *
+ * The dancers keep theirs: drawn with a black outline, they read on any of
+ * the four. On black, all of it is the cartridge's own again. */
+void ink_sprite_palettes(void) {
     const uint8_t *clear = kRomPiecePalettes[10];
     vu16 *cpal = MEM_PALETTE_OBJ + PAL_OBJ_CLEAR * 16;
-    cpal[0] = nes_colour_to_gba(TENGEN_BACKDROP_INDEX);
-    for (int i = 0; i < 3; i++) cpal[1 + i] = nes_colour_to_gba(clear[i]);
+    for (int i = 0; i < 3; i++)
+        cpal[1 + i] = bg_light() ? MEM_PALETTE[0] : nes_colour_to_gba(clear[i]);
+    for (int b = 0; b < 4; b++)
+        for (int i = 1; i < 4; i++) {
+            MEM_PALETTE_OBJ[(PAL_OBJ_GAME + b) * 16 + i] =
+                nes_colour_to_gba(bg_ink(kRomPalette_obj_game[b * 4 + i]));
+            MEM_PALETTE_OBJ[(PAL_OBJ_TITLE + b) * 16 + 4 + i] =
+                nes_colour_to_gba(bg_ink(kRomPalette_obj_title[b * 4 + i]));
+        }
 }
 
 void oam_set(int index, int x, int y, uint16_t tile, bool hflip, int bank) {

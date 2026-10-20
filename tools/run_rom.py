@@ -147,8 +147,8 @@ def main():
                      help="check the counters blank their leading zeros")
     ap.add_argument("--handshare", action="store_true",
                      help="check the hand-entered tunes give way to the effects")
-    ap.add_argument("--extras", action="store_true",
-                     help="check the title's EXTRAS box, its sound test and settings")
+    ap.add_argument("--options", action="store_true",
+                     help="check GAME SELECT's OPTIONS, their boxes and settings")
     ap.add_argument("--pausemenu", action="store_true",
                      help="check the L+R pause menu")
     ap.add_argument("--quit-audio", action="store_true",
@@ -269,8 +269,8 @@ def main():
         sys.exit(pausemenu_check(args.rom))
     if args.counters:
         sys.exit(counters_check(args.rom))
-    if args.extras:
-        sys.exit(extras_check(args.rom))
+    if args.options:
+        sys.exit(options_check(args.rom))
 
     core, screen = load(args.rom)
     start_game(core)

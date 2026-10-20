@@ -286,7 +286,7 @@ def tables_check(rom_path):
                "del release")
 
     # ...and back to the release, whose own table must be untouched: one up
-    # the EXTRAS' list from the first prototype (step_skin).
+    # the OPTIONS page's list from the first prototype (step_skin).
     step_skin(core, -1, settle=24)
     back = play_and_lose(10)
     if 60000 <= score_of(back[0]) < 70000:

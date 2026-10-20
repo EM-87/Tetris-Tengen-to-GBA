@@ -5,14 +5,14 @@ GAME SELECT, the credits, the demo, the cable lobby alone.
 import os
 from .harness import (
     skip, put_skin_on, step_skin, build_has_protos, PAL_BRICK_BANK, CHARBLOCK_ADDR,
-    CATHEDRAL_SPRITES, CELL_BLOCK, CREDITS, CREDIT_FRAMES, CREDIT_PORT, CREDIT_TY,
-    DEMO_START_FRAME, DEMO_WATCH_FRAMES, GAME_SELECT_LONGEST, GAME_SELECT_ROWS,
+    CATHEDRAL_SPRITES, CELL_BLOCK, CELL_WALL, CREDITS, CREDIT_FRAMES, CREDIT_PORT, CREDIT_TY,
+    DEMO_END_WATCH_FRAMES, DEMO_START_FRAME, DEMO_WATCH_FRAMES, GAME_SELECT_LONGEST, GAME_SELECT_ROWS,
     GAME_SELECT_TX, GAME_SELECT_TY, HANDICAP_ROW, KEYS,
     LEVEL_ROW, LIMIT_SKINS, LINK_MSG_ROW, LINK_TIMEOUT_FRAMES,
     MENU_ARROW_TX, MENU_TEXT_BANK, MUSIC_ROW, OAM_ADDR,
     ONSCREEN_MIN_INK, PALETTE_ADDR, PM_EXIT, PM_L, pmenu_span,
     PM_R, SCREENBLOCK_ADDR, SCREEN_H, SCREEN_TW_TILES,
-    SCREEN_W, TENGEN_PF_HEIGHT, TENGEN_PF_WIDTH, TILE,
+    SCREEN_W, SRAM_ADDR, SRAM_CHECKED, TENGEN_PF_HEIGHT, TENGEN_PF_WIDTH, TILE,
     TITLE_PAL_BASE, TITLE_SHOW_FRAMES, check_layout, game_offsets,
     game_state_address, load, oam_visible, pixels, press_start,
     ring_chord_from_title,
@@ -211,8 +211,8 @@ def skin_check(rom_path):
            "antes del acorde un hombro suelto no hace nada")
 
     # ...Y AL REVES: el acorde de los menus encuentra tambien los prototipos.
-    # De vuelta al titulo, L+R ya no hace nada, y la lista de EXTRAS
-    # (step_skin: R, A en PROTOTYPES, DOWN, A) pone el primero.
+    # De vuelta al titulo, L+R ya no hace nada, y la lista de OPTIONS
+    # (step_skin: GAME SELECT, OPTIONS, PROTOTYPES, DOWN, A) pone el primero.
     other, other_screen = load(rom_path)    # `other_screen` must stay alive
     run(other, 40)
     other_release = [other.memory.u16[SCREENBLOCK_ADDR + (r * 32 + c) * 2]
@@ -222,6 +222,20 @@ def skin_check(rom_path):
     other.set_keys(); run(other, 12)
     still = [other.memory.u16[SCREENBLOCK_ADDR + (r * 32 + c) * 2]
              for r in range(SCREEN_H // TILE) for c in range(SCREEN_TW_TILES)]
+    # ...Y L O R A SOLAS TAMPOCO, con el acorde ya hecho: las opciones no
+    # estan en el titulo sino en GAME SELECT.
+    depth_at, _ = game_state_address(rom_path, "g_extras_depth")
+    for name in ("L", "R"):
+        other.set_keys(KEYS[name]); run(other, 4)
+        other.set_keys(); run(other, 12)
+        if depth_at is not None and other.memory.u8[depth_at]:
+            failures.append(f"{name} a solas en el titulo, tras el acorde, abre "
+                            "las opciones: ya no viven ahi")
+    lone = [other.memory.u16[SCREENBLOCK_ADDR + (r * 32 + c) * 2]
+            for r in range(SCREEN_H // TILE) for c in range(SCREEN_TW_TILES)]
+    if lone != other_release:
+        failures.append("L o R a solas en el titulo, tras el acorde, cambian la "
+                        "pantalla")
     step_skin(other, 1, settle=12)
     stepped = [other.memory.u16[SCREENBLOCK_ADDR + (r * 32 + c) * 2]
                for r in range(SCREEN_H // TILE) for c in range(SCREEN_TW_TILES)]
@@ -230,10 +244,10 @@ def skin_check(rom_path):
                         "cambia la skin: deberia haberse retirado")
     elif stepped != proto:
         failures.append("el acorde de los menus no encuentra los prototipos: "
-                        "la lista de EXTRAS no pone el primero en el titulo")
+                        "la lista de OPTIONS no pone el primero en el titulo")
     else:
         print("  y el acorde de los menus los encuentra tambien: la lista de "
-              "EXTRAS pone el primero en el titulo")
+              "OPTIONS pone el primero en el titulo; L o R a solas, nada")
     del other, other_screen
 
     # The release's fireworks and cathedral overlay belong to the release
@@ -261,7 +275,7 @@ def skin_check(rom_path):
         failures.append(f"la lista de skins no vuelve al release en "
                          f"{LIMIT_SKINS} pasos")
     if not failures:
-        print(f"  tras el acorde, la lista de EXTRAS recorre {len(seen) - 1} "
+        print(f"  tras el acorde, la lista de OPTIONS recorre {len(seen) - 1} "
               "skin(s) distinta(s) y vuelve al titulo del release")
 
     # ...Y HACIA ARRIBA TAMBIEN, que es de lo que iba el cambio de L y R: con
@@ -512,12 +526,29 @@ def demo_check(rom_path):
         core.set_keys(KEYS["L"], KEYS["R"]); run(core, 4); core.set_keys(); run(core, 12)
         core.set_keys(KEYS["B"]); run(core, 4); core.set_keys(); run(core, 20)
         chosen = core.memory.u8[music]
+        options, _ = game_state_address(rom_path, "g_options")
+        if options is not None:
+            core.memory.u8[options] = 0x08 | 0x02 | 0x10   # GHOST, FAST DOWN, SWAP
         started = None
         for f in range(DEMO_WATCH_FRAMES):
             core.run_frame()
             if core.memory.u8[flag]:
                 started = f
                 break
+        opts_ghost = opts_fast = None
+        if started is not None and options is not None:
+            lay = check_layout(rom_path)
+            off = game_offsets(rom_path)
+            base, _ = game_state_address(rom_path)
+            opts_ghost = 0
+            for _ in range(90):
+                core.run_frame()
+                opts_ghost = max(opts_ghost, sum(
+                    1 for r in range(20) for c in range(30)
+                    if lay["ghost"] <= core.memory.u16[SCREENBLOCK_ADDR + (r * 32 + c) * 2]
+                    & 0x3FF < lay["ghost"] + 8))
+            opts_fast = core.memory.u8[base + off["fast_soft"]] & 1
+            core.memory.u8[options] = 0
         if started is None:
             failures.append("con el acorde la demo no arranca")
         else:
@@ -534,6 +565,19 @@ def demo_check(rom_path):
             elif hud is not None:
                 print("  con el acorde, la demo va en HUD STATS")
             run(core, 60)
+            # ...CON LAS OPCIONES DEL JUGADOR: la sombra y las reglas (aqui
+            # FAST DOWN, en el tablero de la maquina), no SWAP A-B, que es
+            # del mando. Puestas antes de que arranque (g_options).
+            if opts_ghost is None:
+                failures.append("con GHOST y FAST DOWN puestos la demo no "
+                                "arranco para mirarlos")
+            elif not opts_ghost or not opts_fast:
+                failures.append(f"la demo bajo el acorde no mantiene las "
+                                f"opciones del jugador (sombra {opts_ghost}, "
+                                f"FAST DOWN {opts_fast})")
+            else:
+                print("  con el acorde, la demo lleva la sombra y FAST DOWN "
+                      "del jugador")
             heard = sum(1 for _ in range(120)
                         if (core.run_frame() or True) and core.memory.u8[playing])
             if core.memory.u8[music] == chosen or heard < 100:
@@ -586,6 +630,80 @@ def demo_check(rom_path):
                   f"demo sube al {level}")
         del core, screen
 
+    # ...Y BAJO EL ACORDE ACABA COMO UNA PARTIDA: la pagina de cifras y la
+    # tabla de records, con la fila de la maquina (CPU) metida en su sitio
+    # si llega y sin ella si no, y luego el titulo. Esa tabla no se guarda
+    # nunca: despues la de memoria es la de antes y la bateria no se ha
+    # tocado. Un tablero lleno plantado, con un hueco en cada punta de cada
+    # fila — ninguna pieza completa una, y la siguiente ya no cabe: con un
+    # solo hueco central, la semilla de la demo que trajera una barra la
+    # dejaba seguir jugando.
+    for planted, qualifies in ((12500, True), (100, False)):
+        core, screen = load(rom_path)   # `screen` must stay alive; see load()
+        run(core, 40)
+        title = [core.memory.u16[SCREENBLOCK_ADDR + (r * 32 + c) * 2]
+                 for r in range(SCREEN_H // TILE) for c in range(SCREEN_TW_TILES)]
+        ring_chord_from_title(core)
+        for _ in range(DEMO_WATCH_FRAMES):
+            core.run_frame()
+            if core.memory.u8[flag]:
+                break
+        run(core, 60)
+        sram = bytes(core.memory.u8[SRAM_ADDR + i] for i in range(SRAM_CHECKED))
+        for i in range(4):
+            core.memory.u8[base + off["score"] + i] = (planted >> (8 * i)) & 0xFF
+        for r in range(TENGEN_PF_HEIGHT):
+            for c in range(TENGEN_PF_WIDTH):
+                core.memory.u8[base + off["field"] + r * TENGEN_PF_WIDTH + c] = (
+                    CELL_WALL if c in (0, TENGEN_PF_WIDTH - 1)
+                    else 0 if c in (1, TENGEN_PF_WIDTH - 2) else CELL_BLOCK)
+        page = board = None
+        cpu_row = False
+        shown_rows = 0
+        tables = _symbol_span(rom_path, "g_tables")
+        for f in range(DEMO_END_WATCH_FRAMES):
+            core.run_frame()
+            if not core.memory.u8[flag]:
+                break
+            texts = [tilemap_text(core, r) for r in range(20)]
+            if page is None and any("PIECES" in t for t in texts):
+                page = f
+            if board is None and any("HIGH SCORES" in t for t in texts):
+                board = f
+            if board is not None:
+                cpu_row |= any(" CPU " in t for t in texts)
+                shown_rows = max(shown_rows, _cpu_rows(core, tables)) if tables else 0
+        run(core, 120)
+        back = [core.memory.u16[SCREENBLOCK_ADDR + (r * 32 + c) * 2]
+                for r in range(SCREEN_H // TILE) for c in range(SCREEN_TW_TILES)]
+        kept = tables is None or _cpu_rows(core, tables) != 0
+        after = bytes(core.memory.u8[SRAM_ADDR + i] for i in range(SRAM_CHECKED))
+        what = f"la demo bajo el acorde con {planted} puntos"
+        if page is None:
+            failures.append(f"{what} no ensena la pagina de cifras al acabar")
+        elif board is None or board < page:
+            failures.append(f"{what} no pasa por la tabla de records tras las cifras")
+        elif cpu_row != qualifies:
+            failures.append(f"{what}: la fila de CPU {'falta' if qualifies else 'aparece'} "
+                            "en la tabla")
+        elif tables is None:
+            failures.append("el ELF no exporta g_tables: no se mira que la "
+                            "tabla de la demo se retire")
+        elif qualifies and shown_rows != 1:
+            failures.append(f"{what}: {shown_rows} filas de CPU en las tablas "
+                            "en memoria mientras se ensena, no una")
+        elif core.memory.u8[flag] or back != title or kept:
+            failures.append(f"{what} no vuelve al titulo limpia tras la tabla "
+                            "(la fila de CPU sigue en la tabla en memoria)"
+                            if kept else f"{what} no vuelve al titulo tras la tabla")
+        elif after != sram:
+            failures.append(f"{what} toca la bateria: su tabla no se guarda nunca")
+        else:
+            print(f"  con el acorde y {planted} puntos, la demo acaba con las "
+                  f"cifras y la tabla ({'con' if qualifies else 'sin'} la fila "
+                  "de CPU), vuelve al titulo y la bateria no se toca")
+        del core, screen
+
     for f in failures:
         print("FALLA:", f)
     if failures:
@@ -597,18 +715,40 @@ def demo_check(rom_path):
 def _symbol_prefix(rom_path, prefix):
     """A static's address by the start of its name: link-time optimisation
     adds `.lto_priv.N` to some."""
+    span = _symbol_span(rom_path, prefix)
+    return None if span is None else span[0]
+
+
+def _symbol_span(rom_path, prefix):
+    """...and its address and size, (addr, size), or None."""
     import subprocess
     elf = os.path.splitext(rom_path)[0] + ".elf"
     try:
         out = subprocess.check_output(
-            [os.environ.get("NM", "arm-none-eabi-nm"), elf]).decode()
+            [os.environ.get("NM", "arm-none-eabi-nm"), "-S", elf]).decode()
     except (OSError, subprocess.CalledProcessError):
         return None
     for line in out.splitlines():
         parts = line.split()
-        if len(parts) == 3 and (parts[2] == prefix or parts[2].startswith(prefix + ".")):
-            return int(parts[0], 16)
+        name = parts[-1] if parts else ""
+        if len(parts) >= 3 and (name == prefix or name.startswith(prefix + ".")):
+            return int(parts[0], 16), int(parts[1], 16) if len(parts) == 4 else 0
     return None
+
+
+# A LeaderEntry (gba/port.h): four bytes of score, two of lines, three of
+# initials, as alphabet indices (A is 1), padded to the score's alignment.
+LEADER_ENTRY_SIZE = 12
+LEADER_INITIALS_AT = 6
+CPU_INITIALS = [ord(ch) - ord("A") + 1 for ch in "CPU"]
+
+
+def _cpu_rows(core, span):
+    """How many rows of the tables in memory carry the computer's initials."""
+    addr, size = span
+    return sum(1 for e in range(size // LEADER_ENTRY_SIZE)
+               if [core.memory.u8[addr + e * LEADER_ENTRY_SIZE + LEADER_INITIALS_AT + i]
+                   for i in range(3)] == CPU_INITIALS)
 
 
 def loans_check(rom_path):
@@ -878,8 +1018,8 @@ def credits_check(rom_path):
                   f"{sum(got)} pixeles de tinta")
 
     # UNDER THE CHORD, THE PORT'S: its line in Mirrorsoft's place, and in
-    # the cartridge's copyright lines' its version, build and year (the
-    # Makefile's BUILD_TAG). Without it, neither.
+    # the cartridge's copyright lines' its version over the year (the
+    # Makefile's build/build_tag), no build. Without it, neither.
     import re
     core.set_keys(KEYS["L"], KEYS["R"]); run(core, 4)
     core.set_keys(); run(core, 10)
@@ -899,11 +1039,11 @@ def credits_check(rom_path):
 
     def version(pairs):
         return [(a, b) for a, b in pairs
-                if re.search(r"\bVERSION 2\.\d+  \d{4}\b", a)
-                and re.search(r"\bBUILD ([0-9A-F]{7}|LOCAL)(-DEV)?\b", b)]
-    if not version(later):
-        failures.append(f"con el acorde no sale la version y el build al final: "
-                        f"{later}")
+                if re.fullmatch(r"\S*\s*VERSION 2\.\d+\s*\S*", a)
+                and re.fullmatch(r"\S*\s*\d{4}\s*\S*", b)]
+    if not version(later) or any("BUILD" in a or "BUILD" in b for a, b in later):
+        failures.append(f"con el acorde no sale la version sobre el año, o sale "
+                        f"el build: {later}")
     elif shown(*CREDITS[-1], among=later):
         failures.append("con el acorde siguen saliendo los copyrights del cartucho")
     elif any("VERSION" in a or "BUILD" in b for a, b in seen):

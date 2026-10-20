@@ -1,44 +1,60 @@
 /*
- * extras.c -- the title's EXTRAS, and the settings they keep.
+ * extras.c -- GAME SELECT's OPTIONS, the settings they keep, and the
+ * console's lifetime figures.
  *
- * Under the chord, L or R on the title puts up a box the way the pause puts
- * up its menu: the prototypes to choose from, a sound test of the sounds the
- * cartridge carries and never plays, and the console's own settings — the
- * tune's volume and the effects', the screen's curve and, on a Game Boy
- * Player, its rumble. Under them, in the credits' dark grey, the high scores'
- * erase, which only SELECT reaches. What a choice DOES to the title (another
- * skin, the erase's own pages) is main.c's; this is the box and the settings.
+ * Under the chord GAME SELECT has a sixth line, OPTIONS, under WITH
+ * COMPUTER, and it is a page of its own, as LEVEL SETTINGS is:
+ *
+ *   GAMMA        ▣□□    the screen's curve, for an unlit GBA
+ *   SOUND               a box: MUSIC ▣▣▣□ and EFFECTS ▣▣▣▣, two volumes
+ *   RUMBLE       ▣      on a Game Boy Player only
+ *   BACKGROUND          a box: BLACK, WHITE, GREY or IVORY
+ *   PROTOTYPES          a box: the builds, by the publishers they were for
+ *   STATS               a box: this console's player, every game added up
+ *
+ *   ERASE SCORES        in the credits' grey: UP and DOWN step over it and
+ *                       only SELECT, which steps down a line at a time,
+ *                       reaches it; A on it asks twice, and it erases
+ *                       everything kept.
+ *
+ * What a choice DOES — another skin, another curve, another background —
+ * is done here, and the page drawn again for it (main.c's GAME SELECT hands
+ * this the frame while the page is up).
  */
 #include "port.h"
+
+#include <string.h>
 
 /* ----------------------------------------------------------------------- *
  * THE SETTINGS, kept on the battery (SAVE_SETTINGS_OFF) with a check byte,
  * and in force from power-on, chord or not: they are the console's knobs —
- * how loud and how bright — and what the game IS does not change with them.
- * Only the box that sets them is behind the chord. A save that does not
- * check, or a console that never wrote one, is the cartridge as it plays:
- * both volumes full, the curve the identity, the rumble on.
+ * how loud, how bright, which background — and what the game IS does not
+ * change with them. Only the box that sets them is behind the chord. A save
+ * that does not check, or a console that never wrote one, is the cartridge
+ * as it plays: both volumes full, the curve the identity, the rumble on,
+ * the background black.
  *
  * NOT static: tools/romcheck reads them out of the ELF by name.
  * ----------------------------------------------------------------------- */
-uint8_t g_settings[SET_COUNT] = { AUDIO_LEVEL_MAX, AUDIO_LEVEL_MAX, 0, 0 };
+uint8_t g_settings[SET_COUNT] = { AUDIO_LEVEL_MAX, AUDIO_LEVEL_MAX, 0, 0, BG_BLACK };
 
 static uint8_t settings_check(const uint8_t *s) {
-    return (uint8_t)(0x5A ^ (s[0] * 3 + s[1] * 5 + s[2] * 7 + s[3] * 11));
+    return (uint8_t)(0x5A ^ (s[0] * 3 + s[1] * 5 + s[2] * 7 + s[3] * 11 + s[4] * 13));
 }
 
 static void settings_apply(void) {
     nes_audio_set_levels(g_settings[SET_MUSIC], g_settings[SET_EFFECTS]);
 }
 
-/* At power-on, before anything is drawn: the curve goes in without loading
- * a palette again, as none has been loaded yet. */
+/* At power-on, before anything is drawn: the curve and the background go in
+ * without loading a palette, as none has been loaded yet. */
 void settings_load(void) {
     uint8_t s[SET_COUNT];
     for (int i = 0; i < SET_COUNT; i++) s[i] = sram_read(SAVE_SETTINGS_OFF + (unsigned)i);
     bool ok = sram_read(SAVE_SETTINGS_OFF + SET_COUNT) == settings_check(s) &&
               s[SET_MUSIC] <= AUDIO_LEVEL_MAX && s[SET_EFFECTS] <= AUDIO_LEVEL_MAX &&
-              s[SET_BRIGHT] < LCD_CURVES && !(s[SET_FLAGS] & ~SET_FLAGS_ALL);
+              s[SET_BRIGHT] < LCD_CURVES && !(s[SET_FLAGS] & ~SET_FLAGS_ALL) &&
+              s[SET_BG] < BG_COUNT;
     if (ok)
         for (int i = 0; i < SET_COUNT; i++) g_settings[i] = s[i];
     g_lcd_gamma = kLcdGamma[g_settings[SET_BRIGHT]];
@@ -58,73 +74,134 @@ bool rumble_wanted(void) {
 }
 
 /* ----------------------------------------------------------------------- *
- * THE BOX
+ * THE LIFETIME FIGURES: this console's player, every game added up — the
+ * time the game ran for them, the games, the pieces and every kind of
+ * clear, and the highest level reached. Counted off the same figures as the
+ * end-of-game page (TengenStats), as they move, so a board started again
+ * over A+B and a game quit through EXIT GAME count what they played: not
+ * the computer's board, and nothing in the attract demo.
  *
- * One size for every page, so going from one to another never uncovers the
- * title: eighteen by eight, centred, a heading and five rows. The frame is
- * the pause box's (T_BOX_*, the game set's bank 3, which the title leaves
- * alone), the words its words: the heading in the notes' colour, the
- * choices in the labels', the arrow before the chosen one. Every length on
- * it even, so every line lands on the tile grid and the main map — the
- * offset layer is the title's TENGEN, shifted its own way.
- *
- * Drawn on the main map, and the three layers above it cleared where it
- * lands; the cathedral's sprites have a window hole there
- * (title_window_hole). Closing it draws the title again whole.
+ * On the battery at SAVE_STATS_OFF behind a magic and a check, whenever a
+ * game is paused or over, and every minute of play; ERASE SCORES leaves
+ * them, being the scores' erase. NOT static, for tools/romcheck.
  * ----------------------------------------------------------------------- */
-#define XB_W 18
-#define XB_H 8
-#define XB_TX ((SCREEN_TW - XB_W) / 2)
-/* ...and two rows below the middle: centred, it cut the TETRIS logo in half
- * across its letters. Down here the title's name stands whole over it and
- * the box is in front of the cathedral, whose plinth still shows below. */
-#define XB_TY ((SCREEN_TH - XB_H) / 2 + 2)
-#define XB_ROWS (XB_H - 3)              /* below the heading */
+LifetimeStats g_lifetime;
+static bool g_lifetime_dirty;
+static uint32_t g_lifetime_unsaved;     /* frames counted since the last save */
+static const uint8_t kStatsMagic[4] = { 'S', 'T', 'A', 'T' };
 
-enum { XP_TOP, XP_PROTOS, XP_SOUND, XP_SETTINGS, XP_COUNT };
+static uint8_t lifetime_check(const uint8_t *b, unsigned n) {
+    uint8_t sum = 0xA5;
+    for (unsigned i = 0; i < n; i++) sum = (uint8_t)((sum << 1 | sum >> 7) ^ b[i]);
+    return sum;
+}
 
-/* NOT static, for the checks (tools/romcheck): open, the page, and the
- * arrow on each page. */
-bool g_extras_open;
-uint8_t g_extras_page;
+void lifetime_load(void) {
+    uint8_t b[sizeof g_lifetime];
+    for (int i = 0; i < 4; i++)
+        if (sram_read(SAVE_STATS_OFF + (unsigned)i) != kStatsMagic[i]) return;
+    for (unsigned i = 0; i < sizeof b; i++) b[i] = sram_read(SAVE_STATS_OFF + 4 + i);
+    if (sram_read(SAVE_STATS_OFF + 4 + sizeof b) != lifetime_check(b, sizeof b)) return;
+    for (unsigned i = 0; i < sizeof b; i++) ((uint8_t *)&g_lifetime)[i] = b[i];
+}
+
+static void lifetime_save(void) {
+    const uint8_t *b = (const uint8_t *)&g_lifetime;
+    for (int i = 0; i < 4; i++) sram_write(SAVE_STATS_OFF + (unsigned)i, kStatsMagic[i]);
+    for (unsigned i = 0; i < sizeof g_lifetime; i++) sram_write(SAVE_STATS_OFF + 4 + i, b[i]);
+    sram_write(SAVE_STATS_OFF + 4 + sizeof g_lifetime,
+               lifetime_check(b, sizeof g_lifetime));
+    g_lifetime_dirty = false;
+    g_lifetime_unsaved = 0;
+}
+
+void lifetime_watch(int slot, const TengenStats *was, const TengenStats *now) {
+    if (g_demo || slot != g_view || (g_ai_active && slot == g_ai_slot)) return;
+    static const TengenStats kNone;
+    /* A board put back on its feet starts its figures again. */
+    const TengenStats *from = now->frames < was->frames ? &kNone : was;
+    if (now->frames == from->frames && now->pieces == from->pieces) return;
+    if (from->frames == 0 && now->frames > 0) g_lifetime.games++;
+    g_lifetime.frames += now->frames - from->frames;
+    g_lifetime_unsaved += now->frames - from->frames;
+    if (now->pieces > from->pieces) g_lifetime.pieces += (uint32_t)(now->pieces - from->pieces);
+    for (int i = 0; i < 4; i++)
+        if (now->clears[i] > from->clears[i])
+            g_lifetime.clears[i] += (uint32_t)(now->clears[i] - from->clears[i]);
+    uint8_t level = g_session.game.player[slot].level;
+    if (level > g_lifetime.top_level) g_lifetime.top_level = level;
+    g_lifetime_dirty = true;
+}
+
+/* Once a frame: what was counted goes to the battery when the game is
+ * still (paused, or over) or a minute's play has gone by. */
+void lifetime_tick(bool still) {
+    if (g_lifetime_dirty && (still || g_lifetime_unsaved >= 60u * 60u)) lifetime_save();
+}
+
+/* ----------------------------------------------------------------------- *
+ * THE PAGE AND ITS BOXES
+ *
+ * OPTIONS is a page of its own, as LEVEL SETTINGS is: the menu frame and
+ * logo, the heading lifted as GAME SELECT's is under the chord, the choices
+ * a column at LEVEL SETTINGS' labels with its arrow before them, a value —
+ * a bar of boxes, or one box for a switch (T_SQ_OFF, T_SQ_ON) — in its
+ * values' column, and ERASE SCORES a row under them in the credits' grey.
+ *
+ * What a choice holds opens in a box over the page: SOUND's two volumes,
+ * BACKGROUND's four, PROTOTYPES' builds, STATS, and the erase's two
+ * questions, the second over the first. Each in the pause box's frame
+ * (T_BOX_*, the game set's bank 3, which no skin borrows), a heading in the
+ * notes' colour, the choices in the labels', the arrow before the chosen
+ * one, a value against the frame's inside; its heading level with the line
+ * it was opened from, as far as the screen lets it.
+ *
+ * Drawn when something changes, not every frame: the page again when a box
+ * goes (or a choice changes what it wears), and every box still up over it.
+ * The three layers above the main map are cleared where a box lands — the
+ * heading's, lifted, one row further down.
+ * ----------------------------------------------------------------------- */
+enum { XP_TOP, XP_SOUND, XP_BACKGROUND, XP_PROTOS, XP_STATS, XP_SURE, XP_REALLY,
+       XP_COUNT };
+enum { TI_GAMMA, TI_SOUND, TI_RUMBLE, TI_BACKGROUND, TI_PROTOS, TI_STATS };
+
+typedef struct { int8_t tx, ty, w, h; } XBox;
+
+/* NOT static, for the checks (tools/romcheck): how deep it is (1, the page;
+ * more, the boxes over it), which page each level is, and the arrow on
+ * each. */
+uint8_t g_extras_depth;
+uint8_t g_extras_stack[4];
 uint8_t g_extras_row[XP_COUNT];
+static XBox g_xbox[XP_COUNT];
+static bool g_redraw_page, g_redraw_boxes, g_fresh;
 
-/* THE TOP PAGE'S LINES, and PROTOTYPES only on a build that has some. */
-static int top_items(uint8_t *pages) {
+#define XB_W 18
+#define PAGE_TY 9              /* the first choice; the heading at row 8 */
+#define CASCADE_TX 4
+
+/* THE PAGE'S CHOICES, RUMBLE on a Player only. ERASE SCORES is the line
+ * after them, a row lower, and not one of them. */
+static int top_items(uint8_t *ids) {
     int n = 0;
-    if (TITLE_SKIN_COUNT > 1) pages[n++] = XP_PROTOS;
-    pages[n++] = XP_SOUND;
-    pages[n++] = XP_SETTINGS;
+    ids[n++] = TI_GAMMA;
+    ids[n++] = TI_SOUND;
+    if (gbp_present()) ids[n++] = TI_RUMBLE;
+    ids[n++] = TI_BACKGROUND;
+    ids[n++] = TI_PROTOS;
+    ids[n++] = TI_STATS;
     return n;
 }
 
-/* THE SOUND TEST: the five the engine carries that the cartridge never asks
- * for (constants.asm.txt:47-54, "unused" and "maybe unused"), by the number
- * the engine knows them by and the name the disassembly gives them. The port
- * puts four of them to work behind the chord — the record's jingle, the
- * chord's chirp, the switches' bell, the refusal's alarm — and SWIPE nowhere
- * but here. */
-static const struct { uint8_t id; const char *name; } kSoundTest[] = {
-    { NES_MUSIC_UNUSED_LEVELUP, "0C LEVEL UP" },
-    { NES_SOUND_SWIPE,          "0F SWIPE" },
-    { NES_SOUND_CHIRP,          "10 CHIRP" },
-    { NES_SOUND_DING,           "11 DING" },
-    { NES_SOUND_ALARM,          "12 ALARM" },
-};
-#define SOUND_TEST_COUNT ((int)(sizeof kSoundTest / sizeof kSoundTest[0]))
+static const char *const kBgNames[BG_COUNT] = { "BLACK", "WHITE", "GREY", "IVORY" };
 
-/* SETTINGS' LINES, and RUMBLE only on a Game Boy Player. */
-enum { XS_MUSIC, XS_EFFECTS, XS_BRIGHT, XS_RUMBLE };
-static int settings_items(void) {
-    return gbp_present() ? 4 : 3;
-}
+/* Every build's skins fit their box (four prototypes at most: see the
+ * save's layout in records.c). */
+typedef char extras_skins_fit[TITLE_SKIN_COUNT <= 5 ? 1 : -1];
 
-/* Every build's skins fit the page (four prototypes at most: see the save's
- * layout in records.c). */
-typedef char extras_skins_fit[TITLE_SKIN_COUNT <= XB_ROWS ? 1 : -1];
-
-/* The name the recipe gives a skin (kSkinMenuNames), or its place in the
- * list from a header extracted before there were names. */
+/* The name the recipe gives a skin, the publisher it was made for
+ * (kSkinMenuNames), or its place in the list from a header extracted before
+ * there were names. */
 static const char *skin_name(int skin) {
     if (skin <= 0) return "RELEASE";
 #if SCREEN_PROTO_AVAILABLE && defined(SKIN_MENU_NAMES)
@@ -135,14 +212,63 @@ static const char *skin_name(int skin) {
 #endif
 }
 
-static int page_items(void) {
-    uint8_t pages[XP_COUNT];
-    switch (g_extras_page) {
-    case XP_PROTOS:   return TITLE_SKIN_COUNT;
-    case XP_SOUND:    return SOUND_TEST_COUNT;
-    case XP_SETTINGS: return settings_items();
-    default:          return top_items(pages);
+#define STATS_LINES 10
+
+static int page_items(int page) {
+    uint8_t ids[8];
+    switch (page) {
+    case XP_TOP:        return top_items(ids);
+    case XP_SOUND:      return 2;
+    case XP_BACKGROUND: return BG_COUNT;
+    case XP_PROTOS:     return TITLE_SKIN_COUNT;
+    case XP_SURE:
+    case XP_REALLY:     return 2;
+    default:            return 0;
     }
+}
+
+static const char *page_heading(int page) {
+    static const char *const kHeading[XP_COUNT] = {
+        "OPTIONS", "SOUND", "BACKGROUND", "PROTOTYPES", "STATS",
+        "ARE YOU SURE?", "ARE YOU REALLY SURE?"
+    };
+    return kHeading[page];
+}
+
+/* The row of the page a choice stands on; the erase's is one lower. */
+static int page_row_ty(int row) {
+    uint8_t ids[8];
+    return PAGE_TY + row + (row >= top_items(ids) ? 1 : 0);
+}
+
+/* The box a page is drawn in. Its width holds its heading centred on the
+ * grid — the parity of the two matched — and the lines; its height the
+ * heading and the lines. Its heading is level with the line it was opened
+ * from: the page's, or the box's under it. */
+static XBox place_box(int page, int parent, int parent_row) {
+    XBox b;
+    int head = (int)text_len(page_heading(page));
+    int w = page == XP_STATS ? 20 : XB_W;
+    if (head + 2 > w - 2) w = head + 4;
+    if ((w - 2 - head) & 1) w++;
+    b.w = (int8_t)w;
+    b.h = (int8_t)((page == XP_STATS ? STATS_LINES : page_items(page)) + 3);
+    int tx, ty;
+    if (parent == XP_TOP) {
+        tx = MENU_LABEL_TX + CASCADE_TX;
+        ty = page_row_ty(parent_row) - 1;
+    } else {
+        tx = g_xbox[parent].tx - CASCADE_TX;
+        ty = g_xbox[parent].ty + 1 + parent_row;
+    }
+    /* Inside the menu's frame where it fits, as the page's words are. */
+    if (tx + w > SCREEN_TW - 2) tx = SCREEN_TW - 2 - w;
+    if (tx < 0) tx = 0;
+    if (ty + b.h > SCREEN_TH) ty = SCREEN_TH - b.h;
+    if (ty < 0) ty = 0;
+    b.tx = (int8_t)tx;
+    b.ty = (int8_t)ty;
+    return b;
 }
 
 static void put_text(int tx, int ty, const char *text, int bank) {
@@ -150,208 +276,377 @@ static void put_text(int tx, int ty, const char *text, int bank) {
         set_map_tile(tx + i, ty, WITH_BANK(ascii_tile(text[i]), bank));
 }
 
-/* A value at the right of its line, ending a column in from the frame. */
-static void put_value(int ty, const char *text) {
-    put_text(XB_TX + XB_W - 1 - (int)text_len(text), ty, text, BANK_LABEL);
+/* A bar of `n` boxes from column `tx`, `lit` of them lit; one box alone is
+ * a switch's, or a choice's. */
+static void put_boxes(int tx, int ty, int n, int lit) {
+    for (int i = 0; i < n; i++)
+        set_map_tile(tx + i, ty, WITH_BANK(i < lit ? T_SQ_ON : T_SQ_OFF, BANK_LABEL));
 }
 
-static const char *level_text(uint8_t level) {
-    static const char *const kLevel[AUDIO_LEVEL_MAX + 1] = {
-        "OFF", "25%", "50%", "75%", "100%"
-    };
-    return kLevel[level <= AUDIO_LEVEL_MAX ? level : AUDIO_LEVEL_MAX];
+/* ...and at a box's right, against its frame's inside. */
+static void put_boxes_right(const XBox *b, int ty, int n, int lit) {
+    put_boxes(b->tx + b->w - 1 - n, ty, n, lit);
 }
 
-static void draw_line(int row, const char *name, int bank) {
-    int ty = XB_TY + 2 + row;
-    put_text(XB_TX + 3, ty, name, bank);
-    if (bank != BANK_CREDIT && row == g_extras_row[g_extras_page]) {
-        set_map_tile(XB_TX + 1, ty, WITH_BANK(T_ARROW_TAIL, BANK_LABEL));
-        set_map_tile(XB_TX + 2, ty, WITH_BANK(T_ARROW_HEAD, BANK_LABEL));
+/* ...and a figure there, its digits right-aligned. */
+static void put_figure(const XBox *b, int ty, const char *text) {
+    put_text(b->tx + b->w - 1 - (int)text_len(text), ty, text, BANK_LABEL);
+}
+
+static void put_line(const XBox *b, int row, const char *name, int bank, bool arrow) {
+    int ty = b->ty + 2 + row;
+    put_text(b->tx + 3, ty, name, bank);
+    if (arrow) {
+        set_map_tile(b->tx + 1, ty, WITH_BANK(T_ARROW_TAIL, BANK_LABEL));
+        set_map_tile(b->tx + 2, ty, WITH_BANK(T_ARROW_HEAD, BANK_LABEL));
     }
 }
 
-static void draw_box(void) {
-    for (int y = 0; y < XB_H; y++)
-        for (int x = 0; x < XB_W; x++) {
+static void box_frame(const XBox *b) {
+    for (int y = 0; y < b->h; y++)
+        for (int x = 0; x < b->w; x++) {
             int l = T_BLANK;
-            bool top = y == 0, bottom = y == XB_H - 1;
-            bool left = x == 0, right = x == XB_W - 1;
+            bool top = y == 0, bottom = y == b->h - 1;
+            bool left = x == 0, right = x == b->w - 1;
             if (top)         l = left ? T_BOX_TL : right ? T_BOX_TR : T_BOX_T;
             else if (bottom) l = left ? T_BOX_BL : right ? T_BOX_BR : T_BOX_B;
             else if (left)   l = T_BOX_L;
             else if (right)  l = T_BOX_R;
-            set_map_tile(XB_TX + x, XB_TY + y, WITH_BANK(l, BANK_PAUSE));
-            set_stats_tile(XB_TX + x, XB_TY + y, T_BLANK);
-            set_histogram_tile(XB_TX + x, XB_TY + y, T_BLANK);
+            set_map_tile(b->tx + x, b->ty + y, WITH_BANK(l, BANK_PAUSE));
+            set_histogram_tile(b->tx + x, b->ty + y, T_BLANK);
         }
-    clear_panel_region(XB_TX, XB_TY, XB_W, XB_H);
+    /* The offset layer one row lower too: the page's heading rides it
+     * lifted, so its row shows in the bottom of the one above. */
+    for (int y = 0; y <= b->h; y++)
+        for (int x = 0; x < b->w; x++) set_stats_tile(b->tx + x, b->ty + y, T_BLANK);
+    clear_panel_region(b->tx, b->ty, b->w, b->h);
+}
 
-    static const char *const kHeading[XP_COUNT] = {
-        "EXTRAS", "PROTOTYPES", "SOUND TEST", "SETTINGS"
+/* The digits of `v` into `out` from `at`, ended; where they end. */
+static int put_number(char *out, int at, uint32_t v) {
+    char d[10];
+    int k = 0;
+    do { d[k++] = (char)('0' + v % 10); v /= 10; } while (v && k < 10);
+    while (k) out[at++] = d[--k];
+    out[at] = 0;
+    return at;
+}
+
+static void draw_stats(const XBox *b) {
+    static const char *const kNames[STATS_LINES] = {
+        "TIME", "GAMES", "PIECES", "LINES", "SINGLES", "DOUBLES", "TRIPLES",
+        "TETRISES", "TETRIS RATE", "TOP LEVEL"
     };
-    const char *heading = kHeading[g_extras_page];
-    put_text(XB_TX + 1 + (XB_W - 2 - (int)text_len(heading)) / 2, XB_TY + 1,
-             heading, BANK_NOTE);
-
-    switch (g_extras_page) {
-    case XP_TOP: {
-        static const char *const kPageNames[XP_COUNT] = {
-            "", "PROTOTYPES", "SOUND TEST", "SETTINGS"
-        };
-        uint8_t pages[XP_COUNT];
-        int n = top_items(pages);
-        for (int i = 0; i < n; i++) draw_line(i, kPageNames[pages[i]], BANK_LABEL);
-        /* ...and the erase on the last row, a row clear of them, in the
-         * credits' grey: there, but not one of the choices the arrow walks
-         * (extras_frame). */
-        draw_line(XB_ROWS - 1, "ERASE SCORES", BANK_CREDIT);
-        break;
+    const LifetimeStats *s = &g_lifetime;
+    uint32_t lines = s->clears[0] + 2 * s->clears[1] + 3 * s->clears[2] + 4 * s->clears[3];
+    for (int i = 0; i < STATS_LINES; i++) {
+        char v[16];
+        int n = 0;
+        switch (i) {
+        case 0: {                               /* hours and minutes */
+            uint32_t minutes = s->frames / (60u * 60u);
+            n = put_number(v, 0, minutes / 60);
+            v[n++] = ':';
+            v[n++] = (char)('0' + (minutes % 60) / 10);
+            v[n++] = (char)('0' + minutes % 10);
+            v[n] = 0;
+            break;
+        }
+        case 1: put_number(v, 0, s->games); break;
+        case 2: put_number(v, 0, s->pieces); break;
+        case 3: put_number(v, 0, lines); break;
+        case 4: case 5: case 6: case 7: put_number(v, 0, s->clears[i - 4]); break;
+        case 8:                                 /* the lines made four at a time */
+            n = put_number(v, 0, lines ? 400u * s->clears[3] / lines : 0);
+            v[n++] = '%';
+            v[n] = 0;
+            break;
+        default: put_number(v, 0, s->top_level); break;
+        }
+        put_text(b->tx + 2, b->ty + 2 + i, kNames[i], BANK_LABEL);
+        put_figure(b, b->ty + 2 + i, v);
     }
-    case XP_PROTOS:
-        for (int i = 0; i < TITLE_SKIN_COUNT && i < XB_ROWS; i++)
-            draw_line(i, skin_name(i), BANK_LABEL);
-        break;
+}
+
+/* THE PAGE: the frame, the heading, the choices, their values, the erase. */
+static void draw_options_page(void) {
+    static const char *const kTop[] = {
+        "GAMMA", "SOUND", "RUMBLE", "BACKGROUND", "PROTOTYPES", "STATS"
+    };
+    uint8_t ids[8];
+    int n = top_items(ids);
+    int row = g_extras_row[XP_TOP];
+    draw_menu_page("OPTIONS");
+    for (int i = 0; i <= n; i++) {
+        int ty = page_row_ty(i);
+        if (i < n) {
+            draw_menu_line(ty, MENU_LABEL_TX, kTop[ids[i]], menu_text_bank());
+            if (ids[i] == TI_GAMMA)
+                put_boxes(MENU_VALUE_TX, ty, LCD_CURVES, g_settings[SET_BRIGHT] + 1);
+            if (ids[i] == TI_RUMBLE)
+                put_boxes(MENU_VALUE_TX, ty, 1, rumble_wanted());
+        } else {
+            /* ...and the erase, a row clear of them, in the credits' grey. */
+            draw_menu_line(ty, MENU_LABEL_TX, "ERASE SCORES", BANK_CREDIT);
+        }
+        set_map_tile(MENU_CURSOR_TX, ty, i == row
+                     ? WITH_BANK(ascii_tile(MENU_ARROW_R), BANK_ARROW) : T_BLANK);
+    }
+}
+
+static void draw_box(int page) {
+    const XBox *b = &g_xbox[page];
+    box_frame(b);
+    const char *head = page_heading(page);
+    put_text(b->tx + 1 + (b->w - 2 - (int)text_len(head)) / 2, b->ty + 1, head, BANK_NOTE);
+    int row = g_extras_row[page];
+    switch (page) {
     case XP_SOUND:
-        for (int i = 0; i < SOUND_TEST_COUNT; i++)
-            draw_line(i, kSoundTest[i].name, BANK_LABEL);
+        put_line(b, 0, "MUSIC", BANK_LABEL, row == 0);
+        put_boxes_right(b, b->ty + 2, AUDIO_LEVEL_MAX, g_settings[SET_MUSIC]);
+        put_line(b, 1, "EFFECTS", BANK_LABEL, row == 1);
+        put_boxes_right(b, b->ty + 3, AUDIO_LEVEL_MAX, g_settings[SET_EFFECTS]);
         break;
-    case XP_SETTINGS: {
-        static const char *const kBright[LCD_CURVES] = { "OFF", "LOW", "HIGH" };
-        draw_line(XS_MUSIC, "MUSIC", BANK_LABEL);
-        put_value(XB_TY + 2 + XS_MUSIC, level_text(g_settings[SET_MUSIC]));
-        draw_line(XS_EFFECTS, "EFFECTS", BANK_LABEL);
-        put_value(XB_TY + 2 + XS_EFFECTS, level_text(g_settings[SET_EFFECTS]));
-        draw_line(XS_BRIGHT, "BRIGHT", BANK_LABEL);
-        put_value(XB_TY + 2 + XS_BRIGHT, kBright[g_settings[SET_BRIGHT] % LCD_CURVES]);
-        if (settings_items() > XS_RUMBLE) {
-            int ty = XB_TY + 2 + XS_RUMBLE;
-            draw_line(XS_RUMBLE, "RUMBLE", BANK_LABEL);
-            uint16_t box = rumble_wanted() ? T_CHECK_ON : T_CHECK_OFF;
-            set_map_tile(XB_TX + XB_W - 3, ty, WITH_BANK(box, BANK_LABEL));
-            set_map_tile(XB_TX + XB_W - 2, ty, WITH_BANK(box + 1, BANK_LABEL));
+    case XP_BACKGROUND:
+        for (int i = 0; i < BG_COUNT; i++) {
+            put_line(b, i, kBgNames[i], BANK_LABEL, row == i);
+            put_boxes_right(b, b->ty + 2 + i, 1, g_settings[SET_BG] == i);
         }
         break;
+    case XP_PROTOS:
+        for (int i = 0; i < TITLE_SKIN_COUNT; i++) {
+            put_line(b, i, skin_name(i), BANK_LABEL, row == i);
+            put_boxes_right(b, b->ty + 2 + i, 1, g_title_skin == i);
+        }
+        break;
+    case XP_STATS:
+        draw_stats(b);
+        break;
+    default:                                    /* the two questions */
+        put_line(b, 0, "YES", BANK_LABEL, row == 0);
+        put_line(b, 1, "NO", BANK_LABEL, row == 1);
+        break;
     }
-    }
+}
+
+static int top_page(void) {
+    return g_extras_stack[g_extras_depth - 1];
+}
+
+static void push(int page, int parent_row) {
+    if (g_extras_depth)
+        g_xbox[page] = place_box(page, top_page(), parent_row);
+    g_extras_stack[g_extras_depth++] = (uint8_t)page;
+    /* The questions open on NO; the others on their first line, or on the
+     * one in force. */
+    g_extras_row[page] = 0;
+    if (page == XP_SURE || page == XP_REALLY) g_extras_row[page] = 1;
+    if (page == XP_BACKGROUND) g_extras_row[page] = g_settings[SET_BG];
+    if (page == XP_PROTOS) g_extras_row[page] = g_title_skin;
+    g_redraw_boxes = true;
+}
+
+static void pop(void) {
+    if (g_extras_depth) g_extras_depth--;
+    g_redraw_page = true;
 }
 
 void extras_open(void) {
-    g_extras_open = true;
-    g_extras_page = XP_TOP;
+    g_extras_depth = 0;
+    push(XP_TOP, 0);
     g_extras_row[XP_TOP] = 0;
-    /* The fireworks stop where they are and their bursts go out — a show
-     * frozen in the sky behind a box is a picture of a bug — and the
-     * cathedral stays, its tower behind the box. */
-    for (int i = TITLE_FIREWORK_FIRST; i < TITLE_OAM_COUNT; i++)
-        MEM_OAM[i * 4] = OBJ_ATTR0_HIDDEN;
-    title_window_hole(XB_TX * TILE_PX, XB_TY * TILE_PX, XB_W * TILE_PX, XB_H * TILE_PX);
-    title_window(g_title_skin == 0);
-}
-
-static void extras_close(void) {
-    g_extras_open = false;
-    title_window_hole(0, 0, 0, 0);
-    title_redraw();
-}
-
-bool extras_up(void) { return g_extras_open; }
-
-/* The title's tune stands down for the sound test, so what is tested is
- * heard on its own. */
-bool extras_quiet(void) {
-    return g_extras_open && g_extras_page == XP_SOUND;
-}
-
-static void page_open(uint8_t page) {
-    g_extras_page = page;
-    g_extras_row[page] = 0;
-    /* ...on the skin on the title, for the list of them. */
-    if (page == XP_PROTOS) g_extras_row[page] = g_title_skin;
+    g_fresh = g_redraw_page = true;
     screen_blip();
 }
 
-static void page_close(void) {
-    /* The level-up jingle is a tune, and it outlasts the page: stopped
-     * here, so the title's comes back on its own (front_music). */
-    if (g_extras_page == XP_SOUND) stop_music();
-    g_extras_page = XP_TOP;
-    screen_blip();
+bool extras_up(void) { return g_extras_depth != 0; }
+
+/* A bar moved by `step`: LEFT and RIGHT stop at its ends, A goes round. */
+static uint8_t bar_step(uint8_t v, int step, int max, bool round) {
+    int n = v + step;
+    if (round) return (uint8_t)((n + max + 1) % (max + 1));
+    return (uint8_t)(n < 0 ? 0 : n > max ? max : n);
 }
 
-/* A setting moved by `step` (LEFT -1, RIGHT and A +1), round. */
-static void setting_step(int row, int step) {
-    switch (row) {
-    case XS_MUSIC:
-    case XS_EFFECTS: {
-        uint8_t *level = &g_settings[row == XS_MUSIC ? SET_MUSIC : SET_EFFECTS];
-        *level = (uint8_t)((*level + AUDIO_LEVEL_MAX + 1 + step) % (AUDIO_LEVEL_MAX + 1));
-        settings_apply();
-        break;
-    }
-    case XS_BRIGHT:
-        g_settings[SET_BRIGHT] =
-            (uint8_t)((g_settings[SET_BRIGHT] + LCD_CURVES + step) % LCD_CURVES);
-        lcd_set_curve(g_settings[SET_BRIGHT]);
-        install_title_palette();
-        break;
-    case XS_RUMBLE:
-        g_settings[SET_FLAGS] ^= SET_RUMBLE_OFF;
-        if (rumble_wanted()) gbp_rumble(12);   /* what ON feels like */
-        break;
-    }
+static void changed(void) {
     settings_save();
+    g_redraw_boxes = true;
     /* The switches' bell, at the effects' volume as it now is. */
     nes_audio_play(NES_SOUND_DING);
 }
 
-/* One frame of the box: its buttons, then its drawing (the caller has
- * waited for the blank). Returns what the title has to do about it. */
-int extras_frame(uint8_t pressed, int *skin) {
-    int result = EXTRAS_STAY;
-    int n = page_items();
-    uint8_t *row = &g_extras_row[g_extras_page];
-    if (pressed & (TENGEN_BTN_UP | TENGEN_BTN_DOWN)) {
-        *row = (uint8_t)((*row + n + ((pressed & TENGEN_BTN_UP) ? -1 : 1)) % n);
-        cursor_blip();
-    }
+/* ERASE SCORES ERASES EVERYTHING the console has kept — for a console
+ * passed on to somebody else: every table and the last name typed, the
+ * lifetime figures, the pause menu's switches, these settings, the paused
+ * game on the battery — and puts the release's title back. What is left is
+ * the cartridge as it came, but for the chord, which is this session's. */
+static void erase_everything(void) {
+    leader_erase_all();
+    memset(&g_lifetime, 0, sizeof g_lifetime);
+    lifetime_save();
+    options_erase();
+    static const uint8_t kFactory[SET_COUNT] = {
+        AUDIO_LEVEL_MAX, AUDIO_LEVEL_MAX, 0, 0, BG_BLACK
+    };
+    for (int i = 0; i < SET_COUNT; i++) g_settings[i] = kFactory[i];
+    settings_save();
+    settings_apply();
+    lcd_set_curve(0);
+    bg_apply();
+    suspend_clear();
+    g_title_skin = 0;
+    leader_use_table(front_skin());
+}
+
+/* One frame of the page and its boxes, the blank already waited for: their
+ * buttons, then whatever has to be drawn again. False once the page has
+ * gone, back to GAME SELECT. */
+bool extras_frame(uint8_t pressed) {
+    int page = top_page();
+    int n = page_items(page);
+    uint8_t *row = &g_extras_row[page];
+    uint8_t ids[8];
+    int regular = top_items(ids);
+    bool round = (pressed & TENGEN_BTN_A) != 0;
+    int step = (pressed & TENGEN_BTN_RIGHT) ? 1 : (pressed & TENGEN_BTN_LEFT) ? -1
+             : round ? 1 : 0;
+
     if (pressed & TENGEN_BTN_START) {
-        if (g_extras_page == XP_SOUND) stop_music();
-        extras_close();
-        screen_blip();
-        return EXTRAS_CLOSED;
-    }
-    if (pressed & TENGEN_BTN_B) {
-        if (g_extras_page != XP_TOP) {
-            page_close();
+        /* START: the boxes down, or off the page. */
+        if (g_extras_depth > 1) {
+            g_extras_depth = 1;
+            g_redraw_page = true;
         } else {
-            extras_close();
+            g_extras_depth = 0;
+        }
+        screen_blip();
+    } else if (pressed & TENGEN_BTN_B) {
+        pop();
+        screen_blip();
+    } else if (pressed & (TENGEN_BTN_UP | TENGEN_BTN_DOWN | TENGEN_BTN_SELECT)) {
+        /* UP AND DOWN WALK THE CHOICES AND STEP OVER THE ERASE; SELECT goes
+         * down a line at a time and goes on past the last choice onto it.
+         * Off it again, DOWN and SELECT go round to the top and UP back to
+         * the last choice. */
+        bool up = (pressed & TENGEN_BTN_UP) != 0;
+        if (page == XP_TOP) {
+            if (*row == regular) *row = up ? (uint8_t)(regular - 1) : 0;
+            else if (up) *row = (uint8_t)((*row + regular - 1) % regular);
+            else if ((pressed & TENGEN_BTN_SELECT) && *row == regular - 1) *row = (uint8_t)regular;
+            else *row = (uint8_t)((*row + 1) % regular);
+            g_redraw_page = true;
+        } else if (n) {
+            *row = (uint8_t)((*row + n + (up ? -1 : 1)) % n);
+            g_redraw_boxes = true;
+        }
+        if (n) cursor_blip();
+    } else if (pressed & (TENGEN_BTN_A | TENGEN_BTN_LEFT | TENGEN_BTN_RIGHT)) {
+        switch (page) {
+        case XP_TOP:
+            if (*row == regular) {
+                if (round) {
+                    push(XP_SURE, *row);
+                    screen_blip();
+                }
+                break;
+            }
+            switch (ids[*row]) {
+            case TI_GAMMA:
+                g_settings[SET_BRIGHT] = bar_step(g_settings[SET_BRIGHT], step,
+                                                  LCD_CURVES - 1, round);
+                lcd_set_curve(g_settings[SET_BRIGHT]);
+                g_redraw_page = true;
+                changed();
+                break;
+            case TI_RUMBLE:
+                if (!round) break;
+                g_settings[SET_FLAGS] ^= SET_RUMBLE_OFF;
+                if (rumble_wanted()) gbp_rumble(12);   /* what ON feels like */
+                g_redraw_page = true;
+                changed();
+                break;
+            default: {
+                static const uint8_t kOpens[] = {
+                    [TI_SOUND] = XP_SOUND, [TI_BACKGROUND] = XP_BACKGROUND,
+                    [TI_PROTOS] = XP_PROTOS, [TI_STATS] = XP_STATS,
+                };
+                if (round) {
+                    push(kOpens[ids[*row]], *row);
+                    screen_blip();
+                }
+                break;
+            }
+            }
+            break;
+        case XP_SOUND: {
+            uint8_t *level = &g_settings[*row ? SET_EFFECTS : SET_MUSIC];
+            *level = bar_step(*level, step, AUDIO_LEVEL_MAX, round);
+            settings_apply();
+            changed();
+            break;
+        }
+        case XP_BACKGROUND:
+            if (!round || g_settings[SET_BG] == *row) break;
+            g_settings[SET_BG] = *row;
+            bg_apply();
+            g_redraw_page = true;
+            changed();
+            break;
+        case XP_PROTOS:
+            if (!round || g_title_skin == *row) break;
+            /* ANOTHER SKIN, AND THE PAGE WEARS IT AT ONCE: the menu's frame
+             * and logo (draw_menu_frame), and the HIGH SCORE from its table.
+             * The title takes its tiles when it is next drawn (draw_title).
+             * The chord's own chirp. */
+            g_title_skin = *row;
+            leader_use_table(front_skin());
+            nes_audio_play(NES_SOUND_CHIRP);
+            g_redraw_page = true;
+            break;
+        case XP_STATS:
+            if (round) {
+                pop();
+                screen_blip();
+            }
+            break;
+        case XP_SURE:
+            if (!round) break;
+            if (*row == 0) push(XP_REALLY, 0);
+            else pop();
             screen_blip();
-            return EXTRAS_CLOSED;
+            break;
+        case XP_REALLY:
+            if (!round) break;
+            if (*row == 0) {
+                /* ERASED, and back to the page with the arrow off the erase,
+                 * where a second A cannot find it. */
+                erase_everything();
+                g_extras_depth = 1;
+                g_extras_row[XP_TOP] = 0;
+                g_redraw_page = true;
+                nes_audio_play(NES_SOUND_ALARM);
+            } else {
+                pop();
+                pop();
+                screen_blip();
+            }
+            break;
         }
-    } else if (g_extras_page == XP_TOP) {
-        uint8_t pages[XP_COUNT];
-        top_items(pages);
-        if (pressed & TENGEN_BTN_A) page_open(pages[*row]);
-        /* THE ERASE ANSWERS SELECT AND NOTHING ELSE: the arrow never lands
-         * on it, so no run of UP, DOWN and A can, and the pages after it
-         * ask twice with NO chosen (erase_records_prompt). */
-        else if (pressed & TENGEN_BTN_SELECT) {
-            extras_close();
-            return EXTRAS_ERASE;
-        }
-    } else if (g_extras_page == XP_PROTOS) {
-        if (pressed & TENGEN_BTN_A) {
-            *skin = *row;
-            extras_close();
-            return EXTRAS_SKIN;
-        }
-    } else if (g_extras_page == XP_SOUND) {
-        if (pressed & TENGEN_BTN_A) nes_audio_play(kSoundTest[*row].id);
-    } else if (g_extras_page == XP_SETTINGS) {
-        if (pressed & (TENGEN_BTN_A | TENGEN_BTN_RIGHT)) setting_step(*row, 1);
-        else if (pressed & TENGEN_BTN_LEFT) setting_step(*row, -1);
     }
-    if (g_extras_open) draw_box();
-    return result;
+    if (!g_extras_depth) {
+        clear_screen();                 /* GAME SELECT is drawn next frame */
+        return false;
+    }
+    if (g_fresh) {
+        clear_screen();
+        g_fresh = false;
+    }
+    if (g_redraw_page) {
+        draw_options_page();
+        g_redraw_boxes = true;
+    }
+    if (g_redraw_boxes)
+        for (int i = 1; i < g_extras_depth; i++) draw_box(g_extras_stack[i]);
+    g_redraw_page = g_redraw_boxes = false;
+    return true;
 }
