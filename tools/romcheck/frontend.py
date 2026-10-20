@@ -4,7 +4,7 @@ GAME SELECT, the credits, the demo, the cable lobby alone.
 """
 import os
 from .harness import (
-    skip, put_skin_on, build_has_protos, PAL_BRICK_BANK, CHARBLOCK_ADDR,
+    skip, put_skin_on, step_skin, build_has_protos, PAL_BRICK_BANK, CHARBLOCK_ADDR,
     CATHEDRAL_SPRITES, CELL_BLOCK, CREDITS, CREDIT_FRAMES, CREDIT_PORT, CREDIT_TY,
     DEMO_START_FRAME, DEMO_WATCH_FRAMES, GAME_SELECT_LONGEST, GAME_SELECT_ROWS,
     GAME_SELECT_TX, GAME_SELECT_TY, HANDICAP_ROW, KEYS,
@@ -211,7 +211,8 @@ def skin_check(rom_path):
            "antes del acorde un hombro suelto no hace nada")
 
     # ...Y AL REVES: el acorde de los menus encuentra tambien los prototipos.
-    # De vuelta al titulo, R a solas pone el primero, y L+R ya no hace nada.
+    # De vuelta al titulo, L+R ya no hace nada, y la lista de EXTRAS
+    # (step_skin: R, A en PROTOTYPES, DOWN, A) pone el primero.
     other, other_screen = load(rom_path)    # `other_screen` must stay alive
     run(other, 40)
     other_release = [other.memory.u16[SCREENBLOCK_ADDR + (r * 32 + c) * 2]
@@ -221,8 +222,7 @@ def skin_check(rom_path):
     other.set_keys(); run(other, 12)
     still = [other.memory.u16[SCREENBLOCK_ADDR + (r * 32 + c) * 2]
              for r in range(SCREEN_H // TILE) for c in range(SCREEN_TW_TILES)]
-    other.set_keys(KEYS["R"]); run(other, 4)
-    other.set_keys(); run(other, 12)
+    step_skin(other, 1, settle=12)
     stepped = [other.memory.u16[SCREENBLOCK_ADDR + (r * 32 + c) * 2]
                for r in range(SCREEN_H // TILE) for c in range(SCREEN_TW_TILES)]
     if still != other_release:
@@ -230,10 +230,10 @@ def skin_check(rom_path):
                         "cambia la skin: deberia haberse retirado")
     elif stepped != proto:
         failures.append("el acorde de los menus no encuentra los prototipos: "
-                        "R a solas no pone el primero en el titulo")
+                        "la lista de EXTRAS no pone el primero en el titulo")
     else:
-        print("  y el acorde de los menus los encuentra tambien: R a solas pone "
-              "el primero en el titulo")
+        print("  y el acorde de los menus los encuentra tambien: la lista de "
+              "EXTRAS pone el primero en el titulo")
     del other, other_screen
 
     # The release's fireworks and cathedral overlay belong to the release
@@ -243,46 +243,47 @@ def skin_check(rom_path):
     else:
         print("  los sprites del release (catedral y fuegos) se retiran con ella")
 
-    # HOWEVER MANY SKINS the build was given, R must walk all of them and come
-    # back — and each must be its OWN screen, not the same tiles twice, which
-    # is what a swap that forgot to re-upload the prototype's pattern table
-    # would look like.
+    # HOWEVER MANY SKINS the build was given, the list must walk all of them
+    # and come back — and each must be its OWN screen, not the same tiles
+    # twice, which is what a swap that forgot to re-upload the prototype's
+    # pattern table would look like.
     seen = [release, proto]
     for _ in range(LIMIT_SKINS):
-        tap(KEYS["R"])
+        step_skin(core, 1, settle=12)
         now = frame_tiles()
         if now == release:
             break
         if now in seen:
-            failures.append("dos skins del ciclo dibujan los mismos tiles")
+            failures.append("dos skins de la lista dibujan los mismos tiles")
             break
         seen.append(now)
     else:
-        failures.append(f"el ciclo de skins no vuelve al release en "
-                         f"{LIMIT_SKINS} pulsaciones de R")
+        failures.append(f"la lista de skins no vuelve al release en "
+                         f"{LIMIT_SKINS} pasos")
     if not failures:
-        print(f"  tras el acorde, R recorre {len(seen) - 1} skin(s) distinta(s) "
-               "y vuelve al titulo del release")
+        print(f"  tras el acorde, la lista de EXTRAS recorre {len(seen) - 1} "
+              "skin(s) distinta(s) y vuelve al titulo del release")
 
-    # ...Y L VUELVE, que es de lo que iba el cambio: con cuatro skins, volver a
-    # la que acabas de pasar no puede costar dar la vuelta a las otras tres.
+    # ...Y HACIA ARRIBA TAMBIEN, que es de lo que iba el cambio de L y R: con
+    # cuatro skins, volver a la que acabas de pasar no puede costar dar la
+    # vuelta a las otras tres.
     order = seen + [release]
-    tap(KEYS["R"])
+    step_skin(core, 1, settle=12)
     if frame_tiles() != order[1]:
-        failures.append("R no avanza a la primera skin desde el release")
-    tap(KEYS["L"])
+        failures.append("DOWN no avanza a la primera skin desde el release")
+    step_skin(core, -1, settle=12)
     if frame_tiles() != release:
-        failures.append("L no vuelve a la skin anterior")
+        failures.append("UP no vuelve a la skin anterior")
     else:
-        tap(KEYS["L"])
+        step_skin(core, -1, settle=12)
         if frame_tiles() != order[-2]:
-            failures.append("L desde el release no da la vuelta a la ultima skin")
+            failures.append("UP desde el release no da la vuelta a la ultima skin")
         else:
-            print("  L retrocede y R avanza, y la lista da la vuelta por los dos "
-                   "lados")
+            print("  UP retrocede y DOWN avanza, y la lista da la vuelta por los "
+                  "dos lados")
 
     # ...and the choice must survive leaving the title and coming back.
-    tap(KEYS["R"])
+    step_skin(core, 1, settle=12)
     proto = frame_tiles()
     for name in ("START", "B"):
         core.set_keys(KEYS[name]); run(core, 4); core.set_keys(); run(core, 10)

@@ -809,10 +809,16 @@ def pause_hold(rom_path):
     now = hud()
     label = [entry(3, c) & 0x3FF for c in range(24, 28)]
     want = [lay["hold_label"] + i for i in range(4)]
-    piece = [entry(r, c) for r in (5, 6) for c in range(24, 28)]
-    piece += [core.memory.u16[SCREENBLOCK_ADDR + 0x800 + (r * 32 + c) * 2]
-              for r in (5, 6) for c in range(23, 28)]
-    in_hold_bank = [e for e in piece if (e & 0x3FF) and e >> 12 == 4]
+
+    def hold_piece():
+        """HOLD's cell, on the main map and the offset one: the tiles of the
+        piece put aside, in its bank (PAL_HOLD_BANK)."""
+        piece = [entry(r, c) for r in (5, 6) for c in range(24, 28)]
+        piece += [core.memory.u16[SCREENBLOCK_ADDR + 0x800 + (r * 32 + c) * 2]
+                  for r in (5, 6) for c in range(23, 28)]
+        return [e for e in piece if (e & 0x3FF) and e >> 12 == 4]
+
+    in_hold_bank = hold_piece()
     cossack = [i for i in range(124, 128)
                if (core.memory.u16[0x07000000 + i * 8] & 0x300) != 0x200]
     if now == was:
@@ -822,12 +828,26 @@ def pause_hold(rom_path):
                         f"{[hex(t) for t in label]}")
     elif len(in_hold_bank) < 3:
         failures.append(f"la celda HOLD no muestra la pieza guardada: "
-                        f"{[hex(e) for e in piece]}")
+                        f"{[hex(e) for e in in_hold_bank]}")
     elif cossack:
         failures.append(f"con HOLD el cosaco sigue en HUD STATS (sprites {cossack})")
     else:
         print("  L+R cambia a HUD STATS: HOLD donde estaba el cosaco, con la "
               "pieza guardada en sus colores")
+
+    # ...AND BEHIND THE PAUSE'S WALL IT GOES, as NEXT does: the wall is a
+    # rest, and the piece put aside is half of the look it is there to stop.
+    # Back with the game.
+    tap("START", settle=60)
+    paused = len(hold_piece())
+    tap("START", settle=30)
+    back = len(hold_piece())
+    if paused or back < 3:
+        failures.append(f"tras el muro de la pausa la pieza de HOLD sigue a la "
+                        f"vista ({paused} celdas) o no vuelve ({back})")
+    else:
+        print(f"  en pausa la pieza de HOLD se va tras el muro y vuelve con el "
+              f"juego ({back} celdas)")
 
     # ...AND OFF AGAIN, still in HUD STATS: nothing of HOLD's cell is left
     # on any layer, and the cossack is back. Its label is on the main layer

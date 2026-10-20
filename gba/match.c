@@ -121,7 +121,8 @@ void cossack_watch(int slot, TengenStepResult step) {
  * the cartridge's pad never shook. */
 static bool pause_menu_on(void);
 static void rumble_step(TengenStepResult step) {
-    if (!pause_menu_on()) return;
+    /* ...and not if the player has switched it off (SETTINGS, extras.c). */
+    if (!pause_menu_on() || !rumble_wanted()) return;
     if (step.lines_cleared) {
         int rows = 0;
         for (uint32_t m = step.rows_cleared_mask; m; m &= m - 1) rows++;

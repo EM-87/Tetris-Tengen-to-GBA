@@ -155,16 +155,89 @@ static uint16_t gba_rate(uint16_t nes_period) {
     return (uint16_t)(2048 - scaled);
 }
 
-/* NES volume/envelope byte -> GBA envelope field.
+/* ----------------------------------------------------------------------- *
+ * TWO VOLUMES, THE TUNE'S AND THE EFFECTS' (SETTINGS, extras.c)
+ *
+ * The engine plays both through the same four channels, one voice at a time
+ * on each, so which of the two a channel is sounding is the engine's to say,
+ * and it is asked as it writes: the voice being written for is the one at
+ * the chain node in $03F2 (`sty $03F2` at LD86A, `stx $03F2` at LD83D),
+ * $03DC,node holds that voice's number from 1, and $0292,voice its class —
+ * the byte the pause's gag is compared with (`cmp $FA`, $D889). MEASURED on
+ * the engine, every tune with the effects queued over it at random: the
+ * tunes' voices are class $1D-$23 and every effect's $74 and over; the line
+ * clear over LOGINSKA is $74 on pulse 2 while the tune's $1D goes on on
+ * pulse 1. $40 divides them, the floor the pause lets its tick through at.
+ *
+ * NOT THE HEAD OF THE CHANNEL'S CHAIN, which was the first idea: measured
+ * the same way, the voice at the head is not the one writing four times in
+ * ten — a tune's voice heads the chain while an effect's sounds.
+ * ----------------------------------------------------------------------- */
+#define NES_RAM_VOICE_NODE  0x03F2
+#define NES_RAM_VOICE_CHAIN 0x03DC
+#define NES_RAM_VOICE_CLASS 0x0292
+#define NES_EFFECT_CLASS    0x40
+
+static uint8_t g_level[2] = { AUDIO_LEVEL_MAX, AUDIO_LEVEL_MAX };  /* tune, effects */
+static uint8_t g_effect_channels;   /* the channels an effect wrote last */
+static uint8_t g_effects_applied;   /* ...as they were when last applied */
+static bool g_relevel;              /* every channel again, at its new volume */
+
+static void channel_written(const uint8_t *ram, unsigned channel) {
+    uint8_t voice = ram[NES_RAM_VOICE_CHAIN + ram[NES_RAM_VOICE_NODE]];
+    uint8_t bit = (uint8_t)(1u << channel);
+    if (voice && ram[NES_RAM_VOICE_CLASS + voice - 1] >= NES_EFFECT_CLASS)
+        g_effect_channels |= bit;
+    else
+        g_effect_channels &= (uint8_t)~bit;
+}
+
+static bool effect_on(int channel) {
+    return (g_effect_channels >> channel) & 1;
+}
+
+void nes_audio_set_levels(uint8_t tune, uint8_t effects) {
+    if (tune > AUDIO_LEVEL_MAX) tune = AUDIO_LEVEL_MAX;
+    if (effects > AUDIO_LEVEL_MAX) effects = AUDIO_LEVEL_MAX;
+    if (tune == g_level[0] && effects == g_level[1]) return;
+    g_level[0] = tune;
+    g_level[1] = effects;
+    g_relevel = true;
+}
+
+/* A four-bit volume at the level of its kind. Rounded up, so a note that is
+ * there at full is still there, however quietly, at a quarter. */
+uint8_t audio_scale(uint8_t volume, bool effect) {
+    uint8_t level = g_level[effect];
+    if (level >= AUDIO_LEVEL_MAX) return volume;
+    return (uint8_t)((volume * level + AUDIO_LEVEL_MAX - 1) / AUDIO_LEVEL_MAX);
+}
+
+uint16_t audio_envelope(uint16_t cnt, bool effect) {
+    return (uint16_t)((cnt & 0x0FFF) | (audio_scale((uint8_t)(cnt >> 12), effect) << 12));
+}
+
+/* THE WAVE CHANNEL HAS NO ENVELOPE, only five volumes — 0, 25, 50, 75 and
+ * 100% (SOUND3CNT_H bits 13-15) — which are exactly the five levels. */
+uint16_t audio_wave_volume(bool effect) {
+    static const uint16_t kWaveVolume[AUDIO_LEVEL_MAX + 1] = {
+        0, 3 << 13, 2 << 13, 1 << 15, 1 << 13
+    };
+    return kWaveVolume[g_level[effect]];
+}
+
+/* NES volume/envelope byte -> GBA envelope field, at the level of whoever
+ * wrote it.
  *
  * Bit 4 set means "constant volume", which is what this engine uses: the
  * volume shaping is done in software, a new value written every frame. Bit 4
  * clear means the NES's own hardware envelope, whose period is in the low
  * nibble; the GBA has the same idea, so that maps across as a decay. */
-static uint16_t envelope_bits(uint8_t vol_byte) {
+static uint16_t envelope_bits(uint8_t vol_byte, bool effect) {
     uint8_t v = vol_byte & 0x0F;
-    if (vol_byte & 0x10) return (uint16_t)(v << 12);          /* fixed volume */
-    return (uint16_t)((15 << 12) | (v & 7) << 8);             /* decay from full */
+    if (vol_byte & 0x10)                                       /* fixed volume */
+        return (uint16_t)(audio_scale(v, effect) << 12);
+    return (uint16_t)((audio_scale(15, effect) << 12) | (v & 7) << 8);  /* decay */
 }
 
 /* THE SWEEP, which the NES does in hardware and this engine leans on: the
@@ -212,7 +285,7 @@ static void apply_pulse(int channel, const uint8_t *apu, bool enabled) {
     uint16_t period = g_sweep[channel].period;
 
     uint16_t duty = (uint16_t)((vol >> 6) & 3);
-    uint16_t cnt_h = (uint16_t)((duty << 6) | envelope_bits(vol));
+    uint16_t cnt_h = (uint16_t)((duty << 6) | envelope_bits(vol, effect_on(channel)));
     /* Silence by volume; the GBA has no per-channel mute. */
     if (!enabled || g_sweep[channel].muted) cnt_h &= 0x0FFF;
 
@@ -284,14 +357,14 @@ static void apply_triangle(const uint8_t *apu, bool enabled) {
      * decided by $4015 and by the linear counter's reload value. */
     bool on = enabled && (apu[R_TRI_LIN] & 0x7F) != 0;
     REG_SOUND3CNT_L = on ? 0x0080 : 0x0000;
-    REG_SOUND3CNT_H = on ? (uint16_t)(1 << 13) : 0;   /* volume code 1 = 100% */
+    REG_SOUND3CNT_H = on ? audio_wave_volume(effect_on(2)) : 0;
     REG_SOUND3CNT_X = (uint16_t)(0x8000 | (gba_rate(period) & 0x7FF));
 }
 
 static void apply_noise(const uint8_t *apu, bool enabled) {
     uint8_t vol = apu[R_NOISE_VOL];
     uint8_t lo = apu[R_NOISE_LO];
-    uint16_t cnt_l = envelope_bits(vol);
+    uint16_t cnt_l = envelope_bits(vol, effect_on(3));
     if (!enabled) cnt_l &= 0x0FFF;
 
     uint8_t index = lo & 0x0F;
@@ -311,6 +384,7 @@ void nes_audio_init(void) {
     load_triangle_wave();
 
     nes6502_init(&g_cpu, g_nes_ram, g_code, kAudioPrg, AUDIO_PRG_BASE, AUDIO_PRG_SIZE);
+    g_cpu.bus.channel_written = channel_written;
     /* THE CARTRIDGE'S FIRST FRAME, done here: queue the engine's reset and
      * let one update consume it, before any track is asked for. The reset
      * wipes the queue as it runs, so anything queued alongside it would be
@@ -423,11 +497,21 @@ void nes_audio_frame(void) {
      * in this game. Measured, not assumed. */
     uint32_t written = g_cpu.bus.apu_written;
     g_cpu.bus.apu_written = 0;
+    /* A CHANNEL AT ANOTHER VOLUME is applied again even if nothing in its
+     * registers moved: the levels were changed (nes_audio_set_levels), or the
+     * channel went from a tune's voice to an effect's with the same notes.
+     * Only one the engine is sounding — one it has let go may be a
+     * hand-entered tune's. */
+    uint8_t relevel = (uint8_t)(g_relevel ? 0x0F : 0);
+    relevel |= (uint8_t)(g_effect_channels ^ g_effects_applied);
+    relevel &= enables;
+    g_relevel = false;
+    g_effects_applied = g_effect_channels;
     for (int c = 0; c < 2; c++) {
         uint8_t bit = (uint8_t)(1 << c);
         int base = c == 0 ? R_SQ1_VOL : R_SQ2_VOL;
         sweep_take_writes(c, apu, written);
-        bool restart = changed(apu, base, base + 3, bit);
+        bool restart = changed(apu, base, base + 3, bit) || (relevel & bit);
         /* The sweep moves the note between the engine's writes, on the
          * NES's clock; see PulseSweep. A new note restarts as before, with
          * whatever period the clocks leave it on. */
@@ -450,8 +534,10 @@ void nes_audio_frame(void) {
             sweep_retune(c);
         }
     }
-    if (changed(apu, R_TRI_LIN, R_TRI_HI, 0x04)) apply_triangle(apu, enables & 0x04);
-    if (changed(apu, R_NOISE_VOL, 0x0F, 0x08)) apply_noise(apu, enables & 0x08);
+    if (changed(apu, R_TRI_LIN, R_TRI_HI, 0x04) || (relevel & 0x04))
+        apply_triangle(apu, enables & 0x04);
+    if (changed(apu, R_NOISE_VOL, 0x0F, 0x08) || (relevel & 0x08))
+        apply_noise(apu, enables & 0x08);
 
     for (int i = 0; i < 0x18; i++) g_prev[i] = apu[i];
 }
@@ -498,7 +584,7 @@ void nes_audio_effect_frame(void) {
     /* $4000/$4004 is DDLC VVVV and $4002/$4003 the eleven-bit period, exactly
      * as apply_pulse reads them off the emulated APU. */
     uint16_t period = (uint16_t)(r[2] | ((r[3] & 0x07) << 8));
-    uint16_t cnt_h = (uint16_t)((((r[0] >> 6) & 3) << 6) | envelope_bits(r[0]));
+    uint16_t cnt_h = (uint16_t)((((r[0] >> 6) & 3) << 6) | envelope_bits(r[0], true));
     uint16_t cnt_x = (uint16_t)(0x8000 | (gba_rate(period) & 0x7FF));
     if (g_fx_channel == 0) {
         REG_SOUND1CNT_L = 0;         /* no sweep: these builds sweep by hand */

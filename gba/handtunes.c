@@ -430,8 +430,9 @@ void handtune_frame(void) {
     } else if (lead == NOTE_RELEASE || lead == REST) {
         silence_pulse1();
     } else if (lead != NOTE_HOLD) {
+        /* At the tune's volume (SETTINGS), from the next note. */
         REG_SOUND1CNT_L = 0;                     /* no sweep */
-        REG_SOUND1CNT_H = LEAD_ENVELOPE;
+        REG_SOUND1CNT_H = audio_envelope(LEAD_ENVELOPE, false);
         REG_SOUND1CNT_X = (uint16_t)(kNoteReg[lead] | 0x8000);
     }
 
@@ -463,12 +464,12 @@ void handtune_frame(void) {
         }
     } else if (bass != NOTE_HOLD) {
         if (!(busy & 0x02)) {
-            REG_SOUND2CNT_L = BASS_ENVELOPE;
+            REG_SOUND2CNT_L = audio_envelope(BASS_ENVELOPE, false);
             REG_SOUND2CNT_H = (uint16_t)(kNoteReg[bass] | 0x8000);
         }
         if (!(busy & 0x04)) {
             REG_SOUND3CNT_L = 0x0080;                /* one bank of 32, channel on */
-            REG_SOUND3CNT_H = (uint16_t)(1 << 13);   /* volume code 1 = 100% */
+            REG_SOUND3CNT_H = audio_wave_volume(false);
             REG_SOUND3CNT_X = (uint16_t)(kNoteReg[bass] | 0x8000);
         }
     }

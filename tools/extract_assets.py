@@ -1698,6 +1698,7 @@ PROTO_RECIPES = {
     # fifteen-row subject gets in twenty.
     "c229f45adcfb7b385472dca79636bed7": {
         "label": "TETRIS, Nintendo-licensed",
+        "menu": "NINTENDO",
         "rows": _rows((4, 19), (24, 29)),
         "bank": 1,
     },
@@ -1730,6 +1731,7 @@ PROTO_RECIPES = {
     # three the finished game gave up.
     "ac327eca3d9f9c169210adc9ccfe8344": {
         "label": "TENGEN PRESENTS TETRIS",
+        "menu": "PRESENTS",
         "rows": _rows((1, 4), (6, 9), (10, 23), (28, 29)),
         "bank": 1,
     },
@@ -1745,6 +1747,7 @@ PROTO_RECIPES = {
     # anybody noticing.
     "087bde3f4dd561c60fd03b65d7b21fca": {
         "label": "THE SOVIET MIND GAME",
+        "menu": "SOVIET MIND",
         "rows": _rows((1, 6), (10, 24), (28, 29)),
         "bank": 1,
     },
@@ -1757,6 +1760,7 @@ PROTO_RECIPES = {
     # the tip of its spike to the last course of its plinth.
     "e81d2b5d223599dc33fe4e615ac1eeb6": {
         "label": "THE SOVIET MIND GAME, redrawn",
+        "menu": "SOVIET MIND 2",
         "rows": _rows((1, 6), (10, 24), (28, 29)),
         "bank": 1,
     },
@@ -2559,6 +2563,7 @@ def read_prototype(path):
     if recipe:
         rows, cols, bank = recipe["rows"], PROTO_COLS, recipe["bank"]
         label, how = recipe["label"], "recipe"
+        menu = recipe["menu"]
     else:
         bank = proto_pattern_table(screen, chr_rom)
         fit = auto_compose(screen, chr_rom, bank)
@@ -2568,6 +2573,7 @@ def read_prototype(path):
                           "no trae receta para ella")
         rows, cols = fit
         label, how = f"unknown screen (md5 {key})", "automatic"
+        menu = None             # numbered as it is listed (emit_proto_header)
     if (bank + 1) * CHR_BANK > len(chr_rom):
         return None, f"{path} no tiene banco CHR {bank}"
     tiles, banks = compose_proto_title(screen, rows, cols)
@@ -2591,6 +2597,7 @@ def read_prototype(path):
         play["levelup_clear_sound"] = bool(clear_sound)
     return {
         "label": label,
+        "menu": menu,
         "how": how,
         "source": path,
         "tiles": tiles,
@@ -2745,6 +2752,17 @@ def emit_proto_header(skins, notes):
         f"#define TILES_PROTO_BYTES {chr_bytes}",
         "",
     ]
+    # THE NAME THE TITLE'S EXTRAS LIST IT UNDER (gba/extras.c), twelve
+    # letters at most, in the port's alphabet: the recipe's, or PROTO and its
+    # place in the list for a dump this file has no recipe for.
+    names = [s.get("menu") or f"PROTO {i + 1}" for i, s in enumerate(skins)]
+    for name in names:
+        assert len(name) <= 12 and all(c in " 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                                       for c in name), name
+    lines += ["#define SKIN_MENU_NAMES 1",
+              "static const char *const kSkinMenuNames[SCREEN_PROTO_COUNT] = {",
+              "    " + ", ".join(f'"{n}"' for n in names),
+              "};", ""]
     _table(lines,
            f"static const uint8_t kRomPalette_bg_proto[SCREEN_PROTO_COUNT][16] = {{",
            [s["palette"] for s in skins], lambda b: f"0x{b:02X}", 16)

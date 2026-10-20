@@ -78,7 +78,9 @@
 /* The cartridge's own sound engine can play these and the cartridge never
  * asks it to — constants.asm.txt marks $0F-$12 "maybe unused". The title's
  * skin easter egg uses CHIRP, so the egg has a voice nothing else in the game
- * uses, and it is still the ROM's voice. */
+ * uses, and it is still the ROM's voice. SWIPE, fourteen frames of noise, is
+ * the one of them the port only plays in the SOUND TEST (extras.c). */
+#define NES_SOUND_SWIPE        0x0F
 #define NES_SOUND_CHIRP        0x10
 /* ...and $11, the other of them nothing in the game asks for: measured on
  * the engine, eight frames of pulse 2 on one high note (G#7, about 3.3kHz),
@@ -103,6 +105,18 @@
 #define NES_GAG_TICK_FLOOR  0x40
 #define NES_GAG_TICK_FRAMES 24
 void nes_audio_gag_lower(uint8_t floor, uint8_t frames);
+
+/* THE TUNE'S VOLUME AND THE EFFECTS', 0 (silent) to AUDIO_LEVEL_MAX (as the
+ * cartridge plays them), from SETTINGS (extras.c). The engine's channels
+ * are told apart by the voice writing them (see nes_audio.c); the
+ * hand-entered tunes are tunes. audio_envelope scales a GBA envelope
+ * register's starting volume, audio_wave_volume is the wave channel's
+ * volume code at full, scaled. */
+#define AUDIO_LEVEL_MAX 4
+void nes_audio_set_levels(uint8_t tune, uint8_t effects);
+uint8_t audio_scale(uint8_t volume, bool effect);
+uint16_t audio_envelope(uint16_t cnt, bool effect);
+uint16_t audio_wave_volume(bool effect);
 
 /* Sets up the GBA's sound hardware and the emulated engine. Call once. */
 void nes_audio_init(void);

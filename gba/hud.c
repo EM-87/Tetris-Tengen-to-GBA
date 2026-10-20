@@ -1244,8 +1244,11 @@ static void draw_hold_cell(int tx, int ty, int w, int shown) {
     int label_tx = tx + (w - HOLD_LABEL_W) / 2;
     for (int i = 0; i < HOLD_LABEL_W; i++)
         set_map_tile(label_tx + i, ty, WITH_BANK(T_HOLD_LABEL + i, BANK_LABEL));
+    /* ...behind the pause's wall, empty, as NEXT is (draw_next_piece): the
+     * piece put aside is as much a part of the long look as the one coming. */
     draw_preview_piece(tx + (w - NEXT_CELL_W) / 2, ty + 2,
-                       g_session.game.player[shown].held, PAL_HOLD_BANK);
+                       board_bricked() ? TT_NONE : g_session.game.player[shown].held,
+                       PAL_HOLD_BANK);
     g_panel_layer = was;
 }
 

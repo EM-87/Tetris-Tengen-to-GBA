@@ -225,6 +225,10 @@ void install_title_palette(void) {
  * which on top of the cartridge's own code running under it was enough to
  * miss a vblank every sixty frames. clear_screen arms it again, and every
  * path that reaches the title goes through one. */
+void title_redraw(void) {
+    g_title_dirty = true;
+}
+
 void draw_title(void) {
     if (!g_title_dirty) return;
     g_title_dirty = false;

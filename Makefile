@@ -176,7 +176,7 @@ GBA_ASSETS := gba/tiles_game.h gba/screen_1p.h gba/screen_coop.h \
 # that header for what is in which.
 GBA_SRC  := gba/main.c gba/video.c gba/hud.c gba/records.c gba/frontend.c gba/match.c \
             gba/nes_audio.c gba/nes6502.c gba/handtunes.c gba/link.c gba/suspend.c \
-            gba/splash.c gba/gbp.c gba/wireless.c $(CORE_SRC)
+            gba/splash.c gba/gbp.c gba/wireless.c gba/extras.c $(CORE_SRC)
 GBA_ELF  := $(BUILD)/tengen.elf
 GBA_ROM  := $(BUILD)/tengen.gba
 # THE SINGLE-PAK SLAVE: the same program, linked to run from external WRAM
@@ -317,6 +317,7 @@ gba-check: $(GBA_ROM)
 	python3 tools/run_rom.py $(GBA_ROM) --skin
 	python3 tools/run_rom.py $(GBA_ROM) --handtunes
 	python3 tools/run_rom.py $(GBA_ROM) --handshare
+	python3 tools/run_rom.py $(GBA_ROM) --extras
 	python3 tools/run_rom.py $(GBA_ROM) --xe
 	python3 tools/run_rom.py $(GBA_ROM) --credits
 	python3 tools/run_rom.py $(GBA_ROM) --leave-title

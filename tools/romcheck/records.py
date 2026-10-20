@@ -2,7 +2,7 @@
 The HIGH SCORES table and its per-build pages.
 """
 from .harness import (
-    skip, put_skin_on,
+    skip, put_skin_on, step_skin,
     CELL_BLOCK, CELL_WALL, KEYS, LEADER_FIRST_TY,
     TENGEN_PF_HEIGHT, TENGEN_PF_WIDTH, game_offsets, game_state_address,
     load, press_start, run, start_game,
@@ -285,9 +285,9 @@ def tables_check(rom_path):
         print("  el prototipo abre con las quince del cartucho, no con las "
                "del release")
 
-    # ...and back to the release, whose own table must be untouched. L walks
-    # the ring backwards, so one press from the first prototype is it.
-    tap(KEYS["L"]); run(core, 24)
+    # ...and back to the release, whose own table must be untouched: one up
+    # the EXTRAS' list from the first prototype (step_skin).
+    step_skin(core, -1, settle=24)
     back = play_and_lose(10)
     if 60000 <= score_of(back[0]) < 70000:
         failures.append(f"la tabla del release abre con el record del "
