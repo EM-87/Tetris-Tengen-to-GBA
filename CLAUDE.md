@@ -145,8 +145,9 @@ prototypes or the logos through). A check that did not REACH what it checks
 — the cable's match never starting, a board that would not die, a skin that
 did not go on — prints FALLA, not SALTADO. Reach the port's extras the way
 the player does: `ring_chord_from_title`, and `put_skin_on` for a
-prototype's title (L+R on the title once, R after the chord has been rung:
-rung already, L+R there stands down and does nothing — while the title's
+prototype's title (L+R on the title once; after the chord has been rung,
+GAME SELECT's OPTIONS and its PROTOTYPES, `step_skin`: rung already, L+R on
+the title stands down and does nothing — while the title's
 chord waited for the menus', `--loans` and `--demo` pressed it where it did
 nothing and checked the cartridge's title twice). `ROMCHECK_AUDIT=1` prints
 every L+R on the title that changes nothing, with the check's line.
@@ -374,8 +375,8 @@ story behind each; the item number is in brackets.
   imitate the unlit panels (an LCD gamma of about 4 against a monitor's
   2.2), games of the day drew bright art to make up for them, and the NES
   palette was made for a television. So the brighter two (x^(1/1.3) and
-  822ac6c's) are the player's choice, SETTINGS' BRIGHT in the title's
-  EXTRAS, kept on the battery. A check that names a colour passes the NES
+  822ac6c's) are the player's choice, GAMMA on GAME SELECT's OPTIONS
+  page, kept on the battery. A check that names a colour passes the NES
   one through the same table (`on_screen` in romcheck/harness.py: keep the
   two in step), on a console that has not chosen one.
 - **Sleep waits for the keys to settle** (`wait_keys_settled`): every key
@@ -758,21 +759,36 @@ and those Stats,
 and turns the menus' text from blue to white and the credits from the
 cartridge's orange to dark grey to say so; the prototype skins on the
 title, which the same chord finds (the prototypes are no part of the
-cartridge): rung on the title it puts the first on, and after it, rung
-anywhere, L or R alone — let go with nothing else pressed, so neither the
-chord nor the sleep's L+R+SELECT, which both begin with one shoulder,
-counts (`released_shoulder_alone`) — puts up the title's EXTRAS
-(`extras.c`): a box like the pause's, the title still behind it (the
-cathedral's sprites holed out by a window, `title_window_hole`; no
-fireworks, no clock, no demo), with PROTOTYPES, the skins as a list
-(names from the recipes, `kSkinMenuNames`); SOUND TEST, the five sounds
-the engine carries and the cartridge never asks for ($0C and $0F-$12), the
-title's tune standing down; SETTINGS, the tunes' volume and the effects'
-apart, the screen's curve and, on a Game Boy Player only, its rumble; and
-ERASE SCORES in the credits' grey, which the arrow never reaches and only
-SELECT opens — the power-on's two questions (`--extras`). The settings
-(`g_settings`, SAVE_SETTINGS_OFF) are the console's, in force from
-power-on chord or not; only the box is behind the chord. The volumes need
+cartridge): rung on the title it puts the first on; and GAME SELECT's
+sixth line under it, OPTIONS, under WITH COMPUTER (the list a row higher
+and its heading lifted four pixels, GAME_SELECT_LIFT_PX), a page as LEVEL
+SETTINGS is (`extras.c`, `draw_menu_page`), what each line holds opening in
+a box over it in the pause's frame: GAMMA, three boxes, the screen's
+curve; SOUND, the tunes' volume and the effects' apart, four boxes each;
+RUMBLE, one box, on a Game Boy Player only; BACKGROUND, BLACK, WHITE, GREY
+or IVORY, the backdrop (palette 0's colour 0) and on the light three the
+words' banks inked (`bg_ink`: white and the light greys black, the pale row
+the one under it) and the sprites drawn for a black stage retouched
+(`ink_sprite_palettes`: the line-clear puff the backdrop's colour, the drop
+points inked, the title's fireworks drawn from a copy of their tiles four
+colours up, TITLE_OBJ_INKED_BASE, because the cathedral's sprites share
+their four palettes colour for colour); PROTOTYPES, the skins by the
+publisher each was made for (`kSkinMenuNames`, the recipes' `menu`), worn
+by the page at once; STATS, this console's lifetime figures
+(`LifetimeStats`, SAVE_STATS_OFF, counted from the deltas of the player on
+this console's own TengenStats — never the demo's, the computer's or the
+cable rival's — and saved when the game is still or every minute of it);
+and ERASE SCORES a row lower in the credits' grey, which UP and DOWN step
+over and only SELECT, a line at a time, goes on to from STATS; A on it
+asks ARE YOU SURE? and then ARE YOU REALLY SURE?, NO chosen both times,
+and YES twice erases EVERYTHING kept — the tables, the lifetime figures,
+the pause's switches, the settings, the paused game — for a console passed
+on (`erase_everything`; `--options`). The settings (`g_settings`,
+SAVE_SETTINGS_OFF) are the console's, in force from power-on chord or not;
+only the page is behind the chord. The five sounds the engine carries and
+the cartridge never asks for each have a place now: $0C a new record,
+$0F SWIPE a HOLD (`TengenStepResult.held`), $10 CHIRP a skin, $11 DING a
+switch, $12 ALARM a refusal and the erase. The volumes need
 the engine to say who is writing a channel, which is asked AS IT WRITES
 (Nes6502Bus.channel_written): the voice at the chain node in $03F2, its
 number at $03DC,node and its class at $0292,voice — tunes $1D-$23, effects
@@ -787,9 +803,9 @@ the title screen's last two rows, which the port's title has no room for
 (©1987 ACADEMYSOFT-ELORG. and ©1988 TENGEN, the © the title font's own tile
 $DF copied at boot into T_COPYRIGHT, the game font having none), and
 under the chord the port's own line in Mirrorsoft's place and its version
-in the copyrights' — VERSION 2.N (the merges in the history), BUILD and the
-commit (-DEV with changes not committed), the year, from the Makefile's
-BUILD_TAG (`--credits`);
+in the copyrights' — VERSION 2.N (the merges in the history) over the
+year, from the Makefile's build/build_tag; the commit stood under them
+once, and went (`--credits`);
 the cossacks staged on the panels'
 ledges where the cartridge uses a middle strip the port does not have; a
 second cossack for the rival in HUD VERSUS; a paused race under the chord
@@ -848,7 +864,7 @@ those two: 256 colours for their gradients; all gitignored like the
 cartridge's art; never on the Single-Pak copy, which never shows a
 splash); every
 colour through one table for the GBA's LCD (`kLcdGamma`: the identity
-unless SETTINGS' BRIGHT picks one of the two brighter curves for an unlit
+unless OPTIONS' GAMMA picks one of the two brighter curves for an unlit
 screen, `lcd_set_curve` loading the power-on palettes again through it); the Game Boy Player's logo at power-on, its rumble under the chord, and on it the
 cartridge's three settings pages instead of the one (`gbp.c`,
 `draw_tv_page`); 2 PLAYER and COOPERATIVE over the Wireless Adapter, found by
@@ -867,9 +883,13 @@ take it, B putting back that and not A (`g_last_name`, on the battery); the
 attract demo playing MUSIC MIX under the chord, where the cartridge's is
 silent but for its effects, the player's tune on LEVEL SETTINGS given back
 as it ends (`demo_music_back`, `--demo`), and played by the port's computer
-(`smart`) under it as every match's computer is, up to XE's 19 as every
+(`smart`) under it as every match's computer is, with the player's game
+options (the ghost and the rules, `options_apply_solo`), up to XE's 19 as every
 game under it goes (at 17 the port's computer played on for ever; at 19 it
-falls, some fifteen minutes in); the score stopping at 999999 under the
+falls, some fifteen minutes in), and ending as a game does: its end page,
+then the table with its row in it as CPU if it makes one, and back to the
+title, the table in memory as it was and the battery not written
+(`leader_demo_show`, `leader_demo_end`); the score stopping at 999999 under the
 chord where the cartridge's drops back to 100000 (TengenGame.mended,
 `tengen_score_add`), the lines at 9999 (`shown_lines`; `--counters`); and,
 once a match is over
@@ -900,10 +920,10 @@ coop (there A and B are the way out); the line counter's clamp at 10000;
 the prototypes' own front-end shape (two modes, their level select, no
 handicap or music); the cartridge's computer sliding a piece under an overhang (tried
 twice, measured worse; the port's own does, in WITH COMPUTER under the
-chord); the demo's own game over and HIGH SCORES page (the
-cartridge's demo plays about 25 minutes, tops out, and shows both; the
+chord); the demo's own game over and HIGH SCORES page without the chord
+(the cartridge's demo plays about 25 minutes, tops out, and shows both; the
 port's holds its GAME OVER three seconds and goes back to the title, and
-writes no score nobody played for); the demo's seed (the cartridge's
+writes no score nobody played for — under the chord it shows both, above); the demo's seed (the cartridge's
 depends on how many times its main loop spun on the title).
 
 **Looks like a bug, is the cartridge's**: the one-pixel gap between the left

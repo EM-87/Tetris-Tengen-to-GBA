@@ -214,6 +214,16 @@ void install_title_palette(void) {
                         g_title_skin ? kRomPalette_bg_proto[g_title_skin - 1]
                                      : kRomPalette_bg_title,
                         MEM_PALETTE);
+    /* ...A PROTOTYPE'S WORDS ON A LIGHT BACKGROUND: its licence lines are
+     * in its own banks, white, and go black (bg_apply). Only the white: the
+     * rest of it is the picture. */
+    if (g_title_skin && bg_light()) {
+        const uint8_t *set = kRomPalette_bg_proto[g_title_skin - 1];
+        for (int i = 0; i < 16; i++)
+            if ((i & 3) && (set[i] == 0x20 || set[i] == 0x30))
+                MEM_PALETTE[PAL_TITLE_BASE * 16 + (i >> 2) * 16 + (i & 3)] =
+                    nes_colour_to_gba(0x0F);
+    }
 #else
     upload_palette_set(PAL_TITLE_BASE, kRomPalette_bg_title, MEM_PALETTE);
 #endif
@@ -243,6 +253,9 @@ void draw_title(void) {
     install_title_palette();
 #if SCREEN_PROTO_AVAILABLE
     if (g_title_skin) {
+        /* ...ITS TILES TOO, if the skin was chosen somewhere else (OPTIONS'
+         * PROTOTYPES): the map is blank as this runs (clear_screen). */
+        if (!proto_tiles_loaded(g_title_skin - 1)) upload_proto_tiles(g_title_skin - 1);
         /* Thirty columns, no padding: the bordered prototypes' frames are two
          * columns a side — a thin outer rule and the fret inside it — and the
          * two the GBA lacks come off the rule, so the decoration survives
@@ -438,8 +451,11 @@ void draw_title_sprites(void) {
                 MEM_OAM[i * 4] = OBJ_ATTR0_HIDDEN;
                 continue;
             }
-            oam_set(i, x, y, (uint16_t)(TITLE_OBJ_TILE_BASE + tile), false,
-                     PAL_OBJ_TITLE + (attr & 3));
+            /* On a light background, the copy whose colours are inked
+             * (ink_sprite_palettes). */
+            oam_set(i, x, y, (uint16_t)((bg_light() ? TITLE_OBJ_INKED_BASE
+                                                    : TITLE_OBJ_TILE_BASE) + tile),
+                     false, PAL_OBJ_TITLE + (attr & 3));
             /* Bit 5 is the cartridge's "behind the background"; every burst
              * sprite has it. */
             if (attr & 0x20) MEM_OAM[i * 4 + 2] |= OBJ_ATTR2_PRIO(TITLE_FIREWORK_PRIO);
@@ -572,20 +588,18 @@ static const char *const kCredits[][2] = {
 #define CREDIT_COUNT (sizeof kCredits / sizeof kCredits[0])
 
 /* ...WHICH UNDER THE CHORD GIVE WAY TO WHICH PORT THIS IS: the version (2,
- * and the batch), the build (the commit) and the year, from the Makefile
- * (BUILD_TAG). Those are the cartridge's notices, and they stand where the
- * cartridge stands; behind the chord the screen is the port's. */
+ * and the batch) over the year, from the Makefile (build/build_tag). Those are
+ * the cartridge's notices, and they stand where the cartridge stands; behind
+ * the chord the screen is the port's. The commit stood under them once,
+ * and said nothing to anybody playing. */
 #ifndef TENGEN_VERSION
 #define TENGEN_VERSION "2"
-#endif
-#ifndef TENGEN_BUILD
-#define TENGEN_BUILD "LOCAL"
 #endif
 #ifndef TENGEN_YEAR
 #define TENGEN_YEAR "2026"
 #endif
 static const char *const kCreditVersion[2] = {
-    "VERSION " TENGEN_VERSION "  " TENGEN_YEAR, "BUILD " TENGEN_BUILD
+    "VERSION " TENGEN_VERSION, TENGEN_YEAR
 };
 
 static uint8_t g_credit;
@@ -620,6 +634,24 @@ static int menu_lit_bank(void) {
     return g_pause_unlocked ? BANK_MENU : BANK_ARROW;
 }
 
+/* A PAGE OF THE FRONT END'S OWN (GAME SELECT's OPTIONS, extras.c): the
+ * menu frame and logo, and a heading lifted as GAME SELECT's is under the
+ * chord, its list starting a row higher. What is on it is the caller's,
+ * through these. */
+void draw_menu_page(const char *heading) {
+    draw_menu_frame();
+    draw_text_centred(8, heading, menu_bank());
+    REG_BG1VOFS = GAME_SELECT_LIFT_PX;
+}
+
+void draw_menu_line(int ty, int tx, const char *text, int bank) {
+    draw_text_left(ty, tx, text, bank);
+}
+
+int menu_text_bank(void) {
+    return menu_bank();
+}
+
 void draw_game_select(uint8_t choice) {
     draw_menu_frame();
     draw_text_centred(8, "GAME SELECT", menu_bank());
@@ -629,18 +661,27 @@ void draw_game_select(uint8_t choice) {
      * them and does not fit five under a logo six rows tall. */
     /* ...FLUSH LEFT, which is the cartridge's: all five are written at
      * nametable column $0C whatever their length. See GAME_SELECT_TX. */
-    for (int i = 0; i < GAME_COUNT; i++)
-        draw_text_left(GAME_SELECT_TY + i, GAME_SELECT_TX, kGameNames[i],
-                        menu_bank());
+    /* ...AND A SIXTH UNDER THE CHORD, OPTIONS (extras.c), which a row
+     * under the five does not have: the credit is lifted to the frame
+     * already. So the list starts a row higher, and the heading over it —
+     * alone on the offset layer here — goes up GAME_SELECT_LIFT_PX, half way
+     * back to the logo, keeping a gap either side of it. */
+    bool six = g_pause_unlocked;
+    int ty0 = six ? GAME_SELECT_TY - 1 : GAME_SELECT_TY;
+    int rows = six ? GAME_COUNT + 1 : GAME_COUNT;
+    REG_BG1VOFS = six ? GAME_SELECT_LIFT_PX : 0;
+    for (int i = 0; i < rows; i++)
+        draw_text_left(ty0 + i, GAME_SELECT_TX,
+                        i < GAME_COUNT ? kGameNames[i] : "OPTIONS", menu_bank());
     /* AND THE ARROW, which this screen had been doing without. The cartridge
      * marks its choice here exactly as it does on LEVEL SELECT — a white
      * arrow in the column left of the list (gameSelectArrowPpuAddrs, $A0AB,
      * five addresses one row apart) — and the port was leaning on colour
      * alone. Two columns clear of the list, exactly as the cartridge has
      * it. */
-    for (int ty = GAME_SELECT_TY; ty < GAME_SELECT_TY + GAME_COUNT; ty++)
+    for (int ty = ty0; ty < ty0 + rows; ty++)
         set_map_tile(GAME_SELECT_ARROW_TX, ty, T_BLANK);
-    set_map_tile(GAME_SELECT_ARROW_TX, GAME_SELECT_TY + choice,
+    set_map_tile(GAME_SELECT_ARROW_TX, ty0 + choice,
                   WITH_BANK(ascii_tile(MENU_ARROW_R), BANK_ARROW));
     draw_credits();
 }

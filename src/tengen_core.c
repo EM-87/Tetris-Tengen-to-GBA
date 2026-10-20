@@ -1572,6 +1572,7 @@ TengenStepResult tengen_step(TengenGame *game, TengenPlayerSlot slot, uint8_t he
     if (((game->hold >> slot) & 1) && (new_presses & TENGEN_BTN_SELECT) &&
         !p->hold_spent && hold_piece(game, slot)) {
         p->held_last_frame = held_buttons;
+        result.held = true;
         return result;
     }
 

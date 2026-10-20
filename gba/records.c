@@ -563,6 +563,35 @@ static void leader_record_one(int slot) {
         g_leader_queue[g_leader_queued++] = row;
 }
 
+/* THE DEMO'S ROW, UNDER THE CHORD (main.c): its game shown on the table it
+ * played for, where it belongs among the player's rows — to show there is a
+ * table at all — as the machine's (CPU), never typed, never saved, and taken
+ * off again as the page goes (leader_demo_end). A score that would not make
+ * the table leaves it as it was. */
+static LeaderEntry g_demo_kept[LEADER_ENTRIES];
+static bool g_demo_unsent[LEADER_ENTRIES];
+static bool g_demo_shown;
+
+void leader_demo_show(void) {
+    static const uint8_t kCpu[LEADER_INITIALS] = { 'C' - 'A' + 1, 'P' - 'A' + 1,
+                                                   'U' - 'A' + 1 };
+    memcpy(g_demo_kept, g_leader, sizeof g_demo_kept);
+    memcpy(g_demo_unsent, g_unsent[g_table], sizeof g_demo_unsent);
+    g_demo_shown = true;
+    const TengenPlayerState *p = &g_session.game.player[TENGEN_PLAYER_1];
+    int row = leader_insert(p->score, p->lines);
+    if (row >= 0) memcpy(g_leader[row].initials, kCpu, LEADER_INITIALS);
+    g_leader_row = -1;
+}
+
+void leader_demo_end(void) {
+    if (!g_demo_shown) return;
+    memcpy(g_leader, g_demo_kept, sizeof g_demo_kept);
+    memcpy(g_unsent[g_table], g_demo_unsent, sizeof g_demo_unsent);
+    g_high_score = g_leader[0].score;
+    g_demo_shown = false;
+}
+
 void leader_record(int slot) {
     if (g_demo) return;                 /* nobody played that one */
     leader_record_one(slot);

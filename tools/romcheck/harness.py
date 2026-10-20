@@ -267,9 +267,9 @@ def press_start(core):
 def ring_chord_from_title(core, settle=24):
     """The game's chord, from the title and back to it: START to GAME
     SELECT, L+R there, B. Everything the port adds waits for it — the
-    prototypes' titles among it: after it, L or R alone puts up the title's
-    EXTRAS, where they are listed, and L+R there stands down (put_skin_on,
-    step_skin)."""
+    prototypes' titles among it: after it GAME SELECT has a sixth line,
+    OPTIONS, where they are listed, and L+R on the title stands down
+    (put_skin_on, step_skin)."""
     press_start(core); run(core, 10)
     core.set_keys(KEYS["L"], KEYS["R"]); run(core, 4)
     core.set_keys(); run(core, 12)
@@ -287,30 +287,54 @@ def build_has_protos(rom_path):
             "#define SCREEN_PROTO_AVAILABLE 1" in open(proto_h).read())
 
 
+OPTIONS_PAGE_TY = 9      # the OPTIONS page's first line (PAGE_TY, gba/extras.c)
+
+
 def step_skin(core, step=1, settle=24):
     """From the title, the chord rung, the skin `step` places on in the list
-    the EXTRAS box keeps (gba/extras.c): R puts the box up, A opens
-    PROTOTYPES — its first line on a build that has them — whose arrow
-    starts on the skin on the title, DOWN or UP walk it round, and A puts
-    the one under it on. g_title_skin after, or None without the symbol."""
+    the OPTIONS page keeps (gba/extras.c): START to GAME SELECT, its arrow on
+    1 PLAYER, UP to OPTIONS — the sixth line, under the chord — and A onto
+    the page; DOWN to PROTOTYPES (a line lower with a Game Boy Player's
+    RUMBLE above it) and A opens its box, whose arrow starts on the skin on
+    the title; DOWN or UP walk it round, A puts the one under it on, and
+    three B's go back down to the title. g_title_skin after, or None without
+    the symbol."""
+    rom = getattr(core, "_tengen_rom", "")
+
     def tap(name, settle_=12):
         core.set_keys(KEYS[name]); run(core, 4)
         core.set_keys(); run(core, settle_)
-    tap("R")
-    tap("A")
+    press_start(core); run(core, 10)
+    tap("UP")
+    tap("A", 10)
+    depth, _ = game_state_address(rom, "g_extras_depth")
+    if depth is not None and core.memory.u8[depth] != 1:
+        raise RuntimeError("step_skin: UP from 1 PLAYER and A did not open OPTIONS")
+    row, _ = game_state_address(rom, "g_extras_row")
+    for _ in range(6):
+        line = core.memory.u8[row] if row is not None else 0
+        if "PROTOTYPES" in tilemap_text(core, OPTIONS_PAGE_TY + line):
+            break
+        tap("DOWN", 6)
+    else:
+        raise RuntimeError("step_skin: no PROTOTYPES line on the OPTIONS page")
+    tap("A", 10)
     for _ in range(abs(step)):
         tap("DOWN" if step > 0 else "UP", 8)
-    tap("A", settle)
-    skin, _ = game_state_address(getattr(core, "_tengen_rom", ""), "g_title_skin")
+    tap("A", 10)
+    tap("B", 10)                       # the box
+    tap("B", 12)                       # the page, back to GAME SELECT
+    tap("B", settle)                   # the title
+    skin, _ = game_state_address(rom, "g_title_skin")
     return None if skin is None else core.memory.u8[skin]
 
 
 def put_skin_on(core, settle=24):
     """From the title, a prototype's title on it, the game's chord rung by
     the way: L+R on the title, which is that chord and finds the skins, or —
-    rung already, on the title or the menus, when L+R stands down — the
-    next one down the EXTRAS box's list (step_skin). True when one went on
-    (g_title_skin), False on a build without them."""
+    rung already, when L+R there stands down — the next one down the
+    OPTIONS page's list (step_skin). True when one went on (g_title_skin),
+    False on a build without them."""
     rom = getattr(core, "_tengen_rom", "")
     found, _ = game_state_address(rom, "g_title_skin_found")
     if found is not None and core.memory.u8[found]:
@@ -464,8 +488,8 @@ KEYS = {"A": 0, "B": 1, "SELECT": 2, "START": 3,
         "RIGHT": 4, "LEFT": 5, "UP": 6, "DOWN": 7,
         # The GBA's two extra buttons. The game proper never reads them —
         # they have no NES equivalent — so they are the port's own switches:
-        # under the game's chord L or R puts up the title's EXTRAS and in a
-        # match L+R changes the cossack; SELECT swaps the right-hand HUD box.
+        # L+R together are the game's chord on GAME SELECT and in a match
+        # change the cossack; SELECT swaps the right-hand HUD box.
         "R": 8, "L": 9}
 CODE_LEVEL_UP = "UP DOWN UP DOWN LEFT RIGHT B B A".split()
 CODE_LONG_BAR = "DOWN DOWN LEFT RIGHT LEFT RIGHT B A".split()
@@ -874,6 +898,15 @@ TENGEN_ROM_ROW_ORIGIN = 6   # the ROM row the visible field starts at
 # The attract demo's own clock: frameCounterHigh 5, frameCounterLow $20.
 DEMO_START_FRAME = 5 * 256 + 0x20
 DEMO_WATCH_FRAMES = 2000
+# ...and its end under the chord, from the topping out: GAME OVER held, the
+# end page read, the table shown (GAMEOVER_HOLD_FRAMES, END_PAGE_READ_FRAMES,
+# the leaderboard's five seconds), with room over.
+DEMO_END_WATCH_FRAMES = 2400
+
+# The battery's window, and as much of it as the port writes: the tables,
+# the options and settings, the lifetime figures at SAVE_STATS_OFF (0x700).
+SRAM_ADDR = 0x0E000000
+SRAM_CHECKED = 0x800
 
 # LEVEL SETTINGS, two rows apart and hung off HANDICAP -- gba/port.h's
 # MENU_FIELD_TY(f) = 9 + 2f. Three rows apart read as three announcements

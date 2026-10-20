@@ -1731,7 +1731,7 @@ PROTO_RECIPES = {
     # three the finished game gave up.
     "ac327eca3d9f9c169210adc9ccfe8344": {
         "label": "TENGEN PRESENTS TETRIS",
-        "menu": "PRESENTS",
+        "menu": "ATARI",
         "rows": _rows((1, 4), (6, 9), (10, 23), (28, 29)),
         "bank": 1,
     },
@@ -1747,7 +1747,7 @@ PROTO_RECIPES = {
     # anybody noticing.
     "087bde3f4dd561c60fd03b65d7b21fca": {
         "label": "THE SOVIET MIND GAME",
-        "menu": "SOVIET MIND",
+        "menu": "MIRRORSOFT",
         "rows": _rows((1, 6), (10, 24), (28, 29)),
         "bank": 1,
     },
@@ -1760,7 +1760,7 @@ PROTO_RECIPES = {
     # the tip of its spike to the last course of its plinth.
     "e81d2b5d223599dc33fe4e615ac1eeb6": {
         "label": "THE SOVIET MIND GAME, redrawn",
-        "menu": "SOVIET MIND 2",
+        "menu": "MIRRORSOFT 2",
         "rows": _rows((1, 6), (10, 24), (28, 29)),
         "bank": 1,
     },
@@ -2752,9 +2752,11 @@ def emit_proto_header(skins, notes):
         f"#define TILES_PROTO_BYTES {chr_bytes}",
         "",
     ]
-    # THE NAME THE TITLE'S EXTRAS LIST IT UNDER (gba/extras.c), twelve
-    # letters at most, in the port's alphabet: the recipe's, or PROTO and its
-    # place in the list for a dump this file has no recipe for.
+    # THE NAME GAME SELECT'S OPTIONS LIST IT UNDER (gba/extras.c), twelve
+    # letters at most, in the port's alphabet: the publisher the build was
+    # made for — Nintendo's licence; TENGEN PRESENTS, Tengen being Atari
+    # Games'; THE SOVIET MIND GAME, Mirrorsoft's line for it — or PROTO and
+    # its place in the list for a dump this file has no recipe for.
     names = [s.get("menu") or f"PROTO {i + 1}" for i, s in enumerate(skins)]
     for name in names:
         assert len(name) <= 12 and all(c in " 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"

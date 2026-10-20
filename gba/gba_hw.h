@@ -83,11 +83,6 @@ typedef volatile uint32_t vu32;
  * sprites, 5 the colour effects. */
 #define REG_WIN0H     (*(vu16 *)0x04000040)   /* left << 8 | right (exclusive) */
 #define REG_WIN0V     (*(vu16 *)0x04000044)   /* top << 8 | bottom (exclusive) */
-/* ...and window 1, the same again in WININ's high byte; where the two
- * overlap, window 0's list is the one that counts. */
-#define DCNT_WIN1     0x4000
-#define REG_WIN1H     (*(vu16 *)0x04000042)
-#define REG_WIN1V     (*(vu16 *)0x04000046)
 #define REG_WININ     (*(vu16 *)0x04000048)
 #define REG_WINOUT    (*(vu16 *)0x0400004A)
 

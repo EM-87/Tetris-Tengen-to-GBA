@@ -4239,7 +4239,8 @@ static void test_hold_into_an_empty_box_deals_the_next(void) {
     tengen_step(&g, TENGEN_PLAYER_1, TENGEN_BTN_LEFT);   /* moved off its spot */
     tengen_step(&g, TENGEN_PLAYER_1, 0);
     CHECK(p->held == TT_NONE);
-    tengen_step(&g, TENGEN_PLAYER_1, TENGEN_BTN_SELECT);
+    /* ...and the step says so (TengenStepResult.held): the port sounds it. */
+    CHECK(tengen_step(&g, TENGEN_PLAYER_1, TENGEN_BTN_SELECT).held);
     CHECK(p->held == first);
     CHECK(p->piece.current == second);
     CHECK(p->piece.next != TT_NONE);
@@ -4250,7 +4251,7 @@ static void test_hold_into_an_empty_box_deals_the_next(void) {
     /* ...and not again for this piece. */
     TengenTetromino now = p->piece.current;
     tengen_step(&g, TENGEN_PLAYER_1, 0);
-    tengen_step(&g, TENGEN_PLAYER_1, TENGEN_BTN_SELECT);
+    CHECK(!tengen_step(&g, TENGEN_PLAYER_1, TENGEN_BTN_SELECT).held);
     CHECK(p->piece.current == now);
     CHECK(p->held == first);
 }

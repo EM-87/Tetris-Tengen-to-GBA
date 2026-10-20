@@ -1645,11 +1645,16 @@ def unpause_check(rom_path):
         tap(core, k, 20)
     run(core, 120)
     press_start(core); run(core, 10)    # GAME SELECT, on WITH COMPUTER still
-    for _ in range(5):
-        if "> 1 PLAYER" in tilemap_text(core, GAME_SELECT_TY, 0, 30):
+
+    def on_one_player():
+        # Under the chord the list is six lines, a row higher.
+        return any("> 1 PLAYER" in tilemap_text(core, ty, 0, 30)
+                   for ty in (GAME_SELECT_TY - 1, GAME_SELECT_TY))
+    for _ in range(6):
+        if on_one_player():
             break
         tap(core, "UP", 6)
-    if "> 1 PLAYER" not in tilemap_text(core, GAME_SELECT_TY, 0, 30):
+    if not on_one_player():
         failures.append("tras salir de WITH COMPUTER con EXIT GAME no se llega "
                         "a GAME SELECT")
     else:
@@ -2177,10 +2182,10 @@ def gbp_check(rom_path):
         print(f"  con el truco, un TETRIS: vibracion encendida {n} frames, "
               f"y apagada luego")
 
-    # ...AND THE PLAYER'S OWN SWITCH FOR IT, in the title's EXTRAS, on a
-    # Player and only there (gba/extras.c): SETTINGS has a fourth line,
-    # RUMBLE, ON; A puts it OFF, and the same TETRIS under the chord leaves
-    # the motor alone.
+    # ...AND THE PLAYER'S OWN SWITCH FOR IT, on GAME SELECT's OPTIONS page,
+    # on a Player and only there (gba/extras.c): a third line, RUMBLE, its
+    # box lit; A puts it out, and the same TETRIS under the chord leaves the
+    # motor alone.
     harness.SHOW_SPLASH[0] = True
     try:
         core4, screen4 = load(rom_path)
@@ -2196,26 +2201,23 @@ def gbp_check(rom_path):
         for _ in range(settle):
             switched.frame()
 
-    ptap("START"); ptap("L+R"); ptap("B", 24)
-    ptap("R")
-    for _ in range(2 if harness.build_has_protos(rom_path) else 1):
-        ptap("DOWN", 6)
+    ptap("START"); ptap("L+R")
+    ptap("UP")                                  # OPTIONS, the sixth line
     ptap("A", 20)
-    rumble_row = " ".join(tilemap_text(core4, 13, 7, 23).split())
-    for _ in range(3):
-        ptap("DOWN", 6)
+    ptap("DOWN", 6); ptap("DOWN", 6)            # GAMMA, SOUND, RUMBLE
+    rumble_row = " ".join(tilemap_text(core4, 11, 2, 28).split())
     ptap("A", 20)
     settings, _ = game_state_address(rom_path, "g_settings")
     off_now = settings is not None and core4.memory.u8[settings + 3] & 1
-    ptap("B"); ptap("B", 24)
+    ptap("B", 20); ptap("B", 24)                # the page, GAME SELECT
     after = tetris(switched, False)
-    if not rumble_row.startswith("RUMBLE") or not off_now:
-        failures.append(f"en un Player SETTINGS no trae RUMBLE ({rumble_row!r}) "
+    if "RUMBLE" not in rumble_row or not off_now:
+        failures.append(f"en un Player OPTIONS no trae RUMBLE ({rumble_row!r}) "
                         f"o A no lo apaga ({off_now})")
     elif 0x40000026 in after:
         failures.append("con RUMBLE apagado una limpieza sigue vibrando")
     else:
-        print("  en un Player, SETTINGS trae RUMBLE; apagado, el TETRIS no vibra")
+        print("  en un Player, OPTIONS trae RUMBLE; apagado, el TETRIS no vibra")
 
     # And a plain GBA: nobody answers the logo, the port stays the cable's.
     harness.SHOW_SPLASH[0] = True

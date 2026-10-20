@@ -241,10 +241,11 @@ def quit_audio_check(rom_path):
 
     title = heard(300)
     tap("START"); run(core, 30)             # -> GAME SELECT
-    core.set_keys(KEYS["DOWN"])
-    blip = heard(4)
+    core.set_keys(KEYS["DOWN"])             # WITH COMPUTER -> OPTIONS, the
+    blip = heard(4)                         # chord's sixth line
     core.set_keys()
     blip += heard(20)
+    tap("DOWN")                             # -> round to 1 PLAYER
     tap("START"); run(core, 20)             # -> LEVEL SETTINGS
     for _ in range(2):
         tap("DOWN")
@@ -645,7 +646,7 @@ def proto_pause_check(rom_path):
     dumps (read_skin_pause_music in tools/extract_assets.py) it is proto_a's
     alone: proto_b, proto_c and proto_d go silent like the release. On the
     title, L+R — the game's chord — puts on the first skin (A) and the
-    EXTRAS' list the next (step_skin); and the pause is then the chord's
+    OPTIONS page's list the next (step_skin); and the pause is then the chord's
     menu, which
     keeps the same rule (pause_keeps_music).
     """
@@ -1216,9 +1217,16 @@ def handtune_share_check(rom_path):
     # AT EVERY POINT OF THE TUNE'S BAR, not one: the same drop again and
     # again lands each clear at the same moment of the bass line, which can
     # be a moment the bass is holding a note and writes nothing.
+    # ...AND ON AN EMPTY BOARD EVERY TIME: what the drops leave behind
+    # builds up, and under the chord a high stack speeds the whole engine up
+    # (g_tempo_quarters), the zip with it — a shorter zip that is no cut.
+    from .harness import PF_H, PF_W
     zips = []
     for n in range(16):
         run(core, 13 * n % 97)
+        for r in range(PF_H - 1):
+            for c in range(1, PF_W - 1):
+                core.memory.u8[base + off["field"] + r * PF_W + c] = 0
         fill_rows(core, base + off["field"], [19])
         before = lines()
         for _f in range(400):

@@ -66,6 +66,7 @@ int main(void) {
      * screen's curve the splash's colours go through, and the volumes. See
      * g_settings (extras.c). */
     settings_load();
+    lifetime_load();
     /* The publisher's logo, at power-on only; see splash.c. */
     splash_show();
     /* A Game Boy Player answered its logo — now, or at power-on before a
@@ -160,6 +161,7 @@ int main(void) {
     uint8_t held_last = 0;
     bool sweeping = false;   /* true while the line-clear sweep owns the OAM */
     bool match_running = false;
+    bool gs_options = false;     /* GAME SELECT's cursor on OPTIONS */
     TengenLobby lobby;
     /* THE CABLE OUTLIVES THE MATCH BY A FEW SECONDS. Lockstep gives both
      * consoles the rival's score and lines for nothing; the one thing it
@@ -234,6 +236,10 @@ int main(void) {
         uint8_t pressed = (uint8_t)(buttons & ~held_last);
         held_last = buttons;
         tengen_rng_step(&seed_source);
+        /* The lifetime figures to the battery, when the game is still (see
+         * lifetime_tick). */
+        lifetime_tick(screen != SCREEN_PLAYING || !match_running ||
+                      g_session.game.paused);
 
         /* THE SWAP RUNS UNDER WHATEVER IS ON THE SCREEN, which is why it is
          * up here and not in one screen's arm of the loop: the plaque comes
@@ -286,74 +292,23 @@ int main(void) {
         }
 
         if (screen == SCREEN_TITLE) {
-            /* initializeTitleScreen ends with this (main.asm.txt:4489). The
-             * EXTRAS' sound test has it stand down (extras_quiet). */
-            front_music(extras_quiet() ? FRONT_SILENCE : FRONT_TITLE_THEME);
+            /* initializeTitleScreen ends with this (main.asm.txt:4489). */
+            front_music(FRONT_TITLE_THEME);
             set_offset_layer(TITLE_LOGO_SHIFT_PX);
-            /* THE EXTRAS BOX, while it is up, has the buttons and the frame:
-             * the title stands still behind it — no fireworks, no clock, so
-             * no demo — and only what it chose reaches the rest of this. */
+            /* L+R HERE is the game's own chord as much as on GAME SELECT or
+             * LEVEL SETTINGS (unlock_cheats): rung here it opens the tunes,
+             * the pause menu and the rest, and puts the first prototype on.
+             * Until it is rung, anywhere, the title is the cartridge's and a
+             * lone shoulder does nothing at all, so the title cannot be
+             * changed by accident — and after it the shoulders do nothing
+             * here either: the skins are a list in GAME SELECT's OPTIONS
+             * (extras.c). L and R stepped them here once, and then put up a
+             * box of extras here, where nobody looked for it. */
             int skin_to = -1;
-            bool erase = false;
-            if (extras_up()) {
-                vsync();
-                draw_title();
-                int chosen = 0;
-                int what = extras_frame(pressed, &chosen);
-                audio_frame();
-                if (what == EXTRAS_SKIN && chosen != g_title_skin) {
-                    skin_to = chosen;
-                } else if (what == EXTRAS_ERASE) {
-                    erase = true;
-                } else {
-                    /* Closed: the title's clock from the top, as on any
-                     * visit, or the demo was owed the moment it went. */
-                    if (what != EXTRAS_STAY) restart_title_sprites();
-                    continue;
-                }
-            }
-            /* L+R FINDS IT; L OR R ALONE OPENS THE EXTRAS AFTERWARDS — as it
-             * is let go, and only if nothing else was pressed with it
-             * (released_shoulder_alone). And L+R
-             * here is the game's own chord as much as on GAME SELECT or LEVEL
-             * SETTINGS (unlock_cheats): rung here it opens the tunes, the
-             * pause menu and the rest, and puts the first prototype on; rung
-             * there, it has found the prototypes too. Until it is rung,
-             * anywhere, the title is the cartridge's and a lone shoulder does
-             * nothing at all, so the title cannot be changed by accident.
-             *
-             * After it, though, the chord is a poor control, and so were L
-             * and R stepping through the skins one way and the other: the
-             * skins are a list now, in the EXTRAS box (extras.c), with the
-             * sound test and the settings beside them. */
-            if (!erase && skin_to < 0) {
-                bool chord = shoulder_chord();
-                bool alone = released_shoulder_alone();
-                if (!g_title_skin_found) {
-                    if (chord && unlock_cheats() && TITLE_SKIN_COUNT > 1)
-                        skin_to = 1;
-                } else if (alone) {
-                    extras_open();
-                    screen_blip();
-                    vsync();
-                    draw_title();
-                    audio_frame();
-                    continue;
-                }
-            }
-            /* THE ERASE, from the box's grey line: the power-on's own pages
-             * (erase_records_prompt), asked twice with NO chosen, over a
-             * screen of their own; then the title again, its HIGH SCORE from
-             * whatever table is left. */
-            if (erase) {
-                vsync();
-                clear_screen();
-                oam_hide_all();
-                erase_records_prompt();
-                leader_use_table(front_skin());
-                restart_title_sprites();
-                continue;
-            }
+            bool chord = shoulder_chord();    /* every frame: an edge */
+            if (!g_title_skin_found && chord && unlock_cheats() &&
+                TITLE_SKIN_COUNT > 1)
+                skin_to = 1;
             if (skin_to >= 0) {
                 g_title_skin = (uint8_t)skin_to;
                 /* ...and the HIGH SCORE the menus print is this build's, from
@@ -440,6 +395,10 @@ int main(void) {
                  * cartridge's bugs mended, as in any match under it. */
                 g_ai.smart = g_pause_unlocked;
                 g_session.game.mended = g_pause_unlocked;
+                /* ...AND THE PLAYER'S OPTIONS, the rules on player 1's board,
+                 * which is the computer's here (options_apply_solo: nothing
+                 * without the chord), and the ghost (options_mine). */
+                options_apply_solo(&g_session.game);
                 g_ai_last_piece = TT_NONE;
                 g_ai_last_partner = TT_NONE;
                 g_ai_frame = 0;
@@ -504,19 +463,43 @@ int main(void) {
              * is worse than a menu that waits quietly. Leaving the cathedral
              * stops its music AND the fireworks' bangs with it. */
             front_music(FRONT_SILENCE);
-            if (shoulder_chord() && unlock_cheats()) {
-                /* Nothing on this page shows for it — the tunes are on the
-                 * next one and the menu is in a game — so the chirp is the
-                 * whole answer, and it is the same one the next page gives. */
+            bool chord = shoulder_chord();    /* every frame: an edge */
+            /* OPTIONS' BOXES, while one is up, have the buttons and the
+             * frame (extras.c); the list waits under them on OPTIONS. */
+            if (extras_up()) {
+                vsync();
+                extras_frame(pressed);
+                audio_frame();
+                continue;
+            }
+            if (chord && unlock_cheats()) {
+                /* Nothing else on this page shows for it — the tunes are on
+                 * the next one and the menu is in a game — but OPTIONS, the
+                 * list's sixth line; the chirp is the rest of the answer, and
+                 * it is the same one the next page gives. */
             }
             if (pressed & MENU_STEP) {
-                game_mode = (pressed & MENU_BACKWARD)
-                    ? (uint8_t)((game_mode + GAME_COUNT - 1) % GAME_COUNT)
-                    : (uint8_t)((game_mode + 1) % GAME_COUNT);
+                /* SIX LINES UNDER THE CHORD, the sixth OPTIONS, which is not
+                 * a mode: the cursor stands on it (gs_options) and game_mode
+                 * keeps the last mode it left. */
+                int lines = g_pause_unlocked ? GAME_COUNT + 1 : GAME_COUNT;
+                int at = gs_options ? GAME_COUNT : game_mode;
+                at = (pressed & MENU_BACKWARD) ? (at + lines - 1) % lines
+                                               : (at + 1) % lines;
+                gs_options = at == GAME_COUNT;
+                if (!gs_options) game_mode = (uint8_t)at;
                 /* processMenuInput plays this on every move (:4655). */
                 cursor_blip();
             }
+            if (gs_options && (pressed & MENU_CONFIRM)) {
+                extras_open();
+                vsync();
+                extras_frame(0);
+                audio_frame();
+                continue;
+            }
             if (pressed & TENGEN_BTN_B) {
+                gs_options = false;
                 screen = SCREEN_TITLE;
                 restart_title_sprites();
                 screen_blip();
@@ -558,7 +541,7 @@ int main(void) {
                 continue;
             }
             vsync();
-            draw_game_select(game_mode);
+            draw_game_select(gs_options ? GAME_COUNT : game_mode);
             audio_frame();
             continue;
         }
@@ -1229,6 +1212,14 @@ int main(void) {
                 /* ...and the title's HIGH SCORE is its own table's again. */
                 if (leader_browsing) leader_use_table(front_skin());
                 leader_browsing = false;
+                /* THE DEMO'S TABLE GOES BACK AS IT WAS, and the demo ends
+                 * here, as it does on its own without the chord. */
+                if (g_demo) {
+                    leader_demo_end();
+                    g_demo = false;
+                    demo_music_back();
+                    g_ai_active = false;
+                }
                 screen = SCREEN_TITLE;
                 restart_title_sprites();
                 g_front_tune = FRONT_NOTHING;
@@ -1562,7 +1553,28 @@ int main(void) {
 
         /* THE DEMO SEES ITSELF OUT. Nothing is waiting for a button here, so
          * the game over holds for a moment and the title comes back. */
-        if (g_demo && !match_running) {
+        /* ...EXCEPT UNDER THE CHORD, where the demo's game ends as a game
+         * does: the plaque and the game's page on the board, for as long as
+         * a game's (GAMEOVER_HOLD_FRAMES and END_PAGE_READ_FRAMES), and then
+         * the HIGH SCORES with its row on them as the machine's, if it made
+         * the table — never typed, never saved (leader_demo_show) — and the
+         * title after them. */
+        if (g_demo && !match_running && g_pause_unlocked) {
+            if (++g_demo_over_frames >= GAMEOVER_HOLD_FRAMES +
+                    (g_end_rise >= 0 ? END_PAGE_READ_FRAMES : 0)) {
+                leader_demo_show();
+                leader_frames = 0;
+                leader_browsing = false;
+                leader_nothing_new = true;
+                screen = SCREEN_LEADERBOARD;
+                oam_hide_all();
+                vsync();
+                audio_frame();
+                clear_screen();
+                draw_leaderboard();
+                continue;
+            }
+        } else if (g_demo && !match_running) {
             if (++g_demo_over_frames >= DEMO_GAMEOVER_FRAMES) {
                 g_demo = false;
                 demo_music_back();

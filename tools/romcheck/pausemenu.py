@@ -798,13 +798,24 @@ def pause_hold(rom_path):
     held = lambda: core.memory.u8[base + off["held"]]
     first = core.memory.u8[base + off["current"]]
     was = hud()
-    tap("SELECT", settle=20)
+    # ...WITH THE ENGINE'S SWIPE, the one of its unused sounds left over:
+    # noise, about fourteen frames of it.
+    io = core._native.memory.io
+    swipe = 0
+    core.set_keys(KEYS["SELECT"])
+    for f in range(24):
+        if f == 4:
+            core.set_keys()
+        core.run_frame()
+        swipe = max(swipe, io[(0x04000078 - 0x04000000) >> 1] >> 12)
     if held() != first or hud() != was:
         failures.append(f"con HOLD, SELECT no guarda la pieza ({held()} y no "
                         f"{first}) o cambia el HUD ({was} -> {hud()})")
+    elif not swipe:
+        failures.append("con HOLD, guardar la pieza no suena (SWIPE)")
     else:
-        print(f"  HOLD: SELECT guarda la pieza que caia ({first}) y el HUD sigue "
-              f"en {was}")
+        print(f"  HOLD: SELECT guarda la pieza que caia ({first}) con el SWIPE, "
+              f"y el HUD sigue en {was}")
     tap("L", "R", settle=20)
     now = hud()
     label = [entry(3, c) & 0x3FF for c in range(24, 28)]

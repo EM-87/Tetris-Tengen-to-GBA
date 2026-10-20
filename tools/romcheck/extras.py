@@ -1,46 +1,50 @@
 """
-The title's EXTRAS (gba/extras.c): the box, its pages, the sound test, the
-settings and what they do to the sound and the screen, the battery, and the
-erase that only SELECT reaches.
+GAME SELECT's OPTIONS (gba/extras.c): the sixth line, its page and the boxes
+over it, what each does to the sound and the screen, the battery, the
+lifetime figures, and the erase that only SELECT reaches, A asks twice
+about, and that takes everything kept.
 """
 from .harness import (
-    skip, KEYS, PALETTE_ADDR, DEMO_START_FRAME,
-    REG_SOUND1CNT_H, REG_SOUND2CNT_L, REG_SOUND3CNT_H,
-    SCREENBLOCK_ADDR, SCREENBLOCK_OFFSET_ADDR,
-    build_has_protos, game_state_address, load, ring_chord_from_title, run,
-    tilemap_text,
+    skip, KEYS, PALETTE_ADDR, CELL_BLOCK, CELL_WALL, CHARBLOCK_ADDR,
+    GAME_SELECT_TY, MENU_ARROW_TX, LEADER_FIRST_TY,
+    REG_SOUND1CNT_H, REG_SOUND2CNT_L, REG_SOUND3CNT_H, SCREENBLOCK_ADDR,
+    TENGEN_PF_HEIGHT, TENGEN_PF_WIDTH,
+    build_has_protos, game_offsets, game_state_address, load, oam_visible,
+    press_start, run, start_game, tilemap_text,
 )
 
-# The box: eighteen by eight, centred across, two rows below the middle
-# (XB_W, XB_H, XB_TX, XB_TY in gba/extras.c). The heading on its second
-# row, the lines under it, the erase on the last of them.
-XB_W, XB_H = 18, 8
-XB_TX, XB_TY = (30 - XB_W) // 2, (20 - XB_H) // 2 + 2
-HEAD_ROW = XB_TY + 1
-LINE_ROW = XB_TY + 2
-ERASE_ROW = XB_TY + XB_H - 2
 BANK_CREDIT = 9                 # PAL_MENU_BASE + 1, the credits' grey
-SET_MUSIC, SET_EFFECTS, SET_BRIGHT = 0, 1, 2
+BANK_LABEL = 3                  # the words on the boxes
+SET_MUSIC, SET_EFFECTS, SET_BRIGHT, SET_FLAGS, SET_BG = range(5)
+XP_TOP, XP_SOUND, XP_BACKGROUND, XP_PROTOS, XP_STATS, XP_SURE, XP_REALLY = range(7)
 SAVE_SETTINGS = 0x0E000000 + 0x406   # SAVE_SETTINGS_OFF, in the SRAM's window
+LIFT_PX = 4                     # GAME_SELECT_LIFT_PX
+PAGE_TY = 9                     # the OPTIONS page's first line (extras.c)
+PROTO_TILES = CHARBLOCK_ADDR + 512 * 32   # PROTO_TILE_BASE's 256 tiles
+FRAME = ")*+,/;<:"              # the boxes' frame tiles, read as text (T_BOX_*)
 
 
-def extras_check(rom_path):
-    """L OR R ON THE TITLE, UNDER THE CHORD, PUTS UP THE EXTRAS.
+def options_check(rom_path):
+    """GAME SELECT, UNDER THE CHORD, HAS A SIXTH LINE: OPTIONS, A PAGE.
 
-    Before the chord a lone shoulder does nothing. After it: a box with
-    PROTOTYPES (on a build that has them), SOUND TEST and SETTINGS, the
-    arrow walking only those, and ERASE SCORES under them in the credits'
-    grey; the title stands still behind it (no demo however long it stays
-    up) and comes back whole when it goes. The SOUND TEST stands the title's
-    tune down and plays the five sounds the cartridge carries and never
-    asks for. SETTINGS sets the tunes' volume and the effects' apart — the
-    engine's channels told apart by the voice writing them — and the
-    screen's curve; all three kept on the battery and back after a power
-    cycle. SELECT, and only SELECT, takes the erase's pages, which ask with
-    NO chosen."""
+    Without the chord the cartridge's five. With it OPTIONS under WITH
+    COMPUTER, the list a row higher and its heading lifted. A on it: a page,
+    as LEVEL SETTINGS is, of GAMMA, SOUND, BACKGROUND, PROTOTYPES and STATS,
+    and ERASE SCORES a row lower in the credits' grey, which UP and DOWN
+    step over and SELECT, going down a line at a time, reaches. SOUND,
+    BACKGROUND, PROTOTYPES and STATS are boxes over the page. SOUND's two
+    volumes each silence their own kind — a tune's voices, the cursor's
+    tick, a hand-entered tune — and not the other; BACKGROUND's white is the
+    backdrop and the words go black; GAMMA a curve; PROTOTYPES a skin the
+    page wears at once and the title draws with its own tiles; STATS what
+    this console's player has played. All of it on the battery and back
+    after a power cycle. ERASE SCORES: A asks, then asks again, NO chosen
+    both times, and only YES twice erases — the tables, the lifetime
+    figures, the settings, all of it."""
     syms = {}
-    for name in ("g_extras_open", "g_extras_page", "g_extras_row", "g_settings",
-                 "g_title_frame", "g_demo", "g_lcd_gamma", "kLcdGamma"):
+    for name in ("g_extras_depth", "g_extras_stack", "g_extras_row", "g_settings",
+                 "g_lifetime", "g_title_skin", "g_lcd_gamma", "kLcdGamma",
+                 "g_options", "g_music"):
         addr, why = game_state_address(rom_path, name)
         if addr is None:
             skip(f"{why}")
@@ -50,6 +54,8 @@ def extras_check(rom_path):
     core, screen = load(rom_path)   # `screen` must stay alive; see load()
     _ = screen
     io = core._native.memory.io
+    protos = build_has_protos(rom_path)
+    music_at = syms["g_music"]
 
     def reg(addr):
         return io[(addr - 0x04000000) >> 1]
@@ -58,249 +64,501 @@ def extras_check(rom_path):
         core.set_keys(*[KEYS[n] for n in names]); run(core, 4)
         core.set_keys(); run(core, settle)
 
-    def is_open():
-        return core.memory.u8[syms["g_extras_open"]] != 0
+    def depth():
+        return core.memory.u8[syms["g_extras_depth"]]
 
-    def row_text(r):
-        """A row of the box inside its frame (whose tiles read as text)."""
-        return " ".join(tilemap_text(core, r, XB_TX + 1, XB_TX + XB_W - 1).split())
+    def page():
+        return core.memory.u8[syms["g_extras_stack"] + depth() - 1] if depth() else None
 
-    def box_text():
-        return [row_text(r) for r in range(HEAD_ROW, ERASE_ROW + 1)]
+    def row(p=XP_TOP):
+        return core.memory.u8[syms["g_extras_row"] + p]
 
     def setting(i):
         return core.memory.u8[syms["g_settings"] + i]
 
-    def box_cells():
-        return [(core.memory.u16[a + (r * 32 + c) * 2])
-                for a in (SCREENBLOCK_ADDR, SCREENBLOCK_OFFSET_ADDR)
-                for r in range(XB_TY, XB_TY + XB_H)
-                for c in range(XB_TX, XB_TX + XB_W)]
+    def life(i):
+        return core.memory.u32[syms["g_lifetime"] + 4 * i]
 
-    run(core, 60)
-    tap("R"); tap("L")
-    if is_open():
-        failures.append("antes del acorde un hombro suelto abre los EXTRAS")
-    ring_chord_from_title(core)
-    run(core, 30)
-    title = box_cells()
-    # A SHOULDER WITH SOMETHING ELSE JOINING IT IS NOT THE BOX: the sleep's
-    # L+R+SELECT begins with L down a frame early, and that frame put the
-    # box up and its SELECT took the sleep to the erase. It opens as a
-    # shoulder is let go, alone (released_shoulder_alone). B joins it here,
-    # the one button the title itself does nothing with.
-    core.set_keys(KEYS["L"]); run(core, 3)
-    core.set_keys(KEYS["L"], KEYS["B"]); run(core, 3)
-    core.set_keys(); run(core, 20)
-    if is_open() or box_cells() != title:
-        failures.append("L con B sumandose abre la caja")
-    tap("R")
-    text = box_text()
-    protos = build_has_protos(rom_path)
-    want = (["PROTOTYPES"] if protos else []) + ["SOUND TEST", "SETTINGS"]
-    lines = [t.lstrip("-> ") for t in text[1:1 + len(want)]]
-    if not is_open() or text[0] != "EXTRAS" or lines != want:
-        failures.append(f"R en el titulo no pone la caja de EXTRAS: {text}")
-    erase_bank = core.memory.u16[SCREENBLOCK_ADDR + (ERASE_ROW * 32 + XB_TX + 3) * 2] >> 12
-    if row_text(ERASE_ROW) != "ERASE SCORES" or erase_bank != BANK_CREDIT:
-        failures.append(f"ERASE SCORES no esta en la ultima fila en el gris de "
-                        f"los creditos ({row_text(ERASE_ROW)!r}, banco {erase_bank})")
-    # THE ARROW WALKS THE CHOICES AND NEVER LANDS ON THE ERASE.
-    rows_seen = set()
-    for _ in range(2 * len(want) + 1):
-        tap("DOWN", settle=6)
-        rows_seen.add(core.memory.u8[syms["g_extras_row"]])
-        if "->" in row_text(ERASE_ROW):
-            break
-    if "->" in row_text(ERASE_ROW) or rows_seen != set(range(len(want))):
-        failures.append(f"la flecha llega a ERASE SCORES o no recorre las "
-                        f"opciones ({sorted(rows_seen)})")
-    # The cathedral's sprites have a hole the box's size (title_window_hole).
-    win0h = reg(0x04000040)
-    if win0h != ((XB_TX * 8) << 8 | (XB_TX + XB_W) * 8) or reg(0x04000048) != 0x3F2F:
-        failures.append(f"la caja no hace hueco a los sprites del titulo "
-                        f"(WIN0H {win0h:#06x}, WININ {reg(0x04000048):#06x})")
-    # ...and the title stands still behind it: no demo.
-    clock = core.memory.u16[syms["g_title_frame"]]
-    run(core, DEMO_START_FRAME + 120)
-    if core.memory.u8[syms["g_demo"]] or not is_open() or \
-            core.memory.u16[syms["g_title_frame"]] != clock:
-        failures.append("con la caja arriba el titulo sigue su reloj y "
-                        "arranca la demo")
-    if not failures:
-        print(f"  R pone EXTRAS: {', '.join(want)}, y ERASE SCORES en gris, "
-              f"fuera del alcance de la flecha; el titulo se para detras")
+    def screen_text(first=0, last=20):
+        """Rows inside the menu's own frame (columns 2-27)."""
+        return [" ".join(tilemap_text(core, r, 2, 28).split()) for r in range(first, last)]
 
-    # ...AND B TAKES IT DOWN, THE TITLE WHOLE AGAIN.
-    tap("B", settle=20)
-    if is_open() or box_cells() != title:
-        failures.append("B no quita la caja, o el titulo no vuelve entero")
-    elif reg(0x04000048) != 0x003F:
-        failures.append("sin la caja el hueco de los sprites sigue ahi")
-    else:
-        print("  B la quita y el titulo vuelve entero, sus sprites sin hueco")
+    def lines_of(texts):
+        """Lines of text, the arrows and the boxes' frame tiles taken off."""
+        out = []
+        for t in texts:
+            words = [w.strip(FRAME) for w in t.replace("->", " ").replace(">", " ").split()]
+            out.append(" ".join(w for w in words if w))
+        return out
 
-    # THE SOUND TEST. The title's tune stands down on the page; each of the
-    # five plays (two looked at: the jingle, a tune on the pulses, and the
-    # swipe, noise); B, and the title's tune is back.
-    def to_page(n):
-        tap("R")
-        for _ in range(n):
-            tap("DOWN", settle=6)
-        tap("A", settle=20)
+    def palette(i):
+        return core.memory.u16[PALETTE_ADDR + i * 2]
 
-    def loudest(frames, which):
-        top = 0
+    def listen(frames):
+        """The loudest each channel got over `frames` frames."""
+        top = {"p1": 0, "p2": 0, "tri": 0, "noise": 0}
         for _ in range(frames):
             core.run_frame()
-            if which == "p1":
-                top = max(top, reg(REG_SOUND1CNT_H) >> 12)
-            elif which == "p2":
-                top = max(top, reg(REG_SOUND2CNT_L) >> 12)
-            elif which == "tri":
-                v = reg(REG_SOUND3CNT_H)
-                top = max(top, 4 if v & 0x8000 else (0, 4, 2, 1)[(v >> 13) & 3])
-            elif which == "noise":
-                top = max(top, reg(0x04000078) >> 12)
+            top["p1"] = max(top["p1"], reg(REG_SOUND1CNT_H) >> 12)
+            top["p2"] = max(top["p2"], reg(REG_SOUND2CNT_L) >> 12)
+            v = reg(REG_SOUND3CNT_H)
+            top["tri"] = max(top["tri"], 4 if v & 0x8000 else (0, 4, 2, 1)[(v >> 13) & 3])
+            top["noise"] = max(top["noise"], reg(0x04000078) >> 12)
         return top
 
-    # The title's tune from its first bar — it plays once and stops, and
-    # the box has been up a while — by way of GAME SELECT and back.
-    tap("START", settle=10)
-    tap("B", settle=10)
-    playing = loudest(90, "p1")
-    to_page(1 if protos else 0)
-    page = box_text()
-    names = [t.lstrip("-> ") for t in page[1:6]]
-    quiet = loudest(90, "p1") + loudest(1, "tri") + loudest(1, "noise")
-    tap("DOWN", settle=0)
-    tap("A", settle=0)
-    swipe = loudest(20, "noise")
-    tap("UP", settle=0)
-    tap("A", settle=0)
-    jingle = loudest(40, "p1")
-    if page[0] != "SOUND TEST" or names != ["0C LEVEL UP", "0F SWIPE", "10 CHIRP",
-                                            "11 DING", "12 ALARM"]:
-        failures.append(f"la prueba de sonido no lista los cinco: {page}")
-    elif not playing or quiet or not swipe or not jingle:
-        failures.append(f"en la prueba de sonido el tema del titulo ({playing} antes) "
-                        f"sigue ({quiet}) o no suenan SWIPE ({swipe}) y LEVEL UP "
-                        f"({jingle})")
+    def to_options():
+        """From GAME SELECT, the chord rung: OPTIONS, UP from 1 PLAYER."""
+        tap("UP")
+        tap("A", settle=10)
+
+    def walk(n, key="DOWN"):
+        """The page's arrow to line n by `key` — a failure, not a hang, if
+        it never gets there (the page gone, a line missing)."""
+        for _ in range(12):
+            if row() == n:
+                return True
+            tap(key, settle=4)
+        failures.append(f"la flecha de OPTIONS no llega a la linea {n} "
+                        f"(profundidad {depth()}, fila {row()})")
+        return False
+
+    def to_line(n):
+        return walk(n)
+
+    # WITHOUT THE CHORD, THE CARTRIDGE'S FIVE.
+    run(core, 40)
+    press_start(core); run(core, 20)
+    plain = screen_text(GAME_SELECT_TY - 1, GAME_SELECT_TY + 6)
+    if "OPTIONS" in " ".join(plain):
+        failures.append(f"sin el acorde GAME SELECT ya trae OPTIONS: {plain}")
+    tap("UP")
+    arrow_on_last = core.memory.u16[SCREENBLOCK_ADDR + ((GAME_SELECT_TY + 4) * 32 +
+                                                        MENU_ARROW_TX) * 2] & 0x3FF
+    if arrow_on_last != ord(">"):
+        failures.append("sin el acorde UP desde 1 PLAYER no da la vuelta a WITH "
+                        "COMPUTER")
+    tap("DOWN")
+
+    # ...WITH IT, SIX: the list a row higher, OPTIONS last, the heading
+    # lifted. UP from 1 PLAYER goes round to it.
+    core.set_keys(KEYS["L"], KEYS["R"]); run(core, 4)
+    core.set_keys(); run(core, 20)
+    six = screen_text(GAME_SELECT_TY - 1, GAME_SELECT_TY + 5)
+    lifted = reg(0x04000016)
+    tap("UP")
+    arrow = core.memory.u16[SCREENBLOCK_ADDR + ((GAME_SELECT_TY + 4) * 32 +
+                                                MENU_ARROW_TX) * 2] & 0x3FF
+    if not six[0].endswith("1 PLAYER") or not six[-1].endswith("OPTIONS") or \
+            lifted != LIFT_PX or arrow != ord(">"):
+        failures.append(f"con el acorde GAME SELECT no tiene OPTIONS como sexta "
+                        f"linea, una fila mas arriba y el titulo levantado "
+                        f"({six}, {lifted}px, flecha {arrow:#x})")
     else:
-        print("  SOUND TEST: los cinco por su numero; el tema se calla, y "
-              "suenan el barrido y la fanfarria")
-    tap("B", settle=10)
-    tap("B", settle=10)
-    back = loudest(90, "p1")
-    if back == 0 or is_open():
-        failures.append("al salir de la prueba de sonido el tema del titulo no vuelve")
+        print("  con el acorde GAME SELECT tiene seis lineas, OPTIONS la ultima; "
+              "UP desde 1 PLAYER da la vuelta a ella")
 
-    # SETTINGS: the tunes at OFF and the effects at full — the tune silent
-    # and the cursor's tick heard — then the other way round. On the title
-    # the theme is pulse 1, the triangle and the noise, and the tick pulse 2.
-    to_page(2 if protos else 1)
-    if box_text()[0] != "SETTINGS" or "RUMBLE" in " ".join(box_text()):
-        failures.append(f"SETTINGS no es su pagina, o enseña RUMBLE en una GBA "
-                        f"sin Game Boy Player: {box_text()}")
-    for _ in range(4):
-        tap("LEFT", settle=6)
-    run(core, 30)
-    music_off = (loudest(60, "p1"), loudest(1, "tri"))
-    tap("DOWN", settle=0)
-    tick_on = loudest(10, "p2")
-    tap("UP", settle=0)
-    if setting(SET_MUSIC) != 0 or any(music_off) or not tick_on:
-        failures.append(f"MUSIC OFF no calla el tema ({music_off}) o calla el "
-                        f"tic ({tick_on}); ajuste {setting(SET_MUSIC)}")
-    for _ in range(4):
-        tap("RIGHT", settle=6)
-    tap("DOWN", settle=6)
-    for _ in range(4):
-        tap("LEFT", settle=6)
-    run(core, 30)
-    music_on = loudest(90, "p1")
-    tap("UP", settle=0)
-    tick_off = loudest(10, "p2")
-    tap("DOWN", settle=0)
-    if setting(SET_EFFECTS) != 0 or not music_on or tick_off:
-        failures.append(f"EFFECTS OFF no calla el tic ({tick_off}) o calla el "
-                        f"tema ({music_on}); ajuste {setting(SET_EFFECTS)}")
-    if not failures:
-        print("  MUSIC OFF calla el tema y deja el tic; EFFECTS OFF calla el "
-              "tic y deja el tema: cada canal a su volumen")
-
-    # ...the effects at half and the screen's curve at LOW, and both there
-    # after the power goes off; the palette through the brighter curve.
-    tap("RIGHT", settle=6)
-    tap("RIGHT", settle=6)
-    pal_before = core.memory.u16[PALETTE_ADDR + (4 * 16 + 3) * 2]
-    tap("DOWN", settle=6)
-    tap("RIGHT", settle=20)
-    pal_after = core.memory.u16[PALETTE_ADDR + (4 * 16 + 3) * 2]
-    curve = (core.memory.u32[syms["g_lcd_gamma"]] - syms["kLcdGamma"]) // 32
-    lifted = all(((pal_after >> s) & 31) >= ((pal_before >> s) & 31)
-                 for s in (0, 5, 10)) and pal_after != pal_before
-    if setting(SET_BRIGHT) != 1 or curve != 1 or not lifted:
-        failures.append(f"BRIGHT LOW no pone la segunda curva o no aclara el "
-                        f"titulo (curva {curve}, {pal_before:#06x} -> {pal_after:#06x})")
-    saved = [core.memory.u8[SAVE_SETTINGS + i] for i in range(4)]
-    core.reset()
-    run(core, 60)
-    after = [setting(i) for i in range(4)]
-    curve = (core.memory.u32[syms["g_lcd_gamma"]] - syms["kLcdGamma"]) // 32
-    if after != [4, 2, 1, 0] or saved != after or curve != 1:
-        failures.append(f"los ajustes no sobreviven a apagar: {saved} -> {after}, "
-                        f"curva {curve}")
-    else:
-        print("  EFFECTS 50% y BRIGHT LOW, en la bateria y de vuelta al "
-              "encender, la paleta por la curva mas clara")
-
-    # THE ERASE: SELECT on the box, the power-on's own pages, NO chosen; B
-    # is NO, and the title is back with the box gone.
-    ring_chord_from_title(core)
-    run(core, 20)
-    tap("R")
-    tap("A", settle=6)                  # into the first page, which is not it
+    # THE PAGE: its heading and lines, the erase a row lower in grey, the
+    # arrow's walk; no credits on it.
+    tap("A", settle=10)
+    page_lines = lines_of(screen_text(8, 18))
+    want = ["OPTIONS", "GAMMA", "SOUND", "BACKGROUND", "PROTOTYPES", "STATS", "",
+            "ERASE SCORES"]
+    erase_ty = PAGE_TY + 6
+    erase_bank = core.memory.u16[SCREENBLOCK_ADDR + (erase_ty * 32 + 7) * 2] >> 12
+    gamma_boxes = [core.memory.u16[SCREENBLOCK_ADDR + (PAGE_TY * 32 + 16 + i) * 2] & 0x3FF
+                   for i in range(3)]
+    if depth() != 1 or page() != XP_TOP or page_lines[:8] != want or \
+            erase_bank != BANK_CREDIT or len(set(gamma_boxes)) != 2:
+        failures.append(f"A en OPTIONS no pone su pagina con sus lineas, GAMMA con "
+                        f"sus tres casillas y ERASE SCORES en gris ({page_lines}, "
+                        f"banco {erase_bank}, casillas {gamma_boxes})")
+    seen = set()
+    for _ in range(12):
+        tap("DOWN", settle=4)
+        seen.add(row())
+    for _ in range(12):
+        tap("UP", settle=4)
+        seen.add(row())
+    if seen != set(range(5)):
+        failures.append(f"UP y DOWN no recorren las cinco o llegan al borrado: "
+                        f"{sorted(seen)}")
+    to_line(4)
     tap("SELECT", settle=6)
-    stray = is_open() and core.memory.u8[syms["g_extras_page"]] != 0
-    tap("B", settle=10)
-    tap("SELECT", settle=20)
-    asked = " ".join(" ".join(tilemap_text(core, r).split()) for r in range(8, 17))
-    if not stray or "ERASE ALL HIGH SCORES?" not in asked or "> NO" not in asked:
-        failures.append(f"SELECT en la caja no lleva al borrado con NO elegido "
-                        f"(fuera de su pagina: {stray}): {asked[:80]!r}")
-    tap("B", settle=40)
-    if is_open() or "ERASE" in " ".join(tilemap_text(core, r) for r in range(8, 17)):
-        failures.append("decir que no al borrado no vuelve al titulo")
+    on_erase = row()
+    tap("SELECT", settle=6)
+    wrapped = row()
+    for _ in range(5):
+        tap("SELECT", settle=4)
+    tap("UP", settle=4)
+    back_up = row()
+    if on_erase != 5 or wrapped != 0 or back_up != 4:
+        failures.append(f"SELECT no baja de STATS a ERASE SCORES y de ahi arriba, o "
+                        f"UP no vuelve a STATS ({on_erase}, {wrapped}, {back_up})")
     elif not failures:
-        print("  SELECT, y solo SELECT y en la primera pagina, lleva al "
-              "borrado, que pregunta con NO elegido; B vuelve al titulo")
+        print("  OPTIONS es una pagina: GAMMA, SOUND, BACKGROUND, PROTOTYPES, "
+              "STATS; ERASE SCORES en gris, al que solo llega SELECT")
 
-    # ...AND THE HAND-ENTERED TUNES ARE TUNES: MUSIC OFF, and KOROBEINIKI's
-    # audition on LEVEL SETTINGS is silent on all three of its channels.
-    tap("R")
-    for _ in range(2 if protos else 1):
-        tap("DOWN", settle=6)
+    # THE ERASE ASKS: A on it, NO chosen; A on NO, back; again, YES, and a
+    # second question, NO chosen; B, back to the first. Nothing erased.
+    tap("SELECT", settle=6)
+    tap("A", settle=10)
+    sure = (page(), row(XP_SURE), " ".join(screen_text()))
+    tap("A", settle=10)
+    after_no = depth()
+    tap("A", settle=10)
+    tap("UP", settle=4)
+    tap("A", settle=10)
+    really = (page(), row(XP_REALLY), " ".join(screen_text()))
+    tap("B", settle=10)
+    after_b = depth()
+    if sure[:2] != (XP_SURE, 1) or "ARE YOU SURE?" not in sure[2] or \
+            after_no != 1 or really[:2] != (XP_REALLY, 1) or \
+            "ARE YOU REALLY SURE?" not in really[2] or after_b != 2:
+        failures.append(f"el borrado no pregunta dos veces con NO elegido "
+                        f"({sure[:2]}, {after_no}, {really[:2]}, {after_b})")
+    else:
+        print("  A en ERASE SCORES pregunta ARE YOU SURE? y luego ARE YOU REALLY "
+              "SURE?, NO elegido las dos; NO vuelve a la pagina, B a la pregunta "
+              "anterior")
+    tap("B", settle=10)
+    walk(1, "UP")
+
+    # SOUND, a box over the page: MUSIC and EFFECTS, four boxes each.
+    tap("A", settle=10)
+    sound = (page(), lines_of(screen_text()))
+    for _ in range(4):
+        tap("LEFT", settle=4)
+    music_off = setting(SET_MUSIC)
+    tap("B", settle=6)
+    if sound[0] != XP_SOUND or not any("MUSIC" in t.split() for t in sound[1]) or \
+            not any("EFFECTS" in t.split() for t in sound[1]):
+        failures.append(f"SOUND no es su caja con MUSIC y EFFECTS: {sound}")
+
+    def level_settings(tune, ticks):
+        """Off the page and down to LEVEL SETTINGS: what `tune` (NO MUSIC 0,
+        LOGINSKA 1, ... KOROBEINIKI 5) and the cursor's tick sound like;
+        back on the page after."""
+        tap("B", settle=20)                       # the page -> GAME SELECT
+        tap("DOWN", settle=6)                     # OPTIONS -> 1 PLAYER
+        tap("START", settle=20)
+        tap("DOWN", settle=8); tap("DOWN", settle=8)
+        for _ in range(8):                        # the page keeps its last tune
+            if core.memory.u8[music_at] == tune:
+                break
+            tap("RIGHT", settle=8)
+        run(core, 30)
+        heard = listen(120)
+        tick = 0
+        for _ in range(ticks):
+            core.set_keys(KEYS["UP"]); core.run_frame(); core.set_keys()
+            tick = max(tick, listen(12)["p2"])
+            core.set_keys(KEYS["DOWN"]); core.run_frame(); core.set_keys()
+            tick = max(tick, listen(12)["p2"])
+        tap("B", settle=20)                       # -> GAME SELECT
+        to_options()
+        return heard, tick
+
+    loud_off, tick_on = level_settings(1, 2)       # LOGINSKA, MUSIC OFF
+    hand_off, _ = level_settings(5, 0)            # KOROBEINIKI, MUSIC OFF
+    tap("DOWN", settle=4)
     tap("A", settle=10)
     for _ in range(4):
-        tap("LEFT", settle=6)
-    tap("B"); tap("B", settle=20)
-    tap("START", settle=20)                 # GAME SELECT
-    tap("START", settle=20)                 # LEVEL SETTINGS
-    tap("DOWN", settle=8); tap("DOWN", settle=8)
-    for _ in range(5):                      # NO MUSIC .. KOROBEINIKI
-        tap("RIGHT", settle=8)
-    run(core, 30)
-    hand = (loudest(120, "p1"), loudest(1, "p2"), loudest(1, "tri"))
-    if setting(SET_MUSIC) != 0 or any(hand):
-        failures.append(f"con MUSIC OFF KOROBEINIKI se sigue oyendo {hand}")
+        tap("RIGHT", settle=4)                    # MUSIC back to full
+    tap("DOWN", settle=4)
+    for _ in range(4):
+        tap("LEFT", settle=4)                     # EFFECTS OFF
+    effects_off = setting(SET_EFFECTS)
+    tap("B", settle=6)
+    loud_on, _ = level_settings(1, 0)             # LOGINSKA, MUSIC full
+    _, tick_off = level_settings(0, 2)            # NO MUSIC, the tick alone
+    if music_off != 0 or loud_off["p1"] or loud_off["tri"] or not tick_on:
+        failures.append(f"MUSIC OFF no calla LOGINSKA ({loud_off}) o calla el tic "
+                        f"({tick_on}); ajuste {music_off}")
+    elif any(hand_off[k] for k in ("p1", "p2", "tri")):
+        failures.append(f"con MUSIC OFF KOROBEINIKI se sigue oyendo {hand_off}")
+    elif effects_off != 0 or tick_off or not loud_on["p1"]:
+        failures.append(f"EFFECTS OFF no calla el tic ({tick_off}) o calla "
+                        f"LOGINSKA ({loud_on}); ajuste {effects_off}")
     else:
-        print("  MUSIC OFF calla tambien las canciones a mano (KOROBEINIKI)")
+        print("  SOUND: MUSIC OFF calla LOGINSKA y KOROBEINIKI y deja el tic; "
+              "EFFECTS OFF calla el tic y deja LOGINSKA")
+    # Effects to half, for the battery's part below.
+    tap("DOWN", settle=4)
+    tap("A", settle=10)
+    tap("DOWN", settle=4)
+    tap("RIGHT", settle=4)
+    tap("RIGHT", settle=4)
+    tap("B", settle=6)
+
+    # BACKGROUND: WHITE is the backdrop, the words black; GAMMA a curve.
+    black_backdrop = palette(0)
+    to_line(2)
+    tap("A", settle=10)
+    tap("DOWN", settle=4)
+    tap("A", settle=10)
+    white = (setting(SET_BG), palette(0), palette(BANK_LABEL * 16 + 1))
+    tap("B", settle=6)
+    walk(0, "UP")
+    tap("RIGHT", settle=10)
+    curve = (core.memory.u32[syms["g_lcd_gamma"]] - syms["kLcdGamma"]) // 32
+    if white[0] != 1 or white[1] == black_backdrop or (white[1] & 0x1F) < 28 or \
+            (white[2] & 0x7FFF) > 0x0421:
+        failures.append(f"BACKGROUND WHITE no pone el fondo blanco y las letras "
+                        f"negras ({white[0]}, fondo {white[1]:#06x}, letra "
+                        f"{white[2]:#06x})")
+    elif setting(SET_BRIGHT) != 1 or curve != 1:
+        failures.append(f"GAMMA no pone la segunda curva ({setting(SET_BRIGHT)}, "
+                        f"{curve})")
+    else:
+        print("  BACKGROUND WHITE: fondo blanco y letras negras; GAMMA a la "
+              "segunda curva")
+
+    # PROTOTYPES: one put on, which the page wears; the title draws with its
+    # own tiles, as it does when the title's chord puts it on.
+    if protos:
+        to_line(3)
+        tap("A", settle=10)
+        prot = lines_of(screen_text())
+        tap("DOWN", settle=4)
+        tap("A", settle=20)
+        skin = core.memory.u8[syms["g_title_skin"]]
+        tap("B", settle=6)
+        tap("B", settle=20)                       # the page -> GAME SELECT
+        tap("B", settle=60)                       # -> the title
+        tiles = bytes(core.memory.u8[PROTO_TILES + i] for i in range(0, 256 * 32, 7))
+        ref, ref_screen = load(rom_path)
+        _r = ref_screen
+        run(ref, 40)
+        ref.set_keys(KEYS["L"], KEYS["R"]); run(ref, 4); ref.set_keys(); run(ref, 40)
+        want_tiles = bytes(ref.memory.u8[PROTO_TILES + i] for i in range(0, 256 * 32, 7))
+        listed = " ".join(prot)
+        if skin != 1 or not all(n in listed for n in ("RELEASE", "NINTENDO", "ATARI",
+                                                      "MIRRORSOFT")) \
+                or "UNUSED" in listed:
+            failures.append(f"PROTOTYPES no pone NINTENDO o no lista por editor: "
+                            f"{prot}, skin {skin}")
+        elif tiles != want_tiles:
+            failures.append("el titulo del prototipo elegido en OPTIONS no lleva "
+                            "sus tiles")
+        else:
+            print("  PROTOTYPES: RELEASE, NINTENDO, ATARI, MIRRORSOFT; elegido "
+                  "uno, el titulo lo dibuja con sus tiles")
+        del ref, ref_screen
+    else:
+        skip("esta ROM no trae prototipos: PROTOTYPES solo tiene RELEASE")
+        tap("B", settle=20)
+        tap("B", settle=60)
+
+    # A GAME, AND THE LIFETIME FIGURES: a game played and lost with lines
+    # cleared on the way, its record on the table; STATS says so.
+    off = game_offsets(rom_path)
+    base, _ = game_state_address(rom_path)
+    start_game(core)
+    for r in (18, 19):
+        for c in range(TENGEN_PF_WIDTH):
+            core.memory.u8[base + off["field"] + r * TENGEN_PF_WIDTH + c] = (
+                CELL_WALL if c in (0, TENGEN_PF_WIDTH - 1) else CELL_BLOCK)
+    core.set_keys(KEYS["DOWN"]); run(core, 120); core.set_keys()
+    for i in range(4):
+        core.memory.u8[base + off["score"] + i] = (90000 >> (8 * i)) & 0xFF
+    for r in range(TENGEN_PF_HEIGHT):
+        for c in range(TENGEN_PF_WIDTH):
+            core.memory.u8[base + off["field"] + r * TENGEN_PF_WIDTH + c] = (
+                CELL_WALL if c in (0, TENGEN_PF_WIDTH - 1) else
+                (0 if c == 5 else CELL_BLOCK))
+    run(core, 300)
+    press_start(core); run(core, 30)              # the plaque -> HIGH SCORES
+    tap("START", settle=20)
+    press_start(core); run(core, 40)
+    games, frames, pieces = life(1), life(0), life(2)
+    lines = life(3) + 2 * life(4) + 3 * life(5) + 4 * life(6)
+    if games != 1 or frames < 100 or pieces < 1 or lines < 1:
+        failures.append(f"las cifras de toda la vida no cuentan la partida "
+                        f"(partidas {games}, frames {frames}, piezas {pieces}, "
+                        f"lineas {lines})")
+    else:
+        print(f"  una partida: {games} partida, {frames} frames, {pieces} piezas, "
+              f"{lines} linea(s) en las cifras de toda la vida")
+
+    # ...ALL OF IT ON THE BATTERY, and STATS says what it counted.
+    saved = [core.memory.u8[SAVE_SETTINGS + i] for i in range(5)]
+    core.reset()
+    run(core, 60)
+    after = [setting(i) for i in range(5)]
+    life_after = (life(1), life(2))
+    press_start(core); run(core, 20)
+    core.set_keys(KEYS["L"], KEYS["R"]); run(core, 4); core.set_keys(); run(core, 20)
+    to_options()
+    to_line(4)
+    tap("A", settle=10)
+    stats = lines_of(screen_text())
+    if after != [4, 2, 1, 0, 1] or saved != after or life_after != (games, pieces):
+        failures.append(f"los ajustes o las cifras no sobreviven a apagar: "
+                        f"{saved} -> {after}, {life_after} y no {(games, pieces)}")
+    elif not any(t.split()[-2:] == ["GAMES", "1"] for t in stats if t) or \
+            not any("TETRIS RATE" in t for t in stats):
+        failures.append(f"STATS no dice lo contado: {stats}")
+    else:
+        print("  ajustes y cifras en la bateria, de vuelta al encender; STATS "
+              "dice GAMES 1")
+    tap("B", settle=6)
+
+    # THE ERASE, YES TWICE: everything kept goes — the tables back to the
+    # cartridge's fifteen, the lifetime figures, the settings, the pause
+    # menu's switches — and the arrow back at the top.
+    core.memory.u8[syms["g_options"]] = 0x08          # GHOST, to be erased
+    to_line(4)
+    tap("SELECT", settle=6)
+    tap("A", settle=8)
+    tap("UP", settle=4)
+    tap("A", settle=8)
+    tap("UP", settle=4)
+    tap("A", settle=20)
+    erased = (depth(), row(), life(1), [setting(i) for i in range(5)],
+              core.memory.u8[syms["g_options"]], palette(0))
+    tap("B", settle=20)                       # the page -> GAME SELECT
+    tap("B", settle=40)                       # -> the title
+    tap("SELECT", settle=40)                  # the table
+    first = " ".join(tilemap_text(core, LEADER_FIRST_TY).split())
+    if erased[:2] != (1, 0) or erased[2] or erased[3] != [4, 4, 0, 0, 0] or \
+            erased[4] or erased[5] != black_backdrop or "17000" not in first:
+        failures.append(f"SI y SI no lo borra todo (pagina y flecha {erased[:2]}, "
+                        f"partidas {erased[2]}, ajustes {erased[3]}, opciones "
+                        f"{erased[4]}, fondo {erased[5]:#06x}, tabla {first!r})")
+    else:
+        print("  SI dos veces: la tabla a las quince del cartucho, las cifras a "
+              "cero, los ajustes y las opciones de fabrica, la flecha arriba")
+    del core, screen
+
+    sprites_on_light(rom_path, failures)
 
     for f in failures:
         print("FALLA:", f)
     if failures:
         return 1
-    print("OK: los EXTRAS del titulo: prototipos, prueba de sonido, ajustes "
-          "que se guardan, y el borrado solo con SELECT.")
+    print("OK: OPTIONS en GAME SELECT: una pagina con sus cajas, ajustes y cifras "
+          "en la bateria, y el borrado solo por SELECT, con dos preguntas, de todo.")
     return 0
+
+
+OBJ_PALETTE_ADDR = PALETTE_ADDR + 0x200
+PAL_OBJ_CLEAR, PAL_OBJ_TITLE, PAL_OBJ_GAME = 4, 5, 9      # gba/port.h
+TITLE_OBJ_TILE_BASE, TITLE_OBJ_INKED_BASE = 256, 768
+TITLE_FIREWORK_FIRST = 19
+
+
+def sprites_on_light(rom_path, failures):
+    """THE SPRITES DRAWN FOR A BLACK BACKDROP, on a white one
+    (ink_sprite_palettes, gba/video.c): the line-clear puff is the backdrop,
+    the one-player drop points ($37, pale yellow) are inked darker, and the
+    title's fireworks draw from the inked copy of their tiles while the
+    cathedral's sprites keep the picture's. Back on black, all of it is the
+    cartridge's again — by BACKGROUND's own BLACK, and by the erase."""
+    core, screen = load(rom_path)   # `screen` must stay alive; see load()
+    _ = screen
+    row_at, _ = game_state_address(rom_path, "g_extras_row")
+
+    def tap(*names, settle=12):
+        core.set_keys(*[KEYS[n] for n in names]); run(core, 4)
+        core.set_keys(); run(core, settle)
+
+    def obj(i):
+        return core.memory.u16[OBJ_PALETTE_ADDR + i * 2]
+
+    def bright(c):
+        return (c & 31) + ((c >> 5) & 31) + ((c >> 10) & 31)
+
+    def background(n):
+        """From the title, the chord rung: OPTIONS' BACKGROUND, the n-th,
+        and back to the title."""
+        press_start(core); run(core, 20)
+        tap("UP")
+        tap("A", settle=10)
+        for _ in range(8):
+            if "BACKGROUND" in tilemap_text(core, PAGE_TY + core.memory.u8[row_at]):
+                break
+            tap("DOWN", settle=4)
+        tap("A", settle=10)
+        for _ in range(8):
+            if core.memory.u8[row_at + XP_BACKGROUND] == n:
+                break
+            tap("DOWN", settle=4)
+        else:
+            failures.append(f"BACKGROUND no llega a la linea {n}")
+        tap("A", settle=10)
+        tap("B", settle=6)
+        tap("B", settle=20)
+        tap("B", settle=40)
+
+    def look():
+        """(clear's colours are the backdrop's, drop points' ink, the
+        fireworks' tile bases, the cathedral's)."""
+        backdrop = core.memory.u16[PALETTE_ADDR]
+        clear = all(obj(PAL_OBJ_CLEAR * 16 + i) == backdrop for i in (1, 2, 3))
+        points = obj((PAL_OBJ_GAME + 3) * 16 + 1)
+        fw, cat = set(), set()
+        for _ in range(400):
+            core.run_frame()
+            for _, _, t in oam_visible(core, TITLE_FIREWORK_FIRST, 64):
+                fw.add(t & ~255)
+            for _, _, t in oam_visible(core, 0, TITLE_FIREWORK_FIRST):
+                cat.add(t & ~255)
+        return clear, points, fw, cat
+
+    def erase():
+        """From the title: OPTIONS, SELECT down to ERASE SCORES, YES and
+        YES, and back to the title."""
+        press_start(core); run(core, 20)
+        tap("UP")
+        tap("A", settle=10)
+        for _ in range(8):
+            if "ERASE" in tilemap_text(core, PAGE_TY + core.memory.u8[row_at] + 1):
+                break
+            tap("SELECT", settle=4)
+        tap("A", settle=10)
+        tap("UP", settle=4)
+        tap("A", settle=10)
+        tap("UP", settle=4)
+        tap("A", settle=20)
+        tap("B", settle=20)
+        tap("B", settle=40)
+
+    run(core, 40)
+    press_start(core); run(core, 10)
+    tap("L", "R")
+    tap("B", settle=30)
+    black_backdrop = core.memory.u16[PALETTE_ADDR]
+    black = look()
+    background(1)
+    white = look()
+    background(0)
+    again = look()
+    # ...AND THE ERASE PUTS THE BLACK BACK, from WHITE with the curve
+    # untouched — where nothing but the erase's own bg_apply repaints it.
+    background(1)
+    erase()
+    erased = look()
+    erased_backdrop = core.memory.u16[PALETTE_ADDR]
+    want_fw = {TITLE_OBJ_INKED_BASE}
+    if not white[0]:
+        failures.append("sobre blanco la nube de la linea sigue negra, no del "
+                        "color del fondo")
+    elif bright(white[1]) >= bright(black[1]):
+        failures.append(f"sobre blanco los puntos de la caida no se oscurecen "
+                        f"({black[1]:#06x} -> {white[1]:#06x})")
+    elif white[2] != want_fw or white[3] != {TITLE_OBJ_TILE_BASE}:
+        failures.append(f"sobre blanco los fuegos no salen de la copia entintada "
+                        f"o la catedral si: fuegos {sorted(white[2])}, catedral "
+                        f"{sorted(white[3])}")
+    elif again[1] != black[1] or again[2] != {TITLE_OBJ_TILE_BASE} or \
+            again[3] != {TITLE_OBJ_TILE_BASE} or black[2] != {TITLE_OBJ_TILE_BASE}:
+        failures.append(f"de vuelta al negro los sprites no son los del cartucho "
+                        f"(puntos {again[1]:#06x}, fuegos {sorted(again[2])})")
+    elif erased_backdrop != black_backdrop or erased != again:
+        failures.append(f"borrarlo todo desde WHITE no vuelve al negro (fondo "
+                        f"{erased_backdrop:#06x}, sprites {erased[:2]})")
+    else:
+        print("  sobre blanco: la nube de la linea del color del fondo, los "
+              "puntos de la caida oscuros, los fuegos entintados y la catedral "
+              "intacta; en negro, los del cartucho, y borrarlo todo desde "
+              "blanco vuelve a el")
