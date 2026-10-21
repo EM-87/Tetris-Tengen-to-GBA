@@ -130,16 +130,25 @@ Lo que el GBA tiene de más:
 | Partida, HUD Stats, con el acorde | L+R | cambia el color del cosaco; con HOLD, cambia de HUD (en cualquier HUD) |
 | GAME SELECT, LEVEL SETTINGS o el título | L+R | el acorde, el mismo en las tres: destapa las canciones ocultas (Korobeiniki, Katiuska, MUSIC MIX), los niveles 18-19, el menú de pausa, los títulos de los prototipos y lo demás que añade el port (abajo); hecho en el título, además pone el primer prototipo |
 | GAME SELECT, con el acorde | Arriba desde 1 PLAYER, y A | OPTIONS, la sexta línea: los ajustes, los prototipos, las cifras de toda la vida y el borrado (abajo) |
+| GAME SELECT, con el acorde | A o START en un modo marcado ▣ | vuelve a su partida guardada con SAVE, en pausa (abajo) |
 | Título, con el acorde | SELECT | las tablas de HIGH SCORES, una por modo (Izquierda/Derecha las recorren); sin el acorde, SELECT es otro START, como en el cartucho |
 | Pantalla LINK CABLE | SELECT | Single-Pak: envía el juego a una GBA sin cartucho |
 | Carrera, tablero muerto | A+B | se levanta y sigue, como en el cartucho |
 | En cualquier sitio salvo una partida por cable | L+R+SELECT | reposo: pantalla y sonido apagados, casi sin gastar pila (una partida en solitario se pausa antes); A, B, START o SELECT despiertan |
 | En cualquier momento | A+B+START+SELECT | reinicia el juego (en la EZ-Flash IV lo intercepta el propio cartucho) |
-| Al encender, mantenidos | L+R+B | borra los récords (pregunta dos veces, con NO elegido) |
 
 **El menú de pausa** (con el acorde) es PAUSE, MUSIC, OPTIONS y EXIT GAME;
 START o B lo cierran y siguen la partida. MUSIC abre la lista de canciones,
-alineada a la izquierda, y suena la que tiene la flecha.
+alineada a la izquierda, y suena la que tiene la flecha. EXIT GAME pregunta
+SURE? con tres respuestas, YES, SAVE y NO, la flecha en NO y sin dar la
+vuelta: YES está a dos pulsaciones, pasando por SAVE. SAVE sale como YES y
+deja la partida en el cartucho: hay una por modo de los que juega una sola
+consola (1 PLAYER, VERSUS COMPUTER, WITH COMPUTER; por cable no hay SAVE,
+media partida está en la otra GBA). GAME SELECT marca con una casilla los
+modos que tienen una, y elegir el modo vuelve directo a ella, en pausa, y la
+saca del cartucho (para conservarla, SAVE otra vez). Sobreviven al apagado,
+pero solo se recuperan desde su modo y con el acorde; sin él GAME SELECT es
+el del cartucho.
 OPTIONS tiene seis interruptores, todos en OFF hasta que los toqués, que se
 guardan en el cartucho y vuelven cada vez que hacés el acorde: **HARD DROP**
 (Arriba tira la pieza de golpe), **FAST DOWN** (Abajo baja una fila por
@@ -158,36 +167,48 @@ partida; GHOST y SWAP A-B son de cada jugador.
 
 **OPTIONS** (con el acorde, la sexta línea de GAME SELECT, debajo de WITH
 COMPUTER; la lista sube una fila para que quepa) es una página, como LEVEL
-SETTINGS, y lo que cada línea tiene dentro se abre en una caja sobre ella:
+SETTINGS, centrada en la pantalla: primero las líneas con casillas, que se
+cambian ahí mismo (A da la vuelta, Izquierda/Derecha mueven), y después las
+que abren una caja, centrada también:
 
-- **GAMMA** ▣□□: la curva de la pantalla para una GBA sin luz (aclara los
-  oscuros sin tocar el negro). A pasa a la siguiente; Izquierda/Derecha la
-  mueven.
-- **SOUND**: MUSIC ▣▣▣□ y EFFECTS ▣▣▣▣, el volumen de las canciones y el de
-  los efectos por separado, cuatro casillas cada uno (ninguna es silencio).
-  El motor toca las dos cosas por los mismos canales, y el port distingue
-  cuál suena por la voz que escribe en cada uno.
-- **RUMBLE** ▣: solo en un Game Boy Player; la casilla apaga la vibración.
-- **BACKGROUND**: BLACK, WHITE, GREY o IVORY, el fondo de todas las
-  pantallas. En los claros las letras blancas pasan a negras, y los sprites
-  pensados para el negro se retocan: la nube que borra la línea es del color
-  del fondo, los puntos de la caída se oscurecen y los fuegos del título
-  salen entintados (la catedral, que comparte con ellos sus paletas, queda
-  como en la imagen).
+- **BRIGHTNESS** ▣□□□: la curva de la pantalla para una GBA sin luz (aclara
+  los oscuros sin tocar el negro), cuatro, de la normal a la más brillante.
+- **MUSIC** ▣▣▣▣ y **EFFECTS** ▣▣▣▣: el volumen de las canciones y el de los
+  efectos por separado (ninguna casilla es silencio). El motor toca las dos
+  cosas por los mismos canales, y el port distingue cuál suena por la voz
+  que escribe en cada uno.
+- **RUMBLE** ▣: debajo de EFFECTS, solo en un Game Boy Player; la casilla
+  apaga la vibración.
+- **BACKGROUND**: BLACK, DARK GREY, LIGHT GREY o IVORY, el fondo de todas las
+  pantallas menos el título, que es de noche (los fuegos, y las gemas y
+  lingotes de sus columnas toman el negro del fondo). Los grises son del port
+  y no del NES: los del NES y su blanco son los tonos de las piezas, y una
+  pieza perdía un tono en ellos; por lo mismo no hay blanco (los brillos de
+  las piezas desaparecían en él) y el marfil está por debajo de él. En los
+  claros las letras blancas pasan a negras, y lo que el arte pinta con el
+  negro del fondo se queda negro: la sombra de las letras del banner, la
+  línea fuera de la greca, la junta de los ladrillos del muro de la pausa y
+  las grecas y banners de los prototipos (cada píxel en color 0 que el
+  espacio vacío no alcanza es tinta negra; lo calcula `make assets` sobre
+  las pantallas del cartucho). La nube que borra la línea es del color del
+  fondo y los puntos de la caída se oscurecen.
 - **PROTOTYPES**: RELEASE y los prototipos que tenga la ROM, por el editor
-  para el que se hicieron (NINTENDO, ATARI, MIRRORSOFT); A pone el elegido,
-  la página se lo pone en el acto y su skin llega al título y al juego.
+  para el que se hicieron, en el orden en que se hicieron (MIRRORSOFT, ATARI,
+  NINTENDO); A pone el elegido, la página se lo pone en el acto y su skin
+  llega al título y al juego.
 - **STATS**: las cifras de toda la vida de esta consola — tiempo jugado,
   partidas, piezas, líneas, SINGLES, DOUBLES, TRIPLES, TETRISES, el % de
   líneas hechas de cuatro en cuatro y el nivel más alto —. Cuentan las
   partidas del jugador de esta consola: no la demo, ni el ordenador, ni el
   rival por cable.
-- **ERASE SCORES**, una fila más abajo y en el gris oscuro de los créditos:
+- **ERASE DATA**, una fila más abajo y en el gris oscuro de los créditos:
   Arriba y Abajo lo saltan; solo SELECT, que baja de línea en línea, sigue
   de STATS hasta él. A pregunta ARE YOU SURE? y luego ARE YOU REALLY SURE?,
   las dos con NO elegido, y solo SÍ dos veces lo borra todo — las tablas,
   las cifras de toda la vida, los interruptores de la pausa, estos ajustes y
-  la partida guardada —: la consola queda como recién comprada.
+  las partidas guardadas —: la consola queda como recién comprada. (El
+  borrado al encender con L+R+B se quitó: un botón mantenido de más bastaba
+  para vaciar la consola.)
 
 B vuelve atrás; START cierra las cajas, y con ninguna abierta la página.
 Los ajustes se guardan en el cartucho y valen desde que se enciende, con
@@ -209,7 +230,8 @@ es otro START, el mando no vibra y el título y el cosaco son los del
 cartucho (L y R no hacen nada). Con el acorde, el crédito del port ocupa
 el sitio del de Mirrorsoft y la versión sobre el año el de los
 copyrights, SELECT en el título abre los récords, el Game Boy
-Player vibra, y además de lo de arriba la música acelera con la pila alta, la
+Player vibra, y además de lo de arriba la música acelera con la pila alta
+(solo la música: los efectos siguen a su ritmo), la
 pausa tapa el tablero con un muro de bloques que sube desde el suelo (y al
 seguir baja desde arriba) y esconde NEXT y la pieza de HOLD, un récord nuevo suena con el
 jingle que el cartucho no usa (por cable, todo esto con el acorde del
@@ -236,8 +258,9 @@ cartucho, byte a byte), y la puntuación que al pasar de 999999 vuelve a
 **Apagar en pausa no pierde la partida**, como en Tetris DX: una partida en
 solitario en pausa se guarda en la memoria del cartucho, y al encender vuelve
 en pausa donde estaba. Si se reanuda, se acaba o se sale, se borra; el
-reinicio A+B+START+SELECT también la borra. (Una ROM nueva no recupera la
-partida de otra: la estructura puede haber cambiado.)
+reinicio A+B+START+SELECT también la borra. Solo esa vuelve sola al
+encender; las guardadas con SAVE esperan en su modo. (Una ROM nueva no
+recupera las partidas de otra: la estructura puede haber cambiado.)
 
 **Game Boy Player**: al encender sale su logo, como en los juegos que lo
 soportaban, y si el juego corre en un Game Boy Player lo reconoce y, con el
@@ -390,7 +413,7 @@ Lo que hay detrás del acorde no es un modo: es el juego terminado.
 
 En cifras: unas 5.400 líneas de reglas en C (`src/`, probadas en el PC con
 146 tests y un fuzzer), 15.800 de capa GBA y 25.000 de herramientas y
-comprobaciones — 55 baterías en `make gba-check`, más de ochenta
+comprobaciones — 57 baterías en `make gba-check`, más de ochenta
 comprobaciones que arrancan la ROM en un emulador, la juegan y miran la
 pantalla, el sonido y la memoria —, todo contrastado contra el disassembly
 del cartucho, línea citada a línea citada. Nada de eso se ve desde fuera, y

@@ -856,7 +856,7 @@ def exit_check(rom):
         x = host if who == "anfitriona" else 1 - host
         tap("START", who=x)
         both(20)
-        for key in ("UP", "A", "DOWN", "A"):       # EXIT GAME (round), YES
+        for key in ("UP", "A", "UP", "A"):         # EXIT GAME (round), YES
             tap(key, who=x)
         out = None
         for f in range(300):

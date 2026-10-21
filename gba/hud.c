@@ -2122,7 +2122,7 @@ static void draw_end_page(const TengenPlayfield *field) {
         for (int col = 0; col < field_cols(); col++) {
             uint16_t entry = WITH_BANK(T_BLANK, 0);
             if (row >= wall) {
-                entry = WITH_BANK(T_BRICK, PAL_BRICK_BANK);
+                entry = WITH_BANK(T_WALL_BRICK, PAL_BRICK_BANK);
             } else if (g_end_curtain <= 0) {
                 entry = WITH_BANK(field->cell[row][field_col0() + col], 0);
             } else if (col >= page_tx && col < page_tx + END_PAGE_W) {
@@ -2138,12 +2138,13 @@ void draw_field(void) {
     /* ...BEHIND A WALL OF BRICKS (board_bricked). It used to be put away
      * into nothing, and an empty board under a pause read as a board that
      * had gone; a cell of the cartridge's grey block in every cell reads as
-     * one put away. See T_BRICK for the tile and its colours. */
+     * one put away. See T_BRICK for the tile and its colours, and
+     * T_WALL_BRICK for the grout. */
     if (g_pause_wall >= TENGEN_PF_HEIGHT) {
         for (int row = 0; row < TENGEN_PF_HEIGHT; row++)
             for (int col = 0; col < field_cols(); col++)
                 set_map_tile(field_tx() + col, FIELD_TY + row,
-                              WITH_BANK(T_BRICK, PAL_BRICK_BANK));
+                              WITH_BANK(T_WALL_BRICK, PAL_BRICK_BANK));
         return;
     }
     /* ...and on its way up or down, the rows it has reached. */
@@ -2188,7 +2189,7 @@ void draw_field(void) {
             if (clearing && col <= written)
                 entry = WITH_BANK(ascii_tile(word[col]), 0);
             if (row >= g_wall_top)
-                entry = WITH_BANK(T_BRICK, PAL_BRICK_BANK);
+                entry = WITH_BANK(T_WALL_BRICK, PAL_BRICK_BANK);
 
             set_map_tile(field_tx() + col, FIELD_TY + row, entry);
         }

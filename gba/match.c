@@ -369,7 +369,14 @@ static uint8_t g_pause_row;    /* which line the cursor is on */
  * so the unpause owes the match a tune. See the note in pause_menu_input. */
 static bool g_mix_held;
 bool g_pause_confirm;   /* ...and the SURE? question over the top of it */
-static bool g_pause_yes;
+/* ITS ANSWERS, top to bottom: YES, SAVE where the game can be saved
+ * (saved_slot: the modes one console plays alone), NO. The arrow opens on
+ * NO and goes no further than the ends, so YES is two moves from it and
+ * SAVE always on the way. */
+enum { ANSWER_YES, ANSWER_SAVE, ANSWER_NO };
+static uint8_t g_pause_answer;
+bool g_pause_can_save;  /* set by main as a match starts */
+bool g_pause_saving;    /* SAVE chosen: main writes it as the match goes */
 /* ...or the tunes' window, and the line its cursor is on. See PMENU_H_MAX. */
 static bool g_pause_tunes;
 static uint8_t g_tune_row;
@@ -834,7 +841,8 @@ static void draw_pause_menu(void) {
      * a line, so the arrow answers one of them and not the gap between. */
     /* "SURE?", not "EXIT?": the entry it answers already says EXIT GAME,
      * and the question saying it again read as a second menu. */
-    static const char *const ask[] = { "SURE?", "YES", "NO" };
+    static const char *const ask[] = { "SURE?", "YES", "SAVE", "NO" };
+    static const char *const ask_unsaved[] = { "SURE?", "YES", "NO" };
     /* "EXIT GAME", not "EXIT": a player took the bare word for closing the
      * menu and walked out of the game. */
     /* "MUSIC", not "CHANGE MUSIC": twelve letters and the arrow need a box
@@ -843,7 +851,10 @@ static void draw_pause_menu(void) {
      * race's rival numbers (`--versushud`). */
     static const char *const menu[] = { "PAUSE", "MUSIC", "OPTIONS", "EXIT GAME" };
     if (g_pause_confirm) {
-        draw_pmenu(ask, 3, g_pause_yes ? 1 : 2);
+        if (g_pause_can_save)
+            draw_pmenu(ask, 4, 1 + g_pause_answer);
+        else
+            draw_pmenu(ask_unsaved, 3, g_pause_answer == ANSWER_YES ? 1 : 2);
     } else if (g_pause_options) {
         draw_options_box();
     } else if (g_pause_tunes) {
@@ -1039,18 +1050,29 @@ static bool pause_menu_input(uint8_t pressed, uint8_t mine, bool *leaving,
 
     if (g_pause_confirm) {
         /* The answers stack, so Up and Down move between them as they do on
-         * the column, and SELECT does too. Left and Right are kept from when
-         * the tune was changed with them on the line above. */
-        if (pressed & (TENGEN_BTN_LEFT | TENGEN_BTN_RIGHT | TENGEN_BTN_UP |
-                        TENGEN_BTN_DOWN | TENGEN_BTN_SELECT)) {
-            g_pause_yes = !g_pause_yes;
-            if (!(pressed & (TENGEN_BTN_A | TENGEN_BTN_B))) pause_tick();
+         * the column, and SELECT goes down as it does there; Left goes up
+         * and Right down, kept from when the tune was changed with them on
+         * the line above. TO THE ENDS AND NO FURTHER: from NO, YES is two
+         * moves away, through SAVE where there is one. */
+        int moved = 0;
+        if (pressed & (TENGEN_BTN_UP | TENGEN_BTN_LEFT)) moved = -1;
+        else if (pressed & (TENGEN_BTN_DOWN | TENGEN_BTN_RIGHT | TENGEN_BTN_SELECT)) moved = 1;
+        if (moved) {
+            int a = g_pause_answer + moved;
+            if (a == ANSWER_SAVE && !g_pause_can_save) a += moved;
+            if (a >= ANSWER_YES && a <= ANSWER_NO) {
+                g_pause_answer = (uint8_t)a;
+                if (!(pressed & (TENGEN_BTN_A | TENGEN_BTN_B))) pause_tick();
+            }
         }
         if (pressed & TENGEN_BTN_B) {
             g_pause_confirm = false;
             screen_blip();
         } else if (pressed & TENGEN_BTN_A) {
-            if (g_pause_yes) {
+            if (g_pause_answer != ANSWER_NO) {
+                /* SAVE leaves as YES does, and main puts the game on the
+                 * battery on the way out (saved_write). */
+                g_pause_saving = g_pause_answer == ANSWER_SAVE;
                 /* QUITTING IS NOT AN UNPAUSE, AND THE ENGINE ONLY KNOWS ABOUT
                  * UNPAUSING. This is the whole of a bug that killed every
                  * sound in the machine for the rest of the session.
@@ -1114,7 +1136,7 @@ static bool pause_menu_input(uint8_t pressed, uint8_t mine, bool *leaving,
     if (pressed & TENGEN_BTN_A) {
         if (g_pause_row == PMENU_EXIT) {
             g_pause_confirm = true;
-            g_pause_yes = false;   /* NO first: a pause menu does not lose games */
+            g_pause_answer = ANSWER_NO;   /* NO first: a pause menu does not lose games */
         } else if (g_pause_row == PMENU_OPTIONS) {
             g_pause_options = true;
             g_option_row = 0;

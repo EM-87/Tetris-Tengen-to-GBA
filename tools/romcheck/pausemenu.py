@@ -324,7 +324,8 @@ def pausemenu_check(rom_path):
             while ">" not in row(PM_EXIT):
                 tap("DOWN")
             tap("A")
-        tap("LEFT"); tap("A"); run(core, 60)
+        tap("LEFT"); tap("LEFT")    # NO -> SAVE -> YES, which is two away
+        tap("A"); run(core, 60)
         if "-LINES" in tilemap_text(core, LEADER_HEAD_TY, 0, 30):
             failures.append("salir a la fuerza pasa por la tabla de records")
         elif "EXIT" in row(PM_EXIT) or "PAUSE" in row(PM_HEAD):
@@ -371,7 +372,7 @@ def pausemenu_check(rom_path):
         tap("START")
         while ">" not in row(PM_EXIT):
             tap("DOWN")
-        tap("A"); tap("LEFT"); tap("A"); run(core, 60)
+        tap("A"); tap("LEFT"); tap("LEFT"); tap("A"); run(core, 60)   # YES
         press_start(core); run(core, 10)
         press_start(core); run(core, 12)
         press_start(core); run(core, 30)
@@ -1164,3 +1165,146 @@ def pause_b_and_layout(rom_path):
     for f in failures:
         print(f"FALLA: {f}")
     return failures
+
+
+def save_check(rom_path):
+    """EXIT GAME'S SAVE (match.c, suspend.c, main.c).
+
+    UNDER THE CHORD, in a mode one console plays alone, EXIT GAME asks with
+    three answers, YES, SAVE and NO, the arrow on NO; it goes to the ends
+    and no further, so YES is two moves away, through SAVE. SAVE leaves as
+    YES does, and the game goes to the battery ("SAVE", 0x0E004800 for 1
+    PLAYER): GAME SELECT marks the mode with a box in its column, and the
+    mode goes straight back into the game, paused, the same board and score,
+    and takes it off the battery — no mark after. It outlives the power
+    switch, and without the chord GAME SELECT is the cartridge's: no mark,
+    and 1 PLAYER starts a game; with it, the mark and the game are back.
+    VERSUS COMPUTER asks with SAVE too."""
+    base, why = game_state_address(rom_path)
+    mask_at, why2 = game_state_address(rom_path, "g_saved_mask")
+    if base is None or mask_at is None:
+        skip(f"{why or why2}")
+        return 0
+    off = game_offsets(rom_path)
+    lay = check_layout(rom_path)
+    sq_on = lay["hold_label"] + 7                 # T_SQ_ON (gba/port.h)
+    SAVED_TX = 27                                 # GAME_SAVED_TX
+    from .harness import GAME_SELECT_TY
+    failures = []
+    core, screen = load(rom_path)   # `screen` must stay alive; see load()
+    _ = screen
+
+    def tap(*names, settle=14):
+        core.set_keys(*[KEYS[n] for n in names]); run(core, 4)
+        core.set_keys(); run(core, settle)
+
+    def box_rows():
+        return [" ".join(tilemap_text(core, PMENU_TY + 1 + i, *pmenu_span(core)).split())
+                for i in range(4)]
+
+    def answer():
+        rows = box_rows()
+        return next((r.replace(">", "").replace("-", "").strip()
+                     for r in rows if ">" in r), None)
+
+    def board():
+        return bytes(core.memory.u8[base + off["field"] + i] for i in range(240))
+
+    def magic(slot=0):
+        return bytes(core.memory.u8[0x0E004800 + slot * 0x800 + i] for i in range(4))
+
+    def marks(ty0):
+        return [core.memory.u16[SCREENBLOCK_ADDR + ((ty0 + i) * 32 + SAVED_TX) * 2] & 0x3FF
+                for i in range(5)]
+
+    run(core, 40)
+    ring_chord_from_title(core)
+    start_game(core, tune=1)
+    run(core, 200)
+    core.memory.u32[base + off["score"]] = 4321
+    tap("START")                                  # the pause menu
+    tap("UP")                                     # MUSIC -> EXIT GAME, round
+    tap("A")
+    asked = box_rows()
+    walk = [answer()]
+    for key in ("DOWN", "UP", "UP", "UP", "DOWN"):
+        tap(key)
+        walk.append(answer())
+    if [r.replace("->", "> ").strip() for r in asked] != ["SURE?", "YES", "SAVE", "> NO"]:
+        failures.append(f"EXIT GAME no pregunta YES, SAVE, NO con la flecha en NO: {asked}")
+    elif walk != ["NO", "NO", "SAVE", "YES", "YES", "SAVE"]:
+        failures.append(f"la flecha de la pregunta da la vuelta o se salta SAVE: {walk}")
+    else:
+        print("  EXIT GAME pregunta YES, SAVE, NO con la flecha en NO; va a los "
+              "extremos y no mas alla, por SAVE")
+    kept = (board(), core.memory.u32[base + off["score"]])
+    tap("A", settle=60)                           # SAVE
+    saved = (magic(), core.memory.u8[mask_at] & 7)
+    press_start(core); run(core, 30)              # GAME SELECT, the chord on
+    ty0 = GAME_SELECT_TY - 1
+    shown = marks(ty0)
+    tap("START", settle=60)                       # 1 PLAYER: the game, back
+    back = (board(), core.memory.u32[base + off["score"]],
+            core.memory.u8[base + off["paused"]], magic(), core.memory.u8[mask_at] & 7)
+    if saved != (b"SAVE", 1):
+        failures.append(f"SAVE no deja la partida en la bateria: {saved}")
+    elif shown != [sq_on, 0, 0, 0, 0]:
+        failures.append(f"GAME SELECT no marca 1 PLAYER, y solo el: {shown}")
+    elif back[:3] != (kept[0], kept[1], 1):
+        failures.append(f"1 PLAYER no vuelve a la partida guardada, en pausa "
+                        f"(puntos {back[1]} y no {kept[1]}, pausa {back[2]})")
+    elif back[3] == b"SAVE" or back[4]:
+        failures.append("volver a la partida no la saca de la bateria")
+    else:
+        print("  SAVE: a la bateria; GAME SELECT marca 1 PLAYER; 1 PLAYER vuelve "
+              "a la partida en pausa, el mismo tablero y los mismos puntos, y la "
+              "saca de la bateria")
+
+    # ...AND IT OUTLIVES THE POWER SWITCH. Saved again; off and on.
+    tap("UP"); tap("A"); tap("UP"); tap("A", settle=60)
+    core.reset()
+    run(core, 60)
+    press_start(core); run(core, 30)              # no chord this time
+    plain = marks(GAME_SELECT_TY)
+    tap("START", settle=30)                       # 1 PLAYER: LEVEL SETTINGS
+    level = " ".join(tilemap_text(core, 9, 2, 28).split())
+    tap("B", settle=30)
+    core.set_keys(KEYS["L"], KEYS["R"]); run(core, 4); core.set_keys(); run(core, 20)
+    chord_marks = marks(GAME_SELECT_TY - 1)
+    tap("START", settle=60)
+    again = (board(), core.memory.u32[base + off["score"]],
+             core.memory.u8[base + off["paused"]])
+    if any(plain) or "LEVEL" not in level:
+        failures.append(f"sin el acorde GAME SELECT marca la partida ({plain}) o "
+                        f"1 PLAYER no empieza una nueva ({level!r})")
+    elif chord_marks[0] != sq_on or again != (kept[0], kept[1], 1):
+        failures.append(f"tras apagar, con el acorde la partida guardada no vuelve "
+                        f"(marca {chord_marks[0]}, puntos {again[1]})")
+    else:
+        print("  y sobrevive al apagado: sin el acorde GAME SELECT es el del "
+              "cartucho y 1 PLAYER empieza otra; con el, la marca y la partida")
+    del core, screen
+
+    # VERSUS COMPUTER asks with SAVE as well.
+    core, screen = load(rom_path)
+    run(core, 40)
+    ring_chord_from_title(core)
+    press_start(core); run(core, 10)
+    for _ in range(3):
+        tap("DOWN", settle=8)
+    press_start(core); run(core, 12)
+    press_start(core); run(core, 60)
+    tap("START"); tap("UP"); tap("A")
+    vs = box_rows()
+    if not any("SAVE" in r for r in vs):
+        failures.append(f"en VERSUS COMPUTER EXIT GAME no ofrece SAVE: {vs}")
+    else:
+        print("  VERSUS COMPUTER tambien ofrece SAVE")
+    del core, screen
+
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: SAVE guarda la partida, GAME SELECT la marca y su modo vuelve a ella.")
+    return 0

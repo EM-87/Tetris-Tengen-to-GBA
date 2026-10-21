@@ -70,12 +70,12 @@ static const uint8_t kNesPaletteRGB[64][3] = {
  * curve (x^(1/1.6), build 822ac6c) washed everything out, so the table is
  * the identity: every colour as the cartridge names it.
  *
- * ...AND THE OTHER TWO ARE THE PLAYER'S TO PUT BACK: SETTINGS' BRIGHT
- * (extras.c), for the front-lit and the unlit screens, x^(1/1.3) and
- * build 822ac6c's x^(1/1.6), black still black. One table in force at a time
- * (g_lcd_gamma, video.c); OFF, the first, is the identity, and what a
- * console that never set one shows. */
-#define LCD_CURVES 3
+ * ...AND THE OTHER THREE ARE THE PLAYER'S TO PUT BACK: OPTIONS' BRIGHTNESS
+ * (extras.c), for the front-lit and the unlit screens, x^(1/1.2), x^(1/1.4)
+ * and build 822ac6c's x^(1/1.6), black still black. One table in force at a
+ * time (g_lcd_gamma, video.c); the first, one box lit, is the identity, and
+ * what a console that never set one shows. */
+#define LCD_CURVES 4
 extern const uint8_t kLcdGamma[LCD_CURVES][32];
 extern const uint8_t *g_lcd_gamma;
 

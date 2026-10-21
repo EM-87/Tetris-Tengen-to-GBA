@@ -505,12 +505,6 @@
 #define POINTS_OBJ_TILE_BASE 512
 /* ...and the tile after the ten digits, for the spire's rim. */
 #define SPIRE_RIM_TILE (POINTS_OBJ_TILE_BASE + 10)
-/* ...and the title's bank once more, every pixel four colours up (1-3 are
- * 5-7), for the fireworks on a light background: the same palettes, whose
- * colours 5-7 are the title's own through bg_ink. See ink_sprite_palettes. */
-#define TITLE_OBJ_INKED_BASE 768
-typedef char title_obj_inked_fit[TITLE_OBJ_INKED_BASE >= SPIRE_RIM_TILE + 16 &&
-                                 TITLE_OBJ_INKED_BASE + 256 <= 1024 ? 1 : -1];
 #define PAL_OBJ_TITLE 5           /* banks 5-8: spritePalette1 */
 
 /* spritePalette0, which is the set the cartridge has installed while a game
@@ -1448,6 +1442,9 @@ typedef enum {
  * MENU_IN_TX + MENU_IN_W - 1, so the list starts fifteen columns before that
  * and the arrow two before the list. */
 #define GAME_SELECT_TX (MENU_IN_TX + MENU_IN_W - 1 - 1 - 15 + 1)
+/* ...and the column a saved game's box stands in, the last inside the frame
+ * (draw_game_select). */
+#define GAME_SAVED_TX (MENU_IN_TX + MENU_IN_W - 1)
 #define GAME_SELECT_ARROW_TX (GAME_SELECT_TX - 2)
 /* AND THE LIST IS FLUSH LEFT, NOT CENTRED. Every entry starts at the same
  * nametable column on the cartridge — $0C for all five of them, whether the
@@ -1836,7 +1833,14 @@ typedef enum {
  * tile's left so a row of them is a bar with a pixel between. */
 #define T_SQ_OFF (T_COPYRIGHT + 1)
 #define T_SQ_ON  (T_SQ_OFF + 1)
-typedef char ghost_tiles_fit[T_SQ_ON + 1 <= 1024 ? 1 : -1];
+/* ...AND THE PAUSE'S WALL ITS OWN BRICK: T_BRICK with the grout between its
+ * bricks in the ink, black on any background (upload_tiles). */
+#define T_WALL_BRICK (T_SQ_ON + 1)
+typedef char ghost_tiles_fit[T_WALL_BRICK + 1 <= 1024 ? 1 : -1];
+/* THE INK: the palette entry, black in every bank, that the cartridge's art
+ * draws its borrowed black in (ink_tile, video.c). The NES's four colours of
+ * a bank are 0-3; nothing else uses 15. */
+#define BG_INK_INDEX 15
 
 /* The frame's own tiles, out of the plaque the game over is drawn with. */
 #define T_BOX_TL 0x29
@@ -1948,6 +1952,14 @@ void suspend_save(const SuspendMenu *menu);
 void suspend_clear(void);
 bool suspend_load(SuspendMenu *menu);
 void suspend_apply(void);
+/* ...AND THE ONES EXIT GAME SAVES (suspend.c): one per mode a console plays
+ * alone, resumed from GAME SELECT and taken off the battery as it is. */
+#define SAVED_SLOTS 3
+int saved_slot(uint8_t game_mode);     /* -1: the mode cannot be saved */
+bool saved_has(uint8_t game_mode);
+void saved_write(const SuspendMenu *menu);
+bool saved_load(uint8_t game_mode, SuspendMenu *menu);   /* into suspend_apply's */
+void saved_clear_all(void);
 void match_resumed_paused(void);
 /* The chord's doors, the prototypes' among them, opened without its chirp:
  * for a game put back. */
@@ -2089,9 +2101,6 @@ extern int g_leader_row;
 bool leader_load(void);
 void leader_reset(void);
 void leader_erase_all(void);
-/* L+R+B held at power-on: the erase, asked twice (frontend.c). */
-bool erase_chord_held(void);
-void erase_records_prompt(void);
 void leader_reset_table(int table);
 void leader_use_table(int skin);   /* -1 release, 0.. the prototypes */
 /* The table a match goes in: its skin's, split by mode (GAME_*) on the
@@ -2205,6 +2214,8 @@ extern TengenTetromino g_shown_piece;
 extern TengenTetromino g_shown_piece2;
 uint8_t ai_input(void);
 extern bool g_pause_confirm;
+extern bool g_pause_can_save;   /* EXIT GAME offers SAVE (saved_slot) */
+extern bool g_pause_saving;     /* ...and it was chosen */
 void swallow_held_buttons(TengenGame *game);
 bool link_play_frame(uint8_t pressed, bool *quit);
 void link_match_begin(bool menu);
@@ -2253,9 +2264,9 @@ bool bricks_shown(void);
 void restore_brick_bank(void);
 
 /* extras.c: GAME SELECT'S OPTIONS, under the chord — a sixth line under
- * WITH COMPUTER and a page of its own: GAMMA, SOUND (the two volumes, in a
- * box over it), RUMBLE on a Game Boy Player, BACKGROUND, PROTOTYPES and
- * STATS (each a box), and ERASE SCORES, which only SELECT reaches and which
+ * WITH COMPUTER and a page of its own: BRIGHTNESS, MUSIC and EFFECTS (bars
+ * of boxes), RUMBLE on a Game Boy Player, BACKGROUND, PROTOTYPES and STATS
+ * (each a box over it), and ERASE DATA, which only SELECT reaches and which
  * erases everything kept — and the settings themselves, in force from
  * power-on whatever the chord (see g_settings), and this console's
  * lifetime figures. */
@@ -2267,17 +2278,20 @@ void restore_brick_bank(void);
 #define SET_COUNT      5
 #define SET_RUMBLE_OFF 0x01    /* SET_FLAGS: no rumble on a Game Boy Player */
 #define SET_FLAGS_ALL  0x01
-/* THE BACKGROUND, behind everything the cartridge leaves empty: the
- * cartridge's black, or white, light grey or ivory; on those the letters
- * that were white are black (bg_apply, video.c). */
-enum { BG_BLACK, BG_WHITE, BG_GREY, BG_IVORY, BG_COUNT };
+/* THE BACKGROUND, behind everything the cartridge leaves empty but the
+ * title: the cartridge's black, a grey of the port's own, dark or light, or
+ * ivory; on the light ones the letters that were white are black (bg_apply,
+ * video.c). No white: the blocks' highlights are white, and went into it. */
+enum { BG_BLACK, BG_DARK, BG_LIGHT, BG_IVORY, BG_COUNT };
+#define BG_NAMES { "BLACK", "DARK GREY", "LIGHT GREY", "IVORY" }
 typedef char save_settings_fit[
     SAVE_SETTINGS_OFF + SET_COUNT + 1 <= SAVE_MODE_OFF(0) ? 1 : -1];
 extern uint8_t g_settings[SET_COUNT];
 void settings_load(void);
 bool rumble_wanted(void);
 void bg_apply(void);
-bool bg_light(void);            /* anything but black */
+bool bg_light(void);            /* a light one, and not the title */
+void bg_screen(bool title);     /* the title is black whatever is set */
 uint8_t bg_ink(uint8_t nes);    /* a word's colour on it */
 /* THE LIFETIME FIGURES, this console's player's, every game added up; on the
  * battery at SAVE_STATS_OFF, clear of the tables and of the paused game. */

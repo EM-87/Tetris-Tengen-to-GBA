@@ -40,13 +40,30 @@ static void demo_music_back(void) {
     g_demo_mix = false;
 }
 
+#ifndef TENGEN_MULTIBOOT
+/* WHAT THE MENUS CHOSE, for a game going to the battery (suspend.c): the
+ * plaque's suspend and EXIT GAME's SAVE keep the same. */
+static SuspendMenu kept_menu(uint8_t game_mode, uint8_t start_level,
+                             const uint8_t *handicap) {
+    SuspendMenu m = {
+        .game_mode = game_mode, .start_level = start_level,
+        .music = g_music,
+        .handicap = { handicap[0], handicap[1] },
+        .title_skin = g_title_skin,
+        .unlocked = g_pause_unlocked, .mix_step = g_mix_step,
+        .hud = g_hud, .idle_palette = g_idle_palette,
+        .ai_last_piece = g_ai_last_piece,
+        .ai_last_partner = g_ai_last_partner,
+        .ai_frame = g_ai_frame,
+    };
+    return m;
+}
+#endif
+
 int main(void) {
     /* First: every screen from here on waits for its frame in vsync(), and
      * vsync() sleeps until an interrupt that this is what switches on. */
     irq_init();
-    /* Read before anything waits for the buttons to be let go (the splash
-     * does): see erase_records_prompt. */
-    bool erase_asked = erase_chord_held();
     /* A Wireless Adapter in the port, asked once (wireless.c): if one
      * answers, 2 PLAYER and COOPERATIVE go over the air. The Single-Pak copy
      * asks only if it came over the air itself — the adapter's loader wants
@@ -117,13 +134,6 @@ int main(void) {
     REG_BG3VOFS = STATS_LIFT_PX;
     REG_DISPCNT = DCNT_MODE0 | DCNT_BG0 | DCNT_BG1 | DCNT_BG2 | DCNT_BG3 |
                    DCNT_OBJ | DCNT_OBJ_1D;
-#ifndef TENGEN_MULTIBOOT
-    /* THE ERASE, asked twice, before anything reads the save again — the
-     * paused game on the battery included. */
-    if (erase_asked) erase_records_prompt();
-#else
-    (void)erase_asked;
-#endif
 
     Screen screen = SCREEN_TITLE;
     int leader_frames = 0;
@@ -422,6 +432,7 @@ int main(void) {
                 g_dance_frames = 0;
                 screen = SCREEN_PLAYING;
                 match_running = true;
+                g_pause_can_save = false;
                 over_frames = 0;
                 skin_begin_match(false, -1);
                 /* MUSIC_SUSPEND, which is demoStart's own second act
@@ -530,7 +541,26 @@ int main(void) {
                      * for: a partner who chose the other is not one. */
                     tengen_lobby_mode(&lobby, game_mode == GAME_COOP);
                     screen = SCREEN_LINK_WAIT;
-                } else {
+                }
+#ifndef TENGEN_MULTIBOOT
+                else if (g_pause_unlocked && saved_has(game_mode) &&
+                         saved_load(game_mode, &resume)) {
+                    /* A GAME OF THIS MODE SAVED (EXIT GAME's SAVE): straight
+                     * back into it, paused, as a game left on the plaque
+                     * comes back at power-on — LEVEL SETTINGS confirms
+                     * itself (`resuming`) — and off the battery with it.
+                     * Under the chord, where SAVE is: without it GAME SELECT
+                     * is the cartridge's, and a mode starts a game. */
+                    start_level = resume.start_level;
+                    g_music = resume.music;
+                    handicap[0] = resume.handicap[0];
+                    handicap[1] = resume.handicap[1];
+                    g_title_skin = resume.title_skin;
+                    resuming = true;
+                    screen = SCREEN_LEVEL_SELECT;
+                }
+#endif
+                else {
                     screen = SCREEN_LEVEL_SELECT;
                     menu_field = MENU_FIELD_LEVEL;
                 }
@@ -573,6 +603,14 @@ int main(void) {
              * "yes" and then "no" — which is how the handicap's first version
              * quietly ate the hidden tunes' chord. */
             bool chord = shoulder_chord();
+            /* A GAME COMING BACK goes straight through: a button held from
+             * power-on is not a choice on a page that is never seen — B would
+             * turn it back, LEFT move the level, the shoulders' chord change
+             * the tune. */
+            if (resuming) {
+                pressed = 0;
+                chord = false;
+            }
 
             /* UP/DOWN/SELECT MOVE THE CURSOR, LEFT/RIGHT CHANGE THE FIELD.
              * SELECT moving it the way DOWN does is the cartridge's
@@ -852,6 +890,8 @@ int main(void) {
                 g_dance_frames = 0;
                 screen = SCREEN_PLAYING;
                 match_running = true;
+                /* EXIT GAME offers SAVE in the modes a console plays alone. */
+                g_pause_can_save = saved_slot(game_mode) >= 0;
                 over_frames = 0;
                 skin_begin_match(false, -1);
                 g_front_tune = FRONT_NOTHING;
@@ -1162,6 +1202,7 @@ int main(void) {
                 link_match_begin(lobby.xe);
                 screen = SCREEN_PLAYING;
                 match_running = true;
+                g_pause_can_save = false;    /* half the game is on the other console */
                 over_frames = 0;
                 skin_begin_match(true, lobby.skin);
                 g_front_tune = FRONT_NOTHING;
@@ -1530,17 +1571,7 @@ int main(void) {
             bool keep = match_running && !quit_match && !g_linked &&
                         !g_demo && g_session.game.paused;
             if (keep && (!suspended || g_music != suspended_music)) {
-                SuspendMenu m = {
-                    .game_mode = game_mode, .start_level = start_level,
-                    .music = g_music,
-                    .handicap = { handicap[0], handicap[1] },
-                    .title_skin = g_title_skin,
-                    .unlocked = g_pause_unlocked, .mix_step = g_mix_step,
-                    .hud = g_hud, .idle_palette = g_idle_palette,
-                    .ai_last_piece = g_ai_last_piece,
-                    .ai_last_partner = g_ai_last_partner,
-                    .ai_frame = g_ai_frame,
-                };
+                SuspendMenu m = kept_menu(game_mode, start_level, handicap);
                 suspend_save(&m);
                 suspended = true;
                 suspended_music = g_music;
@@ -1641,6 +1672,15 @@ int main(void) {
                          ((!match_running || own_board_dead) &&
                           (pressed & leave_buttons)))) {
             g_pause_confirm = false;
+#ifndef TENGEN_MULTIBOOT
+            /* EXIT GAME's SAVE: the game to the battery as it stands, paused,
+             * before it is torn down; GAME SELECT brings it back. */
+            if (quit_match && g_pause_saving) {
+                SuspendMenu m = kept_menu(game_mode, start_level, handicap);
+                saved_write(&m);
+            }
+#endif
+            g_pause_saving = false;
             /* Quitting out from under a match still running on the other side
              * of the cable: the cable has to be told, and put away, exactly as
              * it would have been had both boards died. */

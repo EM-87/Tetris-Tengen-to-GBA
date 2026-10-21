@@ -151,6 +151,8 @@ def main():
                      help="check GAME SELECT's OPTIONS, their boxes and settings")
     ap.add_argument("--pausemenu", action="store_true",
                      help="check the L+R pause menu")
+    ap.add_argument("--save", action="store_true",
+                     help="check EXIT GAME's SAVE, GAME SELECT's mark and the resume")
     ap.add_argument("--quit-audio", action="store_true",
                      help="check quitting from the pause menu leaves the sound alive")
     ap.add_argument("--leaderboard", action="store_true",
@@ -267,6 +269,8 @@ def main():
         sys.exit(handtune_share_check(args.rom))
     if args.pausemenu:
         sys.exit(pausemenu_check(args.rom))
+    if args.save:
+        sys.exit(save_check(args.rom))
     if args.counters:
         sys.exit(counters_check(args.rom))
     if args.options:

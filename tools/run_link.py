@@ -1521,7 +1521,9 @@ def pause_check(rom):
     both(10)
     tap("UP", who=0)                                   # MUSIC -> EXIT, round
     tap("A", who=0)                                    # EXIT? ...
-    tap("DOWN", who=1)                                 # NO -> YES, from the slave
+    tap("UP", who=1)                                   # NO -> YES, from the slave
+    #                                                    (no SAVE over a cable, and
+    #                                                    the arrow does not wrap)
     tap("A", who=0)
     both(30)
     if read(cores, "g_linked") != [0, 0]:

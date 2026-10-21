@@ -127,7 +127,7 @@ const uint16_t kGameProbe[24] = {
  * missed made a check read the wrong thing and say nothing
  * (romcheck/harness.py, check_layout). The order is the reader's. */
 __attribute__((used))
-const uint16_t kCheckProbe[27] = {
+const uint16_t kCheckProbe[28] = {
     TILES_GAME_QUESTION, TILES_GAME_PERCENT,
     PMENU_RAISED_BASE, T_ARROW_TAIL, T_ARROW_HEAD,
     SCREEN_LEADER_HEAD_TY, SCREEN_LEADER_FIRST_TY, LEADER_ENTRIES,
@@ -146,6 +146,8 @@ const uint16_t kCheckProbe[27] = {
     (uint16_t)offsetof(TengenAi, plan_stage),
     /* ...and the tiles made for the ghost, the options' boxes and HOLD. */
     T_GHOST, T_CHECK_OFF, T_HOLD_LABEL,
+    /* ...and the wall's brick. */
+    T_WALL_BRICK,
 };
 __attribute__((used))
 const char kCheckRaised[] = PMENU_RAISED_CHARS;
@@ -461,11 +463,63 @@ bool shoulder_chord(void) {
     return pressed;
 }
 
+/* THE BLACK THE ART BORROWS FROM THE BACKDROP (kGameTileInk; see ink_masks
+ * in tools/extract_assets.py): the colour-0 pixels of the cartridge's art
+ * that the empty space round it does not reach — the shadows of the banner's
+ * letters, the line outside the braid — drawn in GAME_TILE_INK_INDEX, black
+ * in every bank (upload_palettes). On the cartridge's black nothing shows
+ * it; on another background (bg_apply) it keeps the art whole. `rows` has a
+ * bit per pixel, bit x for pixel x; in 4bpp a row is two halfwords, its
+ * leftmost pixel the lowest nibble. */
+static void ink_tile(unsigned t, const uint8_t *rows) {
+    vu16 *dst = MEM_CHARBLOCK(CHARBLOCK) + t * 16;
+    for (int y = 0; y < 8; y++)
+        for (int half = 0; half < 2; half++) {
+            uint16_t v = dst[y * 2 + half];
+            for (int n = 0; n < 4; n++)
+                if ((rows[y] >> (half * 4 + n)) & 1)
+                    v = (uint16_t)((v & ~(0xF << (4 * n))) | (BG_INK_INDEX << (4 * n)));
+            dst[y * 2 + half] = v;
+        }
+}
+
+/* ...the release's tile `art`'s, if it has any, on the slot `t` its art was
+ * put back in. */
+static void ink_game_tile(unsigned t, unsigned art) {
+#ifdef GAME_TILE_INK
+    for (int i = 0; i < GAME_TILE_INK_COUNT; i++)
+        if (kGameTileInk[i][0] == art) ink_tile(t, &kGameTileInk[i][1]);
+#else
+    (void)t;
+    (void)art;
+#endif
+}
+
 void upload_tiles(void) {
     vu16 *dst = MEM_CHARBLOCK(CHARBLOCK);
     const uint8_t *src = kGameTiles;
     for (unsigned i = 0; i < sizeof(kGameTiles); i += 2) {
         dst[i / 2] = (uint16_t)(src[i] | (src[i + 1] << 8));
+    }
+#ifdef GAME_TILE_INK
+    for (int i = 0; i < GAME_TILE_INK_COUNT; i++)
+        ink_tile(kGameTileInk[i][0], &kGameTileInk[i][1]);
+#endif
+    /* THE PAUSE'S WALL AND THE END PAGE'S CURTAIN, a brick of their own: the
+     * cartridge's lone block ($0F) with the grout between its bricks in the
+     * ink, where the block itself — the handicap's garbage, on the board —
+     * keeps the backdrop's colour as every block does. See T_WALL_BRICK. */
+    {
+        const uint8_t *b = kGameTiles + T_BRICK * 32;
+        uint8_t grout[8];
+        for (int y = 0; y < 8; y++) {
+            grout[y] = 0;
+            for (int x = 0; x < 8; x++)
+                if (!((b[y * 4 + x / 2] >> (4 * (x & 1))) & 0xF)) grout[y] |= (uint8_t)(1u << x);
+        }
+        vu16 *wall = dst + T_WALL_BRICK * 16;
+        for (int i = 0; i < 32; i += 2) wall[i / 2] = (uint16_t)(b[i] | (b[i + 1] << 8));
+        ink_tile(T_WALL_BRICK, grout);
     }
 
     /* THE PAUSE MENU'S HEADINGS, ONE PIXEL HIGHER. The cartridge's letters
@@ -622,13 +676,16 @@ void title_window(bool on) {
     }
 }
 
-/* THE SCREEN'S THREE CURVES (palette.h): the identity, x^(1/1.3) and
- * x^(1/1.6), each channel's five bits rounded to the nearest. */
+/* THE SCREEN'S FOUR CURVES (palette.h), OPTIONS' BRIGHTNESS: the identity,
+ * x^(1/1.2), x^(1/1.4) and x^(1/1.6), the exponent in even steps up to the
+ * brightest there was, each channel's five bits rounded to the nearest. */
 const uint8_t kLcdGamma[LCD_CURVES][32] = {
     {  0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15,
       16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31 },
-    {  0,  2,  4,  5,  6,  8,  9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
-      19, 20, 20, 21, 22, 23, 24, 25, 25, 26, 27, 28, 29, 29, 30, 31 },
+    {  0,  2,  3,  4,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15, 16, 17,
+      18, 19, 20, 21, 22, 22, 23, 24, 25, 26, 27, 28, 28, 29, 30, 31 },
+    {  0,  3,  4,  6,  7,  8, 10, 11, 12, 13, 14, 15, 16, 17, 18, 18,
+      19, 20, 21, 22, 23, 23, 24, 25, 26, 27, 27, 28, 29, 30, 30, 31 },
     {  0,  4,  6,  7,  9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
       21, 21, 22, 23, 24, 24, 25, 26, 26, 27, 28, 28, 29, 30, 30, 31 },
 };
@@ -637,7 +694,7 @@ const uint8_t *g_lcd_gamma = kLcdGamma[0];
 /* ANOTHER CURVE, AND THE COLOURS ON SCREEN THROUGH IT AT ONCE. Every palette
  * is written through the curve as it is loaded, so the ones a screen loads
  * for itself pick it up the next time it is drawn; these are the ones loaded
- * once at power-on, and the title's own, which is where BRIGHT is changed. */
+ * once at power-on, and the title's own; OPTIONS' BRIGHTNESS changes it. */
 void lcd_set_curve(int curve) {
     if (curve < 0 || curve >= LCD_CURVES) curve = 0;
     if (g_lcd_gamma == kLcdGamma[curve]) return;
@@ -653,19 +710,40 @@ void lcd_set_curve(int curve) {
  * Everything the cartridge leaves empty is the backdrop — colour 0 of every
  * bank is see-through on the GBA, as the NES's universal background is — so
  * one entry, palette 0's colour 0, is the whole background: the cartridge's
- * black, the NES's white ($30) or light grey ($10), or ivory, which the NES
- * has no colour for. A black inside the art is ink and stays.
+ * black, a grey of the port's own, dark or light, or ivory. The greys are
+ * none the NES has: its four — $2D, $00, $10, $3D, five-bit 7, 10, 19 and
+ * 20 — and its white (29) are every level-0 piece's shades and the
+ * sprites', and a board on one of them loses a shade into it. So 6 and 24.
+ * NO WHITE, then, and an ivory under the white: on white ($30) and on the
+ * first ivory, (31, 30, 26), the blocks' highlights went into the
+ * background.
  *
- * ON THE LIGHT ONES — all three — the letters that were white would vanish
- * into it, so the banks the words are drawn in take their colours through
- * bg_ink: white and the light greys black, the pale row ($31-$3C) the
- * middle one under it. A prototype's title keeps its words in its own
- * banks, and their white goes black (install_title_palette). The NES's
- * darker grey ($00) was tried and kept the white letters, but the red ones
- * — the title's, NEXT — all but went into it.
+ * NOT ON THE TITLE, which is the cartridge's picture at night: the fireworks
+ * are a night sky's, and the gems and ingots of its columns take their black
+ * from the backdrop. The title sets g_bg_title as it is drawn and every
+ * other screen clears it (bg_screen), and the title is black whatever the
+ * setting.
+ *
+ * ON THE LIGHT ONES the letters that were white would vanish into it, so the
+ * banks the words are drawn in take their colours through bg_ink: white and
+ * the light greys black, the pale row ($31-$3C) the middle one under it.
  * ----------------------------------------------------------------------- */
+static bool g_bg_title;
+
+static bool bg_is_light(int bg) {
+    return bg == BG_LIGHT || bg == BG_IVORY;
+}
+
 bool bg_light(void) {
-    return g_settings[SET_BG] != BG_BLACK;
+    return !g_bg_title && bg_is_light(g_settings[SET_BG]);
+}
+
+/* The screen being drawn is the title, or not: the backdrop and the words'
+ * banks follow if that changes what they are. */
+void bg_screen(bool title) {
+    if (g_bg_title == title) return;
+    g_bg_title = title;
+    bg_apply();
 }
 
 uint8_t bg_ink(uint8_t c) {
@@ -673,6 +751,9 @@ uint8_t bg_ink(uint8_t c) {
         if (c == 0x10 || c == 0x20 || c == 0x30 || c == 0x3D) return 0x0F;
         if (c > 0x30 && c < 0x3D) return (uint8_t)(c - 0x20);
     }
+    /* ...and on the dark grey the NES's own dark grey, the credits' and
+     * ERASE DATA's, would be all but the background: its light one. */
+    if (!g_bg_title && g_settings[SET_BG] == BG_DARK && c == 0x00) return 0x10;
     return c;
 }
 
@@ -682,10 +763,10 @@ void set_credit_colour(void) {
 }
 
 void bg_apply(void) {
-    static const uint16_t kIvory = 0x6BDF;        /* (31, 30, 26) */
-    switch (g_settings[SET_BG]) {
-    case BG_WHITE: MEM_PALETTE[0] = nes_colour_to_gba(0x30); break;
-    case BG_GREY:  MEM_PALETTE[0] = nes_colour_to_gba(0x10); break;
+    static const uint16_t kIvory = 27 | 26 << 5 | 22 << 10;
+    switch (g_bg_title ? BG_BLACK : g_settings[SET_BG]) {
+    case BG_DARK:  MEM_PALETTE[0] = lcd_colour(rgb15(6, 6, 6)); break;
+    case BG_LIGHT: MEM_PALETTE[0] = lcd_colour(rgb15(24, 24, 24)); break;
     case BG_IVORY: MEM_PALETTE[0] = lcd_colour(kIvory); break;
     default:       MEM_PALETTE[0] = nes_colour_to_gba(TENGEN_BACKDROP_INDEX); break;
     }
@@ -708,6 +789,8 @@ void bg_apply(void) {
 }
 
 void upload_palettes(void) {
+    /* The ink's colour, black, in every bank (ink_tile). */
+    for (int bank = 0; bank < 16; bank++) MEM_PALETTE[bank * 16 + BG_INK_INDEX] = 0;
     upload_palette_set(PAL_GAME_BASE, kRomPalette_bg_game, MEM_PALETTE);
     upload_palette_set(PAL_TITLE_BASE, kRomPalette_bg_title, MEM_PALETTE);
     upload_palette_set(PAL_MENU_BASE, kRomPalette_bg_menu, MEM_PALETTE);
@@ -859,6 +942,13 @@ static void upload_skin_play(int skin) {
         vu16 *dst = base + slot * 16;
         for (int b = 0; b < 32; b += 2)
             dst[b / 2] = (uint16_t)(src[b] | (src[b + 1] << 8));
+        /* ...each with its ink (ink_tile): a skin's own, or the release's. */
+#ifdef SKIN_INK
+        if (skin >= 0) ink_tile(slot, &kSkinSlotInk[skin][i * 8]);
+#endif
+        if (skin < 0)
+            ink_game_tile(slot, slot >= SKIN_PANEL_RUN_BASE
+                                ? kSkinPanelRunRelease[slot - SKIN_PANEL_RUN_BASE] : slot);
     }
 }
 static void upload_skin_banner(int skin) {
@@ -867,6 +957,10 @@ static void upload_skin_banner(int skin) {
     const uint8_t *src = kSkinBannerArt[skin];
     for (unsigned i = 0; i < (unsigned)kSkinBannerCount[skin] * 32; i += 2)
         dst[i / 2] = (uint16_t)(src[i] | (src[i + 1] << 8));
+#ifdef SKIN_INK
+    for (int t = 0; t < kSkinBannerCount[skin]; t++)
+        ink_tile(SKIN_BANNER_BASE + (unsigned)t, &kSkinBannerInk[skin][t * 8]);
+#endif
 }
 static void upload_skin_stats(int skin) {
     if (skin < 0) return;          /* the release draws its own one run */
@@ -1238,16 +1332,6 @@ void upload_sprite_tiles(void) {
     for (unsigned i = 0; i < sizeof(kTitleObjTiles); i += 2) {
         tdst[i / 2] = (uint16_t)(kTitleObjTiles[i] | (kTitleObjTiles[i + 1] << 8));
     }
-    /* ...and again with every coloured pixel four up, for the fireworks on
-     * a light background (TITLE_OBJ_INKED_BASE). */
-    _Static_assert(sizeof(kTitleObjTiles) <= 256 * 32, "the title's bank is 256 tiles");
-    vu16 *idst = MEM_OBJ_TILES + TITLE_OBJ_INKED_BASE * 16;
-    for (unsigned i = 0; i < sizeof(kTitleObjTiles); i += 2) {
-        unsigned v = kTitleObjTiles[i] | (kTitleObjTiles[i + 1] << 8), up = 0;
-        for (int n = 0; n < 16; n += 4)
-            if ((v >> n) & 15) up |= (((v >> n) & 15) + 4) << n;
-        idst[i / 2] = (uint16_t)up;
-    }
 
     /* The HUD labels, with the header grid's vertical stubs masked out of
      * them; see read_hud_labels in tools/extract_assets.py. */
@@ -1298,33 +1382,27 @@ void upload_sprite_palettes(void) {
 }
 
 /* THE SPRITES DRAWN FOR A BLACK BACKDROP, on a light one (OPTIONS'
- * BACKGROUND; see bg_apply). Three of them would not read:
+ * BACKGROUND; see bg_apply). Two of them would not read:
  *
  *   the line-clear puff, flat black (piecePaletteIndexA, "Line clears",
  *     main.asm.txt:5394-5396) because the backdrop was: what it does is let
- *     the backdrop swallow the row, so on a light one it is the backdrop;
+ *     the backdrop swallow the row, so on another it is the backdrop;
  *   the drop points, pale yellow ($37) in a one-player game: through bg_ink,
- *     as the words are;
- *   the title's fireworks, pale on what is now a light sky. Through bg_ink
- *     too — but the cathedral's own sprites share their four palettes colour
- *     for colour, so the fireworks draw from a copy of the tiles four colours
- *     up (TITLE_OBJ_INKED_BASE), and colours 5-7 of those palettes are where
- *     the inked set goes. The cathedral keeps the picture's colours.
+ *     as the words are.
  *
- * The dancers keep theirs: drawn with a black outline, they read on any of
- * the four. On black, all of it is the cartridge's own again. */
+ * The title's fireworks are always on black (bg_screen). The dancers keep
+ * their colours: drawn with a black outline, they read on any of them. On
+ * black, all of it is the cartridge's own again. */
 void ink_sprite_palettes(void) {
     const uint8_t *clear = kRomPiecePalettes[10];
     vu16 *cpal = MEM_PALETTE_OBJ + PAL_OBJ_CLEAR * 16;
+    bool other = !g_bg_title && g_settings[SET_BG] != BG_BLACK;
     for (int i = 0; i < 3; i++)
-        cpal[1 + i] = bg_light() ? MEM_PALETTE[0] : nes_colour_to_gba(clear[i]);
+        cpal[1 + i] = other ? MEM_PALETTE[0] : nes_colour_to_gba(clear[i]);
     for (int b = 0; b < 4; b++)
-        for (int i = 1; i < 4; i++) {
+        for (int i = 1; i < 4; i++)
             MEM_PALETTE_OBJ[(PAL_OBJ_GAME + b) * 16 + i] =
                 nes_colour_to_gba(bg_ink(kRomPalette_obj_game[b * 4 + i]));
-            MEM_PALETTE_OBJ[(PAL_OBJ_TITLE + b) * 16 + 4 + i] =
-                nes_colour_to_gba(bg_ink(kRomPalette_obj_title[b * 4 + i]));
-        }
 }
 
 void oam_set(int index, int x, int y, uint16_t tile, bool hflip, int bank) {

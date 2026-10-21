@@ -282,8 +282,10 @@ story behind each; the item number is in brackets.
   whole are only trusted by the build that wrote them: the record carries a
   hash of that build's date and time, and another build ignores it. It is
   put back by starting the match the way LEVEL SETTINGS does (`resuming`
-  confirms it) and copying the game over the one just dealt, so everything
-  a match lays out is laid out. Written as the plaque goes up and when its
+  confirms it, and the page reads no buttons that frame: one held from
+  power-on would turn it back, move the level or ring the chord) and
+  copying the game over the one just dealt, so everything a match lays out
+  is laid out. Written as the plaque goes up and when its
   tune changes; wiped off the plaque and by the soft reset.
 - **The Game Boy Player is found by its logo** (`gbp.c`), shown at power-on
   before the publisher's on every GBA, as the games that supported it did:
@@ -374,9 +376,9 @@ story behind each; the item number is in brackets.
   822ac6c) washed everything out on the backlit SP: emulators DARKEN to
   imitate the unlit panels (an LCD gamma of about 4 against a monitor's
   2.2), games of the day drew bright art to make up for them, and the NES
-  palette was made for a television. So the brighter two (x^(1/1.3) and
-  822ac6c's) are the player's choice, GAMMA on GAME SELECT's OPTIONS
-  page, kept on the battery. A check that names a colour passes the NES
+  palette was made for a television. So the brighter three (x^(1/1.2),
+  x^(1/1.4) and 822ac6c's x^(1/1.6)) are the player's choice, BRIGHTNESS
+  on GAME SELECT's OPTIONS page, kept on the battery. A check that names a colour passes the NES
   one through the same table (`on_screen` in romcheck/harness.py: keep the
   two in step), on a console that has not chosen one.
 - **Sleep waits for the keys to settle** (`wait_keys_settled`): every key
@@ -686,9 +688,14 @@ story behind each; the item number is in brackets.
   kick; a guess at any of it is a placement it aims at and misses.
 - **The music's extra steps are spent in `audio_frame`**: a match frame sets
   `g_tempo_quarters` right before it, and the call clears it, so the show, the
-  menus and the game-over tune never speed up. The extra step is the whole
-  `nes_audio_frame` (engine AND apply), because what the engine wrote is
-  applied by comparing frame to frame. A hand-entered tune under a jingle is
+  menus and the game-over tune never speed up. The extra step is ONE MORE
+  STEP OF THE TUNE'S NOTE CLOCKS (`nes_audio_tempo_step`): each voice counts
+  its notes down by its own rate ($0266:$025B less $0342, LD39B, the release's
+  $027C:$0271 beside it), and only the voices under class $40 take the extra
+  step, so the effects keep their time. Running the whole `nes_audio_frame`
+  again, as it did, played the line clear's zip at the tune's speed too. What
+  the step would run out is left to the engine's next frame, a frame late at
+  most. A hand-entered tune under a jingle is
   DUCKED (`handtune_duck`: silent, clock running), never suspended: over a
   cable a suspended tune falls behind the other console's.
 - **The NES pulse sweep is emulated** (`gba/nes_audio.c`, PulseSweep): the
@@ -763,27 +770,42 @@ cartridge): rung on the title it puts the first on; and GAME SELECT's
 sixth line under it, OPTIONS, under WITH COMPUTER (the list a row higher
 and its heading lifted four pixels, GAME_SELECT_LIFT_PX), a page as LEVEL
 SETTINGS is (`extras.c`, `draw_menu_page`), what each line holds opening in
-a box over it in the pause's frame: GAMMA, three boxes, the screen's
-curve; SOUND, the tunes' volume and the effects' apart, four boxes each;
-RUMBLE, one box, on a Game Boy Player only; BACKGROUND, BLACK, WHITE, GREY
-or IVORY, the backdrop (palette 0's colour 0) and on the light three the
-words' banks inked (`bg_ink`: white and the light greys black, the pale row
-the one under it) and the sprites drawn for a black stage retouched
-(`ink_sprite_palettes`: the line-clear puff the backdrop's colour, the drop
-points inked, the title's fireworks drawn from a copy of their tiles four
-colours up, TITLE_OBJ_INKED_BASE, because the cathedral's sprites share
-their four palettes colour for colour); PROTOTYPES, the skins by the
-publisher each was made for (`kSkinMenuNames`, the recipes' `menu`), worn
-by the page at once; STATS, this console's lifetime figures
+a box over it in the pause's frame, everything CENTRED on the screen (the
+page's names and values one block; a box an even number of tiles each way
+in the middle, its heading centred in it, on the offset layer half a tile
+over when its length is odd, and its lines a block centred under it):
+BRIGHTNESS, four boxes, the screen's curve; MUSIC and EFFECTS, the tunes'
+volume and the effects' apart, four boxes each; RUMBLE under them, one box,
+on a Game Boy Player only; and the ones that open a box after them:
+BACKGROUND, BLACK, DARK GREY, LIGHT GREY or IVORY, the backdrop (palette
+0's colour 0) everywhere but the title, which is at night whatever is
+chosen (`bg_screen`: its fireworks, and the gems and ingots of its
+columns, take their black from the backdrop) — the greys the port's own (6
+and 24 of 31), none of the NES's, which are the pieces' shades; no white,
+whose blocks' highlights went into it — and on the light two the words'
+banks inked (`bg_ink`: white and the light greys black, the pale row the
+one under it), the line-clear puff the backdrop's colour and the drop points
+inked (`ink_sprite_palettes`), and THE BLACK THE ART BORROWS FROM THE
+BACKDROP kept black: every colour-0 pixel of the cartridge's screens that
+the empty space does not reach is ink (`ink_masks` in
+tools/extract_assets.py, flooded from the screens' blank cells; for a skin,
+`skin_ink`, the release's screens with its art in them), drawn in
+BG_INK_INDEX, black in every bank (`ink_tile`, `kGameTileInk`,
+`kSkinSlotInk`, `kSkinBannerInk`) — the banner's letter shadows, the line
+outside the braid, the prototypes' frets — and the pause's wall a brick of
+its own with its grout in it (`T_WALL_BRICK`); PROTOTYPES, the skins by the
+publisher each was made for (`kSkinMenuNames`, the recipes' `menu`), listed
+in the order they were made (`kSkinMenuOrder`, the recipes' `order`;
+`g_skin_rows`), worn by the page at once; STATS, this console's lifetime figures
 (`LifetimeStats`, SAVE_STATS_OFF, counted from the deltas of the player on
 this console's own TengenStats — never the demo's, the computer's or the
 cable rival's — and saved when the game is still or every minute of it);
-and ERASE SCORES a row lower in the credits' grey, which UP and DOWN step
+and ERASE DATA a row lower in the credits' grey, which UP and DOWN step
 over and only SELECT, a line at a time, goes on to from STATS; A on it
 asks ARE YOU SURE? and then ARE YOU REALLY SURE?, NO chosen both times,
 and YES twice erases EVERYTHING kept — the tables, the lifetime figures,
-the pause's switches, the settings, the paused game — for a console passed
-on (`erase_everything`; `--options`). The settings (`g_settings`,
+the pause's switches, the settings, the paused game and the saved ones —
+for a console passed on (`erase_everything`; `--options`). The settings (`g_settings`,
 SAVE_SETTINGS_OFF) are the console's, in force from power-on chord or not;
 only the page is behind the chord. The five sounds the engine carries and
 the cartridge never asks for each have a place now: $0C a new record,
@@ -826,11 +848,11 @@ STATS bars, under the chord, scaled to the tallest once one would run off the
 top of the box (`piece_total`, the port's uncapped count; `--statsrel`); and
 under the chord — the match's: over a cable the master's — three touches of
 Tetris DX's (`--chordfx`, and over the cable `tempo_check`): the music a
-quarter faster from a stack of twelve rows and a half from fifteen
-(`stack_tempo`, an extra step of the engine in `audio_frame`), the board
+quarter faster from a stack of twelve rows and a half from fifteen, the
+tune and not the effects (`stack_tempo`, `nes_audio_tempo_step`), the board
 hidden while paused behind a wall of grey bricks — the cartridge's lone
 block $0F in every cell, in the level-0 greys whatever the level, in a bank
-of their own (`T_BRICK`, `PAL_BRICK_BANK`; not the rival's board a paused
+of their own (`T_WALL_BRICK`, `PAL_BRICK_BANK`; not the rival's board a paused
 race shows), rising from the floor a row every two frames and coming down
 from the top a row a frame once the game runs again, the end page's curtain
 at a pause's pace (`pause_wall_step`) — and the engine's
@@ -855,7 +877,14 @@ screen sends the game to a console with no cartridge); sleep (L+R+SELECT
 anywhere but a match in play — a solo match pauses first and sleeps on its
 plaque, a linked one not at all; A, B, START or SELECT wakes it) and soft
 reset (A+B+START+SELECT), as commercial games had; a paused solo game kept
-on the battery through a power cycle, as Tetris DX does (`suspend.c`); the
+on the battery through a power cycle, as Tetris DX does (`suspend.c`), and
+under the chord EXIT GAME's SAVE: the question YES, SAVE, NO, the arrow on
+NO and no wrapping, so YES is two moves away; a game saved per mode one
+console plays alone (1 PLAYER, VERSUS COMPUTER, WITH COMPUTER; SRAM
+$4800-$5FFF, the suspend's record each), marked on GAME SELECT with a box
+in its own column (GAME_SAVED_TX) and resumed, paused, by choosing the
+mode, which takes it off the battery — under the chord only, the cartridge's
+GAME SELECT without it (`saved_*`, `--save`); the
 publisher's logo on white at power-on, then the licensors': Mirrorsoft's,
 whose licence the cartridge names on GAME SELECT ($A1EF), and the Tetris
 logo, as the licence has every Tetris open (`splash.c`, from images you
@@ -864,7 +893,7 @@ those two: 256 colours for their gradients; all gitignored like the
 cartridge's art; never on the Single-Pak copy, which never shows a
 splash); every
 colour through one table for the GBA's LCD (`kLcdGamma`: the identity
-unless OPTIONS' GAMMA picks one of the two brighter curves for an unlit
+unless OPTIONS' BRIGHTNESS picks one of the three brighter curves for an unlit
 screen, `lcd_set_curve` loading the power-on palettes again through it); the Game Boy Player's logo at power-on, its rumble under the chord, and on it the
 cartridge's three settings pages instead of the one (`gbp.c`,
 `draw_tv_page`); 2 PLAYER and COOPERATIVE over the Wireless Adapter, found by
@@ -872,8 +901,9 @@ itself at power-on or plugged in later, the LINK CABLE screen saying
 WIRELESS, and Single-Pak over it as well (`wireless.c`);
 "EXIT GAME", not "EXIT", on the pause menu (a player took it for closing the
 menu), and its question "SURE?", not "EXIT?" again (the raised heading
-letters, PMENU_RAISED_CHARS, with the arrow's two tiles after them); the high scores erased by L+R+B held at power-on, asked twice with NO
-chosen (`erase_records_prompt`); a high scores table per mode on the release
+letters, PMENU_RAISED_CHARS, with the arrow's two tiles after them); (the
+high scores erased by L+R+B held at power-on went: a held button away from
+a wiped console; ERASE DATA is the erase); a high scores table per mode on the release
 (1 PLAYER's is the cartridge's; 2 PLAYER, COOPERATIVE, VERSUS and WITH
 COMPUTER one each, the mode's name in the heading where HIGH SCORES was),
 which LEFT and RIGHT walk on the title's SELECT page under the chord

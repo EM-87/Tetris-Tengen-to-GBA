@@ -129,6 +129,10 @@ void nes_audio_play(uint8_t track_id);
  * frame, at the same rate the NES called it from its NMI. */
 void nes_audio_frame(void);
 
+/* One more step of the tune's note clocks and not the effects': the tempo
+ * a high stack plays at under the chord (audio_frame). */
+void nes_audio_tempo_step(void);
+
 /* The channels the engine is sounding: $4015's low four bits (pulse 1,
  * pulse 2, triangle, noise) as its last frame left them. */
 uint8_t nes_audio_engine_channels(void);

@@ -287,18 +287,13 @@ def build_has_protos(rom_path):
             "#define SCREEN_PROTO_AVAILABLE 1" in open(proto_h).read())
 
 
-OPTIONS_PAGE_TY = 9      # the OPTIONS page's first line (PAGE_TY, gba/extras.c)
+OPTIONS_PAGE_TY = 10     # the OPTIONS page's first line (PAGE_TY, gba/extras.c)
 
 
-def step_skin(core, step=1, settle=24):
-    """From the title, the chord rung, the skin `step` places on in the list
-    the OPTIONS page keeps (gba/extras.c): START to GAME SELECT, its arrow on
-    1 PLAYER, UP to OPTIONS — the sixth line, under the chord — and A onto
-    the page; DOWN to PROTOTYPES (a line lower with a Game Boy Player's
-    RUMBLE above it) and A opens its box, whose arrow starts on the skin on
-    the title; DOWN or UP walk it round, A puts the one under it on, and
-    three B's go back down to the title. g_title_skin after, or None without
-    the symbol."""
+def _to_prototypes(core):
+    """From the title, the chord rung: START to GAME SELECT, its arrow on
+    1 PLAYER, UP to OPTIONS — the sixth line, under the chord — A onto the
+    page, DOWN to PROTOTYPES and A into its box."""
     rom = getattr(core, "_tengen_rom", "")
 
     def tap(name, settle_=12):
@@ -309,36 +304,67 @@ def step_skin(core, step=1, settle=24):
     tap("A", 10)
     depth, _ = game_state_address(rom, "g_extras_depth")
     if depth is not None and core.memory.u8[depth] != 1:
-        raise RuntimeError("step_skin: UP from 1 PLAYER and A did not open OPTIONS")
+        raise RuntimeError("UP from 1 PLAYER and A did not open OPTIONS")
     row, _ = game_state_address(rom, "g_extras_row")
-    for _ in range(6):
+    for _ in range(8):
         line = core.memory.u8[row] if row is not None else 0
         if "PROTOTYPES" in tilemap_text(core, OPTIONS_PAGE_TY + line):
             break
         tap("DOWN", 6)
     else:
-        raise RuntimeError("step_skin: no PROTOTYPES line on the OPTIONS page")
+        raise RuntimeError("no PROTOTYPES line on the OPTIONS page")
     tap("A", 10)
-    for _ in range(abs(step)):
-        tap("DOWN" if step > 0 else "UP", 8)
+    return tap
+
+
+def _leave_prototypes(core, tap, settle):
     tap("A", 10)
     tap("B", 10)                       # the box
     tap("B", 12)                       # the page, back to GAME SELECT
     tap("B", settle)                   # the title
+
+
+def step_skin(core, step=1, settle=24):
+    """From the title, the chord rung, the skin `step` lines along from the
+    one on in the list the OPTIONS page keeps (gba/extras.c) — the release
+    and then the builds in the order they were made — and A puts it on.
+    g_title_skin after, or None without the symbol."""
+    rom = getattr(core, "_tengen_rom", "")
+    tap = _to_prototypes(core)
+    for _ in range(abs(step)):
+        tap("DOWN" if step > 0 else "UP", 8)
+    _leave_prototypes(core, tap, settle)
     skin, _ = game_state_address(rom, "g_title_skin")
     return None if skin is None else core.memory.u8[skin]
+
+
+def choose_skin(core, skin, settle=24):
+    """...and the same for skin number `skin` (0 the release, 1 the first
+    dump given, and so on), wherever the list has it: the line whose skin it
+    is in g_skin_rows. g_title_skin after."""
+    rom = getattr(core, "_tengen_rom", "")
+    rows, _ = game_state_address(rom, "g_skin_rows")
+    at, _ = game_state_address(rom, "g_extras_row")
+    tap = _to_prototypes(core)
+    for _ in range(8):
+        if rows is None or core.memory.u8[rows + core.memory.u8[at + 2]] == skin:
+            break                       # g_extras_row[XP_PROTOS]
+        tap("DOWN", 8)
+    _leave_prototypes(core, tap, settle)
+    got, _ = game_state_address(rom, "g_title_skin")
+    return None if got is None else core.memory.u8[got]
 
 
 def put_skin_on(core, settle=24):
     """From the title, a prototype's title on it, the game's chord rung by
     the way: L+R on the title, which is that chord and finds the skins, or —
-    rung already, when L+R there stands down — the next one down the
-    OPTIONS page's list (step_skin). True when one went on (g_title_skin),
-    False on a build without them."""
+    rung already, when L+R there stands down — the first of them, the first
+    dump given, off the OPTIONS page's list (choose_skin). True when one went
+    on (g_title_skin), False on a build without them."""
     rom = getattr(core, "_tengen_rom", "")
     found, _ = game_state_address(rom, "g_title_skin_found")
     if found is not None and core.memory.u8[found]:
-        step_skin(core, 1, settle)
+        choose_skin(core, 1, settle)
     else:
         core.set_keys(KEYS["L"], KEYS["R"])
         run(core, 4)
@@ -517,6 +543,7 @@ _LAYOUT_DEFAULT = {
     "ai_target_x": 6, "ai_target_o": 7, "ai_settle": 8, "ai_soft_drop": 9,
     "ai_coop_aware": 10, "ai_smart": 12, "ai_plan_have": 420,
     "ai_plan_stage": 0, "ghost": 989, "check_off": 997, "hold_label": 1001,
+    "wall_brick": None,
 }
 
 
@@ -538,7 +565,7 @@ def check_layout(rom_path):
         base = 0x08000000 if addr >= 0x08000000 else 0x02000000
         data = open(rom_path, "rb").read()
         v = [int.from_bytes(data[addr - base + 2 * i:addr - base + 2 * i + 2], "little")
-             for i in range(27)]
+             for i in range(28)]
         at = raised - base
         text = data[at:data.index(b"\0", at)].decode("ascii")
         keys = ("question", "percent", "raised_base", "arrow_tail", "arrow_head",
@@ -547,7 +574,7 @@ def check_layout(rom_path):
                 "save_entry_bytes", "save_name", "save_mode", "save_mode_sums",
                 "ai_target_x", "ai_target_o", "ai_settle", "ai_soft_drop",
                 "ai_coop_aware", "ai_smart", "ai_plan_have", "ai_plan_stage",
-                "ghost", "check_off", "hold_label")
+                "ghost", "check_off", "hold_label", "wall_brick")
         layout = dict(zip(keys, v))
         layout["raised"] = text
         _LAYOUT_CACHE[rom_path] = layout
