@@ -1113,7 +1113,10 @@ def end_page_check(rom_path):
     def page(core):
         return [tilemap_text(core, r, PAGE_TX, PAGE_TX + 10) for r in range(PF_H)]
 
-    T_BRICK = 0x0F
+    # The curtain's brick: the wall's own (T_WALL_BRICK, the lone block $0F
+    # with its grout in the ink), read out of the ROM.
+    from .harness import check_layout
+    T_BRICK = check_layout(rom_path)["wall_brick"]
 
     def tiles(core, first, last, rows=range(PF_H)):
         """The main map's tile ids in those columns and rows, the plaque's
@@ -1641,7 +1644,7 @@ def unpause_check(rom_path):
     # (pause_box_forget).
     core, screen = load(rom_path)       # `screen` must stay alive; see load()
     start(core, 4, True)
-    for k in ("START", "UP", "A", "UP", "A"):   # the menu, EXIT GAME, YES
+    for k in ("START", "UP", "A", "UP", "UP", "A"):   # the menu, EXIT GAME, YES
         tap(core, k, 20)
     run(core, 120)
     press_start(core); run(core, 10)    # GAME SELECT, on WITH COMPUTER still
@@ -1923,17 +1926,25 @@ def suspend_check(rom_path):
 
 
 def erase_check(rom_path):
-    """L+R+B AT POWER-ON ERASES THE HIGH SCORES, ASKED TWICE.
+    """L+R+B AT POWER-ON ERASES NOTHING ANY MORE.
 
-    The question comes up with NO chosen; B (or NO) goes on to the game as
-    if nothing was asked — here, the paused game kept on the battery comes
-    back. YES and YES again puts every table back to the cartridge's cold
-    one and drops the paused game with them (gba/frontend.c,
-    erase_records_prompt).
+    It used to put a question up — ERASE ALL HIGH SCORES?, twice — and the
+    owner had it taken out: a held button away from a wiped console. The
+    erase is OPTIONS' ERASE DATA now (--options). Held at power-on with a
+    game paused on the battery and a record on the table, nothing is asked,
+    the paused game comes back as it always does, and the table is whole.
+    The buttons are not a choice on the page the game comes back through
+    either: B there used to turn it back to GAME SELECT, and the shoulders'
+    chord to uncover the hidden tunes and put one on.
     """
     base, why = game_state_address(rom_path)
     if base is None:
         skip(f"{why}")
+        return 0
+    music, why = game_state_address(rom_path, "g_music")
+    unlocked, why2 = game_state_address(rom_path, "g_pause_unlocked")
+    if music is None or unlocked is None:
+        skip(f"{why or why2}")
         return 0
     off = game_offsets(rom_path)
     core, screen = load(rom_path)
@@ -1957,35 +1968,29 @@ def erase_check(rom_path):
     press_start(core); run(core, 12)
     press_start(core); run(core, 60)
     tap("START")                              # paused: on the battery
+    tables = bytes(core.memory.u8[0x0E000000 + i] for i in range(0x400))
+    tune = core.memory.u8[music]
     if not susp():
         failures.append("no hay partida guardada de la que partir")
-    core.reset(); hold(["L", "R", "B"], 10); hold([], 20)
-    if "ERASE ALL HIGH SCORES?" not in text() or "> NO" not in text():
-        failures.append(f"L+R+B al encender no pregunta, con NO elegido: "
-                        f"{text()[:80]!r}")
-    tap("B"); run(core, 40)
-    if not susp() or not core.memory.u8[base + off["paused"]]:
-        failures.append("decir que no borra algo, o no sigue a la partida")
+    core.reset(); hold(["L", "R", "B"], 10); hold([], 60)
+    if "ERASE" in text() or "SURE" in text():
+        failures.append(f"L+R+B al encender aun pregunta: {text()[:80]!r}")
+    elif not susp() or not core.memory.u8[base + off["paused"]]:
+        failures.append("con L+R+B al encender la partida en pausa no vuelve")
+    elif core.memory.u8[music] != tune or core.memory.u8[unlocked]:
+        failures.append(f"con L+R+B al encender la partida vuelve con otra "
+                        f"musica ({tune} -> {core.memory.u8[music]}) o con el "
+                        f"truco ({core.memory.u8[unlocked]})")
+    elif bytes(core.memory.u8[0x0E000000 + i] for i in range(0x400)) != tables:
+        failures.append("L+R+B al encender toca las tablas")
     else:
-        print("  L+R+B al encender pregunta con NO elegido; B sigue a la "
-              "partida guardada")
-    core.reset(); hold(["L", "R", "B"], 10); hold([], 20)
-    tap("DOWN"); tap("A")
-    if "ARE YOU SURE?" not in text() or "> NO" not in text():
-        failures.append(f"no pregunta otra vez con NO elegido: {text()[:80]!r}")
-    tap("DOWN"); tap("A"); run(core, 30)
-    magic = bytes(core.memory.u8[0x0E000000 + i] for i in range(4))
-    if susp() or magic != b"LOGG":
-        failures.append(f"SI y SI no deja la memoria borrada y escrita "
-                        f"(partida {susp()}, firma {magic!r})")
-    else:
-        print("  SI dos veces: tablas de fabrica escritas y la partida "
-              "guardada borrada")
+        print("  L+R+B al encender no pregunta nada: la partida en pausa vuelve "
+              "con su musica, y las tablas siguen ahi")
     for f in failures:
         print(f"FALLA: {f}")
     if failures:
         return 1
-    print("OK: borrar los records pregunta dos veces y solo borra con SI.")
+    print("OK: al encender ya no hay borrado; el de verdad es ERASE DATA.")
     return gbp_check(rom_path)
 
 
@@ -2183,9 +2188,9 @@ def gbp_check(rom_path):
               f"y apagada luego")
 
     # ...AND THE PLAYER'S OWN SWITCH FOR IT, on GAME SELECT's OPTIONS page,
-    # on a Player and only there (gba/extras.c): a third line, RUMBLE, its
-    # box lit; A puts it out, and the same TETRIS under the chord leaves the
-    # motor alone.
+    # on a Player and only there (gba/extras.c): a fourth line, RUMBLE, under
+    # EFFECTS, its box lit; A puts it out, and the same TETRIS under the
+    # chord leaves the motor alone.
     harness.SHOW_SPLASH[0] = True
     try:
         core4, screen4 = load(rom_path)
@@ -2204,8 +2209,9 @@ def gbp_check(rom_path):
     ptap("START"); ptap("L+R")
     ptap("UP")                                  # OPTIONS, the sixth line
     ptap("A", 20)
-    ptap("DOWN", 6); ptap("DOWN", 6)            # GAMMA, SOUND, RUMBLE
-    rumble_row = " ".join(tilemap_text(core4, 11, 2, 28).split())
+    ptap("DOWN", 6); ptap("DOWN", 6); ptap("DOWN", 6)   # BRIGHTNESS, MUSIC,
+    #                                             EFFECTS, and RUMBLE under them
+    rumble_row = " ".join(tilemap_text(core4, 13, 2, 28).split())
     ptap("A", 20)
     settings, _ = game_state_address(rom_path, "g_settings")
     off_now = settings is not None and core4.memory.u8[settings + 3] & 1

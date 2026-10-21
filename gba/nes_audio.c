@@ -459,6 +459,50 @@ uint8_t nes_rom_peek(uint16_t addr) {
  * is a return value rather than a write to RAM. */
 uint8_t nes_rom_acc(void) { return g_cpu.a; }
 
+/* ----------------------------------------------------------------------- *
+ * THE TEMPO, THE TUNE'S ALONE (g_tempo_quarters, audio_frame)
+ *
+ * Each voice times its notes on a countdown, $0266:$025B, less the voice's
+ * own rate $0342 every frame (LD39B); a note ADDS its length to what is left
+ * (LD4F1, LD587), so the time stays exact however the count runs out. Beside
+ * it the release's, $027C:$0271, set two steps short of the note's end
+ * (LD528) and counted down at the same rate (LD3B2).
+ *
+ * One step more of the two, for the tune's voices only (class under
+ * NES_EFFECT_CLASS), is the tune a frame further on and the effects not:
+ * running the whole engine again, as the tempo did, played the line clear's
+ * zip at the tune's speed too. What the step would run out — a note's end, a
+ * release — it leaves to the engine's own next frame, a frame late at most,
+ * the overshoot carried into the next note as the engine carries its own.
+ * ----------------------------------------------------------------------- */
+#define NES_VOICES           11       /* `cpx #$0B`, LD4D7 */
+#define NES_RAM_VOICE_END    0x020E   /* $FF: the voice is done (LD36B) */
+#define NES_RAM_NOTE_LO      0x025B
+#define NES_RAM_NOTE_HI      0x0266
+#define NES_RAM_RELEASE_LO   0x0271
+#define NES_RAM_RELEASE_HI   0x027C
+#define NES_RAM_VOICE_RATE   0x0342
+
+void nes_audio_tempo_step(void) {
+    uint8_t *ram = g_nes_ram;
+    for (int x = 0; x < NES_VOICES; x++) {
+        uint8_t klass = ram[NES_RAM_VOICE_CLASS + x];
+        if (!klass || klass >= NES_EFFECT_CLASS || ram[NES_RAM_VOICE_END + x] == 0xFF ||
+            (int8_t)ram[NES_RAM_NOTE_HI + x] < 0)
+            continue;
+        uint8_t rate = ram[NES_RAM_VOICE_RATE + x];
+        uint8_t lo = ram[NES_RAM_NOTE_LO + x];
+        ram[NES_RAM_NOTE_LO + x] = (uint8_t)(lo - rate);
+        if (lo < rate) ram[NES_RAM_NOTE_HI + x]--;
+        if ((int8_t)ram[NES_RAM_NOTE_HI + x] < 0) continue;   /* the engine's, next frame */
+        uint8_t rlo = ram[NES_RAM_RELEASE_LO + x];
+        uint8_t rhi = (uint8_t)(ram[NES_RAM_RELEASE_HI + x] - (rlo < rate ? 1 : 0));
+        if ((int8_t)rhi < 0) continue;                        /* ...and so is this */
+        ram[NES_RAM_RELEASE_LO + x] = (uint8_t)(rlo - rate);
+        ram[NES_RAM_RELEASE_HI + x] = rhi;
+    }
+}
+
 /* True if any of a channel's registers hold a different value than they did
  * last frame. */
 static bool changed(const uint8_t *apu, int first, int last, uint8_t enable_bit) {

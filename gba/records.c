@@ -239,8 +239,9 @@ void leader_reset(void) {
 }
 
 /* EVERY TABLE BACK TO THE CARTRIDGE'S COLD ONE, in memory and in the save:
- * what the erase at power-on does (erase_records_prompt), after asking
- * twice. */
+ * the tables' part of OPTIONS' ERASE DATA (erase_everything, extras.c),
+ * after asking twice. (There was a chord at power-on for it as well, L+R+B;
+ * it went, a held button away from a wiped console.) */
 void leader_erase_all(void) {
     leader_reset();
     leader_save();

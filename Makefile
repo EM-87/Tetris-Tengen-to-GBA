@@ -349,6 +349,7 @@ gba-check: $(GBA_ROM)
 	python3 tools/run_rom.py $(GBA_ROM) --modetables
 	python3 tools/run_rom.py $(GBA_ROM) --coophud
 	python3 tools/run_rom.py $(GBA_ROM) --pausemenu
+	python3 tools/run_rom.py $(GBA_ROM) --save
 	python3 tools/run_rom.py $(GBA_ROM) --quit-audio
 	python3 tools/run_rom.py $(GBA_ROM) --stats
 	python3 tools/run_rom.py $(GBA_ROM) --effects

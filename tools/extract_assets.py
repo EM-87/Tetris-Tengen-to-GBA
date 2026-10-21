@@ -901,7 +901,7 @@ def plant_glyphs(tiles: bytes) -> bytes:
     return bytes(out)
 
 
-def emit_tiles_header(name, guard, tiles, source, extra=()):
+def emit_tiles_header(name, guard, tiles, source, extra=(), tail=()):
     count = len(tiles) // GBA_TILE_BYTES
     lines = [
         "/*",
@@ -927,7 +927,9 @@ def emit_tiles_header(name, guard, tiles, source, extra=()):
     ]
     for i in range(0, len(tiles), 16):
         lines.append("    " + ", ".join(f"0x{b:02X}" for b in tiles[i:i + 16]) + ",")
-    lines += ["};", "", f"#endif /* {guard}_H */", ""]
+    lines += ["};"]
+    lines += list(tail)
+    lines += ["", f"#endif /* {guard}_H */", ""]
     return "\n".join(lines)
 
 
@@ -1059,6 +1061,169 @@ def read_braid_frame(nametable, attributes):
     runs = {name: [[tile(c + dx, r + dy) for dx in range(w)] for dy in range(h)]
             for name, ((c, r), (w, h)) in BRAID_RUNS.items()}
     return corners, runs, banks.pop()
+
+
+# ---------------------------------------------------------------------------
+# THE BLACK THE ART BORROWS FROM THE BACKDROP.
+#
+# Colour 0 of a tile is see-through, on the NES as on the GBA, and the
+# cartridge's art leans on it: the shadows of the TETRIS banner's letters, the
+# gaps of the braid's weave and the line along the screen's edge outside the
+# braid are all colour 0, black because the backdrop is. On another backdrop
+# (OPTIONS' BACKGROUND, gba/video.c) they take its colour and the art comes
+# apart: the letters lose their shadows, and a light line runs round the
+# screen.
+#
+# So every colour-0 pixel of the cartridge's own screens is sorted here. The
+# ones the empty space reaches — flooded through colour-0 pixels from every
+# blank cell of the screen: the board, the boxes, the space round the banner
+# — are background. The ones it does not reach are shut inside the art, and
+# are ink: the GBA draws them in INK_INDEX, which is black in every bank
+# (upload_palettes), so the black is black on any backdrop and the
+# cartridge's own on its own.
+#
+# A tile is the same art wherever it stands, so a pixel is ink if it is shut
+# in on every screen the tile is on — but for the braid's, which are ink if
+# they are on any: its outer line is shut in against the screen's edge on one
+# screen and open beside a panel on another, and a fine black line round the
+# braid is what the cartridge shows where a light one round the screen is
+# not. The lettering is left alone (its holes are shut in, and are not ink),
+# and so are the blocks, which are not art but the game. A screen that stands
+# in open space on the GBA — the banner, beside the board — is flooded from
+# its edges as well.
+INK_INDEX = 15
+INK_SKIP = set(range(0x01, 0x10)) | set(range(0x30, 0x3A)) | set(range(0x41, 0x5B))
+
+
+def _pixels_4bpp(tiles4: bytes, t: int):
+    b = tiles4[t * 32:(t + 1) * 32]
+    return [[(b[y * 4 + x // 2] >> (4 * (x & 1))) & 15 for x in range(8)] for y in range(8)]
+
+
+def _shut_in(pix, blank, tmap, w, h, open_edges):
+    """{tile: [mask, ...]}, one mask per cell the tile stands in: bit y*8+x
+    set for a colour-0 pixel the empty space does not reach."""
+    W, H = w * 8, h * 8
+    zero = bytearray(W * H)
+    reached = bytearray(W * H)
+    queue = []
+    for ty in range(h):
+        for tx in range(w):
+            t = tmap[ty * w + tx]
+            for y in range(8):
+                for x in range(8):
+                    i = (ty * 8 + y) * W + tx * 8 + x
+                    if pix[t][y][x] == 0:
+                        zero[i] = 1
+                        if t in blank:
+                            reached[i] = 1
+                            queue.append(i)
+    if open_edges:
+        for i in list(range(W)) + list(range((H - 1) * W, H * W)) + \
+                list(range(0, H * W, W)) + list(range(W - 1, H * W, W)):
+            if zero[i] and not reached[i]:
+                reached[i] = 1
+                queue.append(i)
+    while queue:
+        i = queue.pop()
+        x, y = i % W, i // W
+        for j, ok in ((i - 1, x > 0), (i + 1, x < W - 1), (i - W, y > 0), (i + W, y < H - 1)):
+            if ok and zero[j] and not reached[j]:
+                reached[j] = 1
+                queue.append(j)
+    out = {}
+    for ty in range(h):
+        for tx in range(w):
+            t = tmap[ty * w + tx]
+            m = 0
+            for y in range(8):
+                for x in range(8):
+                    i = (ty * 8 + y) * W + tx * 8 + x
+                    if zero[i] and not reached[i]:
+                        m |= 1 << (y * 8 + x)
+            out.setdefault(t, []).append(m)
+    return out
+
+
+def ink_masks(tiles4: bytes, screens, braid: set, skip=INK_SKIP) -> dict:
+    """{tile: mask} for the tiles with ink, from `screens`, a list of
+    (tile map, width, height, flooded from its edges too)."""
+    pix = [_pixels_4bpp(tiles4, t) for t in range(len(tiles4) // 32)]
+    blank = {t for t, p in enumerate(pix) if not any(v for row in p for v in row)}
+    uses = {}
+    for tmap, w, h, open_edges in screens:
+        for t, masks in _shut_in(pix, blank, tmap, w, h, open_edges).items():
+            uses.setdefault(t, []).extend(masks)
+    ink = {}
+    for t, masks in uses.items():
+        if t in blank or t in skip:
+            continue
+        m = 0 if t in braid else (1 << 64) - 1
+        for one in masks:
+            m = m | one if t in braid else m & one
+        if m:
+            ink[t] = m
+    return ink
+
+
+# The release's screens, as main() composed them, for the skins' ink: a
+# skin's art goes into the release's own slots, so its screens are the
+# release's with that art in them (emit_skin_play). (tiles, screens, braid)
+_INK_RELEASE = None
+
+
+def _ink_rows(mask: int) -> list:
+    return [(mask >> (8 * y)) & 0xFF for y in range(8)]
+
+
+def skin_ink(play) -> tuple:
+    """A skin's ink: eight rows for each of its slots (the release's screens
+    with its art in them; the slots above the cartridge's 256 none), and for
+    each tile of its banner art (its banner and its logo, both standing in
+    open space)."""
+    slot_rows = [[0] * 8 for _ in play["slots"]]
+    if _INK_RELEASE is not None:
+        tiles, screens, braid = _INK_RELEASE
+        tiles = bytearray(tiles)
+        mine = set()
+        for slot, art in zip(play["slots"], play["tiles"]):
+            if slot < 256:
+                tiles[slot * 32:(slot + 1) * 32] = bytes(art)
+                mine.add(slot)
+        ink = ink_masks(bytes(tiles), screens, braid | mine)
+        slot_rows = [_ink_rows(ink.get(slot, 0)) if slot in mine else [0] * 8
+                     for slot in play["slots"]]
+    art = b"".join(bytes(t) for t in play["banner_art"])
+    grid = play["banner"]
+    maps = [([i for row in grid for i in row], len(grid[0]), len(grid), True)]
+    if play["logo"]:
+        logo = play["logo"]
+        maps.append(([i for row in logo for i in row], len(logo[0]), len(logo), True))
+    ink = ink_masks(art, maps, set(), skip=set())
+    banner_rows = [_ink_rows(ink.get(i, 0)) for i in range(len(play["banner_art"]))]
+    return slot_rows, banner_rows
+
+
+def ink_lines(ink: dict) -> list:
+    """The C for tiles_game.h: each tile with ink, then its eight rows, bit x
+    the row's pixel x."""
+    lines = [
+        "",
+        "/* THE BLACK THE ART BORROWS FROM THE BACKDROP: the pixels of these tiles",
+        " * the empty space does not reach, drawn in GAME_TILE_INK_INDEX, black in",
+        " * every bank. See ink_masks in tools/extract_assets.py. */",
+        "#define GAME_TILE_INK 1",
+        f"#define GAME_TILE_INK_INDEX {INK_INDEX}",
+        f"#define GAME_TILE_INK_COUNT {max(len(ink), 1)}",
+        "static const uint8_t kGameTileInk[GAME_TILE_INK_COUNT][9] = {",
+    ]
+    for t, m in sorted(ink.items()):
+        rows = [(m >> (8 * y)) & 0xFF for y in range(8)]
+        lines.append(f"    {{ 0x{t:02X}, " + ", ".join(f"0x{r:02X}" for r in rows) + " },")
+    if not ink:
+        lines.append("    { 0 },")
+    lines.append("};")
+    return lines
 
 
 # ---------------------------------------------------------------------------
@@ -1699,6 +1864,7 @@ PROTO_RECIPES = {
     "c229f45adcfb7b385472dca79636bed7": {
         "label": "TETRIS, Nintendo-licensed",
         "menu": "NINTENDO",
+        "order": 3,
         "rows": _rows((4, 19), (24, 29)),
         "bank": 1,
     },
@@ -1732,6 +1898,7 @@ PROTO_RECIPES = {
     "ac327eca3d9f9c169210adc9ccfe8344": {
         "label": "TENGEN PRESENTS TETRIS",
         "menu": "ATARI",
+        "order": 2,
         "rows": _rows((1, 4), (6, 9), (10, 23), (28, 29)),
         "bank": 1,
     },
@@ -1748,6 +1915,7 @@ PROTO_RECIPES = {
     "087bde3f4dd561c60fd03b65d7b21fca": {
         "label": "THE SOVIET MIND GAME",
         "menu": "MIRRORSOFT",
+        "order": 1,
         "rows": _rows((1, 6), (10, 24), (28, 29)),
         "bank": 1,
     },
@@ -1761,6 +1929,7 @@ PROTO_RECIPES = {
     "e81d2b5d223599dc33fe4e615ac1eeb6": {
         "label": "THE SOVIET MIND GAME, redrawn",
         "menu": "MIRRORSOFT 2",
+        "order": 1,
         "rows": _rows((1, 6), (10, 24), (28, 29)),
         "bank": 1,
     },
@@ -2563,7 +2732,7 @@ def read_prototype(path):
     if recipe:
         rows, cols, bank = recipe["rows"], PROTO_COLS, recipe["bank"]
         label, how = recipe["label"], "recipe"
-        menu = recipe["menu"]
+        menu, order = recipe["menu"], recipe.get("order")
     else:
         bank = proto_pattern_table(screen, chr_rom)
         fit = auto_compose(screen, chr_rom, bank)
@@ -2574,6 +2743,7 @@ def read_prototype(path):
         rows, cols = fit
         label, how = f"unknown screen (md5 {key})", "automatic"
         menu = None             # numbered as it is listed (emit_proto_header)
+        order = None            # ...and listed after the known ones
     if (bank + 1) * CHR_BANK > len(chr_rom):
         return None, f"{path} no tiene banco CHR {bank}"
     tiles, banks = compose_proto_title(screen, rows, cols)
@@ -2598,6 +2768,7 @@ def read_prototype(path):
     return {
         "label": label,
         "menu": menu,
+        "order": order,
         "how": how,
         "source": path,
         "tiles": tiles,
@@ -2765,6 +2936,17 @@ def emit_proto_header(skins, notes):
               "static const char *const kSkinMenuNames[SCREEN_PROTO_COUNT] = {",
               "    " + ", ".join(f'"{n}"' for n in names),
               "};", ""]
+    # ...AND THE ORDER IT LISTS THEM IN, the order the builds were made in as
+    # the recipes give it (`order`: Mirrorsoft's, then Tengen's, the
+    # Nintendo-licensed one last), the release above them all; a dump with
+    # no recipe after them. The skins themselves keep the dumps' order, which
+    # the save's tables are laid out by: this is the list's alone. Each entry
+    # is a skin, from 1.
+    rows = sorted(range(len(skins)), key=lambda i: (skins[i].get("order") or 99, i))
+    lines += ["#define SKIN_MENU_ORDER 1",
+              "static const uint8_t kSkinMenuOrder[SCREEN_PROTO_COUNT] = {",
+              "    " + ", ".join(str(i + 1) for i in rows),
+              "};", ""]
     _table(lines,
            f"static const uint8_t kRomPalette_bg_proto[SCREEN_PROTO_COUNT][16] = {{",
            [s["palette"] for s in skins], lambda b: f"0x{b:02X}", 16)
@@ -2918,6 +3100,27 @@ def emit_skin_play(skins):
     _table(lines,
            "static const uint8_t kSkinLogoPalette[SCREEN_PROTO_COUNT][4] = {",
            [p["logo_palette"] for p in plays], lambda b: f"0x{b:02X}", 4)
+
+    # THE BLACK THEIR ART BORROWS FROM THE BACKDROP, as the release's does
+    # (ink_masks, kGameTileInk): eight rows a slot and a banner tile.
+    inks = [skin_ink(p) for p in plays]
+    lines += [
+        "/* THE BLACK THE SKINS' ART BORROWS FROM THE BACKDROP: eight rows, bit x",
+        " * for pixel x, for each slot and each banner tile, drawn in the ink",
+        " * (ink_tile, gba/video.c). See skin_ink in tools/extract_assets.py. */",
+        "#define SKIN_INK 1",
+    ]
+    _table(lines,
+           "static const uint8_t kSkinSlotInk[SCREEN_PROTO_COUNT]"
+           "[SKIN_SLOT_COUNT * 8] = {",
+           [[r for rows in slot for r in rows] for slot, _ in inks],
+           lambda b: f"0x{b:02X}", 16)
+    _table(lines,
+           "static const uint8_t kSkinBannerInk[SCREEN_PROTO_COUNT]"
+           "[SKIN_BANNER_TILES * 8] = {",
+           [[r for rows in banner for r in rows] + [0] * (8 * (width - len(banner)))
+            for _, banner in inks],
+           lambda b: f"0x{b:02X}", 16)
 
     lines += [
         "",
@@ -3576,6 +3779,23 @@ def main() -> int:
     audio_base, audio_bytes, audio_span = extract_audio_prg(rom)
     audio_golden = record_audio_golden(rom, AUDIO_GOLDEN_TRACK, AUDIO_GOLDEN_FRAMES)
 
+    game_tiles = plant_glyphs(convert_tiles(rom.chr_bank(0)))
+    braid_corners, braid_runs, _ = read_braid_frame(nametable, attributes)
+    braid = {t for part in list(braid_corners.values()) + list(braid_runs.values())
+             for row in part for t in row}
+    banner_tiles, _ = read_banner(nametable, attributes)
+    ink_screens = [
+        (menu_tiles, 30, 20, False),
+        (tiles, 30, len(tiles) // 30, False),
+        (coop_tiles, 30, len(coop_tiles) // 30, False),
+        (lead_tiles, 30, len(lead_tiles) // 30, False),
+        ([t for row in banner_tiles for t in row], len(banner_tiles[0]),
+         len(banner_tiles), True),
+    ]
+    ink = ink_masks(game_tiles, ink_screens, braid)
+    global _INK_RELEASE
+    _INK_RELEASE = (game_tiles, ink_screens, braid)
+
     outputs = {
         "audio_prg.h": emit_audio_header(audio_base, audio_bytes, audio_span, src),
         "screen_menu.h": emit_menu_header(menu_tiles, menu_palettes, src),
@@ -3589,9 +3809,9 @@ def main() -> int:
         # ...and the two glyphs that are not the cartridge's, planted in
         # slots the cartridge left empty. See plant_glyphs.
         "tiles_game.h": emit_tiles_header(
-            "kGameTiles", "TILES_GAME",
-            plant_glyphs(convert_tiles(rom.chr_bank(0))), f"{src} [game]",
-            extra=tuple((name, tile) for name, tile, _, _ in PLANTED_GLYPHS)),
+            "kGameTiles", "TILES_GAME", game_tiles, f"{src} [game]",
+            extra=tuple((name, tile) for name, tile, _, _ in PLANTED_GLYPHS),
+            tail=ink_lines(ink)),
         "tiles_dancers.h": emit_tiles_header(
             "kDancerTiles", "TILES_DANCERS", convert_tiles(rom.chr_bank(1)), f"{src} [dancers]"),
         # CHR bank 3 is the title screen's SPRITE bank: the cathedral overlay

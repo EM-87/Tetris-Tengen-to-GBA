@@ -3,8 +3,9 @@ Everything before a match: the title, its skins and sprites,
 GAME SELECT, the credits, the demo, the cable lobby alone.
 """
 import os
+import re
 from .harness import (
-    skip, put_skin_on, step_skin, build_has_protos, PAL_BRICK_BANK, CHARBLOCK_ADDR,
+    _leave_prototypes, _to_prototypes, skip, put_skin_on, step_skin, choose_skin, build_has_protos, PAL_BRICK_BANK, CHARBLOCK_ADDR,
     CATHEDRAL_SPRITES, CELL_BLOCK, CELL_WALL, CREDITS, CREDIT_FRAMES, CREDIT_PORT, CREDIT_TY,
     DEMO_END_WATCH_FRAMES, DEMO_START_FRAME, DEMO_WATCH_FRAMES, GAME_SELECT_LONGEST, GAME_SELECT_ROWS,
     GAME_SELECT_TX, GAME_SELECT_TY, HANDICAP_ROW, KEYS,
@@ -212,7 +213,8 @@ def skin_check(rom_path):
 
     # ...Y AL REVES: el acorde de los menus encuentra tambien los prototipos.
     # De vuelta al titulo, L+R ya no hace nada, y la lista de OPTIONS
-    # (step_skin: GAME SELECT, OPTIONS, PROTOTYPES, DOWN, A) pone el primero.
+    # (choose_skin: GAME SELECT, OPTIONS, PROTOTYPES, su linea, A) pone el
+    # mismo que el L+R del titulo.
     other, other_screen = load(rom_path)    # `other_screen` must stay alive
     run(other, 40)
     other_release = [other.memory.u16[SCREENBLOCK_ADDR + (r * 32 + c) * 2]
@@ -236,7 +238,7 @@ def skin_check(rom_path):
     if lone != other_release:
         failures.append("L o R a solas en el titulo, tras el acorde, cambian la "
                         "pantalla")
-    step_skin(other, 1, settle=12)
+    choose_skin(other, 1, settle=12)
     stepped = [other.memory.u16[SCREENBLOCK_ADDR + (r * 32 + c) * 2]
                for r in range(SCREEN_H // TILE) for c in range(SCREEN_TW_TILES)]
     if still != other_release:
@@ -260,10 +262,14 @@ def skin_check(rom_path):
     # HOWEVER MANY SKINS the build was given, the list must walk all of them
     # and come back — and each must be its OWN screen, not the same tiles
     # twice, which is what a swap that forgot to re-upload the prototype's
-    # pattern table would look like.
-    seen = [release, proto]
+    # pattern table would look like. From the release, IN THE ORDER THE
+    # BUILDS WERE MADE (g_skin_rows, the recipes' `order`): the list's, not
+    # the dumps'.
+    choose_skin(core, 0, settle=12)
+    seen, walked = [release], []
+    rows_at, _ = game_state_address(rom_path, "g_skin_rows")
     for _ in range(LIMIT_SKINS):
-        step_skin(core, 1, settle=12)
+        walked.append(step_skin(core, 1, settle=12))
         now = frame_tiles()
         if now == release:
             break
@@ -274,9 +280,18 @@ def skin_check(rom_path):
     else:
         failures.append(f"la lista de skins no vuelve al release en "
                          f"{LIMIT_SKINS} pasos")
+    listed = ([core.memory.u8[rows_at + i] for i in range(1, len(seen))] + [0]
+              if rows_at is not None else walked)
+    if proto not in seen:
+        failures.append("la lista de OPTIONS no pasa por la skin que pone el L+R "
+                        "del titulo")
+    elif walked != listed:
+        failures.append(f"la lista de OPTIONS no recorre las skins en su orden: "
+                        f"{walked}, no {listed}")
     if not failures:
         print(f"  tras el acorde, la lista de OPTIONS recorre {len(seen) - 1} "
-              "skin(s) distinta(s) y vuelve al titulo del release")
+              f"skin(s) distinta(s), en su orden {walked[:-1]}, y vuelve al "
+              "titulo del release")
 
     # ...Y HACIA ARRIBA TAMBIEN, que es de lo que iba el cambio de L y R: con
     # cuatro skins, volver a la que acabas de pasar no puede costar dar la
@@ -395,6 +410,8 @@ def skin_check(rom_path):
               f"({sorted(skin_blocks)}) donde el release usa "
               f"{len(plain_blocks)} graficos unidos")
 
+    skin_ink(rom_path, failures)
+
     for f in failures:
         print(f"FALLA: {f}")
     if failures:
@@ -402,6 +419,119 @@ def skin_check(rom_path):
     print("OK: L+R recorre el titulo del release y los de los prototipos, "
           "y la skin llega al tablero.")
     return 0
+
+
+SKIN_BANNER_BASE = 832          # gba/port.h
+BG_INK_INDEX = 15               # gba/port.h
+
+
+def header_array(rom_path, header, name):
+    """The numbers of array `name` in a header generated beside the ROM's
+    build (gba/<header>), flat, in order; None when it is not there."""
+    path = os.path.join(os.path.dirname(rom_path), "..", "gba", header)
+    if not os.path.exists(path):
+        return None
+    m = re.search(r"\b%s\[[^=]*=\s*\{(.*?)\};" % name, open(path).read(), re.S)
+    if not m:
+        return None
+    body = re.sub(r"/\*.*?\*/", "", m.group(1), flags=re.S)
+    return [int(v, 0) for v in re.findall(r"0[xX][0-9A-Fa-f]+|\d+", body)]
+
+
+def skin_ink(rom_path, failures):
+    """THE BLACK A SKIN'S ART BORROWS FROM THE BACKDROP (ink_tile, from
+    upload_skin_play and upload_skin_banner; gba/video.c). Read on the
+    OPTIONS page itself, which wears a skin the moment PROTOTYPES' A picks
+    it: each prototype's slots and banner hold the ink's colour exactly
+    where the extractor's masks put it (kSkinSlotInk, kSkinBannerInk) and
+    nowhere else; and the release's slots hold its own (kGameTileInk) before
+    any skin goes on and when it is picked again — none of a prototype's
+    left, and none of its own missing. (The title would hide a release put
+    back without its ink: leaving it uploads every tile again.)"""
+    slots = header_array(rom_path, "screen_proto.h", "kSkinSlots")
+    slot_ink = header_array(rom_path, "screen_proto.h", "kSkinSlotInk")
+    banner_ink = header_array(rom_path, "screen_proto.h", "kSkinBannerInk")
+    counts = header_array(rom_path, "screen_proto.h", "kSkinBannerCount")
+    run_art = header_array(rom_path, "screen_proto.h", "kSkinPanelRunRelease")
+    game_ink = header_array(rom_path, "tiles_game.h", "kGameTileInk")
+    worn, why = game_state_address(rom_path, "g_title_skin")
+    if (not (slots and slot_ink and banner_ink and counts and run_art and game_ink)
+            or worn is None):
+        if build_has_protos(rom_path):
+            failures.append(f"la ROM trae prototipos y no se puede mirar la tinta "
+                            f"de las skins ({why or 'su cabecera no la trae'})")
+        else:
+            skip("sin prototipos no hay tinta de skins que mirar")
+        return
+    banner_tiles = len(banner_ink) // 8 // len(counts)
+    # The release's masks, slot by slot: the ink of the tile whose art the
+    # slot holds — the two panel slots above 255 hold another's (see
+    # SKIN_PANEL_RUN_BASE in gba/screen_proto.h).
+    release_ink = {game_ink[i]: game_ink[i + 1:i + 9] for i in range(0, len(game_ink), 9)}
+    run_base = min(slots[i] for i in range(len(slots)) if slots[i] > 0xFF)
+    release_masks = [release_ink.get(run_art[t - run_base] if t >= run_base else t, [0] * 8)
+                     for t in slots]
+    core, screen = load(rom_path)           # `screen` must stay alive; see load()
+    _ = screen
+
+    def nibbles(t):
+        at = CHARBLOCK_ADDR + t * 32
+        return [(core.memory.u8[at + i // 2] >> (4 * (i & 1))) & 15 for i in range(64)]
+
+    def slot_tiles():
+        return [nibbles(t) for t in slots]
+
+    def misplaced(tiles, masks):
+        """Pixels inked where the mask has none, or not where it has."""
+        return sum(((rows[p // 8] >> (p % 8)) & 1) != (tile[p] == BG_INK_INDEX)
+                   for tile, rows in zip(tiles, masks) for p in range(64))
+
+    run(core, 40)
+    ring_chord_from_title(core)
+    tap = _to_prototypes(core)              # the box, its arrow on the release
+    release = misplaced(slot_tiles(), release_masks)
+    inked, wrong, seen = 0, [], []
+    for _ in range(len(counts)):
+        tap("DOWN", 8)
+        tap("A", 12)
+        skin = core.memory.u8[worn] - 1
+        seen.append(skin + 1)
+        if not 0 <= skin < len(counts):
+            break
+        n = counts[skin]
+        first = skin * len(slots)
+        slot_masks = [slot_ink[(first + i) * 8:(first + i + 1) * 8]
+                      for i in range(len(slots))]
+        first = skin * banner_tiles
+        banner_masks = [banner_ink[(first + t) * 8:(first + t + 1) * 8] for t in range(n)]
+        inked += sum(bin(v).count("1") for m in slot_masks + banner_masks for v in m)
+        bad = (misplaced(slot_tiles(), slot_masks) +
+               misplaced([nibbles(SKIN_BANNER_BASE + t) for t in range(n)], banner_masks))
+        if bad:
+            wrong.append(f"skin {skin + 1}: {bad}")
+    tap("DOWN", 8)                          # round to the release
+    tap("A", 12)
+    back = (core.memory.u8[worn], misplaced(slot_tiles(), release_masks))
+    _leave_prototypes(core, tap, 24)
+    if sorted(seen) != list(range(1, len(counts) + 1)):
+        failures.append(f"PROTOTYPES no pone cada skin una vez: {seen}")
+    elif not inked:
+        failures.append("las mascaras de tinta de las skins estan vacias: asi "
+                        "no se prueba nada")
+    elif wrong:
+        failures.append(f"la tinta de las skins no esta donde dicen sus "
+                        f"mascaras (pixeles fuera de sitio: {', '.join(wrong)})")
+    elif not sum(map(any, release_masks)):
+        failures.append("ninguna casilla del release tiene tinta: asi no se "
+                        "prueba nada")
+    elif release or back != (0, 0):
+        failures.append(f"las casillas del release no llevan su tinta: "
+                        f"{release} pixeles fuera de sitio antes de las skins, "
+                        f"{back[1]} al volver a el (skin {back[0]})")
+    else:
+        print(f"  la tinta de las {len(counts)} skins, {inked} pixeles en sus "
+              "casillas y sus banners, donde dicen sus mascaras, en la misma "
+              "pagina de OPTIONS; el release, antes y de vuelta, con la suya")
 
 
 def demo_check(rom_path):
@@ -834,7 +964,7 @@ def loans_check(rom_path):
             break
         tap("DOWN")
     tap("A")                                # abre la pregunta
-    tap("LEFT")                             # SI
+    tap("LEFT"); tap("LEFT")                # NO -> SAVE -> SI
     tap("A"); run(core, 120)
     if title_banks() != first:
         failures.append("el titulo no recupera sus bancos al volver de una partida")

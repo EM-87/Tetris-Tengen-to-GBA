@@ -96,11 +96,11 @@ uint8_t music_choices(void) {
  * A match frame sets g_tempo_quarters just before it calls this (draw_match),
  * and it is spent here, so nothing but play is ever sped up: the show, the
  * menus and the game-over tune never set it. Quarters of an extra step a
- * frame — one more turn of the cartridge's engine, and of a hand-entered
- * tune, every fourth frame for each quarter — so the music runs faster
- * without changing key: the engine counts its notes in frames. The whole of
- * nes_audio_frame runs again, not just the engine, because it applies what
- * the engine wrote by comparing frame to frame. */
+ * frame — one more step of the tune's note clocks in the engine
+ * (nes_audio_tempo_step), and of a hand-entered tune, every fourth frame for
+ * each quarter — so the music runs faster without changing key: the engine
+ * counts its notes in frames. The effects keep their own time: running the
+ * whole engine again, as this did, sped the line clear's zip up with it. */
 uint8_t g_tempo_quarters;
 static uint8_t g_tempo_acc;
 
@@ -113,7 +113,7 @@ void audio_frame(void) {
         g_tempo_acc = (uint8_t)(g_tempo_acc + q);
         if (g_tempo_acc >= 4) {
             g_tempo_acc = (uint8_t)(g_tempo_acc - 4);
-            nes_audio_frame();
+            nes_audio_tempo_step();
             handtune_frame();
         }
     } else {
@@ -203,6 +203,9 @@ void clear_screen(void) {
     g_title_dirty = true;
     /* ...and the bank a match's bricks borrowed (PAL_BRICK_BANK). */
     restore_brick_bank();
+    /* ...and the background the player chose, which the title alone does
+     * not wear (bg_screen; draw_title puts black back). */
+    bg_screen(false);
 }
 
 /* No two screens are ever up at once, so whichever prototype is showing puts
@@ -214,16 +217,6 @@ void install_title_palette(void) {
                         g_title_skin ? kRomPalette_bg_proto[g_title_skin - 1]
                                      : kRomPalette_bg_title,
                         MEM_PALETTE);
-    /* ...A PROTOTYPE'S WORDS ON A LIGHT BACKGROUND: its licence lines are
-     * in its own banks, white, and go black (bg_apply). Only the white: the
-     * rest of it is the picture. */
-    if (g_title_skin && bg_light()) {
-        const uint8_t *set = kRomPalette_bg_proto[g_title_skin - 1];
-        for (int i = 0; i < 16; i++)
-            if ((i & 3) && (set[i] == 0x20 || set[i] == 0x30))
-                MEM_PALETTE[PAL_TITLE_BASE * 16 + (i >> 2) * 16 + (i & 3)] =
-                    nes_colour_to_gba(0x0F);
-    }
 #else
     upload_palette_set(PAL_TITLE_BASE, kRomPalette_bg_title, MEM_PALETTE);
 #endif
@@ -240,6 +233,8 @@ void title_redraw(void) {
 }
 
 void draw_title(void) {
+    /* AT NIGHT, whatever the background: see bg_screen. */
+    bg_screen(true);
     if (!g_title_dirty) return;
     g_title_dirty = false;
     /* THE TITLE TAKES ITS FOUR BANKS BACK, every visit. Three of them are on
@@ -451,11 +446,8 @@ void draw_title_sprites(void) {
                 MEM_OAM[i * 4] = OBJ_ATTR0_HIDDEN;
                 continue;
             }
-            /* On a light background, the copy whose colours are inked
-             * (ink_sprite_palettes). */
-            oam_set(i, x, y, (uint16_t)((bg_light() ? TITLE_OBJ_INKED_BASE
-                                                    : TITLE_OBJ_TILE_BASE) + tile),
-                     false, PAL_OBJ_TITLE + (attr & 3));
+            oam_set(i, x, y, (uint16_t)(TITLE_OBJ_TILE_BASE + tile), false,
+                     PAL_OBJ_TITLE + (attr & 3));
             /* Bit 5 is the cartridge's "behind the background"; every burst
              * sprite has it. */
             if (attr & 0x20) MEM_OAM[i * 4 + 2] |= OBJ_ATTR2_PRIO(TITLE_FIREWORK_PRIO);
@@ -635,13 +627,12 @@ static int menu_lit_bank(void) {
 }
 
 /* A PAGE OF THE FRONT END'S OWN (GAME SELECT's OPTIONS, extras.c): the
- * menu frame and logo, and a heading lifted as GAME SELECT's is under the
- * chord, its list starting a row higher. What is on it is the caller's,
- * through these. */
+ * menu frame and logo, and a heading, level with the grid — the offset
+ * layer it rides when its length is odd is the one the page's boxes centre
+ * their own odd headings on. What is on it is the caller's, through these. */
 void draw_menu_page(const char *heading) {
     draw_menu_frame();
     draw_text_centred(8, heading, menu_bank());
-    REG_BG1VOFS = GAME_SELECT_LIFT_PX;
 }
 
 void draw_menu_line(int ty, int tx, const char *text, int bank) {
@@ -673,6 +664,12 @@ void draw_game_select(uint8_t choice) {
     for (int i = 0; i < rows; i++)
         draw_text_left(ty0 + i, GAME_SELECT_TX,
                         i < GAME_COUNT ? kGameNames[i] : "OPTIONS", menu_bank());
+    /* ...AND A BOX AFTER A MODE WITH A GAME SAVED (EXIT GAME's SAVE; see
+     * saved_has), in a column of their own at the list's right, the last
+     * inside the frame. Under the chord, where SAVE is. */
+    for (int i = 0; i < GAME_COUNT; i++)
+        set_map_tile(GAME_SAVED_TX, ty0 + i,
+                     six && saved_has((uint8_t)i) ? WITH_BANK(T_SQ_ON, menu_bank()) : T_BLANK);
     /* AND THE ARROW, which this screen had been doing without. The cartridge
      * marks its choice here exactly as it does on LEVEL SELECT — a white
      * arrow in the column left of the list (gameSelectArrowPpuAddrs, $A0AB,
@@ -782,74 +779,6 @@ void draw_records_saved(int kept, bool from_copy) {
     line[at] = 0;
     draw_text_centred(11, kept == 1 ? "RECORD SAVED" : "RECORDS SAVED", BANK_NOTE);
     draw_text_centred(13, line, menu_bank());
-}
-
-/* ERASING THE HIGH SCORES, the way the games of the day offered it: a
- * chord held while switching on (L+R+B — not SELECT, which with L and R is
- * the sleep), a warning, and the question asked TWICE with NO already
- * chosen both times. Up and Down move, A or START takes the line, B is NO.
- * Only YES twice erases: every table back to the cartridge's cold one, and
- * the paused game kept for the power switch with them. */
-#define ERASE_KEYS (KEY_L | KEY_R | KEY_B)
-
-bool erase_chord_held(void) {
-    return (uint16_t)(~REG_KEYINPUT & ERASE_KEYS) == ERASE_KEYS;
-}
-
-static void draw_erase_page(int stage, bool yes) {
-    draw_menu_frame();
-    clear_both(MENU_IN_TX, 9, MENU_IN_W, 8);
-    if (stage == 0) {
-        draw_text_centred(9, "ERASE ALL HIGH SCORES?", menu_bank());
-        draw_text_centred(11, "EVERY TABLE GOES BACK", BANK_NOTE);
-        draw_text_centred(12, "TO THE FACTORY SCORES", BANK_NOTE);
-    } else {
-        draw_text_centred(9, "ARE YOU SURE?", menu_bank());
-        draw_text_centred(11, "THEY CANNOT COME BACK", BANK_NOTE);
-    }
-    const int tx = MENU_IN_TX + MENU_IN_W / 2 - 2;
-    const char *answer[2] = { "NO", "YES" };
-    for (int i = 0; i < 2; i++) {
-        int ty = 14 + i;
-        bool on = (i == 1) == yes;
-        set_map_tile(tx - 2, ty, on ? WITH_BANK(ascii_tile(MENU_ARROW_R), BANK_ARROW)
-                                    : WITH_BANK(ascii_tile(' '), menu_bank()));
-        for (int c = 0; answer[i][c]; c++)
-            set_map_tile(tx + c, ty, WITH_BANK(ascii_tile(answer[i][c]), menu_bank()));
-    }
-}
-
-void erase_records_prompt(void) {
-    uint8_t held = read_buttons();
-    for (int stage = 0; stage < 2; stage++) {
-        bool yes = false;
-        for (;;) {
-            vsync();
-            draw_erase_page(stage, yes);
-            audio_frame();
-            uint8_t now = read_buttons();
-            uint8_t pressed = (uint8_t)(now & ~held);
-            held = now;
-            if (pressed & (TENGEN_BTN_UP | TENGEN_BTN_DOWN)) {
-                yes = !yes;
-                cursor_blip();
-            }
-            if (pressed & TENGEN_BTN_B) yes = false;
-            if (pressed & (MENU_CONFIRM | TENGEN_BTN_B)) break;
-        }
-        screen_blip();
-        /* The answer's button is the prompt's, not the title's (or the
-         * paused game's, which a B would otherwise walk out of). */
-        while (read_buttons()) { vsync(); audio_frame(); }
-        held = 0;
-        if (!yes) {
-            clear_screen();
-            return;
-        }
-    }
-    leader_erase_all();
-    suspend_clear();
-    clear_screen();
 }
 
 /* Appends a number with no leading zeroes, however many digits it has.

@@ -4,7 +4,7 @@ pause, the hand-entered tunes and the menu effects.
 """
 import os
 from .harness import (
-    skip, TENGEN_ROM_ROW_ORIGIN, PAL_NEXT_BANK, put_skin_on, step_skin,
+    skip, TENGEN_ROM_ROW_ORIGIN, PAL_NEXT_BANK, put_skin_on, choose_skin,
     ring_chord_from_title,
     PM_MUSIC, pmenu_span,
     APU_REGS, AUDIO_ALIGN_SEARCH, AUDIO_GOLDEN_SKIP, EFFECT_WATCH_FRAMES,
@@ -236,7 +236,7 @@ def quit_audio_check(rom_path):
     tap("START"); run(core, 10)             # pausa, que ya es el menu
     tap("UP")                               # MUSIC -> EXIT, round the top
     tap("A")                                # -> la pregunta
-    tap("RIGHT")                            # NO -> YES
+    tap("UP"); tap("UP")                    # NO -> SAVE -> YES
     tap("A"); run(core, 40)                 # fuera
 
     title = heard(300)
@@ -317,7 +317,7 @@ def effects_check(rom_path):
         if skin:
             put_skin_on(core, settle=32)      # the title's chord: the first
             if skin > 1:
-                step_skin(core, skin - 1, settle=32)
+                choose_skin(core, skin, settle=32)
         press_start(core); run(core, 30)      # -> GAME SELECT
         core.set_keys(KEYS[button]); run(core, 4); core.set_keys()
         f1, f2, v1, v2 = set(), set(), [], []
@@ -646,7 +646,7 @@ def proto_pause_check(rom_path):
     dumps (read_skin_pause_music in tools/extract_assets.py) it is proto_a's
     alone: proto_b, proto_c and proto_d go silent like the release. On the
     title, L+R — the game's chord — puts on the first skin (A) and the
-    OPTIONS page's list the next (step_skin); and the pause is then the chord's
+    OPTIONS page's list the other (choose_skin); and the pause is then the chord's
     menu, which
     keeps the same rule (pause_keeps_music).
     """
@@ -656,7 +656,7 @@ def proto_pause_check(rom_path):
         run(core, 40)
         put_skin_on(core, settle=32)     # the title's chord: proto_a
         if skin > 1:
-            step_skin(core, skin - 1, settle=32)
+            choose_skin(core, skin, settle=32)
         start_game(core, tune=1)         # LOGINSKA
         heard = 0
         for _ in range(180):
@@ -784,10 +784,12 @@ def levelup_tune_check(rom_path):
 def chord_extras_check(rom_path):
     """THREE THINGS THE CHORD ADDS TO A MATCH, each measured where it happens.
 
-    - THE TEMPO RISES WITH THE STACK: the cartridge's engine is stepped once a
-      frame, and under the chord a quarter more from twelve rows, a half more
-      from fifteen (stack_tempo, audio_frame). Counted as calls into the
-      engine's update ($CFCA) over 120 frames.
+    - THE TEMPO RISES WITH THE STACK, THE TUNE'S AND NOT THE EFFECTS': under
+      the chord the tune's note clocks take a quarter step more a frame from
+      twelve rows, a half more from fifteen (stack_tempo, audio_frame,
+      nes_audio_tempo_step). Counted as the notes LOGINSKA's voices start
+      over ten seconds (each voice's data pointer moving on, LD3D3); and the
+      line clear's zip under the highest stack as long as on an empty board.
     - A NEW RECORD PLAYS THE UNUSED JINGLE ($0C), once, the frame the score
       passes the top of the table (record_watch). Read where the request goes
       in ($CFB1).
@@ -846,18 +848,85 @@ def chord_extras_check(rom_path):
 
     failures = []
 
-    # The tempo.
-    for chord, height, want in ((False, 16, 120), (True, 0, 120),
-                                (True, 13, 150), (True, 16, 180)):
-        core, screen = start(chord)
+    # The tempo: the notes the tune's voices start, against an empty board's.
+    ram, why3 = game_state_address(rom_path, "g_nes_ram")
+    if ram is None:
+        skip(f"{why3}")
+        return 0
+    NOTES_FRAMES = 600
+
+    def tune_notes(core, frames):
+        """Notes started by the tune's voices (class under $40): a voice's
+        data pointer ($0219/$0224,x) moving on by a little, frame to frame."""
+        def voices():
+            return [(core.memory.u8[ram + 0x0219 + x] | core.memory.u8[ram + 0x0224 + x] << 8,
+                     core.memory.u8[ram + 0x0292 + x]) for x in range(11)]
+        n, last = 0, voices()
+        for _ in range(frames):
+            core.run_frame()
+            now = voices()
+            n += sum(1 for (p0, c0), (p1, c1) in zip(last, now)
+                     if 0 < c1 < 0x40 and c0 == c1 and 0 < p1 - p0 <= 8)
+            last = now
+        return n
+
+    def zip_frames(core):
+        """The line clear's zip on pulse 2: frames its period moves, sounding."""
+        io = core._native.memory.io
+        reg = lambda a: io[(a - 0x04000000) >> 1]
+        lines = lambda: core.memory.u32[base + off["lines"]]
+        fill_rows(core, base + off["field"], [19])
+        before = lines()
+        for _ in range(400):
+            core.set_keys(KEYS["DOWN"]); core.run_frame()
+            if lines() != before:
+                break
+        core.set_keys()
+        moving, last = 0, None
+        for _ in range(20):
+            core.run_frame()
+            fq = reg(0x0400006C) & 0x7FF
+            if (reg(0x04000068) >> 12) & 0xF and fq != last:
+                moving += 1
+            last = fq
+        return moving
+
+    def tuned(chord):
+        core, screen = load(rom_path)   # `screen` must stay alive; see load()
+        run(core, 8)
+        if chord:
+            ring_chord_from_title(core)
+        start_game(core, tune=1)        # LOGINSKA, the engine's own
+        run(core, 30)
+        return core, screen
+
+    rate = {}
+    for chord, height in ((False, 16), (True, 0), (True, 13), (True, 16)):
+        core, screen = tuned(chord)
         stack(core, 0, height)
-        steps = sum(1 for _, a, _ in watch(core, 120) if a == 0xCFCA)
-        if abs(steps - want) > 2:
-            failures.append(f"acorde={chord}, pila de {height}: {steps} pasos del "
-                            f"motor en 120 frames, no {want}")
-        else:
-            print(f"  acorde={int(chord)} pila {height:2d}: {steps} pasos del motor en 120 frames")
+        rate[(chord, height)] = tune_notes(core, NOTES_FRAMES)
+        if chord and height == 16:
+            high_zip = zip_frames(core)
         del core, screen
+    core, screen = tuned(True)
+    flat_zip = zip_frames(core)
+    del core, screen
+    base_rate = rate[(True, 0)]
+    for (chord, height), want in (((False, 16), 1.0), ((True, 13), 1.25), ((True, 16), 1.5)):
+        got = rate[(chord, height)] / base_rate if base_rate else 0
+        if abs(got - want) > 0.1:
+            failures.append(f"acorde={chord}, pila de {height}: la cancion va a "
+                            f"{got:.2f} veces, no {want} ({rate[(chord, height)]} "
+                            f"notas contra {base_rate})")
+        else:
+            print(f"  acorde={int(chord)} pila {height:2d}: la cancion a {got:.2f} "
+                  f"veces ({rate[(chord, height)]} notas en {NOTES_FRAMES} frames)")
+    if abs(high_zip - flat_zip) > 1:
+        failures.append(f"con la pila alta el zip de la linea dura {high_zip} frames, "
+                        f"no {flat_zip}: el tempo acelera tambien los efectos")
+    else:
+        print(f"  ...y el zip de la linea, {high_zip} frames con la pila alta y "
+              f"{flat_zip} sin ella: los efectos no se aceleran")
 
     # The record.
     for chord in (False, True):
@@ -875,11 +944,12 @@ def chord_extras_check(rom_path):
 
     # The pause: under the chord the board goes behind a wall of BRICKS, the
     # cartridge's lone shaded block ($0F, the handicap's garbage) in every
-    # cell, grey whatever the level — in a bank of their own (PAL_BRICK_BANK,
-    # the credits'), the falling piece keeping its colours beside them.
+    # cell — its own copy, T_WALL_BRICK, with the grout in the ink — grey
+    # whatever the level, in a bank of their own (PAL_BRICK_BANK, the
+    # credits'), the falling piece keeping its colours beside them.
     from .harness import COL_FIELD, PAL_BRICK_BANK, PAL_PIECE_BANK, \
-        PALETTE_ADDR, PMENU_H, PMENU_TY, pixels
-    T_BRICK = 0x0F
+        PALETTE_ADDR, PMENU_H, PMENU_TY, check_layout, pixels
+    T_BRICK = check_layout(rom_path)["wall_brick"]
 
     def shown_cells(core):
         # Only where the blocks were planted: the plaque and the pause menu
