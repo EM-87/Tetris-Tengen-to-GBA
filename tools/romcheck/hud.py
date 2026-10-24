@@ -323,12 +323,67 @@ def stats_show_check(rom_path):
             print(f"  {name}: {want} cosacos por el cajon izquierdo, sin "
                   f"contadores, y el del histograma baila en el suyo")
 
+    # ...AND WITH HOLD ON (OPT_HOLD) the resident's cell is HOLD's: the
+    # troupe still comes on, and he does not dance the show over the piece
+    # put aside — he is not there between shows either.
+    from .harness import ring_chord_from_title
+    from .pausemenu import PMO_NAMES
+    core, screen = load(rom_path)   # `screen` must stay alive; see load()
+    _ = screen
+
+    def tap(*keys, settle=12):
+        core.set_keys(*[KEYS[k] for k in keys]); run(core, 4)
+        core.set_keys(); run(core, settle)
+
+    run(core, 8)
+    ring_chord_from_title(core)
+    start_game(core)
+    run(core, 60)
+    tap("START"); tap("DOWN"); tap("A")          # the pause menu's OPTIONS
+    for _ in range(PMO_NAMES.index("HOLD")):
+        tap("DOWN")
+    tap("A"); tap("START", settle=20)
+    from .harness import check_layout
+    hold_label = [check_layout(rom_path)["hold_label"] + i for i in range(4)]
+
+    def label():
+        return [core.memory.u16[SCREENBLOCK_ADDR + (3 * 32 + c) * 2] & 0x3FF
+                for c in range(24, 28)]
+    if label() != hold_label:
+        tap("L", "R", settle=20)                  # to HUD STATS: HOLD's label there
+    core.memory.u8[base + off["lines"]] = 28
+    core.memory.u8[base + off["lines"] + 1] = 0
+    fill_rows(core, base + off["field"], (19, 18))
+    level = core.memory.u8[base + off["level"]]
+    for _ in range(60):
+        core.set_keys(KEYS["DOWN"]); run(core, 8)
+        core.set_keys(); run(core, 2)
+        if core.memory.u8[base + off["level"]] != level:
+            break
+    run(core, 400)
+    troupe = [d for d in range(8)
+              if not core.memory.u16[OAM_ADDR + d * 4 * 8] & 0x0200]
+    resident = [i for i in range(IDLE_OAM_BASE, IDLE_OAM_BASE + 4)
+                if not core.memory.u16[OAM_ADDR + i * 8] & 0x0200]
+    held_label = label() == hold_label
+    if core.memory.u8[base + off["level"]] == level:
+        failures.append("1 PLAYER con HOLD: el nivel no subio")
+    elif not troupe or not held_label:
+        failures.append(f"1 PLAYER con HOLD: sin show ({len(troupe)} cosacos) o "
+                        f"sin la celda HOLD ({held_label})")
+    elif resident:
+        failures.append(f"1 PLAYER con HOLD: el cosaco del histograma baila en "
+                        f"la celda HOLD (sprites {resident})")
+    else:
+        print("  1 PLAYER con HOLD: el show sale y el cosaco no baila en la "
+              "celda HOLD")
+
     for f in failures:
         print("FALLA:", f)
     if failures:
         return 1
     print("OK: en HUD Stats el baile sale por el cajon izquierdo, en los tres "
-          "modos.")
+          "modos, y respeta la celda HOLD.")
     return 0
 
 
@@ -1144,4 +1199,99 @@ def stats_relative_check(rom_path):
         return 1
     print(f"  sin el acorde {plain}, con el acorde {chord}")
     print("OK: con el acorde las barras de STATS se escalan a la mas alta.")
+    return 0
+
+
+def show_takes_pause_check(rom_path):
+    """THE SHOW TAKES THE PLACE OF A PAUSE (announce, gba/match.c).
+
+    A clear started before START still finishes under the pause, and when it
+    raises the level the cartridge's showLevelBonus stores GAMESTATE_LEVELUP
+    over the pause (main.asm.txt:1927-1928): the show comes on and the pause
+    is gone. So, under the chord, START during the sweep of a clear that goes
+    up a level: once the show is on, the game is no longer paused and the
+    pause menu's words are nowhere on the screen; the show runs as long as
+    one nobody touched (it used to run under the menu, and the START that let
+    go of the pause cut it short); and after it the tune plays again — the
+    pause's SUSPEND gags the whole engine, and the way out lifts it."""
+    off = game_offsets(rom_path)
+    base, why = game_state_address(rom_path)
+    active_at, why2 = game_state_address(rom_path, "g_dancer_active")
+    if base is None or active_at is None:
+        skip(f"{why or why2}")
+        return 0
+    from .harness import ring_chord_from_title, sound_state
+    failures = []
+
+    def setup():
+        core, screen = load(rom_path)   # `screen` must stay alive; see load()
+        run(core, 8)
+        ring_chord_from_title(core)
+        start_game(core, tune=1)
+        run(core, 60)
+        core.memory.u8[base + off["lines"]] = 28
+        core.memory.u8[base + off["lines"] + 1] = 0
+        fill_rows(core, base + off["field"], (19, 18))
+        return core, screen
+
+    def play(start_at):
+        """DOWN held until the show; START at frame `start_at` if given.
+        (frame the show began, its length, menu words seen during it, a
+        frame of it paused, frames of sound in the 200 after it)."""
+        core, screen = setup()
+        _ = screen
+        core.set_keys(KEYS["DOWN"])
+        f, began = 0, None
+        while f < 900 and began is None:
+            if start_at is not None and f == start_at:
+                core.set_keys(KEYS["DOWN"], KEYS["START"])
+            elif start_at is not None and f == start_at + 4:
+                core.set_keys(KEYS["DOWN"])
+            core.run_frame(); f += 1
+            if core.memory.u8[active_at]:
+                began = f
+        core.set_keys()
+        words, paused, length = set(), False, 0
+        while core.memory.u8[active_at] and length < 4000:
+            core.run_frame(); length += 1
+            paused = paused or bool(core.memory.u8[base + off["paused"]])
+            if length % 8 == 0:
+                text = " ".join(tilemap_text(core, r) for r in range(20))
+                words |= {w for w in ("PAUSE", "MUSIC", "EXIT") if w in text}
+        heard = 0
+        for _ in range(200):
+            core.run_frame()
+            heard += sound_state(core)["activos"] != 0
+        return began, length, words, paused, heard
+
+    began, length, _, _, heard = play(None)
+    if began is None:
+        skip("el nivel no subio: no hay show que mirar")
+        return 0
+    # The sweep is under way some twenty frames before the show (the clear's
+    # animation); START there, and let go before the show begins.
+    got = play(began - 20)
+    if got[0] is None:
+        failures.append("con START durante el barrido el show no llega")
+    elif got[3] or got[2]:
+        failures.append(f"el show sale con la partida en pausa ({got[3]}) o con "
+                        f"el menu de pausa en pantalla ({sorted(got[2])})")
+    elif abs(got[1] - length) > 2:
+        failures.append(f"tras la pausa el show dura {got[1]} frames, no {length}: "
+                        "se acorta")
+    elif heard and got[4] < heard // 2:
+        failures.append(f"tras el show la musica no vuelve ({got[4]} frames con "
+                        f"sonido, {heard} sin la pausa): el motor sigue callado")
+    elif not heard:
+        failures.append("sin pausa, tras el show no suena nada: no se prueba nada")
+    else:
+        print(f"  START en el barrido de una subida de nivel: el show quita la "
+              f"pausa, sin menu, dura lo de siempre ({length} frames) y la "
+              f"musica vuelve")
+
+    for f in failures:
+        print("FALLA:", f)
+    if failures:
+        return 1
+    print("OK: el show de la subida de nivel ocupa el lugar de la pausa.")
     return 0

@@ -1177,9 +1177,9 @@ def save_check(rom_path):
     PLAYER): GAME SELECT marks the mode with a box in its column, and the
     mode goes straight back into the game, paused, the same board and score,
     and takes it off the battery — no mark after. It outlives the power
-    switch, and without the chord GAME SELECT is the cartridge's: no mark,
-    and 1 PLAYER starts a game; with it, the mark and the game are back.
-    VERSUS COMPUTER asks with SAVE too."""
+    switch, and the chord's being forgotten with it: the mark and the game
+    are there without it, and the chord comes back with the game. VERSUS
+    COMPUTER asks with SAVE too."""
     base, why = game_state_address(rom_path)
     mask_at, why2 = game_state_address(rom_path, "g_saved_mask")
     if base is None or mask_at is None:
@@ -1260,29 +1260,33 @@ def save_check(rom_path):
               "a la partida en pausa, el mismo tablero y los mismos puntos, y la "
               "saca de la bateria")
 
-    # ...AND IT OUTLIVES THE POWER SWITCH. Saved again; off and on.
+    # ...AND IT OUTLIVES THE POWER SWITCH, AND THE CHORD'S BEING FORGOTTEN:
+    # only a console that found the chord can SAVE, so GAME SELECT marks the
+    # game and goes back to it without the chord rung again, and the chord
+    # comes back with it. Saved again; off and on.
+    unlocked_at, _ = game_state_address(rom_path, "g_pause_unlocked")
     tap("UP"); tap("A"); tap("UP"); tap("A", settle=60)
     core.reset()
     run(core, 60)
     press_start(core); run(core, 30)              # no chord this time
-    plain = marks(GAME_SELECT_TY)
-    tap("START", settle=30)                       # 1 PLAYER: LEVEL SETTINGS
-    level = " ".join(tilemap_text(core, 9, 2, 28).split())
-    tap("B", settle=30)
-    core.set_keys(KEYS["L"], KEYS["R"]); run(core, 4); core.set_keys(); run(core, 20)
-    chord_marks = marks(GAME_SELECT_TY - 1)
-    tap("START", settle=60)
+    plain = marks(GAME_SELECT_TY - 1)             # the five lines start a row lower
+    forgot = core.memory.u8[unlocked_at]
+    tap("START", settle=60)                       # 1 PLAYER: the game, paused
     again = (board(), core.memory.u32[base + off["score"]],
              core.memory.u8[base + off["paused"]])
-    if any(plain) or "LEVEL" not in level:
-        failures.append(f"sin el acorde GAME SELECT marca la partida ({plain}) o "
-                        f"1 PLAYER no empieza una nueva ({level!r})")
-    elif chord_marks[0] != sq_on or again != (kept[0], kept[1], 1):
-        failures.append(f"tras apagar, con el acorde la partida guardada no vuelve "
-                        f"(marca {chord_marks[0]}, puntos {again[1]})")
+    if forgot:
+        failures.append("tras apagar el acorde sigue sonado: asi no se prueba nada")
+    elif plain != [0, sq_on, 0, 0, 0]:
+        failures.append(f"tras apagar, sin el acorde GAME SELECT no marca 1 "
+                        f"PLAYER, y solo el: {plain}")
+    elif again != (kept[0], kept[1], 1):
+        failures.append(f"tras apagar, 1 PLAYER no vuelve a la partida guardada "
+                        f"(puntos {again[1]}, pausa {again[2]})")
+    elif not core.memory.u8[unlocked_at]:
+        failures.append("la partida guardada vuelve sin su acorde")
     else:
-        print("  y sobrevive al apagado: sin el acorde GAME SELECT es el del "
-              "cartucho y 1 PLAYER empieza otra; con el, la marca y la partida")
+        print("  y sobrevive al apagado: sin volver a hacer el acorde GAME SELECT "
+              "la marca y 1 PLAYER vuelve a ella, y el acorde con ella")
     del core, screen
 
     # VERSUS COMPUTER asks with SAVE as well.

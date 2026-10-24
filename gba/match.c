@@ -156,6 +156,8 @@ static void stats_watch(int slot, TengenStepResult step) {
     lifetime_watch(slot, &was, &g_stats[slot]);
 }
 
+static void pause_toggled(bool was_paused);
+
 /* `level_tune` is whether the LEVEL-UP'S MUSIC plays this step, which is not
  * always this player's level-up: see link_play_frame. */
 static void announce(TengenStepResult step, bool level_tune) {
@@ -189,6 +191,24 @@ static void announce(TengenStepResult step, bool level_tune) {
         return;
     }
     if (level_tune) {
+        /* THE SHOW TAKES THE PLACE OF A PAUSE. A clear started before START
+         * still finishes under the plaque (see tengen_step), and when it
+         * raises the level showLevelBonus stores GAMESTATE_LEVELUP over
+         * whatever gameState held (main.asm.txt:1927-1928) — the pause's 1
+         * included — so the cartridge's show comes on and the pause is gone.
+         * Here the show ran with the core still paused and the pause menu
+         * still up: the BONUS tally printed through the menu's box, and the
+         * START that let go of the pause cut the show short on its way.
+         * Let go of here as an unpause is (pause_toggled), whose RESUME also
+         * lifts the gag the pause's SUSPEND put on the whole engine. (The
+         * cartridge sends none, so its gag would stay on through the show
+         * and the game after it until the next pause: INFERRED from the
+         * engine, not measured.) A linked match has no show, and its pause
+         * is both consoles'; a prototype's level-up has none either (above). */
+        if (g_session.game.paused && !g_linked) {
+            g_session.game.paused = false;
+            pause_toggled(true);
+        }
         /* The cartridge's level-up music takes over; a hand-entered tune stands
          * down and start_music() puts it back when the dancers finish. */
         handtune_stop();
@@ -1196,8 +1216,6 @@ static bool match_over(void) {
 void swallow_held_buttons(TengenGame *game) {
     for (int i = 0; i < 2; i++) game->player[i].held_last_frame = 0xFF;
 }
-
-static void pause_toggled(bool was_paused);
 
 /* THE PAUSE MENU OVER THE CABLE. Both consoles have to show the same menu
  * and do the same thing with it, or a tune picked on one plays on one and an

@@ -543,14 +543,19 @@ int main(void) {
                     screen = SCREEN_LINK_WAIT;
                 }
 #ifndef TENGEN_MULTIBOOT
-                else if (g_pause_unlocked && saved_has(game_mode) &&
-                         saved_load(game_mode, &resume)) {
+                else if (saved_has(game_mode) && saved_load(game_mode, &resume)) {
                     /* A GAME OF THIS MODE SAVED (EXIT GAME's SAVE): straight
                      * back into it, paused, as a game left on the plaque
                      * comes back at power-on — LEVEL SETTINGS confirms
                      * itself (`resuming`) — and off the battery with it.
-                     * Under the chord, where SAVE is: without it GAME SELECT
-                     * is the cartridge's, and a mode starts a game. */
+                     * WITH THE CHORD OR WITHOUT IT. Only a console that has
+                     * found it can SAVE, so a game saved is one found; and
+                     * a power cycle forgets the chord, which hid the game
+                     * until something rang it again — a game put back from
+                     * the plaque at power-on, say, and lost — and then the
+                     * save seemed to come from nowhere. It comes back with
+                     * the game, as the plaque's does. */
+                    if (resume.unlocked) cheats_restore();
                     start_level = resume.start_level;
                     g_music = resume.music;
                     handicap[0] = resume.handicap[0];
