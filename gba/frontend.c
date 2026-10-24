@@ -666,10 +666,15 @@ void draw_game_select(uint8_t choice) {
                         i < GAME_COUNT ? kGameNames[i] : "OPTIONS", menu_bank());
     /* ...AND A BOX AFTER A MODE WITH A GAME SAVED (EXIT GAME's SAVE; see
      * saved_has), in a column of their own at the list's right, the last
-     * inside the frame. Under the chord, where SAVE is. */
+     * inside the frame. With the chord or without it: SAVE is under it, so
+     * a box is only ever there for a console that has found it, and a power
+     * cycle forgets the chord, not the game. Both lists' rows are cleared
+     * first: the chord rung here moves the list up one. */
+    for (int ty = GAME_SELECT_TY - 1; ty < GAME_SELECT_TY + GAME_COUNT; ty++)
+        set_map_tile(GAME_SAVED_TX, ty, T_BLANK);
     for (int i = 0; i < GAME_COUNT; i++)
-        set_map_tile(GAME_SAVED_TX, ty0 + i,
-                     six && saved_has((uint8_t)i) ? WITH_BANK(T_SQ_ON, menu_bank()) : T_BLANK);
+        if (saved_has((uint8_t)i))
+            set_map_tile(GAME_SAVED_TX, ty0 + i, WITH_BANK(T_SQ_ON, menu_bank()));
     /* AND THE ARROW, which this screen had been doing without. The cartridge
      * marks its choice here exactly as it does on LEVEL SELECT — a white
      * arrow in the column left of the list (gameSelectArrowPpuAddrs, $A0AB,

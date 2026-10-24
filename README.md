@@ -130,7 +130,7 @@ Lo que el GBA tiene de más:
 | Partida, HUD Stats, con el acorde | L+R | cambia el color del cosaco; con HOLD, cambia de HUD (en cualquier HUD) |
 | GAME SELECT, LEVEL SETTINGS o el título | L+R | el acorde, el mismo en las tres: destapa las canciones ocultas (Korobeiniki, Katiuska, MUSIC MIX), los niveles 18-19, el menú de pausa, los títulos de los prototipos y lo demás que añade el port (abajo); hecho en el título, además pone el primer prototipo |
 | GAME SELECT, con el acorde | Arriba desde 1 PLAYER, y A | OPTIONS, la sexta línea: los ajustes, los prototipos, las cifras de toda la vida y el borrado (abajo) |
-| GAME SELECT, con el acorde | A o START en un modo marcado ▣ | vuelve a su partida guardada con SAVE, en pausa (abajo) |
+| GAME SELECT | A o START en un modo marcado ▣ | vuelve a su partida guardada con SAVE, en pausa, y con ella el acorde (abajo) |
 | Título, con el acorde | SELECT | las tablas de HIGH SCORES, una por modo (Izquierda/Derecha las recorren); sin el acorde, SELECT es otro START, como en el cartucho |
 | Pantalla LINK CABLE | SELECT | Single-Pak: envía el juego a una GBA sin cartucho |
 | Carrera, tablero muerto | A+B | se levanta y sigue, como en el cartucho |
@@ -146,9 +146,9 @@ deja la partida en el cartucho: hay una por modo de los que juega una sola
 consola (1 PLAYER, VERSUS COMPUTER, WITH COMPUTER; por cable no hay SAVE,
 media partida está en la otra GBA). GAME SELECT marca con una casilla los
 modos que tienen una, y elegir el modo vuelve directo a ella, en pausa, y la
-saca del cartucho (para conservarla, SAVE otra vez). Sobreviven al apagado,
-pero solo se recuperan desde su modo y con el acorde; sin él GAME SELECT es
-el del cartucho.
+saca del cartucho (para conservarla, SAVE otra vez). Sobreviven al apagado
+y se recuperan desde su modo aunque el acorde no se haya vuelto a hacer: solo
+guarda quien lo encontró, así que la partida lo trae de vuelta consigo.
 OPTIONS tiene seis interruptores, todos en OFF hasta que los toqués, que se
 guardan en el cartucho y vuelven cada vez que hacés el acorde: **HARD DROP**
 (Arriba tira la pieza de golpe), **FAST DOWN** (Abajo baja una fila por
@@ -413,7 +413,7 @@ Lo que hay detrás del acorde no es un modo: es el juego terminado.
 
 En cifras: unas 5.400 líneas de reglas en C (`src/`, probadas en el PC con
 146 tests y un fuzzer), 15.800 de capa GBA y 25.000 de herramientas y
-comprobaciones — 57 baterías en `make gba-check`, más de ochenta
+comprobaciones — 58 baterías en `make gba-check`, más de ochenta
 comprobaciones que arrancan la ROM en un emulador, la juegan y miran la
 pantalla, el sonido y la memoria —, todo contrastado contra el disassembly
 del cartucho, línea citada a línea citada. Nada de eso se ve desde fuera, y

@@ -539,6 +539,18 @@ story behind each; the item number is in brackets.
   LEVELUP_LOOP_FRAMES after the intro, twelve ticks of the show's clock,
   with a second of quiet between — measured on the cartridge
   (`--levelup-tune`).
+- **The show takes the place of a pause.** A clear started before START
+  finishes under the pause (stageLineClearAnimation is not gated), and
+  showLevelBonus stores GAMESTATE_LEVELUP over gameState whatever it held
+  (main.asm.txt:1927-1928), the pause's 1 included. The port ran the show
+  with the core still paused and the pause menu up: the BONUS tally printed
+  through the menu's box, and the START that let go of the pause cut the
+  show short. `announce` now lets go of the pause as an unpause does
+  (`pause_toggled`, whose RESUME also lifts the SUSPEND's gag on the whole
+  engine — the cartridge sends none: INFERRED, not measured) (`--showpause`).
+  And with HOLD on the resident cossack does not dance the show over the
+  HOLD cell, which is his cell between shows only without HOLD
+  (`draw_stats_show`, `--statsshow`).
 - **Over the cable the pause menu's tune list is the master's**, the full
   one (it is there because the master found the chord), never this
   console's own: counted from each console's chord, the two stepped through
@@ -883,8 +895,9 @@ NO and no wrapping, so YES is two moves away; a game saved per mode one
 console plays alone (1 PLAYER, VERSUS COMPUTER, WITH COMPUTER; SRAM
 $4800-$5FFF, the suspend's record each), marked on GAME SELECT with a box
 in its own column (GAME_SAVED_TX) and resumed, paused, by choosing the
-mode, which takes it off the battery — under the chord only, the cartridge's
-GAME SELECT without it (`saved_*`, `--save`); the
+mode, which takes it off the battery — with the chord or without it, for
+only a console that found the chord can SAVE and a power cycle forgets the
+chord, and the game brings the chord back with it (`saved_*`, `--save`); the
 publisher's logo on white at power-on, then the licensors': Mirrorsoft's,
 whose licence the cartridge names on GAME SELECT ($A1EF), and the Tetris
 logo, as the licence has every Tetris open (`splash.c`, from images you

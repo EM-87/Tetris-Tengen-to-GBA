@@ -782,7 +782,13 @@ void draw_stats_show(int elapsed, int count) {
         MEM_OAM[i * 4] = OBJ_ATTR0_HIDDEN;
 
     /* ...and the resident, dancing it where he stands. After the troupe,
-     * whose tidy-up above stops short of his slots. */
+     * whose tidy-up above stops short of his slots. NOT WITH HOLD ON
+     * (OPT_HOLD): his cell is HOLD's then, and he danced the show over the
+     * piece put aside, as he does not between shows (draw_panel). */
+    if (hold_on()) {
+        hide_idle_cossack();
+        return;
+    }
     g_idle_show = true;
     if (g_session.game.coop)
         draw_idle_cossack(elapsed, true, g_idle_palette, COOP_R_TX, BRAID_T,
