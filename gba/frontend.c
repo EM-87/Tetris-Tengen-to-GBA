@@ -739,9 +739,13 @@ void draw_link_wait(const TengenLobby *lobby, int elapsed) {
                     draw_text_centred(12, "B TO GO BACK", menu_bank());
                     /* ...or one with no cartridge, which SELECT sends the
                      * game to over the air (main.c): the two notes by turns. */
+                    /* ...naming the mode THIS console chose: a partner who
+                     * picks the other is no partner (tengen_lobby_mode), and
+                     * the note said 2 PLAYER to a console on COOPERATIVE. */
                     clear_both(MENU_IN_TX, 14, MENU_IN_W, 1);
                     draw_text_centred(14, (elapsed / 150) & 1 ? "SELECT SENDS THE GAME"
-                                                              : "PICK 2 PLAYER THERE TOO",
+                                          : lobby->mode_coop ? "COOPERATIVE THERE TOO"
+                                                             : "PICK 2 PLAYER THERE TOO",
                                       BANK_NOTE);
                 } else if (link_is_master()) {
                     draw_text_centred(10, "SWITCH THE OTHER GBA ON", menu_bank());
@@ -750,7 +754,9 @@ void draw_link_wait(const TengenLobby *lobby, int elapsed) {
                 } else {
                     draw_text_centred(10, "CONNECT THE CABLE", menu_bank());
                     draw_text_centred(12, "B TO GO BACK", menu_bank());
-                    draw_text_centred(14, "THEN 2 PLAYER ON BOTH", BANK_NOTE);
+                    draw_text_centred(14, lobby->mode_coop ? "THEN COOPERATIVE ON BOTH"
+                                                           : "THEN 2 PLAYER ON BOTH",
+                                      BANK_NOTE);
                 }
                 break;
         }

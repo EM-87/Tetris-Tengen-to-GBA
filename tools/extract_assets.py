@@ -1176,12 +1176,36 @@ def _ink_rows(mask: int) -> list:
     return [(mask >> (8 * y)) & 0xFF for y in range(8)]
 
 
+def panel_run_ink(run_art) -> list:
+    """The ink of the panels' top run (PANEL_RUN_SLOTS; draw_braid_panel in
+    gba/hud.c): its tiles, one row each, stand across the top of the screen
+    over the panel's empty interior, with nothing but the screen's edge above
+    them — not where the menu's bottom border stands, which is why the slots
+    are the run's own. Flooded from the space below and above, never from
+    their sides, which are copies of themselves: three abreast, the middle
+    one's mask. Eight rows for each tile."""
+    n = len(run_art)
+    tiles = b"".join(bytes(a) for a in run_art) + bytes(32)
+    pix = [_pixels_4bpp(tiles, t) for t in range(n + 1)]
+    tmap = [n] * 3
+    for t in range(n):
+        tmap += [t] * 3
+    tmap += [n] * 3
+    masks = _shut_in(pix, {n}, tmap, 3, n + 2, False)
+    return [_ink_rows(masks.get(t, [0, 0, 0])[1]) for t in range(n)]
+
+
 def skin_ink(play) -> tuple:
     """A skin's ink: eight rows for each of its slots (the release's screens
-    with its art in them; the slots above the cartridge's 256 none), and for
-    each tile of its banner art (its banner and its logo, both standing in
-    open space)."""
+    with its art in them; the panel's top run, above the cartridge's 256, in
+    its own place — see panel_run_ink), and for each tile of its banner art
+    (its banner and its logo, both standing in open space)."""
     slot_rows = [[0] * 8 for _ in play["slots"]]
+    run = [art for slot, art in zip(play["slots"], play["tiles"]) if slot >= 256]
+    run_rows = iter(panel_run_ink(run))
+    for i, slot in enumerate(play["slots"]):
+        if slot >= 256:
+            slot_rows[i] = next(run_rows)
     if _INK_RELEASE is not None:
         tiles, screens, braid = _INK_RELEASE
         tiles = bytearray(tiles)
@@ -1191,8 +1215,8 @@ def skin_ink(play) -> tuple:
                 tiles[slot * 32:(slot + 1) * 32] = bytes(art)
                 mine.add(slot)
         ink = ink_masks(bytes(tiles), screens, braid | mine)
-        slot_rows = [_ink_rows(ink.get(slot, 0)) if slot in mine else [0] * 8
-                     for slot in play["slots"]]
+        slot_rows = [_ink_rows(ink.get(slot, 0)) if slot in mine else rows
+                     for slot, rows in zip(play["slots"], slot_rows)]
     art = b"".join(bytes(t) for t in play["banner_art"])
     grid = play["banner"]
     maps = [([i for row in grid for i in row], len(grid[0]), len(grid), True)]
@@ -1204,9 +1228,9 @@ def skin_ink(play) -> tuple:
     return slot_rows, banner_rows
 
 
-def ink_lines(ink: dict) -> list:
+def ink_lines(ink: dict, panel_run=None) -> list:
     """The C for tiles_game.h: each tile with ink, then its eight rows, bit x
-    the row's pixel x."""
+    the row's pixel x; and the panels' top run's (panel_run_ink), by row."""
     lines = [
         "",
         "/* THE BLACK THE ART BORROWS FROM THE BACKDROP: the pixels of these tiles",
@@ -1223,6 +1247,17 @@ def ink_lines(ink: dict) -> list:
     if not ink:
         lines.append("    { 0 },")
     lines.append("};")
+    if panel_run is not None:
+        lines += [
+            "/* ...AND THE PANELS' TOP RUN'S (SKIN_PANEL_RUN_BASE: kBraidBottom's art",
+            " * in slots of its own), a row each, where it stands over the panel's",
+            " * interior and under the screen's edge rather than under a menu's.",
+            " * See panel_run_ink in tools/extract_assets.py. */",
+            f"static const uint8_t kPanelRunInk[{len(panel_run)}][8] = {{",
+        ]
+        for rows in panel_run:
+            lines.append("    { " + ", ".join(f"0x{r:02X}" for r in rows) + " },")
+        lines.append("};")
     return lines
 
 
@@ -3811,7 +3846,8 @@ def main() -> int:
         "tiles_game.h": emit_tiles_header(
             "kGameTiles", "TILES_GAME", game_tiles, f"{src} [game]",
             extra=tuple((name, tile) for name, tile, _, _ in PLANTED_GLYPHS),
-            tail=ink_lines(ink)),
+            tail=ink_lines(ink, panel_run_ink(
+                [game_tiles[t * 32:(t + 1) * 32] for t in PANEL_RUN_RELEASE]))),
         "tiles_dancers.h": emit_tiles_header(
             "kDancerTiles", "TILES_DANCERS", convert_tiles(rom.chr_bank(1)), f"{src} [dancers]"),
         # CHR bank 3 is the title screen's SPRITE bank: the cathedral overlay

@@ -237,6 +237,13 @@ story behind each; the item number is in brackets.
     once: muting and unmuting around every try clicked in the speaker at
     two to four hertz while nobody answered — and waits a second after,
     before its lobby talks over the new console's start.
+  - **The LINK CABLE screen names the mode this console chose** in its
+    note — THEN COOPERATIVE ON BOTH, or 2 PLAYER; over the air COOPERATIVE
+    THERE TOO (`lobby->mode_coop`). It said 2 PLAYER whatever was chosen,
+    and a partner who took the advice from a console on COOPERATIVE was no
+    partner: the lobby links two consoles on the same mode only
+    (`tengen_lobby_mode`), so the two waited on each other for ever
+    (`--link` reads both notes).
   - **The LINK CABLE screen says what is on the other end** (`link_peer`).
     The port rests in multiplayer mode from boot (`link_rest`), so one of
     ours anywhere in the game reads as "someone" (wait for its player). A
@@ -570,10 +577,17 @@ story behind each; the item number is in brackets.
   suspends again, so the menu around it is silent (`tunes_open`,
   `tunes_move`, `tunes_close`; `--pausemenu` listens).
 - **UP drops the piece when HARD DROP is ON** (`TengenGame.hard_drop`, from
-  the pause menu's OPTIONS; it used to come with the chord itself): a fresh
-  press takes it down a row at a time inside the frame, each row a soft-drop
-  step, and the gravity step below lands it — so it rests, scores and stops
-  on a coop partner exactly as holding DOWN would (`test_up_*`, `--chordfx`).
+  the pause menu's OPTIONS; it used to come with the chord itself): UP held
+  STRAIGHT for `TENGEN_HARD_DROP_HOLD` frames (3; `up_held`, counted on every
+  live frame and saturated by a deal, `spawn_piece`, so a hold begun under a
+  clear or a pause, or on the piece before — UP a frame late, as it landed —
+  is spent, and drops nothing: the hold that drops a piece begins on it)
+  takes it down a row at a time inside the frame, each row a soft-drop step,
+  and the gravity step below lands it — so it rests, scores and stops on a
+  coop partner exactly as holding DOWN would. A fresh press used to do it,
+  and a thumb rolling from RIGHT to LEFT across the pad closes UP for a frame
+  on the way, often with a side still down: pieces dropped by themselves. A
+  tap, or UP with LEFT or RIGHT, drops nothing (`test_up_*`, `--chordfx`).
 - **The pause menu's OPTIONS are six switches, all OFF until a player sets
   them** (`OPT_HARD_DROP`..`OPT_HOLD`, `g_options`): HARD DROP, FAST DOWN
   (`fast_soft`: DOWN a row every frame), FAST SHIFT (`fast_shift`: the side
@@ -803,7 +817,12 @@ the empty space does not reach is ink (`ink_masks` in
 tools/extract_assets.py, flooded from the screens' blank cells; for a skin,
 `skin_ink`, the release's screens with its art in them), drawn in
 BG_INK_INDEX, black in every bank (`ink_tile`, `kGameTileInk`,
-`kSkinSlotInk`, `kSkinBannerInk`) — the banner's letter shadows, the line
+`kSkinSlotInk`, `kSkinBannerInk`; the panels' top run, whose slots are its
+own because it stands where the menu's bottom border never does, has ink of
+its own, flooded over the panel's interior and under the screen's edge —
+`panel_run_ink`, `kPanelRunInk` for the release and the skins' rows of
+`kSkinSlotInk` above 255, which used to be left empty: a prototype's top
+fret showed the grey through) — the banner's letter shadows, the line
 outside the braid, the prototypes' frets — and the pause's wall a brick of
 its own with its grout in it (`T_WALL_BRICK`); PROTOTYPES, the skins by the
 publisher each was made for (`kSkinMenuNames`, the recipes' `menu`), listed

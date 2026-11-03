@@ -151,7 +151,8 @@ y se recuperan desde su modo aunque el acorde no se haya vuelto a hacer: solo
 guarda quien lo encontró, así que la partida lo trae de vuelta consigo.
 OPTIONS tiene seis interruptores, todos en OFF hasta que los toqués, que se
 guardan en el cartucho y vuelven cada vez que hacés el acorde: **HARD DROP**
-(Arriba tira la pieza de golpe), **FAST DOWN** (Abajo baja una fila por
+(Arriba, recto y mantenido un instante —tres fotogramas, sin lateral—, tira
+la pieza de golpe; un roce de la cruceta al pasar de un lado al otro no la tira), **FAST DOWN** (Abajo baja una fila por
 frame), **FAST SHIFT** (el lateral repite antes y más rápido), **GHOST** (la
 silueta de dónde va a caer la pieza, y en cooperativo también la del
 compañero), **SWAP A-B** (A y B giran al revés) y **HOLD** (SELECT guarda la
