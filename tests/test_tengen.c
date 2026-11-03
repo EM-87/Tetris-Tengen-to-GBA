@@ -4034,10 +4034,21 @@ static void test_locked_cells_never_overwrite_the_walls(void) {
     }
 }
 
+/* UP, held straight for TENGEN_HARD_DROP_HOLD frames: the frame the hold runs
+ * out. */
+static TengenStepResult hold_up(TengenGame *g) {
+    TengenStepResult r;
+    memset(&r, 0, sizeof r);
+    for (int i = 0; i < TENGEN_HARD_DROP_HOLD; i++)
+        r = tengen_step(g, TENGEN_PLAYER_1, TENGEN_BTN_UP);
+    return r;
+}
+
 /* UP DROPS THE PIECE WITH HARD DROP ON (TengenGame.hard_drop): the port's,
- * not the cartridge's, whose UP does nothing in play. One press and the piece
- * is where holding DOWN would have put it, locked, on the same frame — and
- * scored as holding DOWN scores it, each row a soft-drop step. */
+ * not the cartridge's, whose UP does nothing in play. Held straight for
+ * TENGEN_HARD_DROP_HOLD frames, and on that frame the piece is where holding
+ * DOWN would have put it, locked — and scored as holding DOWN scores it, each
+ * row a soft-drop step. */
 static void test_up_drops_the_piece_where_down_would_land_it(void) {
     for (int on = 0; on < 2; on++) {
         TengenGame drop;
@@ -4051,9 +4062,16 @@ static void test_up_drops_the_piece_where_down_would_land_it(void) {
         drop.player[0].fall_timer = 30;
         TengenGame held = drop;
 
+        /* The frames before the hold runs out: nothing yet. */
+        for (int i = 1; i < TENGEN_HARD_DROP_HOLD; i++) {
+            CHECK(!tengen_step(&drop, TENGEN_PLAYER_1, TENGEN_BTN_UP).piece_locked);
+            CHECK(drop.player[0].piece.y == TENGEN_SPAWN_Y);
+        }
         TengenStepResult r = tengen_step(&drop, TENGEN_PLAYER_1, TENGEN_BTN_UP);
         if (!on) {
-            /* Off, UP is nothing at all. */
+            /* Off, UP is nothing at all, however long. */
+            for (int i = 0; i < 20; i++)
+                r = tengen_step(&drop, TENGEN_PLAYER_1, TENGEN_BTN_UP);
             CHECK(!r.piece_locked);
             CHECK(drop.player[0].piece.current == TT_T);
             CHECK(drop.player[0].piece.y == TENGEN_SPAWN_Y);
@@ -4076,20 +4094,121 @@ static void test_up_drops_the_piece_where_down_would_land_it(void) {
     }
 }
 
-/* ...ONE PRESS, ONE PIECE: UP held into the next deal does not drop that
+/* ...ONE HOLD, ONE PIECE: UP held into the next deal does not drop that
  * one too. */
 static void test_up_held_drops_one_piece(void) {
     TengenGame g;
     tengen_new_game(&g, 0x1357, 0, false, false, false);
     g.hard_drop = true;
     tengen_step(&g, TENGEN_PLAYER_1, 0);
-    CHECK(tengen_step(&g, TENGEN_PLAYER_1, TENGEN_BTN_UP).piece_locked);
+    CHECK(hold_up(&g).piece_locked);
     tengen_step(&g, TENGEN_PLAYER_1, TENGEN_BTN_UP);   /* the deal */
     CHECK(g.player[0].piece.current != TT_NONE);
     for (int i = 0; i < 20; i++)
         CHECK(!tengen_step(&g, TENGEN_PLAYER_1, TENGEN_BTN_UP).piece_locked);
     tengen_step(&g, TENGEN_PLAYER_1, 0);
+    CHECK(hold_up(&g).piece_locked);
+}
+
+/* ...AND A TAP IS NOT A HOLD, NOR IS UP WITH A SIDE: a thumb rolling from
+ * RIGHT to LEFT across the pad closes UP for a frame, often with a side
+ * still down, and dropped pieces by itself when a fresh press was enough.
+ * Short of TENGEN_HARD_DROP_HOLD frames, nothing; UP with LEFT or RIGHT for
+ * as long as you like, nothing, and the count starts over after it; the
+ * frames before a side came down do not count towards the hold after. */
+static void test_up_tapped_or_sideways_drops_nothing(void) {
+    TengenGame g;
+    tengen_new_game(&g, 0x2468, 0, false, false, false);
+    g.hard_drop = true;
+    tengen_step(&g, TENGEN_PLAYER_1, 0);
+    g.player[0].piece.current = TT_O;
+    g.player[0].piece.orientation = 0;
+    g.player[0].piece.x = 4;
+    g.player[0].piece.y = TENGEN_SPAWN_Y;
+    g.player[0].fall_timer = 200;
+    for (int round = 0; round < 3; round++) {
+        for (int i = 1; i < TENGEN_HARD_DROP_HOLD; i++)        /* a tap */
+            CHECK(!tengen_step(&g, TENGEN_PLAYER_1, TENGEN_BTN_UP).piece_locked);
+        CHECK(!tengen_step(&g, TENGEN_PLAYER_1, 0).piece_locked);
+    }
+    for (int i = 0; i < 30; i++)                               /* the roll */
+        CHECK(!tengen_step(&g, TENGEN_PLAYER_1,
+                            TENGEN_BTN_UP | (i & 1 ? TENGEN_BTN_LEFT : TENGEN_BTN_RIGHT))
+                   .piece_locked);
+    /* Two frames of straight UP, a side for one, two more: never three. */
+    for (int i = 1; i < TENGEN_HARD_DROP_HOLD; i++)
+        CHECK(!tengen_step(&g, TENGEN_PLAYER_1, TENGEN_BTN_UP).piece_locked);
+    CHECK(!tengen_step(&g, TENGEN_PLAYER_1, TENGEN_BTN_UP | TENGEN_BTN_LEFT).piece_locked);
+    for (int i = 1; i < TENGEN_HARD_DROP_HOLD; i++)
+        CHECK(!tengen_step(&g, TENGEN_PLAYER_1, TENGEN_BTN_UP).piece_locked);
+    CHECK(g.player[0].piece.current == TT_O);
+    CHECK(g.player[0].piece.y == TENGEN_SPAWN_Y);
+    /* ...and the next frame makes the hold: the piece goes. */
     CHECK(tengen_step(&g, TENGEN_PLAYER_1, TENGEN_BTN_UP).piece_locked);
+}
+
+/* ...AND A HOLD BEGUN AS THE PIECE LANDS spares the next one: the hold that
+ * drops a piece begins on that piece (spawn_piece saturates the count), so
+ * UP pressed a frame late — on a piece that was landing anyway — does not
+ * send the next one down the moment it is dealt. That was the complaint:
+ * pieces dropping by themselves. */
+static void test_up_begun_as_the_piece_lands_spares_the_next(void) {
+    TengenGame g;
+    tengen_new_game(&g, 0x1357, 0, false, false, false);
+    g.hard_drop = true;
+    tengen_step(&g, TENGEN_PLAYER_1, 0);                 /* the first piece */
+    /* The piece at rest on the floor, its fall timer about to fire. */
+    for (;;) {
+        g.player[0].piece.y++;
+        if (!tengen_position_valid(&g, TENGEN_PLAYER_1)) {
+            g.player[0].piece.y--;
+            break;
+        }
+    }
+    g.player[0].fall_timer = 1;
+    /* UP from here: the piece locks by gravity on this frame (the count at
+     * one), the deal is the next (two, and spent), and twenty more frames
+     * of UP leave the new piece where it was dealt. */
+    CHECK(tengen_step(&g, TENGEN_PLAYER_1, TENGEN_BTN_UP).piece_locked);
+    tengen_step(&g, TENGEN_PLAYER_1, TENGEN_BTN_UP);     /* the deal */
+    CHECK(g.player[0].piece.current != TT_NONE);
+    for (int i = 0; i < 20; i++)
+        CHECK(!tengen_step(&g, TENGEN_PLAYER_1, TENGEN_BTN_UP).piece_locked);
+    CHECK(g.player[0].piece.y <= TENGEN_SPAWN_Y + 1);
+    /* Let go, held again: this piece goes. */
+    tengen_step(&g, TENGEN_PLAYER_1, 0);
+    CHECK(hold_up(&g).piece_locked);
+}
+
+/* ...AND A HOLD BEGUN UNDER A CLEAR drops nothing after it: the count runs
+ * through the frames the board is held still, so by the time the next piece
+ * is dealt the hold is spent, as a press was. */
+static void test_up_held_through_a_clear_spares_the_next_piece(void) {
+    TengenGame g;
+    tengen_new_game(&g, 0x4242, 0, false, false, false);
+    g.hard_drop = true;
+    TengenPlayfield *field = &g.field[0];
+    const int CUT = TENGEN_PF_HEIGHT - 1;
+    for (int col = 1; col < TENGEN_PF_WIDTH - 1; col++)
+        field->cell[CUT][col] = TT_I;
+    g.player[TENGEN_PLAYER_1].clearing_rows = 1u << CUT;
+    g.player[TENGEN_PLAYER_1].line_clear_timer = TENGEN_HARD_DROP_HOLD + 4;
+    g.player[TENGEN_PLAYER_1].piece.current = TT_NONE;
+    TengenStepResult r;
+    int frames = 0;
+    do {
+        r = tengen_step(&g, TENGEN_PLAYER_1, TENGEN_BTN_UP);
+        frames++;
+    } while (!r.lines_collapsed && frames < 60);
+    CHECK(r.lines_collapsed);
+    /* The deal, and twenty frames of UP still down: the piece stays up. */
+    for (int i = 0; i < 20; i++)
+        CHECK(!tengen_step(&g, TENGEN_PLAYER_1, TENGEN_BTN_UP).piece_locked);
+    CHECK(g.player[0].piece.current != TT_NONE);
+    CHECK(g.player[0].piece.y <= TENGEN_SPAWN_Y + 1);
+    /* Let go and held again: it goes. */
+    tengen_step(&g, TENGEN_PLAYER_1, 0);
+    CHECK(hold_up(&g).piece_locked);
 }
 
 /* ...AND ON A SHARED BOARD IT STOPS ON THE PARTNER without landing, as any
@@ -4099,7 +4218,10 @@ static void test_up_stops_on_the_coop_partner(void) {
     place_coop_pair(&game, TT_O, 0, 5, 4, TT_O, 0, 5, 12);
     game.hard_drop = true;
     game.player[1].fall_timer = 200;
-    TengenStepResult r = tengen_step(&game, TENGEN_PLAYER_1, TENGEN_BTN_UP);
+    /* A deal saturates the hold (spawn_piece), the game's first included:
+     * a frame with UP up before the hold, as a hand gives. */
+    tengen_step(&game, TENGEN_PLAYER_1, 0);
+    TengenStepResult r = hold_up(&game);
     CHECK(!r.piece_locked);
     CHECK(game.player[0].piece.current == TT_O);
     CHECK(game.player[0].piece.y == 10);
@@ -4651,6 +4773,9 @@ int main(void) {
     test_mended_collapse_lifts_the_falling_piece();
     test_up_drops_the_piece_where_down_would_land_it();
     test_up_held_drops_one_piece();
+    test_up_tapped_or_sideways_drops_nothing();
+    test_up_begun_as_the_piece_lands_spares_the_next();
+    test_up_held_through_a_clear_spares_the_next_piece();
     test_up_stops_on_the_coop_partner();
     test_fast_shift_repeats_sooner_and_closer();
     test_fast_down_falls_a_row_every_frame();

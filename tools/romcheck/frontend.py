@@ -452,10 +452,10 @@ def skin_ink(rom_path, failures):
     slot_ink = header_array(rom_path, "screen_proto.h", "kSkinSlotInk")
     banner_ink = header_array(rom_path, "screen_proto.h", "kSkinBannerInk")
     counts = header_array(rom_path, "screen_proto.h", "kSkinBannerCount")
-    run_art = header_array(rom_path, "screen_proto.h", "kSkinPanelRunRelease")
+    run_ink = header_array(rom_path, "tiles_game.h", "kPanelRunInk")
     game_ink = header_array(rom_path, "tiles_game.h", "kGameTileInk")
     worn, why = game_state_address(rom_path, "g_title_skin")
-    if (not (slots and slot_ink and banner_ink and counts and run_art and game_ink)
+    if (not (slots and slot_ink and banner_ink and counts and run_ink and game_ink)
             or worn is None):
         if build_has_protos(rom_path):
             failures.append(f"la ROM trae prototipos y no se puede mirar la tinta "
@@ -464,13 +464,14 @@ def skin_ink(rom_path, failures):
             skip("sin prototipos no hay tinta de skins que mirar")
         return
     banner_tiles = len(banner_ink) // 8 // len(counts)
-    # The release's masks, slot by slot: the ink of the tile whose art the
-    # slot holds — the two panel slots above 255 hold another's (see
+    # The release's masks, slot by slot: its own tile's, or for the two panel
+    # slots above 255 — the panels' top run, kBraidBottom's art where
+    # kBraidBottom never stands — the run's own (kPanelRunInk; see
     # SKIN_PANEL_RUN_BASE in gba/screen_proto.h).
     release_ink = {game_ink[i]: game_ink[i + 1:i + 9] for i in range(0, len(game_ink), 9)}
     run_base = min(slots[i] for i in range(len(slots)) if slots[i] > 0xFF)
-    release_masks = [release_ink.get(run_art[t - run_base] if t >= run_base else t, [0] * 8)
-                     for t in slots]
+    release_masks = [run_ink[(t - run_base) * 8:(t - run_base + 1) * 8] if t >= run_base
+                     else release_ink.get(t, [0] * 8) for t in slots]
     core, screen = load(rom_path)           # `screen` must stay alive; see load()
     _ = screen
 
@@ -1614,9 +1615,30 @@ def link_check(rom_path):
         print(f"  sin cable: sigue '{msg.strip()}' tras "
               f"{LINK_TIMEOUT_FRAMES + 60} frames")
 
+    # ...AND THE NOTE NAMES THE MODE THIS CONSOLE CHOSE. A partner who picks
+    # the other is no partner (tengen_lobby_mode: the two never link), and
+    # the note told a console on COOPERATIVE to pick 2 PLAYER on the other.
+    note = tilemap_text(core, LINK_MSG_ROW + 4)
+    if "2 PLAYER ON BOTH" not in note:
+        failures.append(f"la nota del cable en 2 PLAYER no pide 2 PLAYER en la "
+                        f"otra ({note.strip()!r})")
+
     tap("B")                          # back out of the link screen
     if "GAME SELECT" not in tilemap_text(core, 8):
         failures.append("B no vuelve del cable link al menu")
+
+    tap("DOWN")                       # 2 PLAYER -> COOPERATIVE
+    tap("START", settle=60)
+    coop_note = tilemap_text(core, LINK_MSG_ROW + 4)
+    if "LINK CABLE" not in tilemap_text(core, 8):
+        failures.append("COOPERATIVE no lleva a la pantalla de cable link")
+    elif "COOPERATIVE ON BOTH" not in coop_note:
+        failures.append(f"la nota del cable en COOPERATIVE no pide COOPERATIVE "
+                        f"en la otra ({coop_note.strip()!r})")
+    else:
+        print(f"  la nota del cable nombra el modo elegido: '{note.strip()}' "
+              f"y '{coop_note.strip()}'")
+    tap("B")
 
     for f in failures:
         print(f"FALLA: {f}")

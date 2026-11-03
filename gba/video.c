@@ -483,15 +483,13 @@ static void ink_tile(unsigned t, const uint8_t *rows) {
         }
 }
 
-/* ...the release's tile `art`'s, if it has any, on the slot `t` its art was
- * put back in. */
-static void ink_game_tile(unsigned t, unsigned art) {
+/* ...the release's tile `t`'s, if it has any; put back with the tile. */
+static void ink_game_tile(unsigned t) {
 #ifdef GAME_TILE_INK
     for (int i = 0; i < GAME_TILE_INK_COUNT; i++)
-        if (kGameTileInk[i][0] == art) ink_tile(t, &kGameTileInk[i][1]);
+        if (kGameTileInk[i][0] == t) ink_tile(t, &kGameTileInk[i][1]);
 #else
     (void)t;
-    (void)art;
 #endif
 }
 
@@ -946,9 +944,18 @@ static void upload_skin_play(int skin) {
 #ifdef SKIN_INK
         if (skin >= 0) ink_tile(slot, &kSkinSlotInk[skin][i * 8]);
 #endif
-        if (skin < 0)
-            ink_game_tile(slot, slot >= SKIN_PANEL_RUN_BASE
-                                ? kSkinPanelRunRelease[slot - SKIN_PANEL_RUN_BASE] : slot);
+        if (skin < 0) {
+            /* The panel's top run has ink of its own (kPanelRunInk): it
+             * stands over the panel's interior, under the screen's edge,
+             * where kBraidBottom — whose art it is — never does. */
+            if (slot >= SKIN_PANEL_RUN_BASE) {
+#ifdef GAME_TILE_INK
+                ink_tile(slot, kPanelRunInk[slot - SKIN_PANEL_RUN_BASE]);
+#endif
+            } else {
+                ink_game_tile(slot);
+            }
+        }
     }
 }
 static void upload_skin_banner(int skin) {

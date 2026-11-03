@@ -240,6 +240,12 @@ typedef struct {
     int8_t last_x;
     int8_t last_y;
     TengenRng last_rng;
+
+    /* THE PORT'S HARD DROP (TengenGame.hard_drop): frames UP has been held
+     * straight, counted on every frame the board is live and stopped at
+     * TENGEN_HARD_DROP_HOLD, where the drop fires; 0 again when UP is let go
+     * or a side is pressed with it. */
+    uint8_t up_held;
 } TengenPlayerState;
 
 /* main.asm.txt:1192-1197: the timer starts at $1D in 1P/2P and $21 in coop. */
@@ -372,11 +378,13 @@ typedef struct {
     /* UP DROPS THE PIECE — the port's, set by the GBA layer from the pause
      * menu's OPTIONS (HARD DROP; the master's over a cable, see
      * tengen_link_rules), off unless a player turned it on. The cartridge's UP does
-     * nothing in play. A fresh press takes the piece down to rest and locks
-     * it on the same frame, every row of the way a soft-drop step, so it
+     * nothing in play. UP held STRAIGHT — no LEFT or RIGHT with it — for
+     * TENGEN_HARD_DROP_HOLD frames in a row takes the piece down to rest and
+     * locks it on that frame, every row of the way a soft-drop step, so it
      * lands and scores where holding DOWN would have: the threshold tightens
      * a row at a time and a drop of a few rows is doubled (add_lock_score).
-     * A partner underneath stops it without a lock, as it stops any fall. */
+     * Once per hold. A partner underneath stops it without a lock, as it
+     * stops any fall. */
     bool hard_drop;
     /* ...AND TWO FASTER HANDS, the port's as well, a bit per player
      * (1 << slot) so that a computer's pad never has them, set by the GBA
@@ -521,6 +529,14 @@ extern const int8_t TENGEN_SPAWN_X[3];
  * before that anyway. */
 extern const uint16_t TENGEN_LEVEL_LINE_THRESHOLDS[21];
 extern const uint8_t TENGEN_LEVEL_LINE_TENS[21];
+
+/* THE PORT'S HARD DROP (TengenGame.hard_drop) fires on the frame UP has been
+ * held STRAIGHT — no LEFT or RIGHT with it — for this many frames in a row,
+ * once per hold. A fresh press used to do it, and a thumb rolling from
+ * RIGHT to LEFT across the pad closes UP for a frame on the way: pieces
+ * dropped by themselves. Three frames is fifty milliseconds, under any
+ * press meant as one, and a rock across the pad is through in one or two. */
+#define TENGEN_HARD_DROP_HOLD 3
 
 /* ----------------------------------------------------------------------- *
  * DAS / auto-rotate timing constants (VERIFIED, main.asm.txt:96-183)

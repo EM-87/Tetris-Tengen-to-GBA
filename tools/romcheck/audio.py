@@ -1117,11 +1117,15 @@ def chord_extras_check(rom_path):
                       f"baja desde arriba y vuelven el tablero y NEXT")
         del core, screen
 
-    # UP DROPS THE PIECE once HARD DROP is ON in the pause menu's OPTIONS
-    # (TengenGame.hard_drop): one press and it is down and planted, four more
-    # cells on the board within a couple of frames. Without the chord UP is
-    # the cartridge's, nothing, and at level 0 nothing lands that soon; with
-    # the chord and the option as a console first has it, OFF, nothing too.
+    # UP, HELD STRAIGHT FOR TENGEN_HARD_DROP_HOLD FRAMES, DROPS THE PIECE once
+    # HARD DROP is ON in the pause menu's OPTIONS (TengenGame.hard_drop): held
+    # four frames it is down and planted, four more cells on the board within
+    # a couple of frames. Without the chord UP is the cartridge's, nothing,
+    # and at level 0 nothing lands that soon; with the chord and the option
+    # as a console first has it, OFF, nothing too. And ON, a TAP of one frame
+    # drops nothing, nor does UP with a side down for as long as you like:
+    # that is a thumb rolling from RIGHT to LEFT across the pad, which
+    # dropped pieces by themselves while a fresh press was enough.
     def settled(core):
         return sum(1 for i in range(PF)
                    if core.memory.u8[base + off["field"] + i] not in (0, 15))
@@ -1135,15 +1139,27 @@ def chord_extras_check(rom_path):
                 core.set_keys(); run(core, 10)
         run(core, 20)
         before = settled(core)
-        core.set_keys(KEYS["UP"]); run(core, 3)
+        tapped = rolled = 0
+        if switch:
+            core.set_keys(KEYS["UP"]); run(core, 1)                  # a tap
+            core.set_keys(); run(core, 4)
+            tapped = settled(core) - before
+            core.set_keys(KEYS["UP"], KEYS["LEFT"]); run(core, 12)   # the roll
+            core.set_keys(KEYS["UP"], KEYS["RIGHT"]); run(core, 12)
+            core.set_keys(); run(core, 4)
+            rolled = settled(core) - before
+        core.set_keys(KEYS["UP"]); run(core, 4)
         core.set_keys(); run(core, 2)
         landed = settled(core) - before
         if landed != (4 if switch else 0):
             failures.append(f"{name}: ARRIBA deja {landed} celdas "
                             f"nuevas en el tablero, no {4 if switch else 0}")
+        elif tapped or rolled:
+            failures.append(f"{name}: un toque de ARRIBA ({tapped} celdas) o "
+                            f"ARRIBA con un lado ({rolled}) tira la pieza")
         else:
             print(f"  {name}: ARRIBA "
-                  f"{'tira la pieza de golpe' if switch else 'no hace nada'}")
+                  f"{'mantenido tira la pieza de golpe; un toque, o con un lado, no' if switch else 'no hace nada'}")
         del core, screen
 
     # THE TWO ODD BEVELS (mend_bevels): the ends of a horizontal run, $01

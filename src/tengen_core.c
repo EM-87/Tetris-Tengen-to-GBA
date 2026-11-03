@@ -815,6 +815,12 @@ static void spawn_piece(TengenGame *game, TengenPlayerSlot slot) {
     p->piece.x = game->coop ? TENGEN_SPAWN_X[slot] : TENGEN_SPAWN_X[2];
     p->drop_repeat = 0;
     p->hold_spent = false;      /* a new piece may be put aside (hold) */
+    /* ...AND UP HELD THROUGH THE DEAL DROPS NOTHING (TengenGame.hard_drop):
+     * the hold that drops a piece begins on that piece. Pressed a frame late,
+     * on a piece that was landing anyway, it used to run on through the deal
+     * and send the next piece down the moment it came up. Saturated here;
+     * the first frame with UP let go puts it back to 0. */
+    p->up_held = TENGEN_HARD_DROP_HOLD;
 
     /* Piece statistics (main.asm.txt:3730-3797, the tail of getNextTetromino).
      * Counted as the piece is DEALT, not as it locks, and only in 1P: the ROM
@@ -848,6 +854,7 @@ static bool hold_piece(TengenGame *game, TengenPlayerSlot slot) {
         p->fall_timer = TENGEN_DROP_RATE_AT_SPAWN;
         p->drop_rate_possible = TENGEN_DROP_RATE_AT_SPAWN;
         p->drop_repeat = 0;
+        p->up_held = TENGEN_HARD_DROP_HOLD;   /* dealt, as spawn_piece deals */
     }
     if (!tengen_position_valid(game, slot) ||
         (game->coop && tengen_coop_pieces_overlap(game, slot))) {
@@ -1457,6 +1464,24 @@ TengenStepResult tengen_step(TengenGame *game, TengenPlayerSlot slot, uint8_t he
         p->leveled_early = false;
     }
 
+    /* UP HELD STRAIGHT, FOR THE PORT'S HARD DROP (TengenGame.hard_drop):
+     * counted on every frame the board is live, the early returns below
+     * included, so a press begun under a clear, a pause or a deal has run
+     * its course — the counter stopped at TENGEN_HARD_DROP_HOLD — by the
+     * time there is a piece to drop, and drops nothing: one hold, one piece
+     * — and a deal saturates it too (spawn_piece), so the hold that drops a
+     * piece began on that piece. A side held with it is a thumb on its way
+     * across the pad, not a drop, and starts the count over. The drop itself
+     * comes after the frame's shifts and turns, below. */
+    bool drop_now = false;
+    if (game->hard_drop && (held_buttons & TENGEN_BTN_UP) &&
+        !(held_buttons & (TENGEN_BTN_LEFT | TENGEN_BTN_RIGHT))) {
+        if (p->up_held < TENGEN_HARD_DROP_HOLD)
+            drop_now = ++p->up_held == TENGEN_HARD_DROP_HOLD;
+    } else {
+        p->up_held = 0;
+    }
+
     /* While the line-clear animation runs the game is held still and the
      * completed rows are still standing, so a renderer can animate them. When
      * the timer expires they collapse and the counters catch up...
@@ -1652,13 +1677,14 @@ TengenStepResult tengen_step(TengenGame *game, TengenPlayerSlot slot, uint8_t he
     if (rotate_ccw) tengen_try_rotate(game, slot, false);
 
     /* UP DROPS THE PIECE (TengenGame.hard_drop; the port's, behind the
-     * chord). Down while the row below is free, each row a soft-drop step —
-     * the threshold tightened as holding DOWN tightens it — and the step
-     * that finds the row taken is the gravity step below, which lands it, or
-     * leaves it hanging over a coop partner, exactly as it would have. After
-     * this frame's shifts and turns, so a press that turns as it drops drops
-     * the turned piece. */
-    if (game->hard_drop && (new_presses & TENGEN_BTN_UP)) {
+     * chord), on the frame its hold has run to TENGEN_HARD_DROP_HOLD (see
+     * `drop_now`, at the top). Down while the row below is free, each row a
+     * soft-drop step — the threshold tightened as holding DOWN tightens it —
+     * and the step that finds the row taken is the gravity step below, which
+     * lands it, or leaves it hanging over a coop partner, exactly as it would
+     * have. After this frame's shifts and turns, so a hold that turns as it
+     * drops drops the turned piece. */
+    if (drop_now) {
         for (;;) {
             if (p->drop_rate_possible >= 2) p->drop_rate_possible--;
             p->piece.y++;
