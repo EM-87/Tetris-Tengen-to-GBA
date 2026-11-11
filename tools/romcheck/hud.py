@@ -3,6 +3,7 @@ The panels either side of the board: the four HUDs, NEXT, the
 braid, the histogram and the level-up show.
 """
 from .harness import (
+    build_has_protos,
     skip, put_skin_on,
     BRAID_BLUE, CELL_BLOCK, CELL_WALL, HUD_LABEL_TILE_BASE,
     HUD_LABEL_TILE_END, KEYS, OAM_ADDR, PAL_NEXT_BANK,
@@ -883,6 +884,12 @@ def stats_check(rom_path):
     que es lo que paso al tomar prestado el banco 3 entero: los prototipos
     tienen su NEXT tan rojo como el release.
     """
+    # A BUILD FROM THE CARTRIDGE'S DUMP ALONE HAS NO SKIN TO PUT ON, and this
+    # is all about skins: it said FALLA of such a build, which has nothing
+    # wrong with it. It skips there (and a strict run says so).
+    if not build_has_protos(rom_path):
+        skip("esta ROM se construyo sin prototipos: no hay skin que poner")
+        return 0
     failures = []
     # La capa del histograma es la suya propia (SCREENBLOCK_HISTOGRAM en
     # gba/port.h), asi que no hace falta saber donde cae la caja: se barre

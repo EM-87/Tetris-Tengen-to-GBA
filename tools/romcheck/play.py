@@ -8,6 +8,7 @@ import subprocess
 
 from .harness import (
     skip, GAME_SELECT_TY, ring_chord_from_title,
+    stack_bounds, stack_depth, stack_paint,
     CELL_BLOCK, CELL_WALL, CHARBLOCK_ADDR, CLEAR_WORDS,
     CODE_LEVEL_UP, CODE_LONG_BAR, CODE_UNDO, COL_BOX_L,
     COL_BOX_R, COL_FIELD, COL_FRAME_L, COL_FRAME_R,
@@ -1429,7 +1430,10 @@ def vblank_check(rom_path):
     cambiando de ancho y de caja, quitar la pausa (en solitario y en una
     carrera con el acorde, que la pausa cambia al tablero del rival y
     repintaba la pantalla entera: linea 222; ahora solo repone la caja, ver
-    --unpause) y una limpieza de cuatro filas.
+    --unpause), una limpieza de cuatro filas, y la sombra (GHOST) con la
+    pieza girando, sola y en un tablero compartido: su caida y su contorno
+    se calculaban al dibujar y el dibujado acababa en la linea 13 del frame
+    SIGUIENTE; ahora se calculan antes del blanco (ghost_prepare).
     """
     elf = os.path.splitext(rom_path)[0] + ".elf"
     try:
@@ -1528,12 +1532,52 @@ def vblank_check(rom_path):
     results["el final con el acorde: cartel, cortinilla y pagina"] = measure(core, 300)
     del core, screen
 
+    # THE GHOST (OPT_GHOST), WITH THE PIECE TURNING: where it lands and what
+    # its outline is used to be worked out as the board was drawn -- the
+    # whole collision routine twenty times over, and on a turn a flood of a
+    # thousand pixels -- and the drawing ended on line 13 of the NEXT frame,
+    # every frame the ghost was on (39 on a turn, 50 on a coop board). They
+    # are worked out before the blank now (ghost_prepare). Each of the seven
+    # pieces turned twice, alone and on a board shared with the computer,
+    # where there are two ghosts; and no frame may be lost to it either: one
+    # drawing for every frame the screen shows.
+    whole = {}
+    for what, downs in (("la sombra, girando cada pieza", 0),
+                        ("cooperativo con las dos sombras, girando cada pieza", 4)):
+        core, screen = load(rom_path)
+        run(core, 8)
+        press_start(core); run(core, 10)
+        for keys in [["L", "R"]] + [["DOWN"]] * downs:
+            core.set_keys(*[KEYS[k] for k in keys]); run(core, 4)
+            core.set_keys(); run(core, 12)
+        press_start(core); run(core, 12)
+        press_start(core); run(core, 40)
+        for k in ("START", "DOWN", "A", "DOWN", "DOWN", "DOWN", "A", "START"):
+            core.set_keys(KEYS[k]); run(core, 4); core.set_keys(); run(core, 12)
+        run(core, 20)
+        got, frames = [], 0
+        for piece in range(1, 8):
+            core.memory.u8[base + off["current"]] = piece
+            core.memory.u8[base + off["orientation"]] = 0
+            core.memory.u8[base + off["x"]] = 5
+            core.memory.u8[base + off["y"]] = 6
+            for _ in range(2):
+                got += tap_measure(core, ["A"], frames=4)
+                frames += 8
+        results[what] = got
+        whole[what] = frames
+        del core, screen
+
     failures = []
     for what, ends in results.items():
         late = [v for v in ends if v < 160]
         inside = [v for v in ends if v >= 160]
         if not ends:
             failures.append(f"{what}: no se vio terminar ningun dibujado")
+        elif what in whole and len(ends) < whole[what]:
+            failures.append(f"{what}: {whole[what] - len(ends)} de {whole[what]} "
+                            f"frames sin dibujar (el trabajo de antes del blanco "
+                            f"se come el blanco)")
         elif late:
             failures.append(f"{what}: {len(late)} de {len(ends)} frames acaban "
                             f"fuera del blanco (linea {late})")
@@ -1545,6 +1589,125 @@ def vblank_check(rom_path):
     if failures:
         return 1
     print("OK: el dibujado de cada frame termina dentro del blanco vertical.")
+    return 0
+
+
+def stack_check(rom_path):
+    """LA PILA NO LLEGA A LAS VARIABLES, Y SE MIDE CUANTO LE FALTA.
+
+    La RAM interna son 32KB para el codigo caliente, .data, .bss y las dos
+    pilas. El enlazador se niega a dejar menos de 4KB a la del usuario
+    (gba/gba.ld), pero no dice si 4KB bastan: lo que queda sobre .bss ha
+    bajado de unos 10,7KB a unos 4,3KB segun ha ido entrando codigo en IWRAM,
+    y una pila que se acaba escribe encima de las ultimas variables sin
+    avisar. Aqui se pinta lo que queda libre y se mira hasta donde llego la
+    pila en lo mas hondo que hay: los menus y sus paginas, una partida con
+    todas las opciones y la mano ocupada (HOLD, HARD DROP, limpiezas), el
+    final y su pagina, y WITH y VERSUS COMPUTER bajo el acorde, que es el
+    ordenador del port planeando. Tiene que sobrar 1KB; la pila de la
+    interrupcion, la mitad de sus 256 bytes.
+    """
+    bounds = stack_bounds(rom_path)
+    base, why = game_state_address(rom_path)
+    if bounds is None or base is None:
+        skip(f"{why or 'el ELF no exporta __bss_end, __sp_usr y __sp_irq'}")
+        return 0
+    off = game_offsets(rom_path)
+    room = bounds[1] - bounds[0]
+    import random
+
+    def tap(core, *keys, hold=4, settle=12):
+        core.set_keys(*[KEYS[k] for k in keys]); run(core, hold)
+        core.set_keys(); run(core, settle)
+
+    def boot():
+        core, screen = load(rom_path)   # `screen` must stay alive; see load()
+        # Every option on (HARD DROP, FAST DOWN, FAST SHIFT, GHOST, HOLD).
+        core.memory.u8[0x0E000404] = 0x2F
+        core.memory.u8[0x0E000405] = 0xC3 ^ ((0x2F * 7) & 0xFF)
+        core.reset()
+        run(core, 8)
+        stack_paint(core, bounds)
+        press_start(core); run(core, 10)
+        tap(core, "L", "R")
+        return core, screen
+
+    def busy(core, frames, seed):
+        rng = random.Random(seed)
+        hands = [[], [], ["LEFT"], ["RIGHT"], ["A"], ["B"], ["DOWN"], ["UP"],
+                 ["SELECT"], ["LEFT"], ["RIGHT"]]
+        for f in range(frames):
+            if f % 4 == 0:
+                core.set_keys(*[KEYS[k] for k in rng.choice(hands)])
+            core.run_frame()
+        core.set_keys(); run(core, 4)
+
+    seen = {}
+
+    # The menus: the OPTIONS page and every box on it, and STATS.
+    core, screen = boot()
+    tap(core, "UP"); tap(core, "A", settle=20)
+    for _ in range(6):
+        tap(core, "A", settle=14); tap(core, "DOWN"); tap(core, "B", settle=14)
+        tap(core, "DOWN", settle=8)
+    seen["los menus, la pagina OPTIONS y sus cajas"] = stack_depth(core, bounds)
+    del core, screen
+
+    # 1 PLAYER, every option on, a busy hand; four rows cleared at a time
+    # till the level's show; then the board buried and the end's page.
+    core, screen = boot()
+    press_start(core); run(core, 12)
+    press_start(core); run(core, 40)
+    busy(core, 500, 3)
+    for _ in range(8):
+        if not core.memory.u8[base + off["active"]]:
+            break
+        fill_rows(core, base + off["field"], [16, 17, 18, 19])
+        core.set_keys(KEYS["DOWN"]); run(core, 150); core.set_keys()
+    tap(core, "START", settle=20); tap(core, "A", settle=20); tap(core, "B")
+    tap(core, "DOWN"); tap(core, "A", settle=20); tap(core, "B"); tap(core, "START", settle=20)
+    seen["1 PLAYER con todas las opciones, limpiezas y el menu de pausa"] = \
+        stack_depth(core, bounds)
+    for row in range(PF_H):
+        for col in range(PF_W):
+            core.memory.u8[base + off["field"] + row * PF_W + col] = (
+                CELL_WALL if col in (0, PF_W - 1) else 0 if col == 5 else CELL_BLOCK)
+    run(core, 900)
+    seen["el final, su pagina y lo que viene despues"] = stack_depth(core, bounds)
+    del core, screen
+
+    # The port's computer, planning: beside the player and against.
+    for name, downs, seed in (("WITH COMPUTER con la mano ocupada", 4, 5),
+                              ("VERSUS COMPUTER con la mano ocupada", 3, 7)):
+        core, screen = boot()
+        for _ in range(downs):
+            tap(core, "DOWN", settle=10)
+        press_start(core); run(core, 12)
+        press_start(core); run(core, 40)
+        busy(core, 1500, seed)
+        seen[name] = stack_depth(core, bounds)
+        del core, screen
+
+    failures = []
+    for what, (user, irq) in seen.items():
+        if user > room - 1024:
+            failures.append(f"{what}: la pila llega a {user} de {room} bytes, a "
+                            f"menos de 1KB de las variables")
+        elif irq > (bounds[2] - bounds[1]) // 2:
+            failures.append(f"{what}: la pila de la interrupcion llega a {irq} "
+                            f"de {bounds[2] - bounds[1]} bytes")
+        elif user < 256:
+            failures.append(f"{what}: la pila no se movio ({user} bytes): la "
+                            f"medida no mide")
+        else:
+            print(f"  {what}: {user} de {room} bytes, y {irq} de "
+                  f"{bounds[2] - bounds[1]} la de la interrupcion")
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print(f"OK: a la pila le sobran {room - max(u for u, _ in seen.values())} "
+          f"bytes en lo mas hondo.")
     return 0
 
 

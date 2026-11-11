@@ -127,7 +127,7 @@ const uint16_t kGameProbe[24] = {
  * missed made a check read the wrong thing and say nothing
  * (romcheck/harness.py, check_layout). The order is the reader's. */
 __attribute__((used))
-const uint16_t kCheckProbe[28] = {
+const uint16_t kCheckProbe[30] = {
     TILES_GAME_QUESTION, TILES_GAME_PERCENT,
     PMENU_RAISED_BASE, T_ARROW_TAIL, T_ARROW_HEAD,
     SCREEN_LEADER_HEAD_TY, SCREEN_LEADER_FIRST_TY, LEADER_ENTRIES,
@@ -148,6 +148,8 @@ const uint16_t kCheckProbe[28] = {
     T_GHOST, T_CHECK_OFF, T_HOLD_LABEL,
     /* ...and the wall's brick. */
     T_WALL_BRICK,
+    /* ...and the sending's bar and the shelf's join, the last of the line. */
+    T_SEND_BAR, T_SHELF_JOIN,
 };
 __attribute__((used))
 const char kCheckRaised[] = PMENU_RAISED_CHARS;
@@ -483,7 +485,10 @@ static void ink_tile(unsigned t, const uint8_t *rows) {
         }
 }
 
-/* ...the release's tile `t`'s, if it has any; put back with the tile. */
+#if SCREEN_PROTO_AVAILABLE && SCREEN_SKIN_PLAY
+/* ...the release's tile `t`'s, if it has any; put back with the tile, when
+ * a skin is taken off (upload_skin_play: a build with no board skins never
+ * takes one off). */
 static void ink_game_tile(unsigned t) {
 #ifdef GAME_TILE_INK
     for (int i = 0; i < GAME_TILE_INK_COUNT; i++)
@@ -492,6 +497,29 @@ static void ink_game_tile(unsigned t) {
     (void)t;
 #endif
 }
+#endif
+
+/* THE TILE MEMORY'S WINDOWS, COUNTED rather than remembered: the game's
+ * tiles, the title's, a prototype's, the HUD's labels, the panel's run
+ * pair, a skin's banner, its histogram runs and then the tiles made at boot
+ * (PMENU_RAISED_BASE up, which port.h counts to the end of the block). Each
+ * was given its number by whoever needed it, in a comment that said what
+ * was free that day; see T_SEND_BAR for what one of those cost. */
+typedef char tile_windows_fit[
+    sizeof(kGameTiles) / 32 <= TITLE_TILE_BASE &&
+    TITLE_TILE_BASE + sizeof(kTitleTiles) / 32 <= PROTO_TILE_BASE &&
+    PROTO_TILE_BASE + 256 <= HUD_LABEL_TILE_BASE &&
+    HUD_LABEL_TILE_BASE + sizeof(kHudLabelTiles) / 32 <= SKIN_BANNER_BASE &&
+    SKIN_BANNER_BASE + 64 <= SKIN_STATS_BASE &&
+    SKIN_STATS_BASE + 64 <= PMENU_RAISED_BASE ? 1 : -1];
+#if SCREEN_PROTO_AVAILABLE && SCREEN_SKIN_PLAY
+typedef char skin_windows_fit[
+    HUD_LABEL_TILE_BASE + sizeof(kHudLabelTiles) / 32 <= SKIN_PANEL_RUN_BASE &&
+    SKIN_PANEL_RUN_BASE + 2 <= SKIN_BANNER_BASE &&
+    SKIN_BANNER_BASE + SKIN_BANNER_TILES <= SKIN_STATS_BASE &&
+    SKIN_STATS_BASE + SKIN_STATS_RUNS * SKIN_STATS_STEPS <= PMENU_RAISED_BASE
+    ? 1 : -1];
+#endif
 
 void upload_tiles(void) {
     vu16 *dst = MEM_CHARBLOCK(CHARBLOCK);
@@ -502,6 +530,26 @@ void upload_tiles(void) {
 #ifdef GAME_TILE_INK
     for (int i = 0; i < GAME_TILE_INK_COUNT; i++)
         ink_tile(kGameTileInk[i][0], &kGameTileInk[i][1]);
+#endif
+#if !(SCREEN_PROTO_AVAILABLE && SCREEN_SKIN_PLAY)
+    /* THE PANEL'S OWN RUN, IN A BUILD WITH NO BOARD SKINS — made from the
+     * cartridge's dump alone, which is what the README asks for, or with a
+     * prototype that would not give up its play screen. The panel draws
+     * its top run out of two slots of its own (SKIN_PANEL_RUN_BASE, see
+     * port.h) that a skin refills, and upload_skin_play was the only thing
+     * that ever filled them: without a skin to load there was no such
+     * routine, the name itself was not defined, and the port did not
+     * compile. The release's art for them (kBraidBottom's two tiles) and
+     * its ink, once, here. */
+    for (int i = 0; i < 2; i++) {
+        const uint8_t *art = &kGameTiles[kBraidBottom[i][0] * 32];
+        vu16 *run = dst + (SKIN_PANEL_RUN_BASE + i) * 16;
+        for (int b = 0; b < 32; b += 2)
+            run[b / 2] = (uint16_t)(art[b] | (art[b + 1] << 8));
+#ifdef GAME_TILE_INK
+        ink_tile(SKIN_PANEL_RUN_BASE + (unsigned)i, kPanelRunInk[i]);
+#endif
+    }
 #endif
     /* THE PAUSE'S WALL AND THE END PAGE'S CURTAIN, a brick of their own: the
      * cartridge's lone block ($0F) with the grout between its bricks in the
@@ -1262,8 +1310,6 @@ static bool skin_effect(int which) {
                       kSkinFxWrite[skin][which], SKIN_FX_FRAMES, channel);
     return true;
 }
-#else
-static bool skin_effect(int which) { (void)which; return false; }
 #endif
 
 /* WHETHER THIS GAME'S PAUSE LETS ITS TUNE PLAY ON. Only a prototype's rules

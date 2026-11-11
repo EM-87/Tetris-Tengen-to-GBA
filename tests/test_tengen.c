@@ -3016,6 +3016,61 @@ static void test_the_ports_computer_thinks_while_there_is_time(void) {
     CHECK(g_units_left > 0);               /* ...and it stopped asking */
 }
 
+/* ...AND EVERY UNIT IS ASKED FOR: the time is a frame's, and a stretch of
+ * thinking nobody asked the clock about is what runs past the end of it.
+ * A yes that only covers reading the board scores nothing; and the picking
+ * that ends the straight drops is a unit of its own — the look ahead after
+ * it asks again, and with no time left has not begun. */
+static void test_the_ports_computer_asks_before_every_unit(void) {
+    TengenGame g;
+    TengenAi ai;
+    tengen_new_game(&g, 0x4321, 0, false, false, false);
+    tengen_step(&g, TENGEN_PLAYER_1, 0);   /* a piece in hand, and a next */
+    tengen_ai_reset(&ai);
+    ai.smart = true;
+    tengen_ai_choose(&ai, &g, TENGEN_PLAYER_1);
+    CHECK(ai.plan_stage == 1 && ai.plan_cursor == 0);
+    g_units_left = 1;                      /* the board, and no more */
+    tengen_ai_think_while(&ai, &g, TENGEN_PLAYER_1, units_left);
+    CHECK(ai.plan_stage == 1 && ai.plan_cursor == 0);
+    /* A unit a call, to the end of the straight drops and the picking. */
+    int calls = 0;
+    while (ai.plan_stage == 1 && calls < 500) {
+        int before = ai.plan_cursor;
+        g_units_left = 2;
+        tengen_ai_think_while(&ai, &g, TENGEN_PLAYER_1, units_left);
+        CHECK(ai.plan_stage != 1 || ai.plan_cursor == before + 1);
+        calls++;
+    }
+    CHECK(calls > 8 && calls < 500);
+    CHECK(ai.plan_stage == 2);
+    CHECK(ai.plan_top_count > 0);
+    CHECK(ai.plan_cursor == 0 && ai.plan_inner == 0);   /* not begun */
+    /* WHAT IT PICKED TO LOOK AHEAD FROM (ai_pick): the best few of the
+     * straight drops, each once, best first — no candidate left out scores
+     * more than the last one taken. */
+    CHECK(ai.plan_top_count == TENGEN_AI_SMART_KEEP);
+    for (int i = 0; i < ai.plan_top_count; i++) {
+        int k = ai.plan_top[i];
+        CHECK(k < ai.plan_count);
+        for (int j = 0; j < i; j++) CHECK(ai.plan_top[j] != k);
+        if (i > 0)
+            CHECK(ai.plan_cand_score[ai.plan_top[i - 1]] >= ai.plan_cand_score[k]);
+    }
+    for (int k = 0; k < ai.plan_count; k++) {
+        bool picked = false;
+        for (int i = 0; i < ai.plan_top_count; i++)
+            if (ai.plan_top[i] == k) picked = true;
+        if (!picked)
+            CHECK(ai.plan_cand_score[k] <=
+                  ai.plan_cand_score[ai.plan_top[ai.plan_top_count - 1]]);
+    }
+    /* ...and a unit more is one reply looked at. */
+    g_units_left = 2;
+    tengen_ai_think_while(&ai, &g, TENGEN_PLAYER_1, units_left);
+    CHECK(ai.plan_stage == 2 && ai.plan_inner >= 1);
+}
+
 static void test_the_ports_computer_keeps_a_persons_pace(void) {
     /* `adaptive`: a partner who drops pieces gets a computer that drops
      * its own; one who lets them fall does not; four lines ahead, it drops
@@ -4327,6 +4382,51 @@ static void test_drop_distance_is_where_it_fits(void) {
     CHECK(tengen_drop_distance(&g, TENGEN_PLAYER_1) == 0);
 }
 
+/* ...COUNTED FROM THE PIECE'S FEET (ghost_fall), and the same as moving
+ * the whole piece down a row at a time and asking the whole collision
+ * routine — for every piece, every turn, every column out to the walls and
+ * every row from the spawn rows down (where the walls are the buffer's and
+ * not the field's), over a board with overhangs in it; on one player's
+ * board and on a shared one. A piece that does not fit where it is has no
+ * fall at all. */
+static void test_drop_distance_is_the_whole_collision_routines(void) {
+    int asked = 0, fell = 0;
+    for (int coop = 0; coop < 2; coop++) {
+        TengenGame g;
+        tengen_new_game(&g, 0x60D, 0, coop != 0, coop != 0, false);
+        /* Blocks with air under them: a ledge two wide at the left a third
+         * of the way down, one at the right lower, and a broken floor. */
+        for (int c = 1; c <= 2; c++) g.field[0].cell[7][c] = TT_I;
+        for (int c = 7; c <= 9; c++) g.field[0].cell[12][c] = TT_I;
+        for (int c = 0; c < TENGEN_PF_WIDTH; c++)
+            if (c % 3) g.field[0].cell[TENGEN_PF_HEIGHT - 1][c] = TT_I;
+        for (int piece = TT_NONE + 1; piece < TENGEN_TETROMINO_COUNT; piece++)
+        for (int o = 0; o < 4; o++)
+        for (int x = -3; x <= TENGEN_PF_WIDTH + 3; x++)
+        for (int y = -2; y <= TENGEN_ROM_FLOOR_ROW; y++) {
+            TengenPiece *pc = &g.player[0].piece;
+            pc->current = (TengenTetromino)piece;
+            pc->orientation = (uint8_t)o;
+            pc->x = (int8_t)x;
+            pc->y = (int8_t)y;
+            int want = 0;
+            if (tengen_position_valid(&g, TENGEN_PLAYER_1)) {
+                for (;;) {
+                    pc->y++;
+                    if (!tengen_position_valid(&g, TENGEN_PLAYER_1)) break;
+                    want++;
+                }
+                pc->y = (int8_t)y;
+            }
+            asked++;
+            if (want) fell++;
+            CHECK(tengen_drop_distance(&g, TENGEN_PLAYER_1) == want);
+        }
+    }
+    CHECK(asked > 10000);
+    CHECK(fell > 2000);
+}
+
 /* ...ON THE BOARD, NOT ON THE PARTNER: a coop partner's piece is passing
  * through, and the ghost says where this one locks. */
 static void test_drop_distance_looks_through_the_partner(void) {
@@ -4338,6 +4438,152 @@ static void test_drop_distance_looks_through_the_partner(void) {
     CHECK(tengen_position_valid(&game, TENGEN_PLAYER_1));
     game.player[0].piece.y = (int8_t)(4 + d + 1);
     CHECK(!tengen_position_valid(&game, TENGEN_PLAYER_1));
+}
+
+/* THE TWO GHOSTS OF A SHARED BOARD FIT TOGETHER (tengen_ghost_distances).
+ * Two O's one over the other, both making for the floor: read one at a
+ * time they land in the same four cells, which is what the port drew — one
+ * outline over the other. Let go together the lower one lands and the
+ * higher one comes to rest on it, two rows up. */
+static void test_coop_ghosts_stack_instead_of_sharing_cells(void) {
+    TengenGame game;
+    place_coop_pair(&game, TT_O, 0, 5, 4, TT_O, 0, 5, 12);
+    int alone[2] = { tengen_drop_distance(&game, TENGEN_PLAYER_1),
+                     tengen_drop_distance(&game, TENGEN_PLAYER_2) };
+    CHECK(4 + alone[0] == 12 + alone[1]);          /* the same four cells */
+    int d[2];
+    tengen_ghost_distances(&game, d);
+    CHECK(d[1] == alone[1]);                       /* the lower: the floor */
+    CHECK(d[0] == alone[0] - 2);                   /* the higher: on it */
+    /* ...whichever pad holds which: the order is the pieces', not the
+     * slots'. */
+    place_coop_pair(&game, TT_O, 0, 5, 12, TT_O, 0, 5, 4);
+    tengen_ghost_distances(&game, d);
+    CHECK(d[0] == alone[1]);
+    CHECK(d[1] == alone[0] - 2);
+
+    /* Side by side they share no column, and each lands where it would
+     * alone; and one of them with no piece in play leaves the other its
+     * whole fall. */
+    place_coop_pair(&game, TT_O, 0, 3, 4, TT_O, 0, 5, 12);
+    tengen_ghost_distances(&game, d);
+    CHECK(d[0] == tengen_drop_distance(&game, TENGEN_PLAYER_1));
+    CHECK(d[1] == tengen_drop_distance(&game, TENGEN_PLAYER_2));
+    place_coop_pair(&game, TT_O, 0, 5, 4, TT_O, 0, 5, 12);
+    game.player[1].piece.current = TT_NONE;
+    tengen_ghost_distances(&game, d);
+    CHECK(d[0] == alone[0]);
+    CHECK(d[1] == 0);
+
+    /* A piece hanging on its partner in mid air (L840B) has a ghost all the
+     * same: the partner's lands, and its own on top. */
+    place_coop_pair(&game, TT_O, 0, 5, 10, TT_O, 0, 5, 12);
+    tengen_ghost_distances(&game, d);
+    CHECK(d[1] == alone[1]);
+    CHECK(d[0] == d[1]);
+
+    /* Two boards have nothing to meet: each its own fall. */
+    TengenGame race;
+    tengen_new_game(&race, 0x5EED, 0, true, false, false);
+    for (int s = 0; s < 2; s++) {
+        race.player[s].piece.current = TT_O;
+        race.player[s].piece.orientation = 0;
+        race.player[s].piece.x = 5;
+        race.player[s].piece.y = (int8_t)(4 + 8 * s);
+    }
+    tengen_ghost_distances(&race, d);
+    CHECK(d[0] == tengen_drop_distance(&race, TENGEN_PLAYER_1));
+    CHECK(d[1] == tengen_drop_distance(&race, TENGEN_PLAYER_2));
+    CHECK(4 + d[0] == 12 + d[1]);
+}
+
+/* ...FOR EVERY PAIR OF PIECES, EVERY TURN AND EVERY WAY OF STANDING BY EACH
+ * OTHER, over a floor that is not level. Worked out a second way, from the
+ * cells: two pieces that share a column are one over the other in every
+ * column they share (no two tetrominoes hook round each other — counted
+ * here, not assumed), the one underneath lands where it would alone, and
+ * the one above goes down until the field or that landing stops it. */
+static bool ghost_cells_meet(const TengenCell a[4], int da,
+                             const TengenCell b[4], int db) {
+    for (int i = 0; i < 4; i++)
+        for (int j = 0; j < 4; j++)
+            if (a[i].col == b[j].col && a[i].row + da == b[j].row + db)
+                return true;
+    return false;
+}
+
+static void test_coop_ghosts_fit_for_every_pair(void) {
+    int pairs = 0, stacked = 0;
+    for (int a = TT_NONE + 1; a < TENGEN_TETROMINO_COUNT; a++)
+    for (int ao = 0; ao < 4; ao++)
+    for (int b = TT_NONE + 1; b < TENGEN_TETROMINO_COUNT; b++)
+    for (int bo = 0; bo < 4; bo++)
+    for (int dx = -4; dx <= 4; dx++)
+    for (int dy = -4; dy <= 4; dy++) {
+        TengenGame game;
+        place_coop_pair(&game, (TengenTetromino)a, (uint8_t)ao, 6, 8,
+                        (TengenTetromino)b, (uint8_t)bo, 6 + dx, 8 + dy);
+        /* A floor with a step in it and a hole: columns 1-4 two higher
+         * than the rest, and column 7 open one row further down. */
+        for (int c = 0; c < TENGEN_PF_WIDTH; c++) {
+            int top = TENGEN_PF_HEIGHT - (c >= 1 && c <= 4 ? 5 : 3);
+            if (c == 7) top++;
+            for (int r = top; r < TENGEN_PF_HEIGHT; r++)
+                game.field[0].cell[r][c] = TT_I;
+        }
+        if (tengen_coop_pieces_overlap(&game, TENGEN_PLAYER_1) ||
+            !tengen_position_valid(&game, TENGEN_PLAYER_1) ||
+            !tengen_position_valid(&game, TENGEN_PLAYER_2))
+            continue;
+        pairs++;
+        TengenCell cells[2][4];
+        CHECK(tengen_active_piece_cells(&game, TENGEN_PLAYER_1, cells[0]) == 4);
+        CHECK(tengen_active_piece_cells(&game, TENGEN_PLAYER_2, cells[1]) == 4);
+        int alone[2] = { tengen_drop_distance(&game, TENGEN_PLAYER_1),
+                         tengen_drop_distance(&game, TENGEN_PLAYER_2) };
+        /* THE FALL IS COUNTED FROM THE PIECE'S FEET (ghost_fall), and has
+         * to be what the whole collision routine says of the whole piece,
+         * a row at a time: every row down to it fits, and the next does
+         * not. */
+        for (int s = 0; s < 2; s++) {
+            TengenGame probe = game;
+            int d = 0;
+            for (;;) {
+                probe.player[s].piece.y++;
+                if (!tengen_position_valid(&probe, (TengenPlayerSlot)s)) break;
+                d++;
+            }
+            CHECK(alone[s] == d);
+        }
+        /* Which is over which, column by column. */
+        bool over[2] = { false, false };
+        for (int i = 0; i < 4; i++)
+            for (int j = 0; j < 4; j++)
+                if (cells[0][i].col == cells[1][j].col)
+                    over[cells[0][i].row < cells[1][j].row ? 0 : 1] = true;
+        CHECK(!(over[0] && over[1]));              /* never hooked together */
+        int want[2] = { alone[0], alone[1] };
+        if (over[0] || over[1]) {
+            int up = over[0] ? 0 : 1, low = up ^ 1;
+            int k = 0;
+            while (k < alone[up] &&
+                   !ghost_cells_meet(cells[up], k + 1, cells[low], alone[low]))
+                k++;
+            want[up] = k;
+            if (k < alone[up]) stacked++;
+        }
+        int d[2];
+        tengen_ghost_distances(&game, d);
+        CHECK(d[0] == want[0]);
+        CHECK(d[1] == want[1]);
+        /* And what the picture needs of them, said outright: on the field,
+         * and not a cell in common. */
+        CHECK(d[0] >= 0 && d[0] <= alone[0]);
+        CHECK(d[1] >= 0 && d[1] <= alone[1]);
+        CHECK(!ghost_cells_meet(cells[0], d[0], cells[1], d[1]));
+    }
+    CHECK(pairs > 20000);
+    CHECK(stacked > 1000);
 }
 
 /* HOLD (TengenGame.hold, a bit per player; the pause menu's OPTIONS): a
@@ -4768,6 +5014,7 @@ int main(void) {
     test_the_ports_computer_comes_back_when_the_way_clears();
     test_the_ports_computer_slides_under_a_ledge_when_there_is_time();
     test_the_ports_computer_thinks_while_there_is_time();
+    test_the_ports_computer_asks_before_every_unit();
     test_the_ports_computer_keeps_a_persons_pace();
     test_mended_coop_deal_waits_for_room();
     test_mended_collapse_lifts_the_falling_piece();
@@ -4781,7 +5028,10 @@ int main(void) {
     test_fast_down_falls_a_row_every_frame();
     test_fast_hands_are_one_players();
     test_drop_distance_is_where_it_fits();
+    test_drop_distance_is_the_whole_collision_routines();
     test_drop_distance_looks_through_the_partner();
+    test_coop_ghosts_stack_instead_of_sharing_cells();
+    test_coop_ghosts_fit_for_every_pair();
     test_hold_into_an_empty_box_deals_the_next();
     test_hold_swaps_once_the_next_piece_is_dealt();
     test_hold_is_off_and_one_players();

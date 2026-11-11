@@ -592,8 +592,8 @@ story behind each; the item number is in brackets.
   them** (`OPT_HARD_DROP`..`OPT_HOLD`, `g_options`): HARD DROP, FAST DOWN
   (`fast_soft`: DOWN a row every frame), FAST SHIFT (`fast_shift`: the side
   repeat at 8 then every 2 frames, the cartridge's 11 and 6), GHOST (the
-  landing place in outline, `tengen_drop_distance`; in coop the partner's
-  too, in its bank), SWAP A-B (the turns the other way round; the menu
+  landing place in outline, `tengen_ghost_distances`; in coop the partner's
+  too, in its bank and dashed), SWAP A-B (the turns the other way round; the menu
   still reads A as A) and HOLD (below). Kept on the battery with a check byte
   (`SAVE_OPTIONS_OFF`, $0404) and in force whenever the chord is; a
   Single-Pak copy keeps them until it is switched off. The faster hands are
@@ -610,6 +610,27 @@ story behind each; the item number is in brackets.
   are blank, so an eight-pixel outline stood a pixel proud of the piece above
   and to the left. Made again only when the piece, its turn or the skin
   changes (`--pausemenu` `ghost_fits` compares it pixel for pixel).
+- **On a shared board the two ghosts fit together, and the partner's is
+  dashed.** Each used to be its own piece's fall to the settled field, so
+  two pieces over one gap asked for the same cells and one outline was
+  written over the other; and with the same piece in both hands they were
+  the same outline in the same colours. `tengen_ghost_distances` lets both
+  pieces down together, each stopped by the field or by the other as far
+  down as IT has got: the lower lands, the higher rests on it (no two
+  tetrominoes hook round each other; `test_coop_ghosts_fit_for_every_pair`
+  counts it). This console's player's is the whole line, the partner's two
+  pixels on and two off (`ghost_dash`), on either console.
+- **The ghost is worked out before the blank and put up in it**
+  (`ghost_prepare`, called by `draw_match` before `vsync`). Where it lands
+  was the whole collision routine asked a row at a time and its outline a
+  flood of the silhouette, both inside `draw_field`: the drawing ended on
+  line 13 of the NEXT frame every frame the ghost was on (39 on a turn, 50
+  in coop), so the top rows were scanned before the piece and the panel
+  were written. The fall is counted from the piece's feet now
+  (`ghost_fall`: the cells with none of its own under them), the outline is
+  made into `g_ghost_art` (external WRAM) and copied in the blank on the
+  frame it changes. `--vblank` turns every piece with GHOST on, alone and
+  in coop, and counts the frames drawn as well as where they end.
 - **The pause's gag is lowered for the cursor's tick.** `MUSIC_SUSPEND` sets
   the class floor a voice must reach to be heard (`$FA` = $F0, compared at
   $D889); the screen's blip is over it, the cursor's tick (`MENU_SELECT`,
@@ -638,7 +659,8 @@ story behind each; the item number is in brackets.
   master's OPTIONS in HANDICAP's bits 8-11 (`TengenLobby.rules`,
   `tengen_link_rules`, for both players; `opt_link_rules` numbers them); either player changes one from the
   shared menu on both consoles, for that match only. GHOST is drawn by the
-  console that has it, and SWAP A-B turns A and B in the word that console
+  console that has it (its own player's whole, the partner's dashed), and
+  SWAP A-B turns A and B in the word that console
   sends (`g_pad_swap`, read by `link_read_buttons` in the serial interrupt)
   while the match plays, never paused — so the turn is in the lockstep and
   both boards agree (`run_link` `options_check`).
@@ -746,6 +768,53 @@ story behind each; the item number is in brackets.
   boards (`bcs @computerIsPlaying`, main.asm.txt:3539). Only 2 PLAYER has
   two — and VERSUS COMPUTER behind the chord, the second for the
   computer's board (the port's; `handicap_cpu_check`).
+- **Tile slots above 959 are a counted line, not numbers** (`port.h`,
+  `PMENU_RAISED_BASE` to `T_SHELF_JOIN`, each defined from the one before,
+  with a compile-time bound; the windows below them are counted in
+  `video.c`, `tile_windows_fit`). The Single-Pak bar had 1008 and 1009 by
+  hand, "the top of the tile memory that nothing else uses"; `T_SQ_ON` and
+  `T_WALL_BRICK` grew into them, and a console that had sent the game drew
+  OPTIONS' lit boxes as the bar's block and the pause's wall as its outline
+  until it was switched off. `run_link` `mb_send_check` compares the whole
+  tile memory across a send: nothing that had art may change.
+- **The computer asks the clock before every unit of spare thinking**
+  (`tengen_ai_think_while`, `ai_left`): the board read is one stretch and
+  each unit the next, and the picking that ends the straight drops
+  (`ai_pick`, a bit a candidate now) is a unit of its own. The read, a
+  first unit, the picking and a first look ahead used to go by on one
+  asking each — thirty-five scanlines for the last pair, past the blank
+  when begun just short of `AI_SPARE_LINE`, and three to five turns in two
+  thousand took two frames under a busy hand: a hitch every eight seconds
+  or so in WITH COMPUTER. `--aiframe` played an idle hand, which has the
+  computer plan once a piece, and saw none; it plays a busy one now.
+- **The port builds from the cartridge's dump alone, and that is checked**
+  (`make gba-noproto`, first line of `gba-check`: the same sources compiled
+  and linked with `TENGEN_NO_PROTOS`, which is what `make assets ROM=...`
+  without `PROTO=` leaves in `screen_proto.h`). The README's instructions
+  ask for no more than the cartridge, and that build had not compiled since
+  the panel's run got slots of its own: `SKIN_PANEL_RUN_BASE` came from the
+  skins' header and `upload_skin_play` was the only thing that filled the
+  slots. Nobody with the dumps could see it. Anything a skin brings needs
+  its answer for a build without one — here `upload_tiles` fills the two
+  slots from `kBraidBottom`'s tiles.
+- **The stack is measured, not assumed** (`--stack`; `stack_paint` and
+  `stack_depth` in the harness, and over the cable in `coop_ghosts_check`).
+  Internal WRAM holds the hot code, `.data`, `.bss` and both stacks, and
+  what is left above `.bss` has gone from about 10.7KB to about 4.3KB as
+  code moved in; the linker only refuses under 4KB. Deepest today: 2104
+  bytes (linked coop), 2028 against the port's computer; the serial
+  interrupt's, 40 of its 256. A check fails under a kilobyte to spare. A
+  new buffer of any size goes in `.ewram` (which nothing clears: write it
+  before it is read) — `g_ghost_art` did not fit in `.bss`.
+- **The Single-Pak copy has the least time.** It is the same program run
+  from external WRAM, which is slower than the cartridge: its drawing ends
+  about fifteen lines later (213 of 227 in plain play, 218 turning pieces
+  with both ghosts on). `--vblank` measures the cartridge; `run_link`
+  `clone_budget_check` steps the copy in a linked coop match and holds its
+  play to the blank. With its pause menu up the copy does run a few lines
+  over (the tunes' window, line 4 of the next frame): what it writes late
+  is mid-screen and the beam is still at the top, so nothing shows —
+  known, and not what to copy.
 - **Drawing must end inside the vertical blank.** `--vblank` reads the
   scanline where `draw_match` finishes: a full repaint is the heaviest frame
   (line ~220 of 227). Anything that repaints often — the pause box changing

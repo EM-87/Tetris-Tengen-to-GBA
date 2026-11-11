@@ -2,6 +2,7 @@
 The HIGH SCORES table and its per-build pages.
 """
 from .harness import (
+    build_has_protos,
     skip, put_skin_on, choose_skin,
     CELL_BLOCK, CELL_WALL, KEYS, LEADER_FIRST_TY,
     TENGEN_PF_HEIGHT, TENGEN_PF_WIDTH, game_offsets, game_state_address,
@@ -218,6 +219,12 @@ def tables_check(rom_path):
     prototype's and walks back, and the release's must be exactly as it was
     left — neither overwritten nor joined.
     """
+    # A BUILD FROM THE CARTRIDGE'S DUMP ALONE HAS NO SKIN TO PUT ON, and this
+    # is all about skins: it said FALLA of such a build, which has nothing
+    # wrong with it. It skips there (and a strict run says so).
+    if not build_has_protos(rom_path):
+        skip("esta ROM se construyo sin prototipos: no hay skin que poner")
+        return 0
     failures = []
     core, screen = load(rom_path)   # `screen` must stay alive; see load()
     _ = screen

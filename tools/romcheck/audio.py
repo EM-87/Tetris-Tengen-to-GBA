@@ -4,6 +4,7 @@ pause, the hand-entered tunes and the menu effects.
 """
 import os
 from .harness import (
+    build_has_protos,
     skip, TENGEN_ROM_ROW_ORIGIN, PAL_NEXT_BANK, put_skin_on, choose_skin,
     ring_chord_from_title,
     PM_MUSIC, pmenu_span,
@@ -300,6 +301,12 @@ def effects_check(rom_path):
     pantalla suena distinta, que un prototipo que contesta con silencio
     contesta con silencio, y que ninguno de los dos se queda sonando.
     """
+    # A BUILD FROM THE CARTRIDGE'S DUMP ALONE HAS NO SKIN TO PUT ON, and this
+    # is all about skins: it said FALLA of such a build, which has nothing
+    # wrong with it. It skips there (and a strict run says so).
+    if not build_has_protos(rom_path):
+        skip("esta ROM se construyo sin prototipos: no hay skin que poner")
+        return 0
     failures = []
     R1X, R1H = 0x04000064, 0x04000062
     R2H, R2L = 0x0400006C, 0x04000068
@@ -650,6 +657,12 @@ def proto_pause_check(rom_path):
     menu, which
     keeps the same rule (pause_keeps_music).
     """
+    # A BUILD FROM THE CARTRIDGE'S DUMP ALONE HAS NO SKIN TO PUT ON, and this
+    # is all about skins: it said FALLA of such a build, which has nothing
+    # wrong with it. It skips there (and a strict run says so).
+    if not build_has_protos(rom_path):
+        skip("esta ROM se construyo sin prototipos: no hay skin que poner")
+        return 0
     failures = []
     for skin, name, keeps in ((1, "proto_a", True), (2, "proto_b", False)):
         core, screen = load(rom_path)    # `screen` must stay alive; see load()

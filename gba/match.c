@@ -1758,6 +1758,9 @@ static void end_page_frame(void) {
 }
 
 void draw_match(bool *sweeping) {
+    /* The ghosts, before the computer takes what is left of the frame to
+     * think in and before the blank: see ghost_prepare. */
+    ghost_prepare();
     ai_think_spare();
     end_page_frame();
     vsync();

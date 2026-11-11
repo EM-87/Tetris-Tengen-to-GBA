@@ -450,6 +450,56 @@ def game_state_address(rom_path, name="g_session"):
     return None, f"el ELF no exporta {name}"
 
 
+# ---------------------------------------------------------------------------
+# The stacks
+#
+# Internal WRAM is 32KB and holds the hot code, .data, .bss and both stacks.
+# The linker refuses a layout that leaves the user stack under 4KB
+# (gba/gba.ld) and says nothing of whether 4KB is enough: what is left above
+# .bss has gone from about 10.7KB to about 4.3KB as code moved into IWRAM,
+# and a stack that runs out writes over the last variables without a word.
+# So it is measured: the free space between .bss and the stack pointer is
+# painted, and what the paint looks like afterwards says how deep the stack
+# went. The interrupt's stack, the 256 bytes above the user's, the same way.
+# ---------------------------------------------------------------------------
+STACK_PAINT = 0xA5
+
+
+def stack_bounds(rom_path):
+    """(.bss's end, the user stack's top, the IRQ stack's top), or None."""
+    got = [game_state_address(rom_path, n)[0]
+           for n in ("__bss_end", "__sp_usr", "__sp_irq")]
+    return None if None in got else tuple(got)
+
+
+def stack_paint(core, bounds):
+    """Paints what is free of both stacks. Between frames, when the game is
+    in its own code and the interrupt's stack is empty: what is live of the
+    user's is above the stack pointer and is left alone."""
+    bss_end, sp_usr, sp_irq = bounds
+    top = core.cpu.gprs[13]
+    if not bss_end < top <= sp_usr:
+        raise RuntimeError(f"the stack pointer is not in the user stack: {top:#x}")
+    m = core.memory.u8
+    for a in range(bss_end, top - 32):
+        m[a] = STACK_PAINT
+    for a in range(sp_usr, sp_irq):
+        m[a] = STACK_PAINT
+
+
+def stack_depth(core, bounds):
+    """(bytes of user stack used, bytes of IRQ stack used) since the paint."""
+    bss_end, sp_usr, sp_irq = bounds
+    m = core.memory.u8
+    a = bss_end
+    while a < sp_usr and m[a] == STACK_PAINT:
+        a += 1
+    b = sp_usr
+    while b < sp_irq and m[b] == STACK_PAINT:
+        b += 1
+    return sp_usr - a, sp_irq - b
+
+
 def fill_rows(core, base, rows):
     """Plant complete rows straight into the playfield.
 
@@ -543,7 +593,7 @@ _LAYOUT_DEFAULT = {
     "ai_target_x": 6, "ai_target_o": 7, "ai_settle": 8, "ai_soft_drop": 9,
     "ai_coop_aware": 10, "ai_smart": 12, "ai_plan_have": 420,
     "ai_plan_stage": 0, "ghost": 989, "check_off": 997, "hold_label": 1001,
-    "wall_brick": None,
+    "wall_brick": None, "send_bar": None, "shelf_join": None,
 }
 
 
@@ -565,7 +615,7 @@ def check_layout(rom_path):
         base = 0x08000000 if addr >= 0x08000000 else 0x02000000
         data = open(rom_path, "rb").read()
         v = [int.from_bytes(data[addr - base + 2 * i:addr - base + 2 * i + 2], "little")
-             for i in range(28)]
+             for i in range(30)]
         at = raised - base
         text = data[at:data.index(b"\0", at)].decode("ascii")
         keys = ("question", "percent", "raised_base", "arrow_tail", "arrow_head",
@@ -574,7 +624,8 @@ def check_layout(rom_path):
                 "save_entry_bytes", "save_name", "save_mode", "save_mode_sums",
                 "ai_target_x", "ai_target_o", "ai_settle", "ai_soft_drop",
                 "ai_coop_aware", "ai_smart", "ai_plan_have", "ai_plan_stage",
-                "ghost", "check_off", "hold_label", "wall_brick")
+                "ghost", "check_off", "hold_label", "wall_brick",
+                "send_bar", "shelf_join")
         layout = dict(zip(keys, v))
         layout["raised"] = text
         _LAYOUT_CACHE[rom_path] = layout
@@ -985,6 +1036,7 @@ def to_music_page(core, settle=10):
 # setPiecePalette (main.asm.txt:5338) indexes kRomPiecePalettes by PIECE ID,
 # so the two banks must differ exactly when the two pieces do.
 PAL_PIECE_BANK, PAL_NEXT_BANK = 12, 13
+PAL_PIECE2_BANK = 14        # a coop partner's falling piece, and its ghost
 # ...and the bricks' own in a match (PAL_BRICK_BANK, the credits' bank 9).
 PAL_BRICK_BANK = 9
 

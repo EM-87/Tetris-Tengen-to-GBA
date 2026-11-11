@@ -1057,8 +1057,8 @@ uint32_t single_pak_length(void) {
  * nobody waiting for a game needs; see plant_glyphs).
  * (It was the cartridge's solid tile and dashes, which on the SP read as
  * "nnnn------"; and the game's own block tiles are not loaded while a menu
- * is up.) The two tiles are drawn here, pixel by pixel, into slots at the
- * top of the tile memory that nothing else uses (SEND_TILE_BASE): a
+ * is up.) The two tiles are drawn here, pixel by pixel, into slots of
+ * their own in the made tiles' line (T_SEND_BAR, port.h): a
  * bevelled block — light edge top and left, dark bottom and right, the
  * middle shade inside — and its outline in the dark shade. Colours 1-3 are
  * the piece's light, middle and dark (kRomPiecePalettes), in the falling
@@ -1067,13 +1067,12 @@ uint32_t single_pak_length(void) {
  * Called from inside the sending (link_multiboot_send) every few hundred
  * words, between transfers, so it draws straight into the map: no frame
  * is waited for, and a cell or two drawn mid-scanout is nothing. */
-#define SEND_TILE_BASE 1008
 #define SEND_BAR_W  20
 #define SEND_BAR_TY 12
 #define SEND_PCT_TY 14
 static void make_send_tiles(void) {
-    vu16 *dst = MEM_CHARBLOCK(CHARBLOCK) + SEND_TILE_BASE * 16;
-    for (int tile = 0; tile < 2; tile++) {
+    vu16 *dst = MEM_CHARBLOCK(CHARBLOCK) + T_SEND_BAR * 16;
+    for (int tile = 0; tile < SEND_BAR_TILES; tile++) {
         for (int y = 0; y < 8; y++) {
             uint32_t row = 0;
             for (int x = 0; x < 8; x++) {
@@ -1099,7 +1098,7 @@ void draw_send_progress(uint32_t done, uint32_t total) {
     clear_both(MENU_IN_TX, SEND_BAR_TY, MENU_IN_W, 4);
     for (int i = 0; i < SEND_BAR_W; i++)
         set_map_tile(tx + i, SEND_BAR_TY,
-                     WITH_BANK(SEND_TILE_BASE + (i < filled ? 0 : 1),
+                     WITH_BANK(T_SEND_BAR + (i < filled ? 0 : 1),
                                PAL_PIECE_BANK));
     /* "74%", rounded DOWN, so 100% is the whole image and nothing less. */
     char row[8];

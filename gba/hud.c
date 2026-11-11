@@ -851,11 +851,10 @@ void draw_number_blank(int tx, int ty, uint32_t value, int digits, int bank) {
  * TengenGame.mended). The left wall tile $6A has a blank first column, so a
  * shelf ($9D) that runs up to it stops a pixel short of the rope — the
  * cartridge's art, and listed under "looks like a bug, is the cartridge's".
- * Mended, the wall is drawn there with SHELF_JOIN_TILE instead: $6A with
+ * Mended, the wall is drawn there with T_SHELF_JOIN instead: $6A with
  * that column filled from the shelf's last, row for row, made from whatever
  * the two tiles hold now — a skin's included. Only where a shelf meets the
  * wall; everywhere else the wall is the cartridge's. */
-#define SHELF_JOIN_TILE 1016
 #define TILE_WALL_LEFT  0x6A
 #define TILE_SHELF      0x9D
 static void mend_shelf_joins(void) {
@@ -863,7 +862,7 @@ static void mend_shelf_joins(void) {
     vu16 *tiles = MEM_CHARBLOCK(CHARBLOCK);
     vu16 *wall = tiles + TILE_WALL_LEFT * 16;
     vu16 *shelf = tiles + TILE_SHELF * 16;
-    vu16 *join = tiles + SHELF_JOIN_TILE * 16;
+    vu16 *join = tiles + T_SHELF_JOIN * 16;
     for (int r = 0; r < 8; r++) {
         /* A row is two halfwords; pixel 0 is the low nibble of the first,
          * pixel 7 the high nibble of the second. */
@@ -890,7 +889,7 @@ static void mend_shelf_joins(void) {
             uint16_t e = map[ty * MAP_W + tx];
             if ((e & 0x3FF) == TILE_WALL_LEFT &&
                 (map[ty * MAP_W + tx - 1] & 0x3FF) == TILE_SHELF)
-                map[ty * MAP_W + tx] = (uint16_t)((e & ~0x3FFu) | SHELF_JOIN_TILE);
+                map[ty * MAP_W + tx] = (uint16_t)((e & ~0x3FFu) | T_SHELF_JOIN);
         }
     }
 }
@@ -1950,19 +1949,62 @@ void draw_panel(void) {
 }
 
 /* THE GHOSTS (OPT_GHOST): a falling piece where it would land
- * (tengen_drop_distance), in outline, under everything else on the board.
+ * (tengen_ghost_distances), in outline, under everything else on the board.
  * This player's, and on a coop board the partner's too — a person's or the
- * computer's — each in its own piece's colours, this player's drawn last so
- * it wins where the two meet; a piece passing over a ghost hides it, the
- * piece itself included once it is that low. Only on this player's own
- * board and only in play: a paused race showing the rival's board has no
- * ghost of anybody's.
+ * computer's — each in its own piece's colours; a piece passing over a
+ * ghost hides it, the piece itself included once it is that low. Only on
+ * this player's own board and only in play: a paused race showing the
+ * rival's board has no ghost of anybody's.
+ *
+ * ON A SHARED BOARD THE TWO FIT TOGETHER, AND THE PARTNER'S IS DASHED. Two
+ * pieces over the same gap used to be drawn into the same cells, one
+ * outline written over the other — each ghost was its own piece's fall and
+ * knew nothing of the other piece. They are let down together now
+ * (tengen_ghost_distances): the lower piece's lands, the higher one's rests
+ * on it, and no cell is asked for twice. And with the same piece in both
+ * hands the two outlines were the same outline in the same colours, with
+ * nothing to say whose was whose: this player's is the whole line, the
+ * partner's the same line broken (ghost_dash), on either console.
  *
  * THE OUTLINE IS THE PIECE'S OWN (see T_GHOST): the four cells' tiles, read
  * back out of video memory, make one silhouette thirty-two pixels square,
  * and a pixel of it is outline if a pixel beside it is not in it. Made again
- * only when the piece, its turn or the skin changes. */
+ * only when the piece, its turn or the skin changes.
+ *
+ * WORKED OUT BEFORE THE BLANK, PUT UP IN IT (ghost_prepare, draw_ghosts).
+ * Where the ghost goes and what it looks like were both worked out as the
+ * board was drawn, in the vertical blank, and neither is drawing: the fall
+ * was the whole collision routine asked twenty times over, and the outline
+ * a flood of a thousand pixels. MEASURED, where the frame's drawing ends
+ * (`--vblank`): line 193 of 227 with the ghost off; with it on, line 13 of
+ * the NEXT frame, every frame, and line 39 on a frame the piece turned —
+ * line 50 on a coop board. The screen was being scanned again before the
+ * falling piece and the panel were written, which on the console is the top
+ * rows of the board drawn a frame late. Both are done before the blank is
+ * waited for now, into `g_ghost`; in the blank there is a tile copy on the
+ * frame an outline changed, and four map entries a ghost. */
 static struct { TengenTetromino piece; uint8_t orientation; int8_t skin; } g_ghost_made[2];
+static struct {
+    TengenCell cells[4];        /* where its tiles go, the fall included */
+    uint8_t count;              /* 0: no ghost this frame */
+    bool fresh;                 /* its art is not in its tiles yet */
+} g_ghost[2];                   /* GHOST_MINE, GHOST_PARTNER */
+static bool g_ghosts_planned;
+/* The outlines as made, waiting for the blank. In external WRAM, which
+ * nothing clears (gba.ld) and internal WRAM has no room to spare for:
+ * written whole by ghost_make before `fresh` says to read them. */
+__attribute__((section(".ewram")))
+static uint16_t g_ghost_art[2][GHOST_TILES * 16];
+
+/* The partner's line: two pixels on and two off along a row or a column,
+ * the breaks a pixel further along on each row down, so an edge is dashed
+ * whichever way it runs. Row `y` of the silhouette, bit x = column x. */
+static uint32_t ghost_dash(int y) {
+    static const uint32_t kDash[4] = {
+        0x33333333u, 0x99999999u, 0xCCCCCCCCu, 0x66666666u,
+    };
+    return kDash[y & 3];
+}
 
 /* A tile row (eight nibbles) as eight bits of ink, the leftmost pixel bit 0,
  * and back: the nibbles' low bits gathered together in three folds. */
@@ -2013,37 +2055,66 @@ static void ghost_make(int which, const TengenPlayerState *sp,
             if (n != far[y]) { far[y] = n; grew = true; }
         }
     }
-    vu16 *out = MEM_CHARBLOCK(CHARBLOCK) + (T_GHOST + which * GHOST_TILES) * 16;
+    /* Into the plan, not into video memory: its tiles are on the screen
+     * under the last frame's ghost until the blank (draw_ghost). */
+    uint16_t *out = g_ghost_art[which];
+    for (int i = count * 16; i < GHOST_TILES * 16; i++) out[i] = 0;
     for (int i = 0; i < count; i++) {
         int y0 = (cells[i].row - r0) * 8, x0 = (cells[i].col - c0) * 8;
         for (int y = 0; y < 8; y++) {
             int at = 1 + y0 + y;
             uint32_t by_far = (far[at] << 1) | 1u | (far[at] >> 1) | 0x80000000u |
                               far[at - 1] | far[at + 1];
-            uint32_t px = bits_ink(((sil[at] & by_far) >> x0) & 0xFFu);
+            uint32_t line = sil[at] & by_far;
+            if (which == GHOST_PARTNER) line &= ghost_dash(y0 + y);
+            uint32_t px = bits_ink((line >> x0) & 0xFFu);
             out[i * 16 + y * 2] = (uint16_t)px;
             out[i * 16 + y * 2 + 1] = (uint16_t)(px >> 16);
         }
     }
+    g_ghost[which].fresh = true;
 }
 
-static void draw_ghost(int slot, int which, int bank) {
+static void ghost_plan(int slot, int which, int d) {
     const TengenGame *g = &g_session.game;
     const TengenPlayerState *sp = &g->player[slot];
-    if (!sp->game_active || sp->line_clear_timer > 0) return;
-    int d = tengen_drop_distance(g, (TengenPlayerSlot)slot);
-    if (d <= 0) return;
-    TengenCell cells[4];
+    if (!sp->game_active || sp->line_clear_timer > 0 || d <= 0) return;
+    TengenCell *cells = g_ghost[which].cells;
     int count = tengen_active_piece_cells(g, (TengenPlayerSlot)slot, cells);
+    if (count <= 0) return;
     int r0 = cells[0].row, c0 = cells[0].col;
     for (int i = 1; i < count; i++) {
         if (cells[i].row < r0) r0 = cells[i].row;
         if (cells[i].col < c0) c0 = cells[i].col;
     }
     ghost_make(which, sp, cells, count, r0, c0);
-    for (int i = 0; i < count; i++) {
-        int row = cells[i].row + d;
-        int col = cells[i].col - field_col0();
+    for (int i = 0; i < count; i++) cells[i].row = (int8_t)(cells[i].row + d);
+    g_ghost[which].count = (uint8_t)count;
+}
+
+/* Before the blank is waited for (draw_match): the game as the frame's
+ * drawing will find it. */
+void ghost_prepare(void) {
+    g_ghosts_planned = true;
+    g_ghost[GHOST_MINE].count = g_ghost[GHOST_PARTNER].count = 0;
+    if (!(options_mine() & OPT_GHOST) || g_session.game.paused ||
+        field_view() != g_view)
+        return;
+    int d[2];
+    tengen_ghost_distances(&g_session.game, d);
+    if (g_session.game.coop) ghost_plan(g_view ^ 1, GHOST_PARTNER, d[g_view ^ 1]);
+    ghost_plan(g_view, GHOST_MINE, d[g_view]);
+}
+
+static void draw_ghost(int which, int bank) {
+    if (g_ghost[which].fresh) {
+        vu16 *tiles = MEM_CHARBLOCK(CHARBLOCK) + (T_GHOST + which * GHOST_TILES) * 16;
+        for (int i = 0; i < GHOST_TILES * 16; i++) tiles[i] = g_ghost_art[which][i];
+        g_ghost[which].fresh = false;
+    }
+    for (int i = 0; i < g_ghost[which].count; i++) {
+        int row = g_ghost[which].cells[i].row;
+        int col = g_ghost[which].cells[i].col - field_col0();
         if (row < 0 || row >= g_wall_top || col < 0 || col >= field_cols())
             continue;
         set_map_tile(field_tx() + col, FIELD_TY + row,
@@ -2052,11 +2123,12 @@ static void draw_ghost(int slot, int which, int bank) {
 }
 
 static void draw_ghosts(void) {
-    if (!(options_mine() & OPT_GHOST) || g_session.game.paused ||
-        field_view() != g_view)
-        return;
-    if (g_session.game.coop) draw_ghost(g_view ^ 1, 1, PAL_PIECE2_BANK);
-    draw_ghost(g_view, 0, PAL_PIECE_BANK);
+    /* A board drawn that nobody planned for: worked out here, late, sooner
+     * than a ghost a frame old. */
+    if (!g_ghosts_planned) ghost_prepare();
+    g_ghosts_planned = false;
+    draw_ghost(GHOST_PARTNER, PAL_PIECE2_BANK);
+    draw_ghost(GHOST_MINE, PAL_PIECE_BANK);
 }
 
 /* THE END-OF-GAME PAGE (g_end_curtain), written out once as the curtain
