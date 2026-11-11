@@ -155,7 +155,9 @@ guardan en el cartucho y vuelven cada vez que hacés el acorde: **HARD DROP**
 la pieza de golpe; un roce de la cruceta al pasar de un lado al otro no la tira), **FAST DOWN** (Abajo baja una fila por
 frame), **FAST SHIFT** (el lateral repite antes y más rápido), **GHOST** (la
 silueta de dónde va a caer la pieza, y en cooperativo también la del
-compañero), **SWAP A-B** (A y B giran al revés) y **HOLD** (SELECT guarda la
+compañero: la tuya de línea entera y la suya a trazos, y si las dos piezas
+van al mismo hueco las siluetas encajan una sobre otra en vez de pisarse),
+**SWAP A-B** (A y B giran al revés) y **HOLD** (SELECT guarda la
 pieza que cae, y la cambia por la guardada; una vez por pieza; suena SWIPE, un
 barrido que el motor del cartucho trae y nunca pide). Con HOLD, el
 HUD se cambia con L+R y en HUD STATS la pieza guardada sale donde estaba el
@@ -329,6 +331,11 @@ original que aportes vos. Una vez, para generarlo:
 make assets ROM=/ruta/a/tetris.nes
 ```
 
+(Con eso basta. Los prototipos son un extra: si tenés sus dumps,
+`make assets ROM=tetris.nes PROTO="proto_a.nes proto_b.nes proto_c.nes"`
+añade sus títulos y sus tableros como pieles; sin ellos el port es el
+cartucho y lo que añade el acorde, sin la línea PROTOTYPES.)
+
 Después:
 
 ```sh
@@ -412,9 +419,9 @@ Lo que hay detrás del acorde no es un modo: es el juego terminado.
 - **Los prototipos**: los títulos y las reglas de tres versiones previas del
   cartucho, como pieles que llegan hasta el tablero.
 
-En cifras: unas 5.400 líneas de reglas en C (`src/`, probadas en el PC con
-146 tests y un fuzzer), 15.800 de capa GBA y 25.000 de herramientas y
-comprobaciones — 58 baterías en `make gba-check`, más de ochenta
+En cifras: unas 5.600 líneas de reglas en C (`src/`, probadas en el PC con
+154 tests y un fuzzer), 16.800 de capa GBA y 28.000 de herramientas y
+comprobaciones — 60 baterías en `make gba-check`, más de ochenta
 comprobaciones que arrancan la ROM en un emulador, la juegan y miran la
 pantalla, el sonido y la memoria —, todo contrastado contra el disassembly
 del cartucho, línea citada a línea citada. Nada de eso se ve desde fuera, y

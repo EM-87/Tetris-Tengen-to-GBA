@@ -757,10 +757,23 @@ bool tengen_coop_pieces_overlap(const TengenGame *game, TengenPlayerSlot slot);
 /* HOW FAR THE SLOT'S FALLING PIECE COULD STILL FALL on the settled field:
  * the rows between it and where it would land if nothing else moved — the
  * ghost the port draws behind the pause menu's OPTIONS. The port's own; the
- * cartridge has no ghost. A coop partner's falling piece is not counted (it
- * is passing through), and there is nothing to count without a piece in
- * play: 0. Nothing in the game is changed. */
+ * cartridge has no ghost. A coop partner's falling piece is not counted
+ * here (tengen_ghost_distances is the one that counts it), and there is
+ * nothing to count without a piece in play: 0. Nothing in the game is
+ * changed. */
 int tengen_drop_distance(const TengenGame *game, TengenPlayerSlot slot);
+
+/* ...AND THE TWO GHOSTS OF A SHARED BOARD, WHICH FIT TOGETHER: how far each
+ * slot's piece would fall if BOTH were let go as they are — `out[slot]`.
+ * The two are solid to each other all the way down (checkCoopCollision,
+ * above), so where both make for the same cells the lower piece gets them
+ * and the higher one comes to rest on it, as it would in play, and the two
+ * ghosts never share a cell. Read alone, each said where its piece would
+ * land on the settled field, and two pieces over one gap were drawn into
+ * each other there. Outside coop — two boards, nothing to meet — each is
+ * tengen_drop_distance. The port's own, and nothing in the game is
+ * changed. */
+void tengen_ghost_distances(const TengenGame *game, int out[2]);
 
 /* Attempts to shift the active piece by `dx` columns; reverts and returns
  * false if that would be an invalid position. */

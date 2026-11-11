@@ -926,18 +926,23 @@ static void ai_pick(TengenAi *ai, const AiView *v) {
         ai->plan_best = AI_DEAD;
     }
     ai->plan_top_count = 0;
+    /* A BIT A CANDIDATE FOR THE ONES ALREADY PICKED. Each candidate used to
+     * be looked for in the list picked so far, every pick: the same picks,
+     * and on the console the longest stretch of thinking there was between
+     * two looks at the clock — some twenty-five scanlines, which begun just
+     * short of AI_SPARE_LINE (gba/match.c) ran past the vertical blank and
+     * cost the turn a second frame. */
+    uint32_t taken[(TENGEN_AI_SMART_MAX + 31) / 32] = { 0 };
     for (int pick = 0; pick < TENGEN_AI_SMART_KEEP; pick++) {
         int top = -1;
         for (int k = 0; k < ai->plan_count; k++) {
             if (ai->plan_cand_score[k] == AI_DEAD) continue;
-            bool taken = false;
-            for (int j = 0; j < ai->plan_top_count; j++)
-                if (ai->plan_top[j] == k) taken = true;
-            if (taken) continue;
+            if (taken[k >> 5] & (1u << (k & 31))) continue;
             if (top < 0 || ai->plan_cand_score[k] > ai->plan_cand_score[top])
                 top = k;
         }
         if (top < 0) break;
+        taken[top >> 5] |= 1u << (top & 31);
         ai->plan_top[ai->plan_top_count++] = (uint8_t)top;
     }
     ai->plan_cursor = 0;
@@ -950,7 +955,17 @@ static void ai_pick(TengenAi *ai, const AiView *v) {
 /* MORE TIME, IF THE CALLER HAS IT: a slice that has spent its budget asks
  * `s_more` (set by tengen_ai_think_while) for another unit before it stops,
  * so a caller with spare time thinks on in one call, the board read once.
- * The core knows nothing of what the time is; the caller does. */
+ * The core knows nothing of what the time is; the caller does.
+ *
+ * EVERY UNIT IS ASKED FOR, and nothing long is done between two askings:
+ * the caller's time is a frame's, and what runs past the end of it costs
+ * the turn a second frame. Reading the board is one stretch and each unit
+ * the next — the slice starts with no budget of its own — and the picking
+ * at the end of the straight drops is a unit, not a thing done on the way
+ * from one to the next. (The board read, a first unit and then the picking
+ * and a first look ahead used to go by with one asking each: thirty-five
+ * scanlines for the last pair, and under a busy hand three to five turns
+ * in two thousand a frame late.) */
 static bool (*s_more)(void);
 static bool ai_left(int *budget) {
     if (*budget > 0) return true;
@@ -1010,8 +1025,11 @@ static void ai_smart_think(TengenAi *ai, const TengenGame *g,
     while (ai->plan_stage == 1 && ai_left(&budget)) {
         if (ai->plan_cursor >= ai->plan_count) {
             /* Every placement of the piece in hand is in: aim at the best
-             * reachable one now, and pick the few to look ahead from. */
+             * reachable one now, and pick the few to look ahead from. On
+             * a caller's spare time the picking is the unit it was given
+             * (see s_more): the look ahead asks for its own. */
             ai_pick(ai, &v);
+            if (s_more) budget = 0;
             break;
         }
         int k = ai->plan_cursor++;
@@ -1160,7 +1178,7 @@ void tengen_ai_think_while(TengenAi *ai, const TengenGame *game,
                            TengenPlayerSlot slot, bool (*more)(void)) {
     if (!more()) return;
     s_more = more;
-    (void)tengen_ai_think_some(ai, game, slot, 1);
+    (void)tengen_ai_think_some(ai, game, slot, 0);
     s_more = 0;
 }
 

@@ -89,7 +89,19 @@
 #include "screen_coop.h"
 #include "screen_leaderboard.h"
 #include "screen_title.h"
+/* A BUILD WITH NO PROTOTYPE DUMPS, ASKED FOR BY HAND (`make gba-noproto`):
+ * exactly what `make assets ROM=...` alone leaves in screen_proto.h, without
+ * regenerating anything. That is the build the README's own instructions
+ * make, and on a tree that has the dumps nothing ever compiled it: it
+ * stopped compiling the day the panel's run got slots of its own
+ * (SKIN_PANEL_RUN_BASE), and stayed that way until somebody tried. It is
+ * compiled and linked every time the checks run now. */
+#ifdef TENGEN_NO_PROTOS
+#define SCREEN_PROTO_AVAILABLE 0
+#define SCREEN_PROTO_COUNT 0
+#else
 #include "screen_proto.h"
+#endif
 #include "screen_menu.h"
 #include "palettes_rom.h"
 #include "dancer_poses.h"
@@ -559,6 +571,12 @@
  * 789 and the panel's run pair at 801). Fifty-six tiles at most, 1792 bytes,
  * so unlike the title's 8KB swap this needs no blank screen to hide behind. */
 #define SKIN_BANNER_BASE 832
+/* ...and the panel's own run pair, where a build has no board skins to say
+ * so (screen_proto.h defines it with them): the same two slots, filled
+ * once at boot with the release's art (upload_tiles). */
+#ifndef SKIN_PANEL_RUN_BASE
+#define SKIN_PANEL_RUN_BASE 0x320
+#endif
 
 /* THE HISTOGRAM'S SEVEN RUNS, into a window of their own above the banner's.
  *
@@ -1804,6 +1822,10 @@ typedef enum {
 #define T_GHOST (T_ARROW_HEAD + 1)
 #define GHOST_TILES 4       /* per ghost: one per cell */
 #define GHOST_INK   1       /* the colour of the piece's bank it is drawn in */
+/* Which of the two sets: this console's player's, the whole line, and a
+ * coop partner's, the same line dashed (ghost_dash, hud.c). */
+#define GHOST_MINE    0
+#define GHOST_PARTNER 1
 /* ...AND THE OPTIONS WINDOW'S BOXES, after them: a switch's state as a box
  * of the letters' size, empty for OFF and with a dot in it for ON. Two
  * tiles each, the box moved across the pair so its right side is as far
@@ -1836,7 +1858,19 @@ typedef enum {
 /* ...AND THE PAUSE'S WALL ITS OWN BRICK: T_BRICK with the grout between its
  * bricks in the ink, black on any background (upload_tiles). */
 #define T_WALL_BRICK (T_SQ_ON + 1)
-typedef char ghost_tiles_fit[T_WALL_BRICK + 1 <= 1024 ? 1 : -1];
+/* ...AND THE TWO THAT HAD NUMBERS OF THEIR OWN, WRITTEN DOWN WHERE THEY ARE
+ * USED: the Single-Pak sending's bar (draw_send_progress, frontend.c — its
+ * block and its outline) and the wall's join with a shelf (mend_shelf_joins,
+ * hud.c). The bar was at 1008 "at the top of the tile memory that nothing
+ * else uses", which was true the day it was written; T_SQ_ON and
+ * T_WALL_BRICK grew up into 1008 and 1009 since, and a console that had
+ * sent a game drew its lit boxes as the bar's block and the pause's wall as
+ * the bar's outline until it was switched off. They are in the line with
+ * the rest now, and the line is what is counted. */
+#define T_SEND_BAR   (T_WALL_BRICK + 1)           /* and +1, its outline */
+#define SEND_BAR_TILES 2
+#define T_SHELF_JOIN (T_SEND_BAR + SEND_BAR_TILES)
+typedef char ghost_tiles_fit[T_SHELF_JOIN + 1 <= 1024 ? 1 : -1];
 /* THE INK: the palette entry, black in every bank, that the cartridge's art
  * draws its borrowed black in (ink_tile, video.c). The NES's four colours of
  * a bank are 0-3; nothing else uses 15. */
@@ -2222,6 +2256,7 @@ void link_match_begin(bool menu);
 void front_music(uint8_t which);
 bool solo_play_frame(uint8_t buttons, uint8_t pressed, bool *quit);
 void draw_match(bool *sweeping);
+void ghost_prepare(void);
 extern uint8_t g_options;
 void options_load(void);
 void options_apply_solo(TengenGame *game);

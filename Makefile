@@ -213,6 +213,17 @@ $(GBA_MB_ELF): $(GBA_SRC) $(CORE_HDR) gba/port.h gba/gba_hw.h gba/link.h \
 	    -T gba/mb.ld -nostartfiles -Wl,--gc-sections \
 	    gba/crt0.s $(GBA_SRC) -o $@
 
+# THE PORT BUILDS FROM THE CARTRIDGE'S DUMP ALONE, which is all the README
+# asks for: the prototypes' dumps are an extra. On a tree that has them
+# nothing built that configuration, and it did not compile for months
+# (SKIN_PANEL_RUN_BASE; see TENGEN_NO_PROTOS in gba/port.h). This compiles
+# and links it — the same sources, the prototypes' header left out — into an
+# ELF nothing else uses, and `make gba-check` runs it first.
+.PHONY: gba-noproto
+gba-noproto: $(GBA_MB) | $(BUILD)
+	$(ARMCC) $(ARMFLAGS) $(AI_HOT_FLAGS) -DTENGEN_NO_PROTOS $(ARMLDFLAGS) \
+	    gba/crt0.s gba/mb_image.s $(GBA_SRC) -o $(BUILD)/tengen_noproto.elf
+
 $(GBA_MB): $(GBA_MB_ELF) $(GBAFIX)
 	$(ARMOBJCOPY) -O binary $< $@
 	truncate -s %16 $@
@@ -303,6 +314,7 @@ STRICT ?= 1
 .PHONY: gba-check
 gba-check: export ROMCHECK_STRICT = $(STRICT)
 gba-check: $(GBA_ROM)
+	$(MAKE) --no-print-directory gba-noproto
 	python3 tools/check_header.py $(GBA_ROM)
 	python3 tools/run_rom.py $(GBA_ROM) --selftest
 	python3 tools/run_rom.py $(GBA_ROM) --lineclear
@@ -340,6 +352,7 @@ gba-check: $(GBA_ROM)
 	python3 tools/run_rom.py $(GBA_ROM) --titlescores
 	python3 tools/run_rom.py $(GBA_ROM) --vblank
 	python3 tools/run_rom.py $(GBA_ROM) --unpause
+	python3 tools/run_rom.py $(GBA_ROM) --stack
 	python3 tools/run_rom.py $(GBA_ROM) --idleblink
 	python3 tools/run_rom.py $(GBA_ROM) --fireworks
 	python3 tools/run_rom.py $(GBA_ROM) --demo

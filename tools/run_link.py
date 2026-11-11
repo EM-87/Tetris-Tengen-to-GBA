@@ -1557,7 +1557,7 @@ def pause_check(rom):
     print("OK: el menu de pausa va por cable y hace lo mismo en las dos consolas.")
     if (menu_list_check(rom) or levelup_music_check(rom) or
             coop_levelup_music_check(rom) or options_check(rom) or
-            tempo_check(rom, start)):
+            coop_ghosts_check(rom) or tempo_check(rom, start)):
         return 1
     return late_check(rom)
 
@@ -1751,6 +1751,157 @@ def options_check(rom):
         return 1
     print("OK: por cable las reglas son del maestro y de los dos; la sombra y "
           "el giro, de cada uno.")
+    return 0
+
+
+def coop_ghosts_check(rom):
+    """COOPERATIVO POR CABLE CON GHOST EN LAS DOS: CADA UNA LA SUYA ENTERA.
+
+    Un tablero, dos piezas y dos consolas que lo dibujan: cada una pinta la
+    sombra de su jugador de linea entera (T_GHOST) y la del companero a
+    trazos (los cuatro tiles siguientes), asi que lo que una llama la suya la
+    otra lo llama la del companero, en las mismas celdas. Con las dos piezas
+    sobre el mismo hueco las sombras encajan una sobre otra -- la de la
+    pieza de abajo en el suelo -- en vez de pedir las mismas celdas, y las
+    dos consolas estan de acuerdo en cuales; y la partida sigue siendo la
+    misma en las dos (la sombra no es del juego).
+
+    Y DE PASO, LAS PILAS (stack_paint, en el arnes): por cable el intercambio
+    corre en la interrupcion del puerto serie, con su pila de 256 bytes, y
+    la del usuario lleva encima el lobby, la partida y el menu compartido.
+    Pintadas al arrancar y miradas al final, con las dos manos ocupadas
+    entre medias: a la del usuario le tiene que sobrar 1KB, y a la de la
+    interrupcion la mitad.
+    """
+    from romcheck.harness import (check_layout, stack_bounds, stack_depth,
+                                  stack_paint)
+    sym, why = symbol(rom, "g_session")
+    if sym is None:
+        skip(f"{why}")
+        return 0
+    import run_rom
+    off = run_rom.game_offsets(rom)
+    ghost0 = check_layout(rom)["ghost"]
+    failures = []
+
+    def check_byte(v):
+        return 0xC3 ^ ((v * 7) & 0xFF)
+
+    cores, cable, both, tap = _pair(rom)
+    for core in cores:                                  # GHOST, on both
+        core.memory.u8[0x0E000404] = 0x08
+        core.memory.u8[0x0E000405] = check_byte(0x08)
+    both(8)
+    bounds = stack_bounds(rom)
+    if bounds is not None:
+        for core in cores:
+            stack_paint(core, bounds)
+    tap("START")
+    both(4, [[KEYS["L"], KEYS["R"]]] * 2)
+    both(10, [[], []])
+    tap("DOWN"); tap("DOWN"); tap("START")              # COOPERATIVE -> the cable
+    both(50)
+    tap("START", who=0)
+    both(100)
+
+    def place(slot, piece, o, x, y):
+        for core in cores:
+            b = sym[0] + slot * off["stride"]
+            core.memory.u8[b + off["current"]] = piece
+            core.memory.u8[b + off["orientation"]] = o
+            core.memory.u8[b + off["x"]] = x
+            core.memory.u8[b + off["y"]] = y
+
+    def ghosts(core):
+        """The two sets' cells: [this console's player's, the partner's]."""
+        got = [set(), set()]
+        for r in range(20):
+            for c in range(32):
+                t = core.memory.u16[0x0600E000 + (r * 32 + c) * 2] & 0x3FF
+                if ghost0 <= t < ghost0 + 8:
+                    got[(t - ghost0) // 4].add((r, c))
+        return got
+
+    def ink(core, which):
+        """How many pixels of ink the set's four tiles hold."""
+        return sum(1 for t in range(ghost0 + 4 * which, ghost0 + 4 * which + 4)
+                   for b in read_bytes(core, 0x06000000 + t * 32, 32)
+                   for nib in (b & 15, b >> 4) if nib)
+
+    # Two O's over the same two columns: player 1's high, player 2's low.
+    place(0, 3, 0, 5, 6)
+    place(1, 3, 0, 5, 12)
+    both(2)
+    seen = [ghosts(c) for c in cores]
+    master, slave = seen
+    rows = [[sorted({r for r, _ in cells}) for cells in g] for g in seen]
+    if [len(cells) for g in seen for cells in g] != [4, 4, 4, 4]:
+        failures.append(f"con las dos piezas sobre el mismo hueco no salen las "
+                        f"dos sombras enteras en las dos consolas: "
+                        f"{[[len(c) for c in g] for g in seen]} celdas")
+    elif master[0] != slave[1] or master[1] != slave[0]:
+        failures.append(f"las dos consolas no ponen las sombras en las mismas "
+                        f"celdas: filas {rows}")
+    elif rows[0][0][-1] + 1 != rows[0][1][0]:
+        failures.append(f"la sombra de la pieza de arriba no descansa sobre la "
+                        f"de la de abajo: filas {rows[0]}")
+    else:
+        print(f"  dos piezas sobre el mismo hueco: las sombras encajan (filas "
+              f"{rows[0][0]} sobre {rows[0][1]}) y las dos consolas las ponen "
+              f"en las mismas celdas, cada una la suya en sus tiles")
+    # ...and whose is whose: the same O in both hands, so the two outlines
+    # are the same outline — whole in this console's set, broken in the
+    # partner's, on both consoles.
+    inks = [[ink(c, w) for w in (0, 1)] for c in cores]
+    if any(mine <= 0 or theirs <= 0 or theirs * 3 > mine * 2 for mine, theirs in inks):
+        failures.append(f"la sombra del companero no va a trazos en las dos "
+                        f"consolas: pixeles [propia, companero] {inks}")
+    elif inks[0] != inks[1]:
+        failures.append(f"con la misma pieza en las dos manos las dos consolas "
+                        f"no dibujan los mismos contornos: {inks}")
+    else:
+        print(f"  la propia entera y la del companero a trazos, en las dos "
+              f"({inks[0][0]} y {inks[0][1]} pixeles)")
+    if not _same_match(rom, cores):
+        failures.append("con las sombras las dos consolas ya no juegan la misma "
+                        "partida")
+    # Busy hands on both pads, and the shared menu and its windows; then how
+    # deep the stacks went, the serial interrupt's among them.
+    import random
+    rng = random.Random(11)
+    hands = [[], [], ["LEFT"], ["RIGHT"], ["A"], ["B"], ["DOWN"], ["UP"]]
+    keys = [[], []]
+    for f in range(900):
+        if f % 4 == 0:
+            keys = [[KEYS[k] for k in rng.choice(hands)] for _ in range(2)]
+        both(1, keys)
+    both(4, [[], []])
+    tap("START", who=1); both(20)
+    tap("A", who=1); both(20); tap("B", who=1)
+    tap("DOWN", who=1); tap("A", who=1); both(20); tap("B", who=1)
+    tap("START", who=1); both(60)
+    if bounds is None:
+        skip("el ELF no exporta __bss_end, __sp_usr y __sp_irq")
+    else:
+        room, irq_room = bounds[1] - bounds[0], bounds[2] - bounds[1]
+        deep = [stack_depth(core, bounds) for core in cores]
+        if any(u > room - 1024 or q > irq_room // 2 or u < 256 for u, q in deep):
+            failures.append(f"las pilas por cable: [usuario, interrupcion] {deep} "
+                            f"de {room} y {irq_room} bytes")
+        elif not _same_match(rom, cores):
+            failures.append("tras las manos ocupadas y el menu compartido las "
+                            "dos consolas ya no juegan la misma partida")
+        else:
+            print(f"  las pilas por cable, con las dos manos ocupadas y el menu "
+                  f"compartido: {deep[0][0]} y {deep[1][0]} de {room} bytes, y "
+                  f"{deep[0][1]} y {deep[1][1]} de {irq_room} las de la "
+                  f"interrupcion")
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: en cooperativo por cable cada consola ve entera su sombra y a "
+          "trazos la del companero, encajadas y en las mismas celdas.")
     return 0
 
 
@@ -2648,7 +2799,8 @@ def singlepak_check(rom):
     if failures:
         return 1
     print("OK: la imagen de Single-Pak juega contra el cartucho.")
-    return mb_send_check(rom) or records_dump_check(rom) or clone_reset_check(rom)
+    return (mb_send_check(rom) or records_dump_check(rom) or
+            clone_reset_check(rom) or clone_budget_check(rom))
 
 
 def records_dump_check(rom):
@@ -2745,6 +2897,118 @@ def records_dump_check(rom):
     print(f"  la copia entrega {SCORE} / {LINES} lineas, y {COOP_SCORE} en "
           "COOPERATIVE; el cartucho los guarda y las dos dicen RECORDS SAVED")
     print("OK: los records de una copia se guardan en el cartucho al enlazar.")
+    return 0
+
+
+def clone_budget_check(rom):
+    """LA COPIA TAMBIEN DIBUJA DENTRO DEL BLANCO VERTICAL, JUGANDO.
+
+    La copia de Single-Pak es el mismo programa corriendo desde la RAM
+    externa, que es mas lenta que el cartucho: su dibujado acaba unas quince
+    lineas mas tarde (213 de 227 donde el cartucho 198). Es la consola con
+    menos margen, y `--vblank` solo mide el cartucho. Aqui el cartucho y la
+    copia juegan un cooperativo, cada uno con su GHOST puesto desde el menu
+    compartido, girando las piezas -- el frame que rehace un contorno --, y
+    se lee en la copia la linea en la que acaba cada dibujado (donde entra
+    en audio_frame): dentro del blanco, 160-227, todos. Con la sombra
+    calculada al dibujar, como estaba, el cartucho ya acababa en la linea 13
+    del frame siguiente y la copia mas alla.
+
+    (Con el menu de pausa abierto la copia si se pasa unas lineas, sin que
+    se vea: lo que escribe tarde esta a media pantalla y el barrido aun va
+    por arriba. Aqui se mide la partida.)
+    """
+    mb = os.path.splitext(rom)[0] + "_mb.mb"
+    if not os.path.exists(mb):
+        skip(f"no encuentro {mb}")
+        return 0
+    import run_rom
+    audio = run_rom.game_state_address(mb, "audio_frame")[0]
+    there = [symbol(path, "g_session")[0] for path in (rom, mb)]
+    if audio is None or None in there:
+        skip("el ELF de la copia no exporta audio_frame o g_session")
+        return 0
+    audio &= ~1
+    off = run_rom.game_offsets(rom)
+    cores, cable, both, tap = _pair(rom, slave_rom=mb)
+    copy = cores[1]
+
+    def measured(frames, keys=None):
+        """`frames` frames on both, the copy an instruction at a time: the
+        line its drawing ends on, each frame it draws."""
+        ends = []
+        for _ in range(frames):
+            cores[0].set_keys(*(keys[0] if keys else []))
+            cores[0].run_frame()
+            copy.set_keys(*(keys[1] if keys else []))
+            fc, seen = copy.frame_counter, False
+            while copy.frame_counter == fc:
+                copy.step()
+                if not seen and (copy.cpu.pc & ~1) in (audio, audio + 4):
+                    seen = True
+                    ends.append(copy.memory.u16[0x04000006])
+            cable.settle()
+        return ends
+
+    def place(slot, piece, o, x, y):
+        for core, g in zip(cores, there):
+            b = g[0] + slot * off["stride"]
+            core.memory.u8[b + off["current"]] = piece
+            core.memory.u8[b + off["orientation"]] = o
+            core.memory.u8[b + off["x"]] = x
+            core.memory.u8[b + off["y"]] = y
+
+    both(1000)
+    tap("START", who=0)
+    both(4, [[KEYS["L"], KEYS["R"]]] * 2)
+    both(12, [[], []])
+    tap("DOWN", who=0); tap("DOWN", who=0)              # COOPERATIVE
+    tap("START", who=0)
+    both(60)
+    tap("START", who=0)
+    both(120)
+    for who in (0, 1):                                   # GHOST, each its own
+        tap("START", who=who); both(10)
+        tap("DOWN", who=who); tap("A", who=who)
+        for _ in range(3):
+            tap("DOWN", who=who)
+        tap("A", who=who)
+        tap("START", who=who); both(30)
+    failures = []
+    ghost0 = run_rom.check_layout(rom)["ghost"]
+    drawn = sum(1 for r in range(20) for c in range(32)
+                if ghost0 <= (copy.memory.u16[0x0600E000 + (r * 32 + c) * 2]
+                              & 0x3FF) < ghost0 + 8)
+    if drawn != 8:
+        failures.append(f"la copia no tiene las dos sombras en su tablero "
+                        f"({drawn} celdas): no se mide lo que se queria")
+    ends, frames = measured(30), 30
+    for piece in (1, 2, 5, 7):
+        place(0, piece, 0, 3, 6)
+        place(1, piece, 0, 8, 8)
+        for _ in range(2):
+            ends += measured(3, [[KEYS["A"]], [KEYS["A"]]])
+            ends += measured(4)
+            frames += 7
+    late = [v for v in ends if v < 160]
+    if len(ends) < frames:
+        failures.append(f"la copia deja {frames - len(ends)} de {frames} frames "
+                        f"sin dibujar")
+    elif late:
+        failures.append(f"la copia acaba {len(late)} de {len(ends)} dibujados "
+                        f"fuera del blanco (linea {late[:8]})")
+    elif not _same_match_mb(rom, mb, cores):
+        failures.append("el cartucho y la copia ya no juegan la misma partida")
+    else:
+        print(f"  la copia, en cooperativo con las dos sombras y las piezas "
+              f"girando: {len(ends)} frames, el ultimo acaba en la linea "
+              f"{max(ends)} de 227")
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: la copia de Single-Pak dibuja cada frame de la partida dentro "
+          "del blanco vertical.")
     return 0
 
 
@@ -2944,14 +3208,27 @@ class FakeMultibootBios:
         return 0x0000
 
 
+def _tile_memory(core):
+    """The background's tile memory, charblock 0, a tile at a time: the
+    1024 a text background can name, thirty-two bytes each."""
+    block = read_bytes(core, 0x06000000, 1024 * 32)
+    return [bytes(block[t * 32:t * 32 + 32]) for t in range(1024)]
+
+
 def _send_to_fake(rom, master_rom, image):
     """One console (master_rom) on the master's end, the stand-in BIOS on
-    the other; SELECT on the LINK CABLE screen; the image it takes in."""
+    the other; SELECT on the LINK CABLE screen; the image it takes in --
+    and the tiles the sending trod on: every tile that had something in it
+    before (the game's, the title's, the ones made at boot) and has
+    something else after. The bar draws its two tiles as it goes, and they
+    have to be two that were nobody's."""
     import run_rom
     cores, cable, both, tap = _pair(master_rom, slave_rom=rom)
     bios = FakeMultibootBios()
     cable.fake_bios = bios
-    both(1000)
+    both(30)
+    before = _tile_memory(cores[0])
+    both(970)
     if master_rom != rom:                  # the cartridge: to the lobby first
         tap("START", who=0)
         tap("DOWN", who=0)
@@ -2972,7 +3249,15 @@ def _send_to_fake(rom, master_rom, image):
         if bios.done:
             break
     both(120)
-    return offered, bar, bios, _screen_of(cores[0])
+    after = _tile_memory(cores[0])
+    trodden = [t for t in range(1024)
+               if any(before[t]) and before[t] != after[t]]
+    drawn = [t for t in range(1024) if not any(before[t]) and any(after[t])]
+    # A picture taken before the tiles were there would find nothing trodden
+    # whatever was: it has to be of a tile memory with its art in it.
+    if sum(1 for t in before if any(t)) < 500:
+        trodden = ["la foto de antes del envio no tiene los tiles"]
+    return offered, bar, bios, _screen_of(cores[0]), trodden, drawn
 
 
 def mb_send_check(rom):
@@ -2992,11 +3277,13 @@ def mb_send_check(rom):
         skip(f"no encuentro {mb}")
         return 0
     image = open(mb, "rb").read()
+    import run_rom
+    send_bar = run_rom.check_layout(rom).get("send_bar")
     failures = []
     for name, master in (("el cartucho", rom), ("la copia", mb)):
         # The console on the other end is only there to hold the cable in
         # multiplayer mode (SD high); its answers are the stand-in's.
-        offered, bar, bios, where = _send_to_fake(mb, master, image)
+        offered, bar, bios, where, trodden, drawn = _send_to_fake(mb, master, image)
         got = bios.received
         if not offered:
             failures.append(f"{name}: la pantalla del cable no ofrece enviar")
@@ -3018,10 +3305,22 @@ def mb_send_check(rom):
                             f"primera diferencia en {diff})")
         elif where != "cable":
             failures.append(f"{name}: tras enviar no vuelve al lobby ({where})")
+        elif trodden:
+            # THE BAR'S TWO TILES ARE ITS OWN (T_SEND_BAR). They were 1008
+            # and 1009 by hand, which the lit box of OPTIONS and the pause's
+            # brick had grown into: after a send the console drew both as
+            # the bar's until it was switched off.
+            failures.append(f"{name}: el envio pisa tiles que ya eran de otro: "
+                            f"{trodden}")
+        elif send_bar is not None and not {send_bar, send_bar + 1} <= set(drawn):
+            failures.append(f"{name}: la barra del envio no dibuja sus dos "
+                            f"tiles, {send_bar} y {send_bar + 1} (nuevos tras "
+                            f"enviar: {drawn})")
         else:
             print(f"  {name}: {len(image)} bytes, cifrados, recibidos y "
                   f"descifrados identicos, la suma de comprobacion coincide "
-                  f"y vuelve al lobby")
+                  f"y vuelve al lobby; la barra dibuja en sus dos tiles "
+                  f"({send_bar} y {send_bar + 1}) y no pisa ninguno ajeno")
     for f in failures:
         print(f"FALLA: {f}")
     if failures:

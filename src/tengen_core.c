@@ -136,15 +136,45 @@ static TengenTetromino roll_next_piece(TengenRng *rng) {
 /* ----------------------------------------------------------------------- *
  * Collision / movement / rotation
  * ----------------------------------------------------------------------- */
+/* ONE CELL OF A PIECE AGAINST THE BOARD, in the ROM's rows and the buffer's
+ * columns: what position_valid_ex asks of each of a piece's four, and what
+ * the ghost's fall asks of the ones at the bottom (ghost_fall). */
+static bool cell_hits(const TengenGame *game, const TengenPlayfield *field,
+                      int rom_row, int storage_col) {
+    if (rom_row >= TENGEN_ROM_FLOOR_ROW) return true; /* the ROM's solid floor rows */
+    if (storage_col < 0 || storage_col >= TENGEN_PF_WIDTH)
+        return true; /* past the buffer's padding nibbles entirely */
+    int visible_row = rom_row - TENGEN_ROM_ROW_ORIGIN;
+    if (visible_row >= 0) {
+        /* a locked block, or a TT_WALL sentinel */
+        return field->cell[visible_row][storage_col] != TT_NONE;
+    }
+    /* THE WALLS DO NOT STOP AT THE TOP OF THE VISIBLE FIELD.
+     *
+     * The ROM's playfield is one flat array of 8-byte rows starting at row
+     * 0, and `L89C3` (main.asm.txt:1481-1503) writes the $F0/$0F wall
+     * nibbles into EVERY row it builds — the two rows a piece spawns in
+     * included. Only coop leaves them clear, which is the `bit playMode`
+     * there and is what widens its field to twelve.
+     *
+     * This core only stores the twenty VISIBLE rows, so the spawn rows have
+     * to say so themselves. Treating them as open space instead was a real
+     * bug and a nasty one: a piece could be walked sideways into the wall
+     * column while it was still above the field, and then the first row it
+     * descended into blocked it — resting at y=5, one short of
+     * TENGEN_TOPOUT_ROW, which ends the game. Four pieces into an empty
+     * board, GAME OVER, and nothing on screen to explain it. */
+    return !game->coop &&
+           (storage_col == 0 || storage_col == TENGEN_PF_WIDTH - 1);
+}
+
 /* Shared by tengen_position_valid and the lock path. When a collision is
  * found, `lowest_hit_row` (if non-NULL) receives the ROM row of the LOWEST
  * colliding cell — the ROM's scan writes its hit index to $2D as it goes, so
  * the last write wins, and that value is what the scoring routine consumes
  * (main.asm.txt:1029-1064). */
-/* `dy` rows below where the piece is: 0 for where it is, more for the
- * ghost (tengen_drop_distance). */
-static bool position_valid_at(const TengenGame *game, TengenPlayerSlot slot,
-                              int dy, int *lowest_hit_row) {
+static bool position_valid_ex(const TengenGame *game, TengenPlayerSlot slot,
+                               int *lowest_hit_row) {
     const TengenPlayerState *p = &game->player[slot];
     const TengenPlayfield *field = &game->field[game->coop ? 0 : slot];
     const TengenPiece *piece = &p->piece;
@@ -154,44 +184,9 @@ static bool position_valid_at(const TengenGame *game, TengenPlayerSlot slot,
         for (int c = 0; c < 4; c++) {
             if (!tengen_piece_occupies(piece->current, piece->orientation, r, c)) continue;
 
-            int rom_row = piece->y + dy + r;
+            int rom_row = piece->y + r;
             int storage_col = piece->x + c - TENGEN_ROM_COL_ORIGIN;
-            bool hit = false;
-
-            if (rom_row >= TENGEN_ROM_FLOOR_ROW) {
-                hit = true; /* the ROM's solid floor rows */
-            } else if (storage_col < 0 || storage_col >= TENGEN_PF_WIDTH) {
-                hit = true; /* past the buffer's padding nibbles entirely */
-            } else {
-                int visible_row = rom_row - TENGEN_ROM_ROW_ORIGIN;
-                if (visible_row >= 0) {
-                    if (field->cell[visible_row][storage_col] != TT_NONE) {
-                        hit = true; /* a locked block, or a TT_WALL sentinel */
-                    }
-                } else if (!game->coop &&
-                           (storage_col == 0 ||
-                            storage_col == TENGEN_PF_WIDTH - 1)) {
-                    /* THE WALLS DO NOT STOP AT THE TOP OF THE VISIBLE FIELD.
-                     *
-                     * The ROM's playfield is one flat array of 8-byte rows
-                     * starting at row 0, and `L89C3` (main.asm.txt:1481-1503)
-                     * writes the $F0/$0F wall nibbles into EVERY row it
-                     * builds — the two rows a piece spawns in included. Only
-                     * coop leaves them clear, which is the `bit playMode`
-                     * there and is what widens its field to twelve.
-                     *
-                     * This core only stores the twenty VISIBLE rows, so the
-                     * spawn rows have to say so themselves. Treating them as
-                     * open space instead was a real bug and a nasty one: a
-                     * piece could be walked sideways into the wall column
-                     * while it was still above the field, and then the first
-                     * row it descended into blocked it — resting at y=5, one
-                     * short of TENGEN_TOPOUT_ROW, which ends the game. Four
-                     * pieces into an empty board, GAME OVER, and nothing on
-                     * screen to explain it. */
-                    hit = true;
-                }
-            }
+            bool hit = cell_hits(game, field, rom_row, storage_col);
 
             if (hit) {
                 ok = false;
@@ -203,23 +198,60 @@ static bool position_valid_at(const TengenGame *game, TengenPlayerSlot slot,
     return ok;
 }
 
-static bool position_valid_ex(const TengenGame *game, TengenPlayerSlot slot,
-                               int *lowest_hit_row) {
-    return position_valid_at(game, slot, 0, lowest_hit_row);
-}
-
 bool tengen_position_valid(const TengenGame *game, TengenPlayerSlot slot) {
     return position_valid_ex(game, slot, NULL);
+}
+
+/* THE GHOST'S FALL, WHICH IS ASKED EVERY FRAME AND HAS TO BE CHEAP. A piece
+ * that fits where it is fits a row lower if the cells at the BOTTOM of it
+ * do: every other cell of it moves into a place the piece itself has just
+ * left. So a fall is the piece's feet — the cells with none of its own
+ * under them, four at most — tried a row at a time, and not the whole 4x4
+ * box asked of the whole collision routine at every row: that was sixteen
+ * questions a row for twenty rows, some fifty scanlines of a Game Boy
+ * Advance's frame, in the vertical blank, every frame the ghost was on. */
+typedef struct {
+    int8_t rom_row[4], storage_col[4];
+    int count;                      /* 0: no piece, or not one that fits */
+} GhostFeet;
+
+static GhostFeet ghost_feet(const TengenGame *game, TengenPlayerSlot slot) {
+    GhostFeet feet = { { 0 }, { 0 }, 0 };
+    const TengenPiece *piece = &game->player[slot].piece;
+    if (piece->current <= TT_NONE || piece->current >= TENGEN_TETROMINO_COUNT ||
+        !position_valid_ex(game, slot, NULL))
+        return feet;
+    for (int r = 0; r < 4; r++) {
+        for (int c = 0; c < 4; c++) {
+            if (!tengen_piece_occupies(piece->current, piece->orientation, r, c))
+                continue;
+            if (r < 3 &&
+                tengen_piece_occupies(piece->current, piece->orientation, r + 1, c))
+                continue;
+            feet.rom_row[feet.count] = (int8_t)(piece->y + r);
+            feet.storage_col[feet.count] = (int8_t)(piece->x + c - TENGEN_ROM_COL_ORIGIN);
+            feet.count++;
+        }
+    }
+    return feet;
+}
+
+/* True if the piece `d` rows down could go one more, on the settled field. */
+static bool ghost_fall(const TengenGame *game, const TengenPlayfield *field,
+                       const GhostFeet *feet, int d) {
+    for (int i = 0; i < feet->count; i++)
+        if (cell_hits(game, field, feet->rom_row[i] + d + 1, feet->storage_col[i]))
+            return false;
+    return feet->count > 0;
 }
 
 /* The port's, not the cartridge's: see the header. The floor rows stop the
  * count whatever is on the board, so it ends. */
 int tengen_drop_distance(const TengenGame *game, TengenPlayerSlot slot) {
-    if (game->player[slot].piece.current == TT_NONE ||
-        !position_valid_at(game, slot, 0, NULL))
-        return 0;
+    const TengenPlayfield *field = &game->field[game->coop ? 0 : slot];
+    GhostFeet feet = ghost_feet(game, slot);
     int d = 0;
-    while (position_valid_at(game, slot, d + 1, NULL)) d++;
+    while (ghost_fall(game, field, &feet, d)) d++;
     return d;
 }
 
@@ -263,7 +295,11 @@ static const int8_t kCoopShift[7] = { -3, -2, -1, 0, 1, 2, 3 };
  * survive a horizontal shift of that distance, in both nibbles of the byte. */
 static const uint8_t kCoopMask[7] = { 0x88, 0xCC, 0xEE, 0xFF, 0x77, 0x33, 0x11 };
 
-bool tengen_coop_pieces_overlap(const TengenGame *game, TengenPlayerSlot slot) {
+/* `rows` is how much further down MINE is asked about than the partner's:
+ * 0 for the cartridge's own question, more or less for the two ghosts
+ * (tengen_ghost_distances), which are the same two pieces lower down. */
+static bool coop_overlap_at(const TengenGame *game, TengenPlayerSlot slot,
+                            int rows) {
     if (!game->coop) return false;
     const TengenPiece *mine = &game->player[slot].piece;
     const TengenPiece *theirs = &game->player[slot ^ 1].piece;
@@ -271,7 +307,7 @@ bool tengen_coop_pieces_overlap(const TengenGame *game, TengenPlayerSlot slot) {
     /* The ROM does these two in a wrapping byte and tests `bmi` as well as
      * `cmp #$07`, which together mean exactly "0 to 6" — a piece row never
      * gets far enough from another for the wrap to be reachable. */
-    int dy = (int)mine->y - (int)theirs->y + 3;
+    int dy = (int)mine->y + rows - (int)theirs->y + 3;
     if (dy < 0 || dy > 6) return false;
     int dx = (int)mine->x - (int)theirs->x + 3;
     if (dx < 0 || dx > 6) return false;
@@ -287,6 +323,39 @@ bool tengen_coop_pieces_overlap(const TengenGame *game, TengenPlayerSlot slot) {
     uint16_t mask = (uint16_t)(((uint16_t)kCoopMask[dx] << 8) | kCoopMask[dx]);
     return (piece_bits(theirs->current, theirs->orientation)
              & (uint16_t)bits & mask) != 0;
+}
+
+bool tengen_coop_pieces_overlap(const TengenGame *game, TengenPlayerSlot slot) {
+    return coop_overlap_at(game, slot, 0);
+}
+
+/* The port's, not the cartridge's: see the header. Both pieces are let down
+ * a row at a time, each while the field under it is free and the partner —
+ * as far down as IT has got — is not in the way, until neither moves. The
+ * one underneath is never held up by the one above, so it comes to rest
+ * where it would alone and the other on top of it; and two pieces that
+ * never overlap on the way down do not overlap where they stop. */
+void tengen_ghost_distances(const TengenGame *game, int out[2]) {
+    out[0] = out[1] = 0;
+    if (!game->coop) {
+        out[0] = tengen_drop_distance(game, TENGEN_PLAYER_1);
+        out[1] = tengen_drop_distance(game, TENGEN_PLAYER_2);
+        return;
+    }
+    const TengenPlayfield *field = &game->field[0];
+    GhostFeet feet[2];
+    for (int s = 0; s < 2; s++) feet[s] = ghost_feet(game, (TengenPlayerSlot)s);
+    for (bool moved = true; moved;) {
+        moved = false;
+        for (int s = 0; s < 2; s++) {
+            if (!ghost_fall(game, field, &feet[s], out[s]) ||
+                coop_overlap_at(game, (TengenPlayerSlot)s,
+                                out[s] + 1 - out[s ^ 1]))
+                continue;
+            out[s]++;
+            moved = true;
+        }
+    }
 }
 
 /* `checkPositionAndClearFlagsOnCarrySet` (main.asm.txt:1017-1021). The

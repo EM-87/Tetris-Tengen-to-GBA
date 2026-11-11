@@ -1,6 +1,6 @@
 # Tengen Tetris -> GBA port: the checks that need no cartridge dump.
 #
-# The ROM itself, and the 42 checks `make gba-check` runs against it, need the
+# The ROM itself, and the checks `make gba-check` runs against it, need the
 # graphics and the sound engine that `make assets` extracts from a dump of the
 # original cartridge — which is not in this repository and must not be. So
 # what runs here is everything that does not: the rules core and its tests

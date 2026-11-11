@@ -2,6 +2,7 @@
 The computer player, alone and as a partner.
 """
 import os
+import random
 
 from .harness import (
     skip,
@@ -293,6 +294,13 @@ def coop_ai_check(rom_path):
     return 0
 
 
+# The hand `--aiframe` plays with: what it holds, changed every few frames.
+# No UP (a hard drop buries the board before the frames are up).
+AI_FRAME_SEED = 1
+AI_FRAME_HANDS = [[], [], ["LEFT"], ["RIGHT"], ["A"], ["B"], ["DOWN"],
+                  ["LEFT"], ["RIGHT"]]
+
+
 def ai_frame_check(rom_path):
     """THE PORT'S COMPUTER THINKS INSIDE A FRAME.
 
@@ -304,6 +312,15 @@ def ai_frame_check(rom_path):
     between one draw_match and the next must always be one. The first
     version, sixteen placements a frame, took two frames on 140 turns of
     3000 in WITH COMPUTER.
+
+    WITH A BUSY HAND ON THE PAD (AI_FRAME_SEED). Left alone the player's
+    piece falls where it was dealt and the computer plans once a piece; a
+    piece that is moved and turned has it planning again all the time, and
+    that is where the long stretch was: on the frame's spare time the
+    picking that ends the straight drops and the first look ahead went by
+    on one look at the clock, thirty-five scanlines begun just short of
+    AI_SPARE_LINE, and three to five turns in two thousand took two frames.
+    Every unit is asked for now (tengen_ai_think_while).
     """
     # TengenAi's fields, where this build keeps them (kCheckProbe).
     lay = check_layout(rom_path)
@@ -336,7 +353,12 @@ def ai_frame_check(rom_path):
         press_start(core); run(core, 12)
         press_start(core); run(core, 20)
         gaps, last, f0 = {}, None, core.frame_counter
+        rng = random.Random(AI_FRAME_SEED)
+        until = 0
         while core.frame_counter < f0 + 2000:
+            if core.frame_counter >= until:
+                core.set_keys(*[KEYS[k] for k in rng.choice(AI_FRAME_HANDS)])
+                until = core.frame_counter + rng.choice([1, 2, 3, 6, 12])
             core.step()
             # The pipeline: the instruction at draw_match is executing when
             # the PC reads four past it.

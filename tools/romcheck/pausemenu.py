@@ -8,7 +8,7 @@ from .harness import (
     PMENU_H, PMENU_TX, PMENU_TY, PMENU_W_T, pmenu_span,
     PM_EXIT, PM_HEAD, PM_L, PM_MUSIC, PM_OPTIONS,
     PM_R, PM_SURE, PMO_BOX, PMO_FIRST, PMO_H, PMO_HEAD, PMO_NAME, PMO_NAMES,
-    PMO_TY, PMO_TX, PMO_W, PAL_PIECE_BANK,
+    PMO_TY, PMO_TX, PMO_W, PAL_PIECE_BANK, PAL_PIECE2_BANK,
     PMT_FIRST, PMT_H, PMT_HEAD, PMT_TY, REG_SOUND1CNT_X,
     SCREENBLOCK_ADDR, SCREEN_TW_TILES, SCREEN_W, TILE,
     game_offsets, game_state_address, load, pixels,
@@ -489,7 +489,8 @@ def pause_options(rom_path):
     cambian el de la flecha, y mover la flecha suena como en los menus; B
     vuelve al menu sin dejar nada de la ventana. Lo que cambian se nota en la
     partida al momento: la sombra de la pieza donde caera -- el contorno de la
-    pieza misma, pixel a pixel, y en cooperativo tambien la del companero --,
+    pieza misma, pixel a pixel, y en cooperativo tambien la del companero, a
+    trazos y encajada con la propia si las dos piezas van al mismo hueco --,
     A y B girando al reves (y el menu leyendo A como A), ABAJO cayendo una
     fila por frame. Y se guardan en la bateria (SAVE_OPTIONS_OFF, $0E000404 y
     su byte de control): tras un reset, con el acorde otra vez, estan como se
@@ -744,6 +745,98 @@ def pause_options(rom_path):
                         f"su banco: {seen}")
     else:
         print("  en cooperativo, la sombra del companero tambien, en sus colores")
+
+    # ...AND THE TWO FIT TOGETHER (tengen_ghost_distances). Two O's over the
+    # same two columns, one high and one low: each ghost used to be its own
+    # piece's fall to the floor, so both asked for the same four cells and
+    # one outline was written over the other. Let down together, the lower
+    # piece's ghost is on the floor and the higher one's on top of it --
+    # whichever of the two players is the higher.
+    def place(slot, piece, o, x, y):
+        b = base + slot * off["stride"]
+        core2.memory.u8[b + off["current"]] = piece
+        core2.memory.u8[b + off["orientation"]] = o
+        core2.memory.u8[b + off["x"]] = x
+        core2.memory.u8[b + off["y"]] = y
+
+    def coop_cells():
+        got = [set(), set()]
+        for r in range(20):
+            for c in range(32):
+                t = core2.memory.u16[SCREENBLOCK_ADDR + (r * 32 + c) * 2] & 0x3FF
+                if ghost0 <= t < ghost0 + 8:
+                    got[(t - ghost0) // 4].add((r, c))
+        return got
+
+    def stacked(mine_y, theirs_y):
+        """The two ghosts' cells with an O in each hand over columns 5-6,
+        or None if the computer moved its piece before the frame was read.
+        Two frames: the ghosts are planned before the blank is waited for
+        (ghost_prepare), where a piece planted from here between two frames
+        finds the game — so the first frame's ghost is of the piece that
+        was there, and the second's of this one."""
+        for _ in range(12):
+            place(0, 3, 0, 5, mine_y)
+            place(1, 3, 0, 5, theirs_y)
+            run(core2, 2)
+            if all(core2.memory.u8[base + s * off["stride"] + off["x"]] == 5
+                   for s in (0, 1)):
+                return coop_cells()
+        return None
+
+    def rows(cells):
+        return sorted({r for r, _ in cells})
+
+    for mine_y, theirs_y, who in ((6, 12, "la mia encima"), (12, 6, "la suya encima")):
+        got = stacked(mine_y, theirs_y)
+        if got is None:
+            failures.append("no pude dejar las dos piezas sobre las mismas "
+                            "columnas un frame entero")
+            break
+        up, low = (got[0], got[1]) if mine_y < theirs_y else (got[1], got[0])
+        if len(got[0]) != 4 or len(got[1]) != 4:
+            failures.append(f"dos piezas sobre el mismo hueco: las sombras se "
+                            f"pisan ({len(got[0])} y {len(got[1])} celdas, {who})")
+        elif {c for _, c in up} != {c for _, c in low} or \
+                rows(up)[-1] + 1 != rows(low)[0]:
+            failures.append(f"dos piezas sobre el mismo hueco: las sombras no "
+                            f"encajan una sobre otra ({who}): filas {rows(up)} y "
+                            f"{rows(low)}")
+        else:
+            print(f"  dos piezas sobre el mismo hueco: las sombras encajan, "
+                  f"{who} (filas {rows(up)} sobre {rows(low)})")
+
+    # ...AND THE PARTNER'S IS THE SAME OUTLINE DASHED (ghost_dash): two
+    # pixels on and two off, so with the same piece in both hands -- the
+    # same outline in the same colours -- it is plain whose is whose. Mine
+    # stays the whole line.
+    for _ in range(12):
+        place(0, 3, 0, 2, 6)
+        place(1, 2, 0, 8, 8)                    # a T, for its inside corners
+        run(core2, 2)
+        if len(coop_cells()[1]) == 4 and \
+                core2.memory.u8[base + off["stride"] + off["current"]] == 2:
+            break
+
+    def entry2(r, c):
+        return core2.memory.u16[SCREENBLOCK_ADDR + (r * 32 + c) * 2]
+    failures += ghost_fits(core2, entry2, ghost0, which=1, bank=PAL_PIECE2_BANK,
+                           dashed=True)
+
+    # ...AND SWITCHED OFF, THEY GO: both of them, on the frame the game is
+    # back. (They are planned before the blank and put up in it; a plan
+    # kept from the frame before would be a ghost nobody asked for.)
+    for k in ("START", "DOWN", "A", "DOWN", "DOWN", "DOWN", "A", "START"):
+        core2.set_keys(KEYS[k]); run(core2, 4); core2.set_keys(); run(core2, 12)
+    place(0, 3, 0, 2, 6)
+    place(1, 2, 0, 8, 8)
+    run(core2, 6)
+    left = [len(c) for c in coop_cells()]
+    if left != [0, 0]:
+        failures.append(f"con GHOST apagado desde la ventana siguen las sombras "
+                        f"en el tablero: {left} celdas")
+    else:
+        print("  GHOST apagado desde la ventana: las dos sombras se van")
     del core2, screen2
 
     # ...and without the chord there are none: no ghost on the board. Off
@@ -944,13 +1037,18 @@ def pause_ticks_hold_the_tune(rom_path):
     return failures
 
 
-def ghost_fits(core, entry, ghost0):
+def ghost_fits(core, entry, ghost0, which=0, bank=PAL_PIECE_BANK, dashed=False):
     """THE GHOST IS THE PIECE'S OWN OUTLINE, pixel for pixel: the falling
     piece's four tiles (bank 12, the cartridge's block art) make one
     silhouette; outside it is what its edge reaches without crossing ink;
     and the ghost's ink is exactly the silhouette's pixels next to that
     outside, cell for cell. It used to be eight pixels square a cell, a
-    pixel proud of the piece above and to the left."""
+    pixel proud of the piece above and to the left.
+
+    `which` 1 is a coop partner's (its piece in `bank`), and `dashed` says
+    its line is broken: of that outline, only the pixels whose row and
+    column add up to 0 or 1 in every four, counted from the corner of the
+    piece's box -- two on and two off along any edge."""
     def art(t):
         rows = []
         for y in range(8):
@@ -963,10 +1061,10 @@ def ghost_fits(core, entry, ghost0):
         for r in range(20):
             for c in range(32):
                 e = entry(r, c)
-                t, bank = e & 0x3FF, e >> 12
-                if bank == PAL_PIECE_BANK and 1 <= t <= 15:
+                t = e & 0x3FF
+                if e >> 12 == bank and 1 <= t <= 15:
                     piece.append((r, c, t))
-                elif ghost0 <= t < ghost0 + 4:
+                elif ghost0 + 4 * which <= t < ghost0 + 4 * which + 4:
                     ghost.append((r, c, t))
         if len(piece) == 4 and len(ghost) == 4:
             break
@@ -999,6 +1097,16 @@ def ghost_fits(core, entry, ghost0):
         todo += [(y + 1, x), (y - 1, x), (y, x + 1), (y, x - 1)]
     edge = {(y, x) for y, x in ink
             if {(y + 1, x), (y - 1, x), (y, x + 1), (y, x - 1)} & far}
+    if dashed:
+        line = {(y, x) for y, x in edge if (x + y) & 3 < 2}
+        if drawn != line:
+            return [f"la sombra del companero no es el contorno de su pieza a "
+                    f"trazos: {len(drawn - line)} pixeles de mas, "
+                    f"{len(line - drawn)} de menos (contorno entero {len(edge)}, "
+                    f"dibujados {len(drawn)})"]
+        print(f"  la sombra del companero es el contorno de su pieza a trazos "
+              f"({len(drawn)} de sus {len(edge)} pixeles); la propia, entera")
+        return []
     if drawn != edge:
         return [f"la sombra no es el contorno de la pieza: {len(drawn - edge)} "
                 f"pixeles de mas, {len(edge - drawn)} de menos"]

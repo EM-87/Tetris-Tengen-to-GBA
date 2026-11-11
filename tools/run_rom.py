@@ -108,6 +108,8 @@ def main():
                      help="check a solo level-up silences the tune and times the loop")
     ap.add_argument("--vblank", action="store_true",
                      help="check each frame's drawing ends inside the vertical blank")
+    ap.add_argument("--stack", action="store_true",
+                     help="check the stack stays a kilobyte clear of the variables")
     ap.add_argument("--modetables", action="store_true",
                      help="check one high score table per mode, and the last name kept")
     ap.add_argument("--unpause", action="store_true",
@@ -235,6 +237,8 @@ def main():
         sys.exit(vblank_check(args.rom))
     if args.unpause:
         sys.exit(unpause_check(args.rom))
+    if args.stack:
+        sys.exit(stack_check(args.rom))
     if args.modetables:
         sys.exit(mode_tables_check(args.rom))
     if args.fireworks:
