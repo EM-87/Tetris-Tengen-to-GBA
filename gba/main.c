@@ -61,7 +61,12 @@ static SuspendMenu kept_menu(uint8_t game_mode, uint8_t start_level,
 #endif
 
 int main(void) {
-    /* First: every screen from here on waits for its frame in vsync(), and
+    /* WHAT THIS CARTRIDGE CAN KEEP A SAVE IN, asked before anything reads
+     * one: its save RAM, or on a board with no battery its own flash too
+     * (cartsave.h). Before the interrupts as well — while the chip is
+     * being asked it is not a ROM, and nothing of the cartridge's may run. */
+    cartsave_init();
+    /* Every screen from here on waits for its frame in vsync(), and
      * vsync() sleeps until an interrupt that this is what switches on. */
     irq_init();
     /* A Wireless Adapter in the port, asked once (wireless.c): if one
@@ -84,8 +89,10 @@ int main(void) {
      * g_settings (extras.c). */
     settings_load();
     lifetime_load();
-    /* The publisher's logo, at power-on only; see splash.c. */
-    splash_show();
+    /* The publisher's logo, at power-on only; see splash.c. Not on the way
+     * to the page behind L+R+A, which is asked for to be read at once
+     * (cartsave_page, below). */
+    if (!cartsave_page_asked()) splash_show();
     /* A Game Boy Player answered its logo — now, or at power-on before a
      * soft reset: the serial port is its, for the rumble (gbp.c). */
     gbp_start();
@@ -134,6 +141,9 @@ int main(void) {
     REG_BG3VOFS = STATS_LIFT_PX;
     REG_DISPCNT = DCNT_MODE0 | DCNT_BG0 | DCNT_BG1 | DCNT_BG2 | DCNT_BG3 |
                    DCNT_OBJ | DCNT_OBJ_1D;
+    /* L+R+A HELD AT POWER-ON: what this cartridge turned out to be and
+     * where its save is going, before the title (cartsave_page). */
+    if (cartsave_page_asked()) cartsave_page();
 
     Screen screen = SCREEN_TITLE;
     int leader_frames = 0;

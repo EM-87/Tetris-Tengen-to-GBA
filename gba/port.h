@@ -75,6 +75,7 @@
 #include "handtunes.h"
 #include "audio_prg.h"
 #include "link.h"
+#include "cartsave.h"
 #include "../src/tengen_core.h"
 #include "../src/tengen_link.h"
 #include "../src/tengen_ai.h"
@@ -2133,6 +2134,10 @@ void bonus_step(void);
 void bonus_end(void);
 extern int g_leader_row;
 bool leader_load(void);
+/* Whether the save has this game's tables in it at all — the letters they
+ * are filed under, not their contents: for cartsave_init, which has to
+ * tell an older build's save from what RAM holds with no battery. */
+bool leader_saved_before(void);
 void leader_reset(void);
 void leader_erase_all(void);
 void leader_reset_table(int table);
@@ -2343,6 +2348,7 @@ typedef char save_stats_fit[SAVE_STATS_OFF >= SAVE_MODE_SUMS_OFF + LEADER_MODE_T
                             SAVE_STATS_OFF + 4 + sizeof(LifetimeStats) + 1 <= 0x4000 ? 1 : -1];
 extern LifetimeStats g_lifetime;
 void lifetime_load(void);
+bool lifetime_saved_before(void);   /* ...and the same of the console's figures */
 void lifetime_watch(int slot, const TengenStats *was, const TengenStats *now);
 void lifetime_tick(bool still);
 void extras_open(void);

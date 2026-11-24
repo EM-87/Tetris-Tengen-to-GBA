@@ -262,6 +262,13 @@ void poll_interrupts(void) {
 #endif
 
 __attribute__((noinline)) void vsync(void) {
+    /* WHAT WAS SAVED THIS FRAME GOES TO THE CARTRIDGE'S FLASH, on a board
+     * that keeps its save there (cartsave.h) — here, before the wait and
+     * not after it: the frame's work is done and what is left of it is
+     * idle, where after the wait is the vertical blank, which the drawing
+     * needs all of. A save that runs past the blank's start costs that
+     * frame and nothing on the screen. */
+    cartsave_tick();
 #if defined(TENGEN_MULTIBOOT)
     /* NOT THROUGH THE BIOS, AND NOT ON AN INTERRUPT: on two SPs the slave
      * died on the first one it took. The frame is waited for by polling. */
@@ -308,6 +315,9 @@ static void soft_reset_check(void) {
     if ((uint16_t)(~REG_KEYINPUT & RESET_KEYS) != RESET_KEYS) return;
     while ((uint16_t)(~REG_KEYINPUT & KEY_MASK)) { }
     suspend_clear();
+    /* ...and that, with anything else still waiting, to the flash now:
+     * the restart reads the save again from the beginning. */
+    cartsave_flush();
     REG_IME = 0;
     REG_IE = 0;
     REG_IF = 0xFFFF;
@@ -395,6 +405,10 @@ void system_sleep(void) {
     /* ...and still: a Game Boy Player's rumble off before nothing answers
      * it any more (gbp.c). */
     gbp_quiet();
+    /* ...and anything saved and still waiting goes to the cartridge's
+     * flash (cartsave.h): a console put to sleep may not be woken before
+     * its battery is flat. */
+    cartsave_flush();
     wait_keys_settled();
     uint16_t ie = REG_IE, dispcnt = REG_DISPCNT;
     REG_IME = 0;

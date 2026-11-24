@@ -51,6 +51,7 @@ from romcheck.hud import *        # noqa: F401,F403
 from romcheck.ai import *         # noqa: F401,F403
 from romcheck.records import *    # noqa: F401,F403
 from romcheck.extras import *     # noqa: F401,F403
+from romcheck.cartsave import cartsave_check    # noqa: F401
 
 def main():
     ap = argparse.ArgumentParser()
@@ -157,6 +158,9 @@ def main():
                      help="check the L+R pause menu")
     ap.add_argument("--save", action="store_true",
                      help="check EXIT GAME's SAVE, GAME SELECT's mark and the resume")
+    ap.add_argument("--cartsave", action="store_true",
+                     help="check the save on every kind of cartridge, a flash "
+                          "chip with no battery among them")
     ap.add_argument("--quit-audio", action="store_true",
                      help="check quitting from the pause menu leaves the sound alive")
     ap.add_argument("--leaderboard", action="store_true",
@@ -279,6 +283,8 @@ def main():
         sys.exit(pausemenu_check(args.rom))
     if args.save:
         sys.exit(save_check(args.rom))
+    if args.cartsave:
+        sys.exit(cartsave_check(args.rom))
     if args.counters:
         sys.exit(counters_check(args.rom))
     if args.options:

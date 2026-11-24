@@ -202,11 +202,16 @@ static bool leader_load_table(int table) {
     return true;
 }
 
+bool leader_saved_before(void) {
+    for (int i = 0; i < SAVE_MAGIC_LEN; i++)
+        if (sram_read((unsigned)i) != (unsigned char)kSaveMagic[i]) return false;
+    return true;
+}
+
 bool leader_load(void) {
     /* The name stands on its own check byte, with or without a table. */
     leader_load_name();
-    for (int i = 0; i < SAVE_MAGIC_LEN; i++)
-        if (sram_read((unsigned)i) != (unsigned char)kSaveMagic[i]) return false;
+    if (!leader_saved_before()) return false;
 
     /* THE RELEASE'S TABLE DECIDES WHETHER THERE IS A SAVE AT ALL — it is the
      * one that has always been at these offsets. The prototypes' and the

@@ -164,21 +164,29 @@ static inline uint16_t rgb15(unsigned r, unsigned g, unsigned b) {
  * the BIOS's multiboot with one in, holding START and SELECT — is some
  * other game, whose save this must never read as a table or write one
  * into. So on that build the save memory reads as nothing (no table: the
- * cartridge's fifteen) and every write goes nowhere. */
-static inline unsigned char sram_read(unsigned offset) {
+ * cartridge's fifteen) and every write goes nowhere.
+ *
+ * ON THE CARTRIDGE THE SAVE IS WHEREVER THIS BOARD CAN KEEP ONE
+ * (cartsave.h): the save RAM, and on a board with no battery behind it
+ * the cartridge's own flash as well. Nothing that saves has to know which;
+ * these two are all it calls. */
 #ifdef TENGEN_MULTIBOOT
+static inline unsigned char sram_read(unsigned offset) {
     (void)offset;
     return 0;
-#else
-    return MEM_SRAM[offset];
-#endif
 }
 static inline void sram_write(unsigned offset, unsigned char value) {
-#ifdef TENGEN_MULTIBOOT
     (void)offset; (void)value;
-#else
-    MEM_SRAM[offset] = value;
-#endif
 }
+#else
+unsigned char cartsave_read(unsigned offset);
+void cartsave_write(unsigned offset, unsigned char value);
+static inline unsigned char sram_read(unsigned offset) {
+    return cartsave_read(offset);
+}
+static inline void sram_write(unsigned offset, unsigned char value) {
+    cartsave_write(offset, value);
+}
+#endif
 
 #endif /* GBA_HW_H */

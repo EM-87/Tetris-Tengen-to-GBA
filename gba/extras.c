@@ -97,10 +97,15 @@ static uint8_t lifetime_check(const uint8_t *b, unsigned n) {
     return sum;
 }
 
+bool lifetime_saved_before(void) {
+    for (int i = 0; i < 4; i++)
+        if (sram_read(SAVE_STATS_OFF + (unsigned)i) != kStatsMagic[i]) return false;
+    return true;
+}
+
 void lifetime_load(void) {
     uint8_t b[sizeof g_lifetime];
-    for (int i = 0; i < 4; i++)
-        if (sram_read(SAVE_STATS_OFF + (unsigned)i) != kStatsMagic[i]) return;
+    if (!lifetime_saved_before()) return;
     for (unsigned i = 0; i < sizeof b; i++) b[i] = sram_read(SAVE_STATS_OFF + 4 + i);
     if (sram_read(SAVE_STATS_OFF + 4 + sizeof b) != lifetime_check(b, sizeof b)) return;
     for (unsigned i = 0; i < sizeof b; i++) ((uint8_t *)&g_lifetime)[i] = b[i];

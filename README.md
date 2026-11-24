@@ -106,7 +106,8 @@ Hay una ROM de GBA que arranca, se juega y corre las reglas reales de Tengen.
 Los cinco modos del GAME SELECT del cartucho: **1 PLAYER**, **2 PLAYER** y
 **COOPERATIVE** por cable link, y **VERSUS COMPUTER** y **WITH COMPUTER**
 contra el jugador de la máquina de la ROM (`computerMove`, transcrito). El
-handicap inicial, la tabla de HIGH SCORES guardada en la SRAM del cartucho
+handicap inicial, la tabla de HIGH SCORES guardada en el cartucho — en su
+SRAM o, donde no hay pila, en su propia flash (más abajo) —
 (y cruzada por cable, con los nombres de los dos), la demo de atracción, la
 cuenta de BONUS entre niveles con los cosacos y su coreografía real, y los
 títulos de tres prototipos como skins con sus reglas.
@@ -322,6 +323,68 @@ no guarda récords. Y la copia puede hacer copias: en su propia pantalla LINK
 CABLE, SELECT la envía a su vez a otra consola sin cartucho, desde su
 memoria. Ver `CLAUDE.md` para lo que se aprendió por el camino.
 
+## En qué cartucho guarda
+
+Récords, opciones, cifras y partidas en pausa van a la memoria de guardado
+del cartucho. Qué hay detrás de esa memoria lo averigua el juego solo, al
+encender, y no hay nada que elegir ni que parchear:
+
+- **Emulador, EZ-Flash, EverDrive, SuperCard, cartucho con pila**: la RAM
+  de guardado (SRAM), como siempre. La ROM lleva la firma `SRAM_V113`, que
+  es por la que emuladores y flash carts saben que tiene una.
+- **Placa de reproducción sin pila** — las AGB-E05-xx y parientes: un chip
+  flash de 16 MB con el juego, una SRAM y nada que la mantenga (o ni
+  siquiera la SRAM) —: ahí la
+  SRAM se olvida de todo al apagar, y el juego guarda **además en la flash
+  del propio cartucho**, un megabyte adentro, lejos del programa. Al
+  encender lee de donde esté lo bueno: de la SRAM si conserva su marca (una
+  placa con pila), de la flash si no.
+
+Cómo lo sabe: le pregunta al cartucho quién es (la consulta CFI que
+contesta cualquier flash NOR, la misma por la que el grabador sabe grabarla).
+Una ROM de verdad, o un flash cart, no contesta y ahí queda la cosa. Un chip
+contesta con su tabla — tamaño, sectores, juego de comandos — y de paso con
+cómo está cableado: en estas placas las líneas de datos D0 y D1 suelen venir
+cruzadas (y a veces D6 y D7), y la tabla llega cruzada también. Se usan los
+chips de **comandos AMD** con cualquiera de esos cableados (MSP55LV128M,
+S29GL128/256, M29W128, W29GL128… la familia que FlashGBX graba con sus
+perfiles «AAA/A9» y «AAA/AA»); los de comandos Intel se reconocen y se dejan
+en paz, con la SRAM como hasta ahora. Tampoco se toca un chip que tenga
+**otro juego** detrás de este (un flash cart de los que guardan varios en la
+misma memoria): se le reconoce por la cabecera, y ese megabyte es suyo.
+
+Lo guardado es un diario: cada cambio se añade detrás del anterior con su
+suma de control, en uno de dos sectores, y cuando se llena se pasa en limpio
+al otro. Si se va la luz a mitad, queda el guardado anterior o el nuevo,
+nunca medio. Guardar son milisegundos (una pausa, unos 50 la primera vez y 6
+las siguientes); el único segundo largo, borrar un sector, se hace nada más
+encender. Por cable se espera a que acabe la partida.
+
+**Mantener L+R+A al encender** saca, en vez de los logos, la página
+CARTRIDGE SAVE: qué contestó el chip, cómo está cableado, su identificador
+(el mismo que enseña el grabador), si la SRAM conservó lo suyo, de dónde se
+ha leído la partida y qué se le va a pedir al chip a continuación. Si un
+cartucho no guarda, una foto de esa página dice por qué. La página sale
+**antes de escribir nada en el chip**: START sigue con normalidad, y SELECT
+sigue *sin tocar la flash* en esa sesión (la SRAM sola), que es la salida si
+un chip se atragantase al escribirle.
+
+Tres cosas a saber:
+
+- **No se ha probado todavía en una placa de estas.** Está escrito sobre lo
+  que hace FlashGBX con ellas y sobre los parches «batteryless» que ya las
+  usan, y comprobado contra un modelo del chip en el emulador
+  (`tools/romcheck/flashchip.py`, `--cartsave`): las rutinas reales, paso a
+  paso, con cortes de corriente en cualquier instrucción. El primer
+  encendido en hardware sigue siendo el primero.
+- Mientras se le habla, el chip no es una ROM: el trozo que le habla corre
+  desde RAM. Si el chip no volviera nunca a ser ROM, la pantalla se queda
+  **roja** en vez de colgarse a ciegas: apagar, y encender con L+R+A para
+  ver la página y seguir con SELECT.
+- Al regrabar una versión nueva, lo guardado sigue ahí si el grabador borra
+  solo los sectores que escribe (FlashGBX, tal cual viene); un borrado
+  completo del chip se lo lleva.
+
 ## Compilar
 
 El arte del juego **no está en este repo**: sale de un dump del cartucho
@@ -369,10 +432,11 @@ comparaciones contra el cartucho necesitan el dump y se corren en local.
 
 ```
 Tetris-Tengen-to-GBA/
-├── src/                  núcleo del juego (C99, sin dependencias de GBA)
-├── tests/                tests nativos del núcleo
+├── src/                  núcleo del juego (C99, sin dependencias de GBA),
+│                         y el diario del guardado en flash
+├── tests/                tests nativos del núcleo y del diario
 ├── gba/                  capa de GBA: hardware, crt0, linker script, renderer,
-│                         y el cable link (link.c)
+│                         el cable link (link.c) y dónde se guarda (cartsave.c)
 ├── tools/                extracción de assets, verificación de ROM, gbafix
 ├── reference/
 │   ├── disasm/           disassembly completo de Tetris (NES, Tengen)
@@ -419,9 +483,10 @@ Lo que hay detrás del acorde no es un modo: es el juego terminado.
 - **Los prototipos**: los títulos y las reglas de tres versiones previas del
   cartucho, como pieles que llegan hasta el tablero.
 
-En cifras: unas 5.600 líneas de reglas en C (`src/`, probadas en el PC con
-154 tests y un fuzzer), 16.800 de capa GBA y 28.000 de herramientas y
-comprobaciones — 60 baterías en `make gba-check`, más de ochenta
+En cifras: unas 6.300 líneas de C sin nada de GBA (`src/`: las reglas, y el
+diario con que se guarda en la flash; probadas en el PC con 175 tests y un
+fuzzer), 17.700 de capa GBA y 31.000 de herramientas y
+comprobaciones — 61 baterías en `make gba-check`, más de ochenta
 comprobaciones que arrancan la ROM en un emulador, la juegan y miran la
 pantalla, el sonido y la memoria —, todo contrastado contra el disassembly
 del cartucho, línea citada a línea citada. Nada de eso se ve desde fuera, y

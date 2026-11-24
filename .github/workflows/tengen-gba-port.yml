@@ -74,7 +74,8 @@ jobs:
       # the headers `make assets` generates from a dump.
       - name: Compile src/ for ARM7TDMI, Thumb
         run: |
-          for f in src/tengen_core.c src/tengen_link.c src/tengen_ai.c src/tengen_stats.c; do
+          for f in src/tengen_core.c src/tengen_link.c src/tengen_ai.c src/tengen_stats.c \
+                   src/tengen_nvlog.c src/tengen_cfi.c; do
             arm-none-eabi-gcc -mcpu=arm7tdmi -mthumb -mthumb-interwork \
               -std=c99 -Wall -Wextra -Werror -O2 -ffreestanding -fno-builtin \
               -c "$f" -o /dev/null

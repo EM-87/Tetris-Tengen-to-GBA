@@ -58,6 +58,26 @@ SECTIONS
     } > iwram AT> rom
     __data_lma = LOADADDR(.data);
 
+    /* CODE THAT RUNS FROM EXTERNAL WRAM, for the one job that cannot run
+     * from the cartridge: talking to the cartridge's own flash chip, which
+     * stops being a ROM while it is being told something (gba/cartsave.c,
+     * RAM_CODE). Copied there by cartsave_init, not by crt0 — the
+     * Single-Pak copy has none of it. Slow memory, and it does not matter:
+     * what these routines wait for is the chip. */
+    .ramcode : {
+        __ramcode_start = .;
+        *(.ramcode .ramcode.*)
+        . = ALIGN(4);
+        __ramcode_end = .;
+    } > ewram AT> rom
+    __ramcode_lma = LOADADDR(.ramcode);
+    /* THE PROGRAM STAYS BELOW THE SAVE'S JOURNAL, which is in the same
+     * chip one megabyte in (CARTSAVE_FIRST, gba/cartsave.h) on the boards
+     * that keep their save there. A program that grew into it would be
+     * erased by its own first save. */
+    ASSERT(__ramcode_lma + SIZEOF(.ramcode) <= ORIGIN(rom) + 0x100000,
+           "the program has grown into the save's journal (CARTSAVE_FIRST)")
+
     /* Uninitialised buffers too big for internal WRAM. Nothing is copied
      * here at startup; whatever lands in it is filled in by code. */
     .ewram (NOLOAD) : {

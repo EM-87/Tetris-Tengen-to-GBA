@@ -866,3 +866,66 @@ The split was mechanical and is meant to stay honest: a symbol gets external
 linkage because another file names it IN CODE, not in a comment. (Checking
 that against comment-stripped text is not a detail — `main` itself came out
 "shared" at first, because `main.asm.txt` is cited in half a dozen of them.)
+
+## Why the save is also in the cartridge's flash
+
+The first board made for the port — an AGB-E05-01, which FlashGBX knows as
+"with MSP55LV128M" — ran build 0d357df perfectly and saved nothing. The
+port's save code was right and had been for a year: byte accesses to
+$0E000000, the wait states set, the `SRAM_V113` signature every flash cart
+and emulator goes by. What was wrong was the assumption under it, that save
+RAM is kept. FlashGBX's own notes say it of these boards in one line: an
+SRAM chip and no battery, "not designed for unmodified ROM files". The
+games sold on them are patched to copy their save into the flash chip the
+game itself is in, and back at power-on.
+
+So the port does that itself, and finds out for itself whether it has to:
+
+- **What was read first.** FlashGBX's table for the board
+  (`fc_AGB_MSP55LV128M.txt`: AMD's commands with D0 and D1 crossed, sectors
+  from the chip's own CFI table) and its CFI parser, which is how the
+  crossed lines are told ("QRY" reads "RQZ"); the patchers that give other
+  games a save on these boards (metroid-maniac's gba-auto-batteryless-
+  patcher and PocketNES's flash_write: unlock, 0xA0, the word, wait until
+  it reads back; 0x80, unlock, 0x30 to the sector, wait for 0xFFFF; 0xF0),
+  from RAM with the interrupts off; and gbadev's note on bootleg carts.
+  The same sequences, sent the same way: the chip the port has never met
+  has met them.
+- **A journal, not a copy.** The patchers erase a sector and write the
+  whole save at every change — fine for a game that saves at a save point,
+  and a second of frozen console at every pause for one that saves a paused
+  game. A change appended to a log is a few words (`src/tengen_nvlog.c`);
+  the erase happens when a sector fills, which at power-on is nobody's
+  wait. It was written and tested on the host first, against a chip model
+  that loses its power at every word in turn, before there was a line of
+  GBA code to call it.
+- **Asked, not assumed.** Nothing says a board has no battery. RAM that
+  kept its contents may only have been off for a second; RAM that lost
+  them may be a dead battery. So the RAM is marked with a hash of what was
+  written to it and believed while it adds up, and the flash is written
+  regardless on a board that has one to write. A board with a battery and
+  one without come to the same save by different halves.
+- **What an emulator cannot say.** mGBA's cartridge ignores writes, so the
+  routines ran there and proved nothing. The chip had to be stood in
+  (`tools/romcheck/flashchip.py`): the port's own routines stepped an
+  instruction at a time, with the model holding them to what a board would
+  punish and an emulator forgives — a single instruction fetched from the
+  cartridge while the chip is answering a command. Ninety-odd deliberately
+  broken builds were run against it to see that it bites.
+- **The red screen** is the one place the port chooses to stop. A routine
+  whose chip never goes back to reading has nowhere to return to: the
+  instruction after its call is in that chip. It stays in RAM, keeps
+  asking, and paints the backdrop red so that what is seen is not a
+  hang with a picture on it.
+
+- **The page before the first write.** The page behind L+R+A was first
+  drawn after power-on had done everything, the journal's first writing
+  included — so a chip that hung on being written would have left a red
+  screen and no page, on the one board where the page was needed. Power-on
+  only reads now; what it owes the chip is paid at the first frame, and
+  not at all while the page is up. From the page SELECT goes on without
+  the chip, so a board that will not be written can still be played, and
+  photographed.
+
+None of this has met the board as this is written. The page behind L+R+A
+at power-on is there for the day it does.
