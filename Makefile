@@ -22,6 +22,15 @@ CORE_SRC := src/tengen_core.c src/tengen_link.c src/tengen_ai.c src/tengen_stats
 CORE_HDR := src/tengen_core.h src/tengen_link.h src/tengen_ai.h src/tengen_stats.h
 TEST_SRC := tests/test_tengen.c
 TEST_BIN := $(BUILD)/test_tengen
+# THE SAVE IN THE CARTRIDGE'S OWN FLASH, for the boards with no battery: the
+# journal (tengen_nvlog) and the reading of what a flash chip says of itself
+# (tengen_cfi). Neither knows a rule of the game or a register of the GBA,
+# so both are tested here, on the host — the journal against a chip that
+# loses its power at every word there is.
+SAVE_SRC := src/tengen_nvlog.c src/tengen_cfi.c
+SAVE_HDR := src/tengen_nvlog.h src/tengen_cfi.h
+NVLOG_BIN := $(BUILD)/test_nvlog
+CFI_BIN   := $(BUILD)/test_cfi
 
 .PHONY: all test clean gba
 
@@ -33,8 +42,16 @@ $(BUILD):
 $(TEST_BIN): $(CORE_SRC) $(CORE_HDR) $(TEST_SRC) | $(BUILD)
 	$(CC) $(CFLAGS) $(CORE_SRC) $(TEST_SRC) -o $(TEST_BIN)
 
-test: $(TEST_BIN)
+$(NVLOG_BIN): src/tengen_nvlog.c src/tengen_nvlog.h tests/test_nvlog.c | $(BUILD)
+	$(CC) $(CFLAGS) src/tengen_nvlog.c tests/test_nvlog.c -o $@
+
+$(CFI_BIN): src/tengen_cfi.c src/tengen_cfi.h tests/test_cfi.c | $(BUILD)
+	$(CC) $(CFLAGS) src/tengen_cfi.c tests/test_cfi.c -o $@
+
+test: $(TEST_BIN) $(NVLOG_BIN) $(CFI_BIN)
 	./$(TEST_BIN)
+	./$(NVLOG_BIN)
+	./$(CFI_BIN)
 
 clean:
 	rm -rf $(BUILD)
@@ -172,7 +189,8 @@ GBA_ASSETS := gba/tiles_game.h gba/screen_1p.h gba/screen_coop.h \
 # that header for what is in which.
 GBA_SRC  := gba/main.c gba/video.c gba/hud.c gba/records.c gba/frontend.c gba/match.c \
             gba/nes_audio.c gba/nes6502.c gba/handtunes.c gba/link.c gba/suspend.c \
-            gba/splash.c gba/gbp.c gba/wireless.c gba/extras.c $(CORE_SRC)
+            gba/splash.c gba/gbp.c gba/wireless.c gba/extras.c gba/cartsave.c \
+            $(CORE_SRC) $(SAVE_SRC)
 GBA_ELF  := $(BUILD)/tengen.elf
 GBA_ROM  := $(BUILD)/tengen.gba
 # THE SINGLE-PAK SLAVE: the same program, linked to run from external WRAM
@@ -189,7 +207,7 @@ gba: $(GBA_ROM)
 # The generated headers are prerequisites through $(wildcard) rather than
 # directly: that way regenerating assets rebuilds the ROM, while a missing one
 # still reaches the helpful message below instead of "no rule to make target".
-$(GBA_ELF): $(GBA_SRC) $(CORE_HDR) gba/port.h gba/gba_hw.h gba/link.h \
+$(GBA_ELF): $(GBA_SRC) $(CORE_HDR) $(SAVE_HDR) gba/port.h gba/gba_hw.h gba/link.h gba/cartsave.h \
              gba/crt0.s gba/gba.ld gba/mb_image.s $(GBA_MB) $(BUILD_TAG_FILE) \
              $(wildcard $(GBA_ASSETS) gba/splash_logo.h gba/splash_mirrorsoft.h gba/splash_tetris.h gba/gbp_logo.h) | $(BUILD)
 	@command -v $(ARMCC) >/dev/null 2>&1 || { \
@@ -205,7 +223,7 @@ $(GBA_ELF): $(GBA_SRC) $(CORE_HDR) gba/port.h gba/gba_hw.h gba/link.h \
 	    exit 1; }; done
 	$(ARMCC) $(ARMFLAGS) $(AI_HOT_FLAGS) $(ARMLDFLAGS) gba/crt0.s gba/mb_image.s $(GBA_SRC) -o $@
 
-$(GBA_MB_ELF): $(GBA_SRC) $(CORE_HDR) gba/port.h gba/gba_hw.h gba/link.h \
+$(GBA_MB_ELF): $(GBA_SRC) $(CORE_HDR) $(SAVE_HDR) gba/port.h gba/gba_hw.h gba/link.h gba/cartsave.h \
                 gba/crt0.s gba/mb.ld $(BUILD_TAG_FILE) $(wildcard $(GBA_ASSETS)) | $(BUILD)
 	@for h in $(GBA_ASSETS); do test -f $$h || { \
 	    echo "error: $$h is missing (make assets ROM=...)"; exit 1; }; done
@@ -364,6 +382,7 @@ gba-check: $(GBA_ROM)
 	python3 tools/run_rom.py $(GBA_ROM) --coophud
 	python3 tools/run_rom.py $(GBA_ROM) --pausemenu
 	python3 tools/run_rom.py $(GBA_ROM) --save
+	python3 tools/run_rom.py $(GBA_ROM) --cartsave
 	python3 tools/run_rom.py $(GBA_ROM) --quit-audio
 	python3 tools/run_rom.py $(GBA_ROM) --stats
 	python3 tools/run_rom.py $(GBA_ROM) --effects

@@ -2800,7 +2800,8 @@ def singlepak_check(rom):
         return 1
     print("OK: la imagen de Single-Pak juega contra el cartucho.")
     return (mb_send_check(rom) or records_dump_check(rom) or
-            clone_reset_check(rom) or clone_budget_check(rom))
+            clone_reset_check(rom) or clone_budget_check(rom) or
+            flash_wait_check(rom))
 
 
 def records_dump_check(rom):
@@ -3431,6 +3432,112 @@ def peer_check(rom):
     if failures:
         return 1
     print("OK: la pantalla del cable dice que hay al otro lado y que hacer.")
+    return 0
+
+
+def flash_wait_check(rom):
+    """THE CARTRIDGE'S FLASH WAITS FOR THE MATCH TO END.
+
+    Two consoles on boards that keep their save in the game's own flash
+    chip (gba/cartsave.c; the chip is tools/romcheck/flashchip.py's). A
+    save to the chip is a few milliseconds with the interrupts off, and a
+    match over the cable is its serial interrupt: so what is saved while
+    one runs — the console's figures, at a pause — goes to the save RAM at
+    once and to the chip only when the match is over. Here: paused in a
+    match, both have something waiting and neither has touched its chip;
+    played on and the cable lost for good, START to the title, and it is
+    in the chip on the next frame — and still there after the power has
+    been off, with no battery.
+    """
+    from romcheck.flashchip import Cart, WIRE_D0D1
+    linked = symbol(rom, "g_linked")[0]
+    image_at = symbol(rom, "g_cartsave_image")[0]
+    if linked is None or image_at is None or symbol(rom, "g_session")[0] is None:
+        skip("el ELF no tiene g_linked o g_cartsave_image")
+        return 0
+    mgba.log.silence()
+    carts = [Cart(rom, chip=dict(wiring=WIRE_D0D1), seed=s) for s in (1, 2)]
+    cores = [c.core for c in carts]
+    cable = Cable(*cores)
+    ends = [CableEnd(cable, True), CableEnd(cable, False)]
+    for core, end in zip(cores, ends):
+        core.attach_sio(end, lib.SIO_MULTI)
+    _KEEP.append((carts, cable, ends))
+
+    def both(frames, keys=None):
+        for _ in range(frames):
+            for i, cart in enumerate(carts):
+                cart.core.set_keys(*(keys[i] if keys else []))
+                cart.frame()
+            cable.settle()
+
+    def tap(key, who=None):
+        both(4, [[KEYS[key]] if who in (None, i) else [] for i in range(2)])
+        both(10, [[], []])
+
+    def state():
+        return [(c.report(), c.chip.programmed, len(c.calls)) for c in carts]
+
+    failures = []
+    both(70)                                # the first power-on: a journal each
+    tap("START"); tap("DOWN"); tap("START")
+    both(60)
+    tap("START", who=0)
+    both(90)
+    if [c.memory.u8[linked[0]] for c in cores] != [1, 1]:
+        print("FALLA: las dos consolas no llegan a la partida por cable")
+        return 1
+    began = state()
+    tap("START", who=0)                     # paused: the figures go to the save
+    both(20)
+    paused = state()
+    for i, ((r, words, calls), (_, words0, calls0)) in enumerate(zip(paused, began)):
+        who = "la maestra" if i == 0 else "la esclava"
+        if not r["dirty"] or not r["waiting"] or r["waits"] != 1:
+            failures.append(f"en pausa por cable {who} no tiene nada esperando "
+                            f"(pendiente {r['dirty']}, esperando {r['waiting']})")
+        if words != words0 or calls != calls0:
+            failures.append(f"en pausa por cable {who} escribe en su flash: "
+                            f"{words - words0} palabras")
+    stat = [bytes(c.memory.u8[image_at[0] + 0x700 + i] for i in range(4)) for c in cores]
+    if stat != [b"STAT", b"STAT"]:
+        failures.append(f"en pausa por cable no se guardan las cifras: {stat}")
+    tap("START", who=0)
+    both(20)
+    cable.plugged = False
+    both(LINK_GIVEUP_FRAMES_PY + 10)
+    still = state()
+    if any(words != words0 for (_, words, _), (_, words0, _) in zip(still, began)):
+        failures.append("con el cable perdido y la partida sin acabar se escribe en la flash")
+    tap("START")
+    both(30)
+    after = state()
+    if any(c.memory.u8[linked[0]] for c in cores):
+        failures.append("START no saca de la partida con el cable perdido")
+    for i, ((r, words, _), (_, words0, _)) in enumerate(zip(after, began)):
+        who = "la maestra" if i == 0 else "la esclava"
+        if r["dirty"] or r["waiting"] or words == words0:
+            failures.append(f"acabada la partida {who} no guarda lo que esperaba "
+                            f"(pendiente {r['dirty']}, {words - words0} palabras)")
+    for c in carts:
+        failures.extend(c.faults + c.chip.faults)
+
+    # ...and it is there with the power gone, on the master's board.
+    cart = carts[0]
+    saved = bytes(cart.core.memory.u8[image_at[0] + i] for i in range(0x7FE0))
+    cart.power_cycle()
+    cart.run(90)
+    back = bytes(cart.core.memory.u8[image_at[0] + i] for i in range(0x7FE0))
+    if cart.report()["boot"] != 3 or back != saved or back[0x700:0x704] != b"STAT":
+        failures.append("lo guardado al acabar la partida no vuelve tras apagar sin pila")
+    failures.extend(cart.faults + cart.chip.faults)
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("  en pausa en una partida por cable: lo guardado espera en las dos, "
+          "y ninguna toca su flash hasta que la partida acaba")
+    print("OK: la flash del cartucho espera a que acabe la partida por cable.")
     return 0
 
 

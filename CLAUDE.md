@@ -72,7 +72,11 @@ running ROM; only the side panels need reflowing).
 - **`src/`** — the rules. `tengen_core.c` (the game), `tengen_ai.c`
   (`computerMove`), `tengen_link.c` (the cable's lockstep, lobby and records
   swap), `tengen_stats.c` (the end page's figures, which the rules never
-  read). C99, no GBA headers, tested on the host.
+  read). C99, no GBA headers, tested on the host. And two that know no rule
+  of the game either: `tengen_nvlog.c` (the save as a journal in two flash
+  sectors, for the boards with no battery) and `tengen_cfi.c` (what a flash
+  chip says of itself), with their own tests (`tests/test_nvlog.c` against a
+  chip that loses its power at every word, `tests/test_cfi.c`).
 - **`gba/`** — the GBA layer, six files sharing `gba/port.h`:
   `video.c` the hardware (backgrounds, palettes, uploads, keypad, skins, the
   interrupt handler and `vsync`); `hud.c` what a match looks like;
@@ -81,13 +85,16 @@ running ROM; only the side panels need reflowing).
   `main.c` the state machine. Plus `nes6502.c` + `nes_audio.c` (the
   cartridge's sound engine, run), `handtunes.c` (the two hand-entered tunes)
   `link.c` (the cable), `suspend.c` (the paused game on the battery),
-  `splash.c` (the logos at power-on), `gbp.c` (the Game Boy Player) and
-  `wireless.c` (the Wireless Adapter). A symbol is shared only if another file names it
+  `splash.c` (the logos at power-on), `gbp.c` (the Game Boy Player),
+  `wireless.c` (the Wireless Adapter) and `cartsave.c` (where the save is
+  kept: the save RAM, and the cartridge's own flash where there is no
+  battery). A symbol is shared only if another file names it
   in code; everything else is `static`.
 - **`tools/`** — `extract_assets.py` (all the art, from a dump);
   `run_rom.py` (the command `make gba-check` runs) with its checks in
   `tools/romcheck/`, one module per family and `harness.py` for what they
-  share; `run_link.py` (two cores and a cable); `run_wireless.py` (two cores, two
+  share (`flashchip.py` is a flash chip for the emulator's cartridge, which
+  has none); `run_link.py` (two cores and a cable); `run_wireless.py` (two cores, two
   stand-in Wireless Adapters and the air between them); `nes_cpu.py` /
   `nes_console.py` (the cartridge, run in Python); `render_nes.py` (the
   cartridge's screens as a NES draws them); `probes/` (comparisons against
@@ -108,7 +115,7 @@ minus those).
 | --- | --- | --- |
 | `make test` | no | always — the rules, in milliseconds |
 | `make gba` | headers | to build `build/tengen.gba` |
-| `make gba-check` | headers | before calling any change done: 72 checks on the running ROM in mGBA, eighteen of them on two consoles with a cable, and then the Wireless Adapter's (`run_wireless.py`) |
+| `make gba-check` | headers | before calling any change done: 74 checks on the running ROM in mGBA, nineteen of them on two consoles with a cable, and then the Wireless Adapter's (`run_wireless.py`) |
 | `make trace ROM=... [MODE=coop\|versus\|with\|demo]` | yes | after touching `tengen_step` or `tengen_ai.c`: the port against the cartridge, iteration by iteration. The 1P and coop scripts never complete a row; `MODE="with --pad1"` plays player 1 with the port's computer and clears plenty; add `--handicap N` to any mode |
 | `make tune-check ROM=...` | yes | after touching audio: the four tunes against the cartridge, note by note |
 | `make dance-check ROM=...` | yes | after touching the dancers: their choreography against the cartridge's driver |
@@ -294,6 +301,94 @@ story behind each; the item number is in brackets.
   copying the game over the one just dealt, so everything a match lays out
   is laid out. Written as the plaque goes up and when its
   tune changes; wiped off the plaque and by the soft reset.
+- **Where the save is kept is asked of the cartridge at power-on**
+  (`cartsave.c`; `sram_read`/`sram_write` in gba_hw.h are all anything that
+  saves calls). A reproduction board with a flash chip, save RAM and NO
+  BATTERY ran the game perfectly and forgot everything at the switch (an
+  AGB-E05-01, FlashGBX's "with MSP55LV128M"). So `cartsave_init` asks the
+  ROM the flash query (CFI: 0x98 to word 0x55, then both families' resets —
+  three writes to one word, and to a board with D6/D7 crossed the same with
+  0x58), and:
+  - **nothing answers** (an emulator, an EZ-Flash, an EverDrive, a
+    SuperCard): the save RAM alone, byte for byte as before. A ROM that
+    KEEPS the write is a flash cart's RAM: it is put back as it was.
+  - **a chip answers, AMD's command set, and then its own identify**: the
+    save is ALSO kept in two sectors of the chip, at ROM offsets
+    `CARTSAVE_FIRST` ($100000) and $140000, as a journal
+    (`src/tengen_nvlog.c`). The program must stay below the first — gba.ld
+    refuses a link that does not, and the image has 13KB left before
+    gbafix's padding makes it a megabyte, which is still below.
+  - **a chip answers and is not that** (Intel's commands, no room, a table
+    that makes no sense): left alone, the save RAM as before. So is one
+    with ANOTHER GAME where the journal would go — a flash cart that keeps
+    several in one chip: every GBA ROM starts with the boot logo, and one
+    found anywhere from the program's end to the journal's
+    (`another_rom_follows`) means the megabyte is not the port's.
+  Which is believed at power-on: the save RAM carries a mark at $7FE0
+  ("TNVS", the image's hash and the hash inverted). RAM that adds up to its
+  mark is the newest there is (it is written first, always) and the flash
+  is brought level; RAM that does not — which is what no battery leaves —
+  is filled from the journal. With no journal yet, RAM holding this game's
+  letters (LOGG, STAT) starts it (an older build's save on a board with a
+  battery); RAM holding noise starts it empty.
+  - **A chip being told something is not a ROM**, anywhere in it, so
+    nothing of the cartridge's may run meanwhile: the four routines that
+    talk to it are copied to external WRAM (`RAM_CODE`, `.ramcode` in
+    gba.ld; `noclone` or link-time optimisation renames them), call
+    nothing, read no constant from the ROM — what they need is handed to
+    them in RAM (`ChipWords`) — run with the interrupts off, and do not
+    return until the chip reads as the ROM again (`back_to_rom`: a chip
+    that never does is a RED SCREEN, on purpose, not a program running
+    into status words). They wait the way the tools known to work on
+    these boards wait — read it back until it is what it should be, for a
+    patience of their own (28ms a word, 12s a sector) — and read nothing
+    else into the chip's status: its bit 5 is the datasheets' way to stop
+    early, and a clone that put anything there would be refused here
+    while it worked for them. `--cartsave` disassembles the section: a `bl`, a
+    switch (Thumb's is a libgcc call), a division or a `static const`
+    table in one of them is a crash on the board and nothing at all in an
+    emulator.
+  - **What goes to the flash goes at vsync, before the wait** (the frame's
+    idle end, not the blank), a few words appended: a pause is some 50ms
+    the first time and 6 after (only the 16-byte blocks that changed), a
+    resume 1.5 — and never more than four of them at a stretch with the
+    interrupts off (`PROGRAM_AT_ONCE`: the serial interrupt is the cable,
+    the adapter and the Game Boy Player). A journal that needs writing
+    afresh (an erase: a second) is written so at the FIRST FRAME after
+    power-on if under a quarter of its sector is left — not in
+    `cartsave_init`, which only reads the chip (the page below is shown
+    on that alone). Nothing goes while a match is on the cable
+    (`g_linked`) and nothing slow while anybody is on the other end; the
+    save RAM has it meanwhile, and the soft reset and the sleep flush.
+  - **None of it has run on such a board** (INFERRED from FlashGBX's
+    config for it, the batteryless patchers' routines and the chip
+    family's datasheets). It runs against `FlashChip`
+    (tools/romcheck/flashchip.py): the routines are stepped an
+    instruction at a time, their stores to the cartridge decoded and the
+    chip's answers written into the emulator's ROM. The model holds them
+    to what a real chip would punish — code run from the cartridge or an
+    interrupt taken while the chip is not a ROM, a bit set by programming,
+    a write below the journal — and can cut the power at any instruction.
+    A chip that does what no datasheet says is not in it. What it can be
+    made to do: refuse a word or a sector, erase badly, hold a word that
+    fades, take its time over a reset, have no save RAM beside it at all.
+    A check that waits on a save calls `Play.settle`: every call into the
+    RAM routines costs the console a frame in the rig, where on the board
+    it is milliseconds.
+  - **A save file put into a board's RAM from outside is believed only
+    while there is no journal** (a .sav from an emulator has no mark, and
+    RAM without one is what no battery leaves). Believing it for its
+    letters would be believing RAM that half-survived a second without
+    power.
+  - **L+R+A held at power-on** is a page of what the cartridge turned out
+    to be (`cartsave_page`), in place of the logos: what the query read,
+    the wiring, the chip's identity as the flasher prints it, where the
+    save was read from, what the chip will be asked to do next. It is
+    there to be photographed when a board does not save, so NOTHING HAS
+    BEEN WRITTEN TO THE CHIP when it comes up and nothing is while it is
+    up (`hold`): a board that hangs on its first write still says what it
+    is. START goes on and writes; SELECT goes on without the chip for the
+    session, the save RAM alone.
 - **The Game Boy Player is found by its logo** (`gbp.c`), shown at power-on
   before the publisher's on every GBA, as the games that supported it did:
   while it is up a Player holds all four directions one frame in three
@@ -1041,6 +1136,11 @@ the colon of MM:SS drawn at boot, T_COLON, the cartridge's $3A being box
 art).
 (There was a seventh credit under the chord, BUILD and the commit; it went,
 and the ROM file's name is what says which build it is.)
+The save kept in the cartridge's own flash as well as its save RAM on a
+board that answers the flash query, with nothing to choose or patch
+(`cartsave.c`; the trap above), and L+R+A held at power-on for the page
+that says what the cartridge is (CARTRIDGE SAVE, in English like the rest;
+START to go on, SELECT to go on without the chip).
 
 **Knowingly not shown**: proto_c's title animation (its rows are the ones
 the composition drops); a screen-change noise under proto_a (its dump has
@@ -1115,6 +1215,12 @@ And what has run only in an emulator:
   mGBA (`suspend_check`). On a flash cart the save memory has to reach the
   card for the game to survive: the EZ-Flash IV and the SuperCard each do
   that their own way, as they do for the high scores.
+- **The save in the cartridge's own flash** (`cartsave.c`) has run only
+  against `FlashChip`, a model. The board it was written for (AGB-E05-01,
+  MSP55LV128M: AMD's commands, D0/D1 crossed) ran build 0d357df, which
+  saved to its RAM and lost it at the switch. Chips of Intel's command sets
+  are recognised and not written: nothing here speaks to them yet. Words
+  go one command each; the chips' write buffer is not used.
 
 A new idea starts in the cartridge (`tools/nes_console.py`,
 `tools/render_nes.py`), not in memory of how Tetris goes.
