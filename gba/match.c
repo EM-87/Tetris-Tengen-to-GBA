@@ -329,25 +329,86 @@ static void announce_step(TengenStepResult step) {
  * The re-plan goes through tengen_ai_rechoose, which is the same choice with
  * the settle clock left running: a piece halfway down that stops dead for a
  * quarter of a second reads as a hang, not as a decision. */
-uint8_t ai_input(void) {
-    TengenPlayerSlot slot = (TengenPlayerSlot)g_ai_slot;
-    TengenPlayerSlot other = (TengenPlayerSlot)(g_ai_slot ^ 1);
+static uint8_t ai_input_of(TengenAi *ai, TengenPlayerSlot slot,
+                           TengenTetromino *last_piece,
+                           TengenTetromino *last_partner, uint8_t *frame) {
+    TengenPlayerSlot other = (TengenPlayerSlot)(slot ^ 1);
     TengenTetromino mine = g_session.game.player[slot].piece.current;
     TengenTetromino theirs = g_session.game.player[other].piece.current;
 
-    if (mine != g_ai_last_piece) {
-        tengen_ai_choose(&g_ai, &g_session.game, slot);
-    } else if (g_session.game.coop && theirs != g_ai_last_partner &&
+    if (mine != *last_piece) {
+        tengen_ai_choose(ai, &g_session.game, slot);
+    } else if (g_session.game.coop && theirs != *last_partner &&
                 theirs != TT_NONE && mine != TT_NONE) {
         /* The shared board, and only there. `coop` is what playModeTable
          * makes of WITH COMPUTER; a race is two boards and what lands on the
          * other one is not news. */
-        tengen_ai_rechoose(&g_ai, &g_session.game, slot);
+        tengen_ai_rechoose(ai, &g_session.game, slot);
     }
-    g_ai_last_piece = mine;
-    g_ai_last_partner = theirs;
-    return tengen_ai_buttons(&g_ai, &g_session.game, slot, g_ai_frame++);
+    *last_piece = mine;
+    *last_partner = theirs;
+    return tengen_ai_buttons(ai, &g_session.game, slot, (*frame)++);
 }
+
+uint8_t ai_input(void) {
+    return ai_input_of(&g_ai, (TengenPlayerSlot)g_ai_slot, &g_ai_last_piece,
+                       &g_ai_last_partner, &g_ai_frame);
+}
+
+#ifndef TENGEN_MULTIBOOT
+/* THE DEMO TWO TITLES SHARE (main.c, link.c: link_title_tick): one
+ * cooperative game, a computer on each pad. BOTH COMPUTERS RUN ON BOTH
+ * CONSOLES, inside the step the cable keeps them on (link_play_frame) —
+ * the same board, the same two heads, the same two moves, so the same game
+ * on the two screens with nothing but the cable's clock between them. What
+ * a pad's word carries in a demo is only whether somebody has picked the
+ * console up (DEMO_LEAVE_BUTTONS).
+ *
+ * Each console's own computer on its own pad, its moves over the wire like
+ * a player's, was the other way to do it, and a worse one: a word is
+ * loaded for the next step as the last one's arrives, before this console
+ * has played it, so a computer there would steer by the board of two steps
+ * ago.
+ *
+ * The cartridge's computer as it ships, on both — or, on the master's
+ * chord, the port's (`smart`), reading its partner's landing as ground
+ * (`coop_aware`) and told where the other is going (`partner_known`), as
+ * tests/ai_bench.c plays two of them. Never `deep`: that one thinks for as
+ * long as a frame has time left, and two consoles do not have the same
+ * time left. */
+/* (In EWRAM: a second head is half a kilobyte of working state, and the
+ * stack has what is left of IWRAM.) */
+__attribute__((section(".ewram"))) static TengenAi g_ai_two;
+static TengenTetromino g_ai_two_piece, g_ai_two_partner;
+static uint8_t g_ai_two_frame;
+
+void link_demo_begin(bool chord) {
+    tengen_ai_reset(&g_ai);
+    tengen_ai_reset(&g_ai_two);
+    g_ai.smart = g_ai_two.smart = chord;
+    g_ai.coop_aware = g_ai_two.coop_aware = chord;
+    g_ai_last_piece = g_ai_last_partner = TT_NONE;
+    g_ai_two_piece = g_ai_two_partner = TT_NONE;
+    g_ai_frame = g_ai_two_frame = 0;
+}
+
+/* Both pads' moves for the step about to be played, player 1's first. */
+static void link_demo_moves(uint8_t moves[2]) {
+    TengenAi *ai[2] = { &g_ai, &g_ai_two };
+    for (int p = 0; p < 2; p++) {
+        ai[p]->partner_known = ai[p ^ 1]->smart && ai[p ^ 1]->plan_have;
+        ai[p]->partner_x = ai[p ^ 1]->target_x;
+        ai[p]->partner_o = ai[p ^ 1]->target_orientation;
+        moves[p] = 0;
+        if (!g_session.game.player[p].game_active) continue;
+        moves[p] = p == 0
+            ? ai_input_of(&g_ai, TENGEN_PLAYER_1, &g_ai_last_piece,
+                          &g_ai_last_partner, &g_ai_frame)
+            : ai_input_of(&g_ai_two, TENGEN_PLAYER_2, &g_ai_two_piece,
+                          &g_ai_two_partner, &g_ai_two_frame);
+    }
+}
+#endif
 
 static void ai_play_frame(void) {
     if (!g_ai_active || g_ai_slot != TENGEN_PLAYER_2) return;
@@ -1324,7 +1385,9 @@ static bool link_frame_done(bool going) {
  * plays on, the cable put away. See g_link_alone. */
 static void link_go_alone(void) {
     g_link_alone = true;
-    g_link_left_note = LINK_LEFT_NOTE_FRAMES;
+    /* ...and says so — but not a demo, which nobody is watching for a
+     * rival: its two computers play on, on this console alone. */
+    g_link_left_note = g_demo ? 0 : LINK_LEFT_NOTE_FRAMES;
     link_play_end();
     link_shutdown();
     /* A match that was waiting for the cable has its tune and its panel
@@ -1380,6 +1443,29 @@ bool link_play_frame(uint8_t pressed, bool *quit) {
         uint8_t menu_pressed = (uint8_t)(new0 | new1);
         g_link_prev[0] = b0;
         g_link_prev[1] = b1;
+
+#ifndef TENGEN_MULTIBOOT
+        /* IN THE DEMO TWO TITLES SHARE, A PAD IS THE WAY OUT AND NOTHING
+         * ELSE (main.c; link_demo_begin): the buttons that leave a demo,
+         * pressed on either console, are that console leaving — on the
+         * step both have, as START on a dead board is below — and the
+         * other plays on with both computers, alone. What the board gets
+         * are the computers' moves, the same two on both consoles. */
+        if (g_demo) {
+            if ((me == 0 ? new0 : new1) & (MENU_ADVANCE | TENGEN_BTN_B)) {
+                g_link_walked = true;
+                return link_frame_done(false);
+            }
+            if (((me == 0 ? new1 : new0) & (MENU_ADVANCE | TENGEN_BTN_B)) &&
+                !g_link_alone)
+                link_go_alone();
+            uint8_t moves[2];
+            link_demo_moves(moves);
+            local_buttons = moves[me];
+            remote = (uint16_t)((remote & ~TENGEN_LINK_BUTTON_MASK) | moves[me ^ 1]);
+            menu_pressed = 0;
+        }
+#endif
 
         /* START ON A DEAD BOARD, THE OTHER STILL GOING, IS ITS PLAYER
          * LEAVING THE RACE — and it happens HERE, on the word that carried
@@ -1502,6 +1588,19 @@ bool link_play_frame(uint8_t pressed, bool *quit) {
     }
     /* A DESYNC IS FINAL at once — the two consoles are no longer playing the
      * same game — and a cable quiet for LINK_GIVEUP_FRAMES is taken for gone. */
+#ifndef TENGEN_MULTIBOOT
+    /* ...BUT NOT A DEMO'S, which nobody is watching for a cable: whatever
+     * becomes of it — out of step, quiet, the other console gone — its two
+     * computers play on, on this console alone. No LINK ISSUES, no CABLE
+     * LOST window over an attract mode. */
+    if (g_demo && !g_link_alone &&
+        (g_session.desynced ||
+         (stepped == 0 && (link_partner_left() ||
+                           link_starved() > LINK_LOST_FRAMES)))) {
+        g_session.desynced = false;
+        link_go_alone();
+    }
+#endif
     if (g_session.desynced) {
         link_give_up();
         return link_frame_done(false);

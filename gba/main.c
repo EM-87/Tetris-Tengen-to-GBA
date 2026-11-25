@@ -40,6 +40,15 @@ static void demo_music_back(void) {
     g_demo_mix = false;
 }
 
+/* ...and GAME SELECT's line, which the demo two titles share takes for its
+ * own game (COOPERATIVE) while it plays: given back with the tune. */
+static int g_demo_mode_kept = -1;
+static void demo_mode_back(uint8_t *game_mode) {
+    if (g_demo_mode_kept < 0) return;
+    *game_mode = (uint8_t)g_demo_mode_kept;
+    g_demo_mode_kept = -1;
+}
+
 #ifndef TENGEN_MULTIBOOT
 /* WHAT THE MENUS CHOSE, for a game going to the battery (suspend.c): the
  * plaque's suspend and EXIT GAME's SAVE keep the same. */
@@ -186,6 +195,18 @@ int main(void) {
     bool records_answered = false, records_took = false;
     uint16_t records_answered_for = 0;
 #endif
+#ifndef TENGEN_MULTIBOOT
+    /* TWO TITLES, ONE DEMO (the title, below; link.c, link_title_tick).
+     * How long a title has to have stood untouched before the other
+     * console's demo may take it along; how long the slave's end, its own
+     * demo due, waits to be asked (three of the master's beacons); and how
+     * long a handshake gets. */
+#define TITLE_IDLE_FRAMES 300
+#define DEMO_LINK_WAIT 24
+#define DEMO_LINK_FRAMES 90
+    bool demo_link = false;         /* the two titles are shaking hands */
+    int demo_link_frames = 0;
+#endif
     uint8_t held_last = 0;
     bool sweeping = false;   /* true while the line-clear sweep owns the OAM */
     bool match_running = false;
@@ -260,6 +281,21 @@ int main(void) {
             screen == SCREEN_LEADERBOARD ||
             (screen == SCREEN_LEVEL_SELECT && !GAME_IS_LINKED(game_mode)))
             link_beacon();
+#ifndef TENGEN_MULTIBOOT
+        /* ...and, UNDER THE CHORD, that it is on its title and how long it
+         * has been (link_title_tick): two of them start their demos as one
+         * game. Without the chord this console says 0 as it always has,
+         * hears nothing, and its demo is the cartridge's. */
+        {
+            int title = -1;
+            if (screen == SCREEN_TITLE && g_pause_unlocked && !demo_link) {
+                title = 0;
+                if (g_title_frame >= TITLE_IDLE_FRAMES) title |= LINK_TITLE_IDLE;
+                if (g_title_frame >= DEMO_START_FRAME) title |= LINK_TITLE_DUE;
+            }
+            link_title_tick(title);
+        }
+#endif
         uint8_t buttons = read_buttons();
         uint8_t pressed = (uint8_t)(buttons & ~held_last);
         held_last = buttons;
@@ -325,38 +361,24 @@ int main(void) {
             set_offset_layer(TITLE_LOGO_SHIFT_PX);
             /* L+R HERE is the game's own chord as much as on GAME SELECT or
              * LEVEL SETTINGS (unlock_cheats): rung here it opens the tunes,
-             * the pause menu and the rest, and puts the first prototype on.
-             * Until it is rung, anywhere, the title is the cartridge's and a
-             * lone shoulder does nothing at all, so the title cannot be
-             * changed by accident — and after it the shoulders do nothing
-             * here either: the skins are a list in GAME SELECT's OPTIONS
-             * (extras.c). L and R stepped them here once, and then put up a
-             * box of extras here, where nobody looked for it. */
-            int skin_to = -1;
-            bool chord = shoulder_chord();    /* every frame: an edge */
-            if (!g_title_skin_found && chord && unlock_cheats() &&
-                TITLE_SKIN_COUNT > 1)
-                skin_to = 1;
-            if (skin_to >= 0) {
-                g_title_skin = (uint8_t)skin_to;
-                /* ...and the HIGH SCORE the menus print is this build's, from
-                 * this build's table. See LEADER_TABLES. */
-                leader_use_table(front_skin());
-                nes_audio_play(NES_SOUND_CHIRP);
-                vsync();
-                /* CLEAR FIRST, then the tiles: a skin swap rewrites the whole
-                 * 256-tile prototype bank, which is far more than a vblank
-                 * holds, and with the map already blank none of it is on
-                 * screen while it is being written. */
-                clear_screen();
-#if SCREEN_PROTO_AVAILABLE
-                if (g_title_skin) upload_proto_tiles(g_title_skin - 1);
-#endif
-                draw_title();
-                oam_hide_all();
-                audio_frame();
-                continue;
+             * the pause menu and the rest — AND THAT IS ALL IT DOES. It
+             * used to put the first prototype's title on as well, which was
+             * a title changed by a chord rung for something else: the
+             * skins are a list in GAME SELECT's OPTIONS (extras.c), and
+             * that is where one is put on. Until the chord is rung,
+             * anywhere, a lone shoulder does nothing at all; after it the
+             * shoulders do nothing here either. What says it took is the
+             * chirp, and the last credit's colour (set_credit_colour). */
+            if (shoulder_chord())             /* every frame: an edge */
+                unlock_cheats();
+#ifndef TENGEN_MULTIBOOT
+            /* The title left while two of them shake hands (below): the
+             * cable is put away with it. */
+            if (demo_link && (pressed & MENU_ADVANCE)) {
+                link_shutdown();
+                demo_link = false;
             }
+#endif
             /* SELECT SHOWS THE HIGH SCORES, which otherwise only a lost
              * game could. The page as a game over leaves it, with nothing
              * to type, and back to the title as it goes back after one: a
@@ -397,9 +419,86 @@ int main(void) {
                 oam_hide_all();
                 continue;
             }
+#ifndef TENGEN_MULTIBOOT
+            /* TWO CARTRIDGES LEFT ON THEIR TITLES, A CABLE BETWEEN THEM,
+             * THE CHORD RUNG ON BOTH: their demos start together, as ONE
+             * cooperative game the two computers play (link_demo_begin).
+             * It happens by itself after any game two players shared: both
+             * go back to the title at once and both demos come due at
+             * once. Nothing the cartridge does, so nothing a console does
+             * without the chord — which says nothing on the cable and is
+             * asked nothing (link_title_tick).
+             *
+             * The master's end asks, being the one that can start a
+             * transfer: when its demo is due and the other title has stood
+             * untouched TITLE_IDLE_FRAMES, or the other's is due and its
+             * own has. It asks by starting the lobby of a demo
+             * (tengen_lobby_demo), the settings a demo's; the slave's end
+             * sees that and starts its own. A slave whose demo is due
+             * first waits DEMO_LINK_WAIT frames to be asked, and only with
+             * a title on the master's end to ask it. The handshake is the
+             * lobby's, with the title still on the screen; if it is not
+             * done in DEMO_LINK_FRAMES, or either title is left meanwhile,
+             * each console plays its own demo as ever.
+             *
+             * (No word of the chord here: a console without it has heard
+             * of no title and been asked nothing, having said nothing.) */
+            bool demo_hold = false;
+            if (!demo_link) {
+                int other = link_title_other();
+                bool idle = g_title_frame >= TITLE_IDLE_FRAMES;
+                bool due = g_title_frame >= DEMO_START_FRAME;
+                bool begin = false;
+                if (link_title_master())
+                    begin = other >= 0 &&
+                            ((due && (other & LINK_TITLE_IDLE)) ||
+                             (idle && (other & LINK_TITLE_DUE)));
+                else if (link_title_invites() >= 2)
+                    begin = true;
+                else if (due && (link_title_invites() ||
+                                 (other >= 0 && (other & LINK_TITLE_IDLE))) &&
+                         g_title_frame < DEMO_START_FRAME + DEMO_LINK_WAIT)
+                    demo_hold = true;
+                if (begin) {
+                    uint16_t seed =
+                        (uint16_t)(seed_source.lo | (seed_source.hi << 8));
+                    link_init();
+                    link_lobby_start_demo(&lobby, seed);
+                    uint16_t prints[TENGEN_SKIN_MAX];
+                    int count = skin_prints(prints, TENGEN_SKIN_MAX);
+                    tengen_lobby_skins(&lobby, prints, count, front_skin());
+                    if (link_is_master()) {
+                        static const uint8_t kNoHandicap[2] = { 0, 0 };
+                        link_lobby_release(&lobby, seed, DEMO_START_LEVEL, 0,
+                                           kNoHandicap, true, g_xe);
+                        tengen_lobby_rules(&lobby,
+                                           opt_link_rules(g_options & OPT_RULES));
+                    }
+                    demo_link = true;
+                    demo_link_frames = 0;
+                }
+            }
+            if (demo_link) {
+                link_lobby_step(&lobby);
+                if (lobby.ready) {
+                    /* ...and the match starts where a lobby's does (the
+                     * LINK CABLE screen, which this never shows). */
+                    screen = SCREEN_LINK_WAIT;
+                    continue;
+                }
+                if (++demo_link_frames >= DEMO_LINK_FRAMES) {
+                    link_shutdown();
+                    demo_link = false;
+                } else {
+                    demo_hold = true;
+                }
+            }
+#else
+            const bool demo_hold = false;
+#endif
             /* ...and if nobody presses anything, the cartridge starts playing
              * by itself. See DEMO_START_FRAME. */
-            if (g_title_frame >= DEMO_START_FRAME) {
+            if (g_title_frame >= DEMO_START_FRAME && !demo_hold) {
                 uint16_t seed = (uint16_t)(seed_source.lo | (seed_source.hi << 8));
                 g_demo = true;
                 g_linked = false;
@@ -1137,6 +1236,9 @@ int main(void) {
             if (pressed & TENGEN_BTN_B) {
                 screen = SCREEN_GAME_SELECT;
                 link_shutdown();
+#ifndef TENGEN_MULTIBOOT
+                demo_link = false;      /* ...a demo's lobby included */
+#endif
                 oam_hide_all();
                 screen_blip();
                 vsync();
@@ -1158,6 +1260,17 @@ int main(void) {
                  * for two seconds, keeping the link turning meanwhile (over
                  * the air, a second and a half of silence is a lost
                  * partner). */
+#ifndef TENGEN_MULTIBOOT
+                /* (Not for the demo two titles share: nobody is there to
+                 * ask, and nothing of anybody's is at stake.) */
+                const bool demo_start = demo_link;
+                const uint8_t music_was = g_music, mode_was = game_mode;
+                demo_link = false;
+                /* ...and a demo from here on, for everything the start of a
+                 * match asks (as the title's own demo is before its). */
+                if (demo_start) g_demo = true;
+                if (!demo_start)
+#endif
                 {
                     TengenRecordSync sync;
                     TengenRecord mine[TENGEN_RECORDS_MAX];
@@ -1293,6 +1406,23 @@ int main(void) {
                 over_frames = 0;
                 skin_begin_match(true, lobby.skin);
                 g_front_tune = FRONT_NOTHING;
+#ifndef TENGEN_MULTIBOOT
+                if (demo_start) {
+                    /* ...AND NOBODY IS PLAYING IT: the demo two titles
+                     * share. A computer on each pad, both on both consoles
+                     * (link_demo_begin); MUSIC MIX, as the demo under the
+                     * chord plays, and the tune and GAME SELECT's line the
+                     * player left given back as it ends (demo_music_back,
+                     * demo_mode_back); nothing written down
+                     * (leader_record), nobody's name to swap. */
+                    g_demo_over_frames = 0;
+                    g_demo_mode_kept = mode_was;
+                    link_demo_begin(lobby.xe);
+                    g_demo_music_kept = music_was;
+                    g_demo_mix = true;
+                    g_music = MUSIC_MIX;
+                }
+#endif
                 start_music(g_music);
                 /* The lobby's cossack is four sprites nothing on the play
                  * screen ever writes to, so nothing there would ever have
@@ -1346,6 +1476,7 @@ int main(void) {
                     leader_demo_end();
                     g_demo = false;
                     demo_music_back();
+                    demo_mode_back(&game_mode);
                     g_ai_active = false;
                 }
                 screen = SCREEN_TITLE;
@@ -1597,28 +1728,27 @@ int main(void) {
          * player1ControllerNew, so what the game sees IS the computer — and
          * what the player presses reaches processMenuInput instead, where
          * SELECT or START leaves for GAME SELECT (main.asm.txt:4633-4638). */
+        /* ...THE DEMO TWO TITLES SHARE THE SAME, but off the wire while it
+         * plays: the press goes across like any other, and on the step both
+         * consoles have it this one leaves and the other plays on alone
+         * (link_play_frame, g_link_walked) — left off its own keypad, the
+         * other console's demo stood still until it worked out it had been
+         * left. Its computers are not this pad's either (link_demo_moves). */
+        bool demo_out = false;
         if (g_demo) {
-            if (pressed & (MENU_ADVANCE | TENGEN_BTN_B)) {
-                g_demo = false;
-                demo_music_back();
-                g_ai_active = false;
-                match_running = false;
-                screen = SCREEN_GAME_SELECT;
-                screen_blip();
-                vsync();
-                audio_frame();
-                clear_screen();
-                oam_hide_all();
-                continue;
+            bool shared = g_linked && match_running;
+            if (!shared && (pressed & (MENU_ADVANCE | TENGEN_BTN_B))) {
+                demo_out = true;
+            } else if (!g_linked) {
+                buttons = (match_running &&
+                            g_session.game.player[TENGEN_PLAYER_1].game_active)
+                    ? ai_input() : 0;
+                pressed = buttons;
             }
-            buttons = (match_running &&
-                        g_session.game.player[TENGEN_PLAYER_1].game_active)
-                ? ai_input() : 0;
-            pressed = buttons;
         }
 
         bool quit_match = false;
-        if (match_running) {
+        if (match_running && !demo_out) {
             bool keep_going = g_linked ? link_play_frame(pressed, &quit_match)
                                         : solo_play_frame(buttons, pressed,
                                                            &quit_match);
@@ -1631,12 +1761,14 @@ int main(void) {
                     /* The other player left this race a while ago and the
                      * cable was put away then (link_go_alone): nobody to
                      * swap a name with. */
-                } else if (g_linked && (quit_match || g_link_lost || g_link_walked)) {
+                } else if (g_linked && (quit_match || g_link_lost ||
+                                        g_link_walked || g_demo)) {
                     /* ...and a cable gone for good takes nobody's name
                      * across: there is no cable to take it (link_give_up).
                      * Nor does a player who leaves a race the other is
                      * still playing (g_link_walked): that console has gone
-                     * on alone, its cable put away on the same step. */
+                     * on alone, its cable put away on the same step. Nor
+                     * do a demo's two computers, which have none. */
                     link_play_end();
                     link_shutdown();
                 } else if (g_linked) {
@@ -1653,6 +1785,26 @@ int main(void) {
                     swap_drawn = false;
                 }
             }
+        }
+#ifndef TENGEN_MULTIBOOT
+        if (g_demo && g_link_walked) {
+            g_link_walked = false;
+            demo_out = true;
+        }
+#endif
+        if (demo_out) {
+            g_demo = false;
+            demo_music_back();
+            demo_mode_back(&game_mode);
+            g_ai_active = false;
+            match_running = false;
+            screen = SCREEN_GAME_SELECT;
+            screen_blip();
+            vsync();
+            audio_frame();
+            clear_screen();
+            oam_hide_all();
+            continue;
         }
 
 #ifndef TENGEN_MULTIBOOT
@@ -1700,6 +1852,8 @@ int main(void) {
                 continue;
             }
         } else if (g_demo && !match_running) {
+            /* (Never the demo two titles share, which is under the chord
+             * and ends above: nothing of its to give back here.) */
             if (++g_demo_over_frames >= DEMO_GAMEOVER_FRAMES) {
                 g_demo = false;
                 demo_music_back();

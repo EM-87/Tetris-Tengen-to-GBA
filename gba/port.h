@@ -2254,6 +2254,9 @@ extern bool g_link_lost;
 extern bool g_link_waiting;
 extern bool g_link_alone;       /* the other player left a race; this one plays on */
 extern bool g_link_walked;      /* ...and this console's own did */
+/* The demo two titles share: a computer on each pad (match.c; cartridge
+ * only). `chord` is the master's, and makes them the port's computers. */
+void link_demo_begin(bool chord);
 extern bool g_repaint;
 extern uint8_t g_front_tune;
 extern uint8_t g_music;

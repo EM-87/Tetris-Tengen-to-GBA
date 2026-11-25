@@ -185,8 +185,7 @@ def coop_ai_check(rom_path):
         run(core, 8)
         press_start(core); run(core, 10)
         if chord:
-            # The chord is rung on GAME SELECT, which is where unlock_cheats
-            # lives; at the title it only cycles the skin.
+            # The chord, rung on GAME SELECT (the title's is the same one).
             core.set_keys(KEYS["L"], KEYS["R"]); run(core, 4)
             core.set_keys(); run(core, 24)
         for _ in range(entry):

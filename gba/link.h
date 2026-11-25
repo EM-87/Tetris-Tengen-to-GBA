@@ -211,6 +211,20 @@ void link_rest(void);
  * link.c). */
 void link_beacon(void);
 
+/* TWO TITLES, ONE DEMO (cartridge only; see link.c). Once a frame, whatever
+ * the screen: `flags` is LINK_TITLE_* on the title and -1 anywhere else.
+ * Then what the other console's title last said — its flags, or -1 if it
+ * is not on one, or said nothing lately — for how many transfers running
+ * this console has been asked into a demo (the slave's end; two is an
+ * invitation, one a reason to wait a frame), and which end it is on. */
+#define LINK_TITLE_IDLE 0x01    /* nobody has touched it for a while */
+#define LINK_TITLE_DUE  0x02    /* its demo is due: it is waiting to be asked */
+void link_title_tick(int flags);
+int link_title_other(void);
+int link_title_invites(void);   /* transfers running with the master asking */
+bool link_title_master(void);
+void link_lobby_start_demo(TengenLobby *lobby, uint16_t seed);
+
 /* WHAT IS ON THE OTHER END, while the lobby has found nobody to talk to —
  * for the LINK CABLE screen to say what to do next. */
 typedef enum {

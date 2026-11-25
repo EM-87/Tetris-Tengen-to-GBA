@@ -207,7 +207,15 @@ typedef struct {
      * no GAME SELECT of its own to have chosen on. It takes the mode of the
      * master's HELLO as its own; see tengen_lobby_mode_any. */
     bool mode_any;
+    /* NOBODY CAME: this is two title screens whose demos are sharing a
+     * board (tengen_lobby_demo). It rides in HELLO beside the mode, and a
+     * lobby a player is sitting in never answers one that nobody is. */
+    bool mode_demo;
 } TengenLobby;
+
+/* What HELLO carries, the master's and the echo alike. */
+#define TENGEN_HELLO_COOP 0x0001
+#define TENGEN_HELLO_DEMO 0x0002
 
 /* Starts a lobby. The master's seed/level/music are the ones that count; on
  * the slave they are overwritten by what arrives. */
@@ -229,6 +237,21 @@ void tengen_lobby_mode(TengenLobby *lobby, bool coop);
  * the game. Only ever the slave's; a master with it would have nothing to
  * say in its own HELLO. Call after tengen_lobby_start_held. */
 void tengen_lobby_mode_any(TengenLobby *lobby);
+
+/* TWO TITLES, TWO DEMOS, ONE BOARD. Two cartridges left alone on their
+ * titles with a cable between them start their demos together, as one
+ * cooperative game the two computers play (gba/main.c, the title; nobody
+ * asked for the cartridge to do it, and it does not). The lobby is the
+ * lobby, with nobody in it — and that is the whole of what this says: the
+ * word is in HELLO both ways (TENGEN_HELLO_DEMO), and a HELLO or an echo
+ * that says otherwise than this console is not an answer, exactly as for
+ * the other mode. So a player who walks into the cable's screen while the
+ * other console is inviting a demo is not taken into one, a Single-Pak copy
+ * that follows any mode does not follow this, and a build from before the
+ * bit is never asked: the invitation goes only to a title that says it is
+ * one (gba/link.c, link_title_tick). Call after tengen_lobby_start_held;
+ * tengen_lobby_forget keeps it. */
+void tengen_lobby_demo(TengenLobby *lobby);
 
 /* Starts the conversation again in the given role, keeping the seed, the
  * settings and the skins: for a console that has just learnt from the cable

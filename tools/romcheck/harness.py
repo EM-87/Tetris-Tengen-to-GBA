@@ -268,8 +268,7 @@ def ring_chord_from_title(core, settle=24):
     """The game's chord, from the title and back to it: START to GAME
     SELECT, L+R there, B. Everything the port adds waits for it — the
     prototypes' titles among it: after it GAME SELECT has a sixth line,
-    OPTIONS, where they are listed, and L+R on the title stands down
-    (put_skin_on, step_skin)."""
+    OPTIONS, where they are listed (put_skin_on, step_skin)."""
     press_start(core); run(core, 10)
     core.set_keys(KEYS["L"], KEYS["R"]); run(core, 4)
     core.set_keys(); run(core, 12)
@@ -357,20 +356,22 @@ def choose_skin(core, skin, settle=24):
 
 def put_skin_on(core, settle=24):
     """From the title, a prototype's title on it, the game's chord rung by
-    the way: L+R on the title, which is that chord and finds the skins, or —
-    rung already, when L+R there stands down — the first of them, the first
-    dump given, off the OPTIONS page's list (choose_skin). True when one went
-    on (g_title_skin), False on a build without them."""
+    the way: L+R on the title, which is that chord and NOTHING ELSE (it put
+    the first prototype on as well, once: a title changed by a chord rung
+    for something else), and then the first of the skins, the first dump
+    given, off the OPTIONS page's list (choose_skin). True when one went on
+    (g_title_skin), False on a build without them."""
     rom = getattr(core, "_tengen_rom", "")
     found, _ = game_state_address(rom, "g_title_skin_found")
-    if found is not None and core.memory.u8[found]:
-        choose_skin(core, 1, settle)
-    else:
+    if found is None or not core.memory.u8[found]:
         core.set_keys(KEYS["L"], KEYS["R"])
         run(core, 4)
-        core.set_keys(); run(core, settle)
+        core.set_keys(); run(core, 12)
     skin, _ = game_state_address(rom, "g_title_skin")
-    return skin is not None and core.memory.u8[skin] != 0
+    if skin is None or not build_has_protos(rom):
+        return False
+    choose_skin(core, 1, settle)
+    return core.memory.u8[skin] != 0
 
 
 def start_game(core, tune=0):

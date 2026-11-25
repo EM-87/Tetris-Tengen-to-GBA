@@ -13,7 +13,7 @@ from .harness import (
     TENGEN_PF_HEIGHT, TENGEN_PF_WIDTH,
     SCREENBLOCK_OFFSET_ADDR,
     build_has_protos, pixels, check_layout, game_offsets, game_state_address, load,
-    oam_visible, press_start, run, start_game, tilemap_text,
+    oam_visible, press_start, run, start_game, tilemap_text, put_skin_on,
 )
 
 BANK_CREDIT = 9                 # PAL_MENU_BASE + 1, the credits' grey
@@ -400,7 +400,7 @@ def options_check(rom_path):
 
     # PROTOTYPES: in the order the builds were made, centred; NINTENDO, the
     # last, put on, which the page wears; the title draws with its own tiles,
-    # as it does when the title's chord puts it on.
+    # the ones a console that went straight for that skin has (put_skin_on).
     if protos:
         walk(4, "DOWN")
         tap("A", settle=10)
@@ -418,7 +418,7 @@ def options_check(rom_path):
         ref, ref_screen = load(rom_path)
         _r = ref_screen
         run(ref, 40)
-        ref.set_keys(KEYS["L"], KEYS["R"]); run(ref, 4); ref.set_keys(); run(ref, 40)
+        put_skin_on(ref, settle=40)       # the chord, and skin 1 off the list
         want_tiles = bytes(ref.memory.u8[PROTO_TILES + i] for i in range(0, 256 * 32, 7))
         head = prot.index("PROTOTYPES") if "PROTOTYPES" in prot else 0
         if prot[head + 1:head + 5] != ["RELEASE", "MIRRORSOFT", "ATARI", "NINTENDO"] or \
