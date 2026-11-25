@@ -115,7 +115,7 @@ minus those).
 | --- | --- | --- |
 | `make test` | no | always — the rules, in milliseconds |
 | `make gba` | headers | to build `build/tengen.gba` |
-| `make gba-check` | headers | before calling any change done: 74 checks on the running ROM in mGBA, nineteen of them on two consoles with a cable, and then the Wireless Adapter's (`run_wireless.py`) |
+| `make gba-check` | headers | before calling any change done: 79 checks on the running ROM in mGBA, twenty-four of them on two consoles with a cable, and then the Wireless Adapter's (`run_wireless.py`) |
 | `make trace ROM=... [MODE=coop\|versus\|with\|demo]` | yes | after touching `tengen_step` or `tengen_ai.c`: the port against the cartridge, iteration by iteration. The 1P and coop scripts never complete a row; `MODE="with --pad1"` plays player 1 with the port's computer and clears plenty; add `--handicap N` to any mode |
 | `make tune-check ROM=...` | yes | after touching audio: the four tunes against the cartridge, note by note |
 | `make dance-check ROM=...` | yes | after touching the dancers: their choreography against the cartridge's driver |
@@ -255,10 +255,43 @@ story behind each; the item number is in brackets.
     The port rests in multiplayer mode from boot (`link_rest`), so one of
     ours anywhere in the game reads as "someone" (wait for its player). A
     console with no cartridge cannot be heard at the lobby's 38400 baud:
-    the master asks for it with the send's first word, $6200 at 115200,
-    every sixteenth frame while the lobby is unlinked (`link_probe`), and
-    offers SELECT only when $720x comes back (INFERRED from GBATEK's
-    table and gba-link-connection; the stand-in BIOS answers so). The
+    the master asks for it with the send's first word, $6200 at 115200
+    (`link_probe`), and offers SELECT only when $720x comes back. **THE
+    FIRST PROBE NEVER FOUND A REAL CONSOLE**: it asked twice every
+    sixteenth frame, between the lobby's transfers, the stand-in BIOS of
+    the checks answered it, and on two real consoles the game went across
+    only on SELECT. The BIOS, read off a disassembly (PikalaxALT/gba_bios:
+    sub_2B34 once a frame, the handlers from sub_2D70), listens in three
+    modes in turn — JOY BUS, multiplayer at 115200, normal: seven frames,
+    thirty-one and seven — takes two frames to be listening after each
+    change, goes back to the start of that on a transfer with the error
+    bit, which a word at the lobby's speed is (INFERRED), answers $6200
+    on the NEXT transfer and stays in multiplayer mode eleven frames a
+    $6200. That reading alone does not explain a probe that never got
+    through, so the probe leans on none of its numbers: it does what the
+    send does, in the silence the send does it in. Twenty-four frames of
+    the lobby's transfers, twenty-four with none (`g_hush`) and an attempt
+    every eighth — to 115200 through normal mode, $6200 four times — and
+    once a console has answered the lobby says nothing at all and the
+    attempts go on every eight frames, so that console stays listening
+    until the game is sent or it stops answering. `FakeMultibootBios`
+    does all of the above now, with `deaf` for how many frames a word of
+    the wrong speed costs it: `peer_check` finds it at two (as read),
+    twelve and twenty, and the first probe fails the last two as it
+    failed on the consoles. **"It finds the stand-in" was the check the
+    first probe passed**, so `peer_check` also READS THE WIRE
+    (`Cable.wire`: every transfer the master starts, its speed, word and
+    answer, by frame): the round as written above, to the frame, with
+    somebody there who never answers; nothing asked while SD is low; not
+    a word of the lobby's from the first answer to the send; the screen
+    unmoved by two attempts whose answers are lost
+    (`FakeMultibootBios.lose`, `LINK_PROBE_KEEP`). The first reading
+    caught the cable's screen itself cutting a round short: the search
+    for a Wireless Adapter plugged in late (`RADIO_FIRST_TRY`, main.c)
+    starts the cable over, and did it wherever the probe happened to be
+    — it waits for the end of a round now (`link_probe_resting`). Six
+    mutants of the probe's numbers had lived through "it finds the
+    stand-in"; none lives through the wire. The
     probe's interrupt is kept out of IE as well as SIOCNT — the emulated
     cable raises IF regardless, and the master's lobby ate its own probe
     — and $6200 is tag GO with a payload, which a slave of ours once took
@@ -272,7 +305,10 @@ story behind each; the item number is in brackets.
     its player and asks for the cable only when nothing is on it. A console
     with no cartridge gets the game by itself three-quarters of a second
     after it is found (`AUTO_SEND_FRAMES`); B on the sending screen stops it
-    and leaves SELECT until another comes. The stand-in BIOS answers as the
+    and leaves SELECT until that console has been gone two seconds
+    (`AUTO_SEND_GONE_FRAMES`: coming back from the sending screen the cable
+    is started over, and "not found for a frame" used to count as gone, so
+    the send began again by itself). The stand-in BIOS answers as the
     game at rest once it has it, as the console would.
   - `poll_interrupts` serves only what IE has switched on, as the
     interrupt would: a transfer pending as the slave left the lobby was
@@ -519,7 +555,28 @@ story behind each; the item number is in brackets.
   ends, exactly as it takes a match word; and the exchange takes a match
   word as the other having finished. The copy marks its own rows
   (`g_unsent`, hud.c) and forgets them only once a console with a save has
-  answered how many it kept. A row says its table by a number of the wire's
+  answered how many it kept. **Between two cartridges nothing crosses
+  unasked**: a table is its owner's, and a friend's scores push the owner's
+  own off it. Each says a digest of what it would offer (`leader_offer`:
+  the rows somebody made, the best of every table first, fifteen at most);
+  where the two differ each console asks its player (`asking`,
+  `draw_records_question`, NO under the arrow) and only one whose player
+  said yes is sent the rows — once: a player who said no is not asked
+  again until the power is cycled, and one who said yes only when the
+  other has something new (main.c, `records_answered`). The message is
+  `[flags, digest, want, n, rows, k]`, each byte going as soon as what it
+  waits on has arrived; every word of this version carries a mark (bit
+  11), nothing is sent before a word of the other's has come, and a console
+  that sees no mark answers in the older form (`[1, k]`, `[0, n, rows]`),
+  which `tests/records_v1.h` keeps word for word to test against. Rows are
+  taken only if this console asked for them BEFORE they came, never more
+  than a message holds whatever its `n` says, and `make fuzz` plays the
+  exchange against noise as well as against itself (`records_noise_run`:
+  nothing written outside the state, no save's rows without a yes).
+  **`records_carts_check` goes to the cable's screen by reading the
+  screen, not by counting presses**: one START too many was the master's,
+  the match began before the check looked, and its second and third
+  meetings "passed" on a paused game. A row says its table by a number of the wire's
   (`leader_wire_id`: the skins' 0-3 as ever, the modes' 8 and up), never by
   its place in memory, which moves with the build's count of skins. A row already on the table to the letter is not
   put in twice: two copies that played each other carry both games.
@@ -584,6 +641,35 @@ story behind each; the item number is in brackets.
     for LINK_GIVEUP_FRAMES, or desynced, it is over: the CABLE LOST window
     in the middle of the screen, and START to the title without the records
     swap or the high scores (`link_wait`, `link_give_up`, `lost_check`).
+  - **A console that has left the match is still on the cable.** At rest
+    it answers every transfer with 0, and a master on its menus sends a
+    beacon of them: the console left behind took each for "the partner is
+    there", waited for a move that was not coming, and never saw the
+    quiet that LINK ISSUES and CABLE LOST are for — its board frozen, no
+    way to the menu, the HUD still changing (two cartridges, a race, the
+    loser pressing START). Three things now. START on a dead board with
+    the other still going is taken OFF THE WIRE, on the step both consoles
+    have it (`link_play_frame`, `g_link_walked`): the leaver goes to its
+    table, and the other plays on alone from the next step
+    (`link_go_alone`: the cable put away, its own pad and the other at
+    rest, RIVAL LEFT in the rival's cell for three seconds, no names swap
+    at the end) — and the START does not pause it, as it did where it
+    crossed as a button. A console that leaves some other way — the soft
+    reset, the power switch — is known by its words: with its first move
+    arrived, six transfers running in which this console's own move
+    crossed whole and the other slot held no move (`link_partner_left`):
+    a race goes on alone, a shared board ends under CABLE LOST. And a
+    move for a step already played — a console late loading its next, or
+    one started over with the last still in its port — is not queued
+    (it was "a word for the wrong frame": desynced, on the spot): both
+    consoles have the same two words, both send again, and a console that
+    keeps it up is counted with the ones that left (`walkout_check`,
+    `gone_check`, `stale_check`, `Cable.stale_slave_at`).
+  - **The cable put away is nobody on it**: `link_shutdown` sets the count
+    of frames since the last transfer to "never". It is only kept up while
+    something steps the cable, so it stood where the session left it —
+    `link_connected` true until the power switch, which the cartridge's
+    flash waits on before it writes its journal afresh.
   While the cable was being made to work, the LINK CABLE screen printed the
   build and the cable's own account (SIOCNT now and at the last interrupt,
   good/error/absent/reset counts, the last two words: `draw_link_debug` and
@@ -624,6 +710,14 @@ story behind each; the item number is in brackets.
   mapped through the composition by its own centre, never per sprite. The
   brick columns are NOT opaque, so window 0 keeps sprites inside the
   release's frame (`title_window`, `--fireworks`). [15]
+- **A shared board's end is both consoles'.** A coop top-out takes both
+  players and is reported on the one whose piece did not fit; each console
+  announced only its own player's results, so the other played no
+  game-over tune and left the match's going under the plaque, the table
+  and its typing (two cartridges: "the music goes on on the slave" — on
+  whichever had not dealt the last piece). `link_play_frame` gives the
+  top-out to both; and a race's board put back with A+B has its tune back
+  (`coop_end_check`, `walkout_check`).
 - **A linked match has no level-up show**, and the show is what brings a
   hand-entered tune back after the intro; the cartridge's own engine picks
   its tunes back up by itself. So a linked level-up asks for Korobeiniki,
@@ -1061,7 +1155,13 @@ the HIGH SCORES page, which otherwise only a lost game did — without it
 SELECT is the cartridge's there, another START ($9FA4) — (`--titlescores`);
 a Single-Pak copy's
 records handed to a console with a save every time they link, with RECORDS
-SAVED on both (`TengenRecordSync`, `records_dump_check`); a handicap of its own
+SAVED on both (`TengenRecordSync`, `records_dump_check`), and two
+cartridges' best rows to each other only where the player says yes to THE
+OTHER GBA HAS HIGH SCORES OF ITS OWN / ADD THEM HERE? (`records_carts_check`);
+START on a dead board of a linked race leaving it for the table while the
+other console plays on alone under RIVAL LEFT, and under the chord what
+that board's pad does said under its plaque, A AND B: AGAIN / START: LEAVE
+(`draw_race_hint`); a handicap of its own
 for the computer in VERSUS COMPUTER under the chord; the pause menu over the
 cable, there if the MASTER found the chord and driven by both players'
 presses through lockstep (`link_match_begin`); a linked match that waits
@@ -1197,9 +1297,11 @@ And what has run only in an emulator:
 - **Single-Pak** worked on two SPs with the cartridge sending through the
   BIOS's SWI $25 and the slave polling (build bb77e71): a coop match, the
   skins and the chord; the software sender, its bar and the copy sending
-  itself on the SPs too (build bccaf9d). The block bar, the steady mute,
-  the cable-state screen and the probe behind it have run only in mGBA
-  (`peer_check`).
+  itself on the SPs too (build bccaf9d). The block bar, the steady mute
+  and the cable-state screen have run only in mGBA; the probe behind it
+  ran on two consoles and did not find the one with no cartridge (build
+  22f0bac; see the trap), and the one that replaced it has run only
+  against the stand-in BIOS (`peer_check`).
 - **The sleep** has run only in mGBA, whose stand-in BIOS has no Stop:
   `system_check` checks the way in and out, the console the rest — and
   that a Stop entered with IME off (the Single-Pak copy) still wakes on
@@ -1215,12 +1317,26 @@ And what has run only in an emulator:
   mGBA (`suspend_check`). On a flash cart the save memory has to reach the
   card for the game to survive: the EZ-Flash IV and the SuperCard each do
   that their own way, as they do for the high scores.
-- **The save in the cartridge's own flash** (`cartsave.c`) has run only
-  against `FlashChip`, a model. The board it was written for (AGB-E05-01,
-  MSP55LV128M: AMD's commands, D0/D1 crossed) ran build 0d357df, which
-  saved to its RAM and lost it at the switch. Chips of Intel's command sets
-  are recognised and not written: nothing here speaks to them yet. Words
-  go one command each; the chips' write buffer is not used.
+- **The save in the cartridge's own flash** (`cartsave.c`) HAS RUN ON THE
+  BOARD it was written for (AGB-E05-01, build 22f0bac): the page read
+  QUERY 0052 0051 005A, WIRING D0 D1, COMMANDS AMD 0002, CHIP 65536K
+  512X128K, CHIP ID 008A 227D — 0x89 and 0x227E with the crossing undone,
+  sixty-four megabytes and not the MSP55LV128M's sixteen the flasher's
+  profile is named for — JOURNAL IN USE, STARTED RAM AND FLASH, SAVE RAM
+  KEPT (the RAM had not been without power long enough to lose its mark),
+  GENERATION 1, 85 saves, 12448 of 128K used. So the query, the wiring,
+  the identify, and words programmed and read back have all run; **an
+  erase has not** (the journal is written afresh when under a quarter of
+  its sector is left, some six hundred saves in), nor the read back from
+  the flash with the RAM gone. Chips of Intel's command sets are
+  recognised and not written: nothing here speaks to them yet. Words go
+  one command each; the chips' write buffer is not used.
+- **Two cartridges on a cable** (the same board, two of them) played 2
+  PLAYER and COOPERATIVE on build 22f0bac and found what the walkout, the
+  gone console, the coop's end and the probe above are about. None of
+  those mends has run on consoles yet: the probe's quiet and its attempts
+  are INFERRED from the send that works there and from the BIOS's
+  disassembly.
 
 A new idea starts in the cartridge (`tools/nes_console.py`,
 `tools/render_nes.py`), not in memory of how Tetris goes.

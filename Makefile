@@ -39,7 +39,7 @@ all: test
 $(BUILD):
 	mkdir -p $(BUILD)
 
-$(TEST_BIN): $(CORE_SRC) $(CORE_HDR) $(TEST_SRC) | $(BUILD)
+$(TEST_BIN): $(CORE_SRC) $(CORE_HDR) $(TEST_SRC) tests/records_v1.h | $(BUILD)
 	$(CC) $(CFLAGS) $(CORE_SRC) $(TEST_SRC) -o $(TEST_BIN)
 
 $(NVLOG_BIN): src/tengen_nvlog.c src/tengen_nvlog.h tests/test_nvlog.c | $(BUILD)
@@ -69,7 +69,7 @@ FUZZ_FLAGS := -std=c99 -Wall -Wextra -g -O1 -fsanitize=address,undefined \
 .PHONY: fuzz
 $(BUILD)/fuzz_core: $(CORE_SRC) $(CORE_HDR) tests/fuzz_core.c | $(BUILD)
 	$(CC) $(FUZZ_FLAGS) $(CORE_SRC) tests/fuzz_core.c -o $@
-$(BUILD)/fuzz_link: $(CORE_SRC) $(CORE_HDR) tests/fuzz_link.c | $(BUILD)
+$(BUILD)/fuzz_link: $(CORE_SRC) $(CORE_HDR) tests/fuzz_link.c tests/records_v1.h | $(BUILD)
 	$(CC) $(FUZZ_FLAGS) $(CORE_SRC) tests/fuzz_link.c -o $@
 fuzz: $(BUILD)/fuzz_core $(BUILD)/fuzz_link
 	./$(BUILD)/fuzz_core $(FUZZ_GAMES) $(if $(filter-out 0,$(FUZZ_SEED)),$(FUZZ_SEED))

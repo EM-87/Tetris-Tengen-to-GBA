@@ -271,7 +271,9 @@ static void hide_idle_cossack(void) {
 }
 
 /* LINK ISSUES, said in the rival's big cell while a linked match waits for
- * its cable (link_wait, gba/match.c). The rival's preview and cossack stood
+ * its cable (link_wait, gba/match.c) — and RIVAL LEFT, for a moment, when
+ * the other player has walked out of a race (link_go_alone): two words, five
+ * letters or six. The rival's preview and cossack stood
  * there, and a board that is not moving has nothing to preview: the cell is
  * emptied first, on every layer that draws in it.
  *
@@ -280,7 +282,7 @@ static void hide_idle_cossack(void) {
  * were cleared and written from column 22, which on the coop screen is the
  * braid of the board's frame. The words sit in one column, the one that
  * centres five letters; six centred in coop's seven would touch the braid. */
-void draw_link_issues(void) {
+void draw_link_note(const char *first, const char *second) {
     bool was = g_panel_layer;
     g_panel_layer = false;
     bool coop = g_session.game.coop;
@@ -292,8 +294,8 @@ void draw_link_issues(void) {
     hide_idle_cossack();
     int mid = (BRAID_T + bottom) / 2;
     int col = tx + (w - 5) / 2;
-    draw_text(col, mid - 1, "LINK", BANK_LABEL);
-    draw_text(col, mid, "ISSUES", BANK_LABEL);
+    draw_text(col, mid - 1, first, BANK_LABEL);
+    draw_text(col, mid, second, BANK_LABEL);
     g_panel_layer = was;
 }
 

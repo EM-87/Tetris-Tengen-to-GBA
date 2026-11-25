@@ -161,6 +161,11 @@ void link_play_begin(void);
  * put the hardware away entirely. */
 void link_play_end(void);
 
+/* True when the console on the other end, having played, is answering as
+ * one that is no longer in the match: at rest in its menus, in a lobby,
+ * started over. Not a quiet cable (link_starved): this one is there. */
+bool link_partner_left(void);
+
 /* ----------------------------------------------------------------------- *
  * The records
  *
@@ -218,6 +223,7 @@ typedef enum {
  * lobby is not linked: now and then asks the cable, the way a Single-Pak
  * send starts, whether a console with no cartridge is waiting there. */
 void link_probe(void);
+bool link_probe_resting(void);  /* cartridge only: between two of its rounds */
 LinkPeer link_peer(void);
 
 /* ----------------------------------------------------------------------- *

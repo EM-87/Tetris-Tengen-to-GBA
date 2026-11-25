@@ -2082,7 +2082,8 @@ void clear_panel_region(int tx, int ty, int w, int h);
 void set_stats_tile(int tx, int ty, uint16_t entry);
 void set_histogram_tile(int tx, int ty, uint16_t entry);
 void clear_both(int tx, int ty, int w, int h);
-void draw_link_issues(void);     /* the cable is quiet: said in the right box */
+/* The cable's two words, said in the right box: LINK ISSUES, RIVAL LEFT. */
+void draw_link_note(const char *first, const char *second);
 /* WHAT THE HUD IS, AND TWO PER MODE.
  *
  * Four of them, and each game mode offers exactly two — the one it opens on
@@ -2173,6 +2174,7 @@ void leader_own_initials(uint8_t out[LEADER_INITIALS]);
 /* The records a Single-Pak copy made, and their way to a save
  * (TengenRecordSync; hud.c). */
 int leader_unsent(TengenRecord *out, int max);
+int leader_offer(TengenRecord *out, int max);   /* a cartridge's, to another */
 void leader_mark_sent(void);
 int leader_merge(const TengenRecord *rows, int n);
 void leader_rival_initials(const uint8_t in[LEADER_INITIALS]);
@@ -2215,7 +2217,15 @@ void restart_title_sprites(void);
 void draw_title_sprites(void);
 void draw_game_select(uint8_t choice);
 void draw_link_wait(const TengenLobby *lobby, int elapsed);
-void draw_records_saved(int kept, bool from_copy);
+/* RECORDS SAVED, and where: this console kept `count` of the other's
+ * (RECORDS_FROM_OTHER), or the other kept that many of this one's — a copy's
+ * on the cartridge it linked to (RECORDS_ON_CARTRIDGE), a cartridge's on the
+ * other cartridge (RECORDS_ON_OTHER). */
+enum { RECORDS_FROM_OTHER, RECORDS_ON_CARTRIDGE, RECORDS_ON_OTHER };
+void draw_records_saved(int count, int where);
+/* ...and, between two cartridges, the question first (frontend.c). */
+enum { RECORDS_ASK_NO, RECORDS_ASK_YES, RECORDS_ASK_ANSWERED };
+void draw_records_question(int state);
 void draw_link_sending(bool wrong_end);   /* Single-Pak; see frontend.c */
 void draw_air_sending(int stage, uint32_t done, uint32_t total);
 /* The Single-Pak slave's image, inside the cartridge (gba/mb_image.s). */
@@ -2242,6 +2252,8 @@ extern int g_demo_over_frames;
 extern bool g_linked;
 extern bool g_link_lost;
 extern bool g_link_waiting;
+extern bool g_link_alone;       /* the other player left a race; this one plays on */
+extern bool g_link_walked;      /* ...and this console's own did */
 extern bool g_repaint;
 extern uint8_t g_front_tune;
 extern uint8_t g_music;

@@ -773,10 +773,34 @@ void draw_link_wait(const TengenLobby *lobby, int elapsed) {
     draw_guest_dancer(elapsed);
 }
 
-/* THE RECORDS A COPY MADE HAVE A HOME: said on both consoles, on the
- * cable's own screen, for the two seconds before the match. `from_copy` is
- * the cartridge's side of it. */
-void draw_records_saved(int kept, bool from_copy) {
+#ifndef TENGEN_MULTIBOOT
+/* THE OTHER CARTRIDGE'S RECORDS ARE ASKED ABOUT, NEVER TAKEN: a table is
+ * its owner's, and a friend's scores push the owner's own off the bottom of
+ * it. On the cable's screen, as the two link (TengenRecordSync.asking):
+ * the question, NO where the arrow starts, LEFT and RIGHT to move it, A or
+ * START to answer and B for no. `state` is RECORDS_ASK_NO, _YES, or
+ * _ANSWERED: the question gone, waiting for the other player's. */
+void draw_records_question(int state) {
+    draw_menu_frame();
+    draw_text_centred(8, wireless_on() ? "WIRELESS" : "LINK CABLE", menu_bank());
+    clear_both(MENU_IN_TX, 10, MENU_IN_W, 7);
+    oam_hide_all();
+    if (state == RECORDS_ASK_ANSWERED) {
+        draw_text_centred(11, "WAITING FOR OTHER PLAYER", menu_bank());
+        return;
+    }
+    draw_text_centred(10, "THE OTHER GBA HAS", menu_bank());
+    draw_text_centred(11, "HIGH SCORES OF ITS OWN", menu_bank());
+    draw_text_centred(13, "ADD THEM HERE?", BANK_NOTE);
+    draw_text_centred(15, state == RECORDS_ASK_YES ? "  NO    > YES"
+                                                   : "> NO      YES", menu_bank());
+}
+#endif
+
+/* THE RECORDS THAT CROSSED HAVE A HOME: said on both consoles, on the
+ * cable's own screen, for the two seconds before the match. `where` says
+ * whose and where (RECORDS_FROM_OTHER and the rest, port.h). */
+void draw_records_saved(int kept, int where) {
     draw_menu_frame();
     draw_text_centred(8, wireless_on() ? "WIRELESS" : "LINK CABLE", menu_bank());
     clear_both(MENU_IN_TX, 10, MENU_IN_W, 7);
@@ -785,7 +809,9 @@ void draw_records_saved(int kept, bool from_copy) {
     int at = 0;
     if (kept >= 10) line[at++] = (char)('0' + kept / 10);
     line[at++] = (char)('0' + kept % 10);
-    const char *rest = from_copy ? " FROM THE OTHER GBA" : " ON THE CARTRIDGE";
+    const char *rest = where == RECORDS_FROM_OTHER ? " FROM THE OTHER GBA"
+                     : where == RECORDS_ON_OTHER   ? " ON THE OTHER GBA"
+                                                   : " ON THE CARTRIDGE";
     while (*rest && at < (int)sizeof line - 1) line[at++] = *rest++;
     line[at] = 0;
     draw_text_centred(11, kept == 1 ? "RECORD SAVED" : "RECORDS SAVED", BANK_NOTE);

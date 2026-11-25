@@ -134,7 +134,8 @@ Lo que el GBA tiene de más:
 | GAME SELECT | A o START en un modo marcado ▣ | vuelve a su partida guardada con SAVE, en pausa, y con ella el acorde (abajo) |
 | Título, con el acorde | SELECT | las tablas de HIGH SCORES, una por modo (Izquierda/Derecha las recorren); sin el acorde, SELECT es otro START, como en el cartucho |
 | Pantalla LINK CABLE | SELECT | Single-Pak: envía el juego a una GBA sin cartucho |
-| Carrera, tablero muerto | A+B | se levanta y sigue, como en el cartucho |
+| Carrera, tablero muerto | A+B | se levanta y sigue, como en el cartucho (con el acorde lo dice bajo el GAME OVER) |
+| Carrera por cable, tablero muerto | START | deja la carrera y va a su tabla; la otra consola sigue jugando sola |
 | En cualquier sitio salvo una partida por cable | L+R+SELECT | reposo: pantalla y sonido apagados, casi sin gastar pila (una partida en solitario se pausa antes); A, B, START o SELECT despiertan |
 | En cualquier momento | A+B+START+SELECT | reinicia el juego (en la EZ-Flash IV lo intercepta el propio cartucho) |
 
@@ -311,10 +312,32 @@ simulan la misma partida desde la misma semilla y solo se mandan botones, y
 se va, las dos lo detectan. Las dos necesitan esta misma versión del ROM
 (con otra más vieja se conectan igual, pero sin skin).
 
+En una **carrera** cada tablero es de su jugador: el que pierde el suyo lo
+levanta con **A+B** y sigue, o se va con **START** — y entonces la otra
+consola dice RIVAL LEFT un momento y sigue jugando sola hasta el final, sin
+pausa ni corte. Si una consola se reinicia o se apaga a media partida, la
+otra no se queda esperando: en carrera sigue sola, y en cooperativo (un solo
+tablero para los dos) lo da por perdido con CABLE LOST.
+
+**Los récords entre dos cartuchos se preguntan.** Cada cartucho tiene sus
+tablas, y las del amigo con puntuaciones monstruosas echarían de ellas las
+tuyas: al enlazar, si las tablas no coinciden, cada consola pregunta a su
+jugador si quiere añadir los mejores récords de la otra (THE OTHER GBA HAS
+HIGH SCORES OF ITS OWN / ADD THEM HERE?, con NO bajo la flecha). Solo quien
+dice que sí los recibe; no se vuelve a preguntar esa tarde, y si las dos
+tablas ya son iguales no se pregunta nunca. Lo que sí pasa sin preguntar es
+lo de siempre: las partidas que jugáis juntos quedan en las dos tablas, con
+el nombre de cada uno, y los récords de una copia Single-Pak (que no tiene
+dónde guardarlos) pasan al cartucho con el que enlace.
+
 **Single-Pak**: la otra consola no necesita cartucho. La pantalla LINK
 CABLE dice qué hay al otro lado: una GBA sin cartucho (y se lo envía sola; B lo
-para y **SELECT** lo vuelve a enviar), otra consola con el juego (esperar a su
-jugador) o nada (encenderla, o conectar el cable). La consola que envía
+para, y parado se queda hasta **SELECT**), otra consola con el juego (esperar a su
+jugador) o nada (encenderla, o conectar el cable). Para encontrar a la consola
+sin cartucho el lobby calla un momento de cada segundo y pregunta como pregunta
+el propio envío: en dos consolas de verdad la primera sonda, que preguntaba
+entre palabra y palabra del lobby, no la encontró nunca y había que pulsar
+SELECT. La consola que envía
 tiene que estar en el extremo maestro; si no, lo dice. La otra se enciende
 sin cartucho y su BIOS lo recibe, con una barra de bloques y los KB en la
 que envía;
@@ -371,12 +394,16 @@ un chip se atragantase al escribirle.
 
 Tres cosas a saber:
 
-- **No se ha probado todavía en una placa de estas.** Está escrito sobre lo
-  que hace FlashGBX con ellas y sobre los parches «batteryless» que ya las
-  usan, y comprobado contra un modelo del chip en el emulador
-  (`tools/romcheck/flashchip.py`, `--cartsave`): las rutinas reales, paso a
-  paso, con cortes de corriente en cualquier instrucción. El primer
-  encendido en hardware sigue siendo el primero.
+- **Probado en una placa de estas** (AGB-E05-01, v2.22): el chip contestó
+  la consulta con D0/D1 cruzadas (`0052 0051 005A`), comandos AMD, 64 MB en
+  512 sectores de 128 KB e identificador `008A 227D` (fabricante 0x89,
+  0x227E al deshacer el cruce: no el MSP55LV128M de 16 MB que se le
+  suponía), y el diario llevaba 85 guardados cuando se leyó la página.
+  **Lo que aún no ha corrido en hardware es el borrado de un sector**, que
+  toca al encender cuando al diario le queda menos de un cuarto (unos
+  seiscientos guardados): hasta entonces solo está comprobado contra el
+  modelo del chip (`tools/romcheck/flashchip.py`, `--cartsave`). Los chips
+  de comandos Intel siguen sin soporte.
 - Mientras se le habla, el chip no es una ROM: el trozo que le habla corre
   desde RAM. Si el chip no volviera nunca a ser ROM, la pantalla se queda
   **roja** en vez de colgarse a ciegas: apagar, y encender con L+R+A para
@@ -483,9 +510,9 @@ Lo que hay detrás del acorde no es un modo: es el juego terminado.
 - **Los prototipos**: los títulos y las reglas de tres versiones previas del
   cartucho, como pieles que llegan hasta el tablero.
 
-En cifras: unas 6.300 líneas de C sin nada de GBA (`src/`: las reglas, y el
-diario con que se guarda en la flash; probadas en el PC con 175 tests y un
-fuzzer), 17.700 de capa GBA y 31.000 de herramientas y
+En cifras: unas 6.500 líneas de C sin nada de GBA (`src/`: las reglas, y el
+diario con que se guarda en la flash; probadas en el PC con 182 tests y un
+fuzzer), 18.000 de capa GBA y 32.000 de herramientas y
 comprobaciones — 61 baterías en `make gba-check`, más de ochenta
 comprobaciones que arrancan la ROM en un emulador, la juegan y miran la
 pantalla, el sonido y la memoria —, todo contrastado contra el disassembly

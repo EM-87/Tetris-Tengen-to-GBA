@@ -89,6 +89,12 @@ static volatile uint8_t g_tx_frame;
 static volatile bool g_auto_tx;      /* the interrupt loads the buttons itself */
 static bool g_armed;
 static uint8_t g_peer_empty;     /* see link_probe */
+/* Frames the lobby's own transfers stay off the cable, for link_probe's
+ * sake: set by it, run down by link_tick, so a lobby it has stopped looking
+ * after gets its transfers back by itself. */
+static uint8_t g_hush;
+static uint8_t g_probe_clock;    /* ...its clock, and the port as it left it */
+static bool g_probe_fast;
 #define LINK_QUIET_RESTART 180
 static uint8_t g_quiet_frames;   /* a slave's frames unlinked */
 /* What the send register is supposed to hold, so a reset can put it back. */
@@ -115,6 +121,21 @@ static uint8_t g_si_disagree;
  * step with the master's, a slave's lobby found the port busy EVERY frame
  * and never answered: it wrote only when idle. */
 static volatile uint16_t g_sent_word;
+
+/* THE OTHER CONSOLE IS THERE AND NOT IN THE MATCH. Once its first move has
+ * arrived (g_partner_played), a transfer in which this console's own move
+ * came back as sent and the other slot holds a word that is no move is a
+ * console that has gone somewhere else: at rest in its menus (0, which is
+ * also the master's beacon), in a lobby, restarted — or a move for a step
+ * already played, from a console whose program is no longer loading them.
+ * Counted in a row (g_strangers) and put to nothing by any move;
+ * link_partner_left is what the match asks: six of them, a tenth of a
+ * second of a console at rest on the slave's end and most of one of a
+ * master's beacons. Before the first move such words are the lobby's last
+ * and mean "not yet" (TENGEN_LINK_MATCH_MARK). */
+#define LINK_LEFT_WORDS 6
+static volatile uint8_t g_strangers;
+static volatile bool g_partner_played;
 
 static inline void load_send(void) {
     g_sent_word = g_tx_word;
@@ -216,9 +237,20 @@ void link_serial_service(void) {
          * other's GO once more: that is not a move, so it is not queued and
          * the frame is not advanced, and the same word goes out again until
          * the partner's first move arrives (see TENGEN_LINK_MATCH_MARK). */
+        /* ...AND BOTH FOR THE SAME STEP. A console whose interrupt did not
+         * get to load its next move before the transfer — late once, or
+         * started over under the match, its port still answering with the
+         * last move it loaded — sends that one again. Queued, it was a
+         * word for the wrong frame and the end of the match on the spot
+         * (desynced); it is not a move, so, like the lobby's last GO, it
+         * is not queued and the frame is not advanced: both consoles have
+         * the same two words and both send theirs again. Once late costs a
+         * transfer; a console that keeps it up is counted with the ones
+         * that have left (g_strangers). */
         bool heard = m != LINK_ABSENT && s != LINK_ABSENT;
         bool lobby_word = heard && g_auto_tx &&
-            !(tengen_link_is_match_word(m) && tengen_link_is_match_word(s));
+            !(tengen_link_is_match_word(m) && tengen_link_is_match_word(s) &&
+              tengen_link_frame(m) == tengen_link_frame(s));
         /* Any transfer that heard both consoles ends a run of empty ones —
          * the lobby's last GO in the match included, or a partner halfway
          * out of the lobby could add its empty transfers to the ones
@@ -226,6 +258,13 @@ void link_serial_service(void) {
         if (heard) g_absent_run = 0;
         if (lobby_word) {
             g_starved = 0;                    /* the partner is there */
+            /* ...and, if it has played, no longer in the match: only where
+             * this console's own word crossed whole, so that a transfer
+             * the cable mangled is not taken for a console's answer. */
+            bool mine_m = m == g_sent_word && tengen_link_is_match_word(m);
+            bool mine_s = s == g_sent_word && tengen_link_is_match_word(s);
+            if (g_partner_played && mine_m != mine_s && g_strangers < 0xFF)
+                g_strangers++;
         } else if (!heard) {
             if (++g_absent_run >= LINK_ABSENT_LIMIT) {
                 g_absent_run = 0;
@@ -261,6 +300,8 @@ void link_serial_service(void) {
             if (g_auto_tx) {
                 g_tx_frame++;
                 g_tx_word = tengen_link_pack(link_read_buttons(), g_tx_frame);
+                g_partner_played = true;
+                g_strangers = 0;
             }
         }
     }
@@ -315,6 +356,9 @@ void link_init(void) {
     g_tx_frame = 0;
     g_auto_tx = false;
     g_peer_empty = 0;
+    g_hush = 0;
+    g_probe_clock = 0;
+    g_probe_fast = false;
     g_quiet_frames = 0;
 
     /* The vector is already irq_handler's (irq_init, at boot); the cable
@@ -340,15 +384,32 @@ void link_shutdown(void) {
         wireless_close();
         g_auto_tx = false;
         g_armed = false;
+        g_starved = 0xFFFF;
         return;
     }
     REG_IME = 0;
+    /* ...AND AT THE LOBBY'S SPEED: a probe for a console in its BIOS may
+     * have left it at 115200 (link_probe), where a lobby on the other end
+     * could make nothing of this one's answers or its beacon. */
+    if (g_probe_fast) {
+        g_probe_fast = false;
+        REG_SIOCNT = SIO_NORMAL_SO_HIGH;
+        REG_SIOCNT = SIO_MODE_MULTI | SIO_BAUD;
+    }
     REG_SIOCNT &= (uint16_t)~SIO_IRQ;
     REG_IE &= (uint16_t)~IRQ_SERIAL;
     REG_SIOMLT_SEND = 0;
     REG_IF = IRQ_SERIAL;     /* a transfer that landed on the way out is not served */
     g_auto_tx = false;
     g_armed = false;
+    /* NOBODY IS HEARD ONCE THE CABLE IS PUT AWAY. The count of frames since
+     * the last transfer is only kept up while something steps the cable
+     * (link_tick), so left as it stood it said "connected" for ever after
+     * any session that ended with the partner still there — and the save
+     * in the cartridge's flash, which waits for the other end to go before
+     * it writes its journal afresh (cartsave.c, commit), would have waited
+     * until the power switch. */
+    g_starved = 0xFFFF;
     REG_IME = IME_ON;
     gbp_start();             /* ...and back to a Game Boy Player, if one */
 }
@@ -459,6 +520,7 @@ uint16_t link_starved(void) {
 void link_tick(void) {
     if (g_starved < 0xFFFF) g_starved++;
     if (g_reset_cool) g_reset_cool--;
+    if (g_hush) g_hush--;
     link_sample_role();
 }
 
@@ -550,8 +612,9 @@ void link_lobby_step(TengenLobby *lobby) {
         tengen_lobby_apply(lobby, master, false, 0, 0);
     }
     /* ...unless that word was the last: a transfer started after the
-     * handshake is done would land its GO in the match's queue. */
-    if (!lobby->ready) link_pump();
+     * handshake is done would land its GO in the match's queue. And not
+     * while the cable is kept quiet for a console in its BIOS (link_probe). */
+    if (!lobby->ready && !g_hush) link_pump();
 }
 
 /* ----------------------------------------------------------------------- *
@@ -564,6 +627,8 @@ void link_play_begin(void) {
     g_rx_tail = 0;
     g_starved = 0;
     g_tx_frame = 0;
+    g_strangers = 0;
+    g_partner_played = false;
     /* Frame 0's word goes in before the interrupt takes over, so the first
      * transfer of the match carries real buttons rather than the lobby's
      * last GO. */
@@ -575,6 +640,10 @@ void link_play_begin(void) {
 
 void link_play_end(void) {
     g_auto_tx = false;
+}
+
+bool link_partner_left(void) {
+    return g_strangers >= LINK_LEFT_WORDS;
 }
 
 /* ----------------------------------------------------------------------- *
@@ -692,11 +761,11 @@ static void mb_frame(void) {
  * for a transfer that did not happen. A port stuck busy is started over
  * the gentle way (through normal mode; see sio_reset). Then GBATEK's 36us
  * before the next, for the slave's BIOS to have its answer ready. */
-static uint16_t mb_transfer(uint16_t word) {
+static uint16_t mb_transfer_within(uint16_t word, uint32_t spins) {
     REG_SIOMLT_SEND = word;
     REG_SIOCNT = (uint16_t)(REG_SIOCNT | SIO_START);
     for (uint32_t spin = 0; REG_SIOCNT & SIO_START; spin++) {
-        if (spin > MB_SPIN_LIMIT) {
+        if (spin > spins) {
             REG_SIOCNT = SIO_NORMAL_SO_HIGH;
             REG_SIOCNT = SIO_MODE_MULTI | SIO_BAUD_115200;
             return LINK_ABSENT;
@@ -707,6 +776,10 @@ static uint16_t mb_transfer(uint16_t word) {
     for (volatile int wait = 0; wait < 60; wait++) { }
     if (!(cnt & SIO_SD) || (cnt & SIO_ERR)) return LINK_ABSENT;
     return got;
+}
+
+static uint16_t mb_transfer(uint16_t word) {
+    return mb_transfer_within(word, MB_SPIN_LIMIT);
 }
 
 /* GBATEK's checksum step: 32 bits of `data` into `crc`. */
@@ -817,37 +890,61 @@ LinkSendResult link_multiboot_send(const uint8_t *image, uint32_t len,
  * ----------------------------------------------------------------------- */
 
 /* THE FIRST STEP OF A SEND, AND NO MORE: $6200 at the BIOS's speed, which a
- * console waiting in its BIOS answers $720x (GBATEK's table: $0000 the
- * first time, while it is still settling, so two). The lobby's own
- * transfers run at 38400 and cannot hear that console at all. Every
- * sixteenth frame, through normal mode both ways (see sio_reset), with the
- * port's interrupt off meanwhile, at the port and in IE, so that neither
- * transfer reaches the lobby's queue. A console of ours on the other end takes the probe for a
- * word out of order and answers NONE, which costs the handshake a turn;
- * the LINK CABLE screen probes only while the lobby has not linked. */
-#define LINK_PROBE_EVERY 16
-static uint8_t g_probe_clock;
+ * console waiting in its BIOS answers $720x on the transfer after. The
+ * lobby's own transfers run at 38400 and cannot hear that console at all.
+ * The LINK CABLE screen asks only while the lobby has not linked.
+ *
+ * THE FIRST PROBE HERE NEVER FOUND A REAL CONSOLE. It asked twice every
+ * sixteenth frame, between the lobby's transfers, and against the stand-in
+ * BIOS of the checks that was enough; on two real consoles the one with no
+ * cartridge was never found, and the game went across only on SELECT —
+ * which goes silent first and then asks, sixteen times an attempt, an
+ * attempt every eight frames. What the BIOS is doing meanwhile, read off a
+ * disassembly of it (PikalaxALT/gba_bios, asm/bios.s: sub_2B34 once a
+ * frame, the serial handlers from sub_2D70):
+ *
+ *   - it listens in THREE MODES IN TURN — JOY BUS, multiplayer at 115200
+ *     (SIOCNT $6003), normal — some seven frames, thirty-one and seven; a
+ *     probe in the other two finds SD low and nobody there;
+ *   - a mode begins with a frame of setting up and a frame more before its
+ *     interrupt is on: two frames in which a word is not heard at all;
+ *   - in multiplayer mode a transfer that comes in with the error bit
+ *     (_2D70) puts it back to the start of that — and a word of the
+ *     lobby's, at a third of its speed, is such a transfer (INFERRED: a
+ *     word at 38400 has no stop bit where one at 115200 looks for it);
+ *   - its answer to $6200 is loaded for the NEXT transfer, and each $6200
+ *     keeps it in multiplayer mode eleven frames more (_2DCA); anything
+ *     else after one puts it back to the start with 0 to send (_2F56).
+ *
+ * That reading alone does not account for a probe that NEVER got through
+ * (a console set back two frames by every other word of the lobby's should
+ * have been caught now and then), so nothing here leans on its numbers.
+ * The probe does what the send that works does, in the silence it does it
+ * in: LINK_PROBE_TALK frames of the lobby's own transfers, then
+ * LINK_PROBE_QUIET with none (g_hush) and an attempt every LINK_PROBE_STEP
+ * of them — through normal mode to 115200 and LINK_PROBE_ASKS times $6200,
+ * the port left at that speed between attempts as the send leaves it. Once
+ * a console has answered, the lobby says nothing at all — there is no
+ * lobby on the other end to talk to — and the attempts go on every
+ * LINK_PROBE_STEP frames, inside the BIOS's eleven, so that console stays
+ * as it is, listening in the one mode, until the game is sent to it (which
+ * starts with this same word) or it stops answering. A console of ours on
+ * the other end hears the attempts as words out of order, answers NONE,
+ * and is found in the next of the lobby's turns: under half a second
+ * later than it would have been. */
+#define LINK_PROBE_TALK  24     /* looking: frames of the lobby's transfers... */
+#define LINK_PROBE_QUIET 24     /* ...and of silence, with the attempts in it */
+#define LINK_PROBE_STEP  8      /* an attempt every so many quiet frames */
+#define LINK_PROBE_KEEP  3      /* found once, lost after this many misses */
+#define LINK_PROBE_ASKS  4
+#define LINK_PROBE_SPINS 4000u  /* two milliseconds; a transfer is a third of one */
 
-void link_probe(void) {
-    if (wireless_on()) return;      /* no cable to ask */
-    if (++g_probe_clock % LINK_PROBE_EVERY) return;
-    if (!g_armed || !link_is_master()) {
-        g_peer_empty = 0;
-        return;
-    }
-    if (REG_SIOCNT & SIO_START) return;
-    REG_IME = 0;
-    REG_IE = (uint16_t)(REG_IE & ~IRQ_SERIAL);
-    REG_SIOCNT = SIO_NORMAL_SO_HIGH;
-    REG_SIOCNT = SIO_MODE_MULTI | SIO_BAUD_115200;
-    REG_IME = IME_ON;
-    uint16_t got = LINK_ABSENT;
-    /* SD low is nobody in multiplayer mode on the other end: nothing to
-     * ask, and a start would only set the error bit. */
-    if (REG_SIOCNT & SIO_SD) {
-        mb_transfer(0x6200);
-        got = mb_transfer(0x6200);
-    }
+/* g_probe_fast: the port is at the BIOS's speed with its interrupt off, as
+ * an attempt leaves it; put back before the lobby next speaks. */
+
+static void probe_port_back(void) {
+    if (!g_probe_fast) return;
+    g_probe_fast = false;
     REG_IME = 0;
     REG_SIOCNT = SIO_NORMAL_SO_HIGH;
     REG_SIOCNT = SIO_MODE_MULTI | SIO_BAUD;
@@ -856,11 +953,64 @@ void link_probe(void) {
     REG_SIOCNT = (uint16_t)(REG_SIOCNT | SIO_IRQ);
     load_send();
     REG_IME = IME_ON;
-    /* Found at once, lost only after two probes in a row say so: the
-     * screen should not flicker for one transfer that went astray. */
-    if ((got & 0xFFF0) == 0x7200) g_peer_empty = 2;
-    else if (g_peer_empty) g_peer_empty--;
 }
+
+/* One attempt, as link_multiboot_send begins one. */
+static bool probe_ask(void) {
+    REG_IME = 0;
+    REG_SIOCNT = (uint16_t)(REG_SIOCNT & ~SIO_IRQ);
+    REG_IE = (uint16_t)(REG_IE & ~IRQ_SERIAL);
+    REG_IME = IME_ON;
+    REG_SIOCNT = SIO_NORMAL_SO_HIGH;
+    REG_SIOCNT = SIO_MODE_MULTI | SIO_BAUD_115200;
+    g_probe_fast = true;
+    /* SD takes its time to come up after the change of mode (the line is
+     * pulled up, not driven): a tenth of a millisecond before it is read.
+     * Low, it is nobody in multiplayer mode on the other end: nothing to
+     * ask, and a start would only set the error bit. */
+    for (volatile int wait = 0; wait < 160; wait++) { }
+    if (!(REG_SIOCNT & SIO_SD)) return false;
+    for (int ask = 0; ask < LINK_PROBE_ASKS; ask++)
+        if ((mb_transfer_within(0x6200, LINK_PROBE_SPINS) & 0xFFF0) == 0x7200)
+            return true;
+    return false;
+}
+
+void link_probe(void) {
+    if (wireless_on()) return;      /* no cable to ask */
+    if (!g_armed || !link_is_master()) {
+        probe_port_back();
+        g_peer_empty = 0;
+        g_probe_clock = 0;
+        return;
+    }
+    g_probe_clock++;
+    if (!g_peer_empty && g_probe_clock <= LINK_PROBE_TALK) {
+        probe_port_back();          /* the lobby's turn */
+        return;
+    }
+    g_hush = 2;
+    uint8_t quiet = g_peer_empty ? g_probe_clock
+                                 : (uint8_t)(g_probe_clock - LINK_PROBE_TALK);
+    if (quiet % LINK_PROBE_STEP) return;
+    /* Found at once, lost only after LINK_PROBE_KEEP attempts in a row say
+     * so: the screen should not flicker for one that went astray. */
+    if (probe_ask()) g_peer_empty = LINK_PROBE_KEEP;
+    else if (g_peer_empty) g_peer_empty--;
+    if (g_peer_empty || quiet >= LINK_PROBE_QUIET) g_probe_clock = 0;
+}
+
+#ifndef TENGEN_MULTIBOOT
+/* BETWEEN TWO ROUNDS OF THE PROBE, or with none running: the moment for
+ * anything else that takes the port away — the search for a wireless
+ * adapter plugged in late (main.c), which starts the cable over. In the
+ * middle of a round it cut the silence short after one attempt and began
+ * the count again with the lobby's words: one round in every six was half
+ * a round (run_link.py, peer_check, read it off the wire). */
+bool link_probe_resting(void) {
+    return g_probe_clock == 0;
+}
+#endif
 
 LinkPeer link_peer(void) {
     if (wireless_on())

@@ -929,3 +929,78 @@ So the port does that itself, and finds out for itself whether it has to:
 
 None of this has met the board as this is written. The page behind L+R+A
 at power-on is there for the day it does.
+
+**The day it did.** Build 22f0bac on the board: FLASH CHIP ANSWERS, QUERY
+0052 0051 005A, WIRING D0 D1, COMMANDS AMD 0002 — and CHIP 65536K 512X128K,
+CHIP ID 008A 227D, which with the crossing undone is 0x89 and 0x227E: a
+sixty-four megabyte chip, not the sixteen of the MSP55LV128M the flasher's
+profile is named for. Nothing had assumed the size or the maker; it was
+asked. JOURNAL IN USE, GENERATION 1, 85 saves. STARTED RAM AND FLASH, SAVE
+RAM KEPT: the RAM had not been off long enough to lose its mark, which is
+the case the mark is there to tell apart. What has still not run on a board
+is an erase.
+
+## Two cartridges on a cable, and what a console that has left sounds like
+
+The first evening with two cartridges and no copy found six things, and
+five of them were one thing seen from different sides: what a console does
+when the other is no longer where it thinks.
+
+- **A console that has left is not a quiet cable.** The port rests in
+  multiplayer mode, answering 0, so that the other end's LINK CABLE screen
+  can say "wait for its player" instead of "connect the cable"; a master
+  on its menus sends a beacon of zeroes for the same reason. Both were
+  added for the lobby, and both are exactly what a match takes for "the
+  partner is slow": a word that is not a move resets the count of quiet
+  frames, so LINK ISSUES and CABLE LOST never came. The loser of a race
+  pressed START to play again (it leaves; A+B is what plays again, and
+  nothing said so), went to the title, and the winner's console sat with a
+  frozen board and a HUD that still changed. Leaving is now part of the
+  game the two consoles agree on step by step, like the A+B restart and
+  the pause menu's EXIT: the START is read off the wire. And for the ways
+  of leaving that no button announces — the reset, the switch — the other
+  console is believed when it says it is elsewhere: six transfers of its
+  not playing, with this console's own word intact so that a mangled
+  transfer is not taken for an answer.
+- **The winner plays on.** A race is two boards and each is its player's:
+  with the other gone, the cable is put away and the match carries on with
+  that pad at rest. A shared board cannot, and ends as a lost cable does.
+- **A move that arrives late is not a desync.** The console started over
+  under a match answered, for a few transfers, with the last move its
+  interrupt had loaded: a word for the step before. That had always been
+  the end of the match on the spot — and so it was for any console whose
+  interrupt was a transfer late, once. Both consoles see the same two
+  words; when they are not for the same step neither takes them.
+- **One speaker each, one board between them.** The cartridge has one
+  sound engine and the port's linked match has two, each following its own
+  player; the end of a shared board was reported on the player whose piece
+  did not fit, and the other console's tune played on over GAME OVER.
+- **The probe that the stand-in answered.** The copy went across only on
+  SELECT. The probe for a console in its BIOS had been written from
+  GBATEK's table and checked against a stand-in that answered whenever
+  asked; the BIOS turns between three serial modes, is deaf for two frames
+  after each turn, and is set back by a word at the lobby's speed. Its
+  disassembly gave the model those; it did not explain a probe that never
+  once got through, so the probe was not tuned to the reading but made to
+  do what the send does, which works: silence first, then asking. The
+  stand-in now has a knob for how hard a word of the wrong speed is on it,
+  and the old probe fails at the settings the new one passes.
+- **The check that read the wire.** Six mutants of the new probe — its
+  silence a third as long, one question for four, the lobby never hushed —
+  still found the stand-in, which is all the checks asked: the same hole
+  the first probe went through. So the cable was made to keep what goes
+  over it, and the check to read the round off the wire, frame by frame.
+  The first reading failed on the real build: one round in six was cut
+  short after a single attempt. The cable's screen looks for a Wireless
+  Adapter plugged in late every five seconds, starting the cable over, and
+  did it wherever the probe happened to be. It waits for the end of a
+  round now. And a check of the records had been counting presses of START
+  to get back to the cable: one too many was the master's, and two of its
+  four meetings were held on a paused game, passing.
+- **Whose table it is.** Two cartridges gave each other nothing, and the
+  first mend gave each other everything. It was stopped before it shipped:
+  a table is its owner's, and the friend with the monstrous scores would
+  have pushed the owner's off the bottom of it. A copy's rows are another
+  matter — it was sent by this cartridge an hour ago, starts from the cold
+  table and is about to be switched off — and go across unasked as before.
+  Between cartridges each player is asked, once, with NO under the arrow.

@@ -343,6 +343,40 @@ int leader_unsent(TengenRecord *out, int max) {
     return n;
 }
 
+#ifndef TENGEN_MULTIBOOT
+/* A row of the cartridge's cold table (leader_reset_table): nobody's. One
+ * a player made that happens to read the same — a round thousand, no lines,
+ * AAA — is not told apart, and is no loss. */
+static bool leader_cold(const LeaderEntry *e) {
+    if (e->lines || e->score < 3000 || e->score > 17000 || e->score % 1000)
+        return false;
+    for (int c = 0; c < LEADER_INITIALS; c++)
+        if (e->initials[c] != 1) return false;
+    return true;
+}
+
+/* WHAT THIS CARTRIDGE SHOWS ANOTHER when the two link (TengenRecordSync):
+ * the rows somebody made, the best of every table first — every table's
+ * first row, then every table's second, and so on down — as many as `max`.
+ * The other keeps the ones that make its own tables and shows this one
+ * its own; both first compare a digest of what they would show, so two
+ * cartridges that have met and have nothing new send none of it. */
+int leader_offer(TengenRecord *out, int max) {
+    int n = 0;
+    for (int i = 0; i < LEADER_ENTRIES; i++)
+        for (int t = 0; t < LEADER_TABLES && n < max; t++) {
+            const LeaderEntry *e = &g_tables[t][i];
+            if (leader_cold(e)) continue;
+            out[n].table = leader_wire_id(t);
+            out[n].score = e->score;
+            out[n].lines = e->lines;
+            for (int c = 0; c < LEADER_INITIALS; c++) out[n].initials[c] = e->initials[c];
+            n++;
+        }
+    return n;
+}
+#endif
+
 /* ...and they have: a console with a save has them now. */
 void leader_mark_sent(void) {
     for (int t = 0; t < LEADER_TABLES; t++)

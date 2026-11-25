@@ -519,11 +519,13 @@ uint32_t tengen_gbp_reply(uint32_t received, bool rumble) {
 }
 
 /* ----------------------------------------------------------------------- *
- * The records a copy made (TengenRecordSync)
+ * The records a copy made, and two cartridges' tables (TengenRecordSync)
  * ----------------------------------------------------------------------- */
 #define REC_SEQ   0x100u
 #define REC_ACK   0x200u
 #define REC_HAVE  0x400u
+#define REC_MARK  0x800u    /* this version's: every word of it carries it */
+#define REC_STORAGE 0x01u   /* the message's first byte, bit 0 */
 
 static void put_record(uint8_t *at, const TengenRecord *r) {
     at[0] = r->table;
@@ -542,32 +544,76 @@ static void get_record(const uint8_t *at, TengenRecord *r) {
     for (int c = 0; c < 3; c++) r->initials[c] = at[6 + c];
 }
 
+/* Sixteen bits of a set of records, whatever order they are in: two builds
+ * walk their tables in different orders and must still agree that they hold
+ * the same rows. */
+static uint16_t records_digest(const uint8_t *rows, int n) {
+    uint16_t sum = 0;
+    for (int i = 0; i < n; i++) {
+        uint32_t h = 2166136261u;
+        for (int b = 0; b < TENGEN_RECORD_BYTES; b++) {
+            h ^= rows[i * TENGEN_RECORD_BYTES + b];
+            h *= 16777619u;
+        }
+        sum = (uint16_t)(sum + (uint16_t)(h ^ (h >> 16)));
+    }
+    return sum;
+}
+
 void tengen_records_start(TengenRecordSync *sync, bool storage,
                           const TengenRecord *mine, int n) {
     memset(sync, 0, sizeof(*sync));
     sync->storage = storage;
-    if (storage) {
+    if (n < 0 || !mine) n = 0;
+    if (n > TENGEN_RECORDS_MAX) n = TENGEN_RECORDS_MAX;
+    sync->mine_n = (uint8_t)n;
+    /* Where this version's message has them; the older form moves them. */
+    for (int i = 0; i < n; i++)
+        put_record(&sync->out[TENGEN_RECORDS_HEAD + i * TENGEN_RECORD_BYTES], &mine[i]);
+    sync->digest = records_digest(&sync->out[TENGEN_RECORDS_HEAD], n);
+    /* ...and nothing goes until a word of the other's says which form it
+     * speaks (records_form). */
+}
+
+/* The message in the form the other console speaks. */
+static void records_form(TengenRecordSync *sync, uint8_t version) {
+    sync->version = version;
+    if (version == 2) {
+        sync->out[0] = sync->storage ? REC_STORAGE : 0;
+        sync->out[1] = (uint8_t)(sync->digest >> 8);
+        sync->out[2] = (uint8_t)sync->digest;
+        sync->out_len = 3;              /* the rest as each byte is settled */
+        return;
+    }
+    /* THE FORM BEFORE THE MARK: a save says [1, k] and gives nothing; a copy
+     * says [0, n, its records]. */
+    if (sync->storage) {
         sync->out[0] = 1;
         sync->out_len = 2;
         sync->out_held = true;          /* `k` once the other's are merged */
         return;
     }
-    if (n < 0) n = 0;
-    if (n > TENGEN_RECORDS_MAX) n = TENGEN_RECORDS_MAX;
+    memmove(&sync->out[2], &sync->out[TENGEN_RECORDS_HEAD],
+            (size_t)sync->mine_n * TENGEN_RECORD_BYTES);
     sync->out[0] = 0;
-    sync->out[1] = (uint8_t)n;
-    for (int i = 0; i < n; i++)
-        put_record(&sync->out[2 + i * TENGEN_RECORD_BYTES], &mine[i]);
-    sync->out_len = (uint8_t)(2 + n * TENGEN_RECORD_BYTES);
+    sync->out[1] = sync->mine_n;
+    sync->out_len = (uint8_t)(2 + sync->mine_n * TENGEN_RECORD_BYTES);
 }
 
-/* How many bytes of `out` may go: all of them, bar a held `k`. */
+/* How many bytes of `out` may go: none before the other's form is known
+ * (out_len is 0 until records_form), then all there are so far, bar a `k`
+ * that is waiting for the merge — and in this version's form nothing past
+ * the digest before this console's `want`, the fourth byte, is settled,
+ * whatever is already written behind it (the other's `want` may come
+ * first, and with it this console's `n`). */
 static uint8_t records_sendable(const TengenRecordSync *sync) {
-    return sync->out_held ? 1 : sync->out_len;
+    if (sync->version == 2 && !sync->want_decided) return 3;
+    return (uint8_t)(sync->out_len - (sync->out_held ? 1 : 0));
 }
 
 uint16_t tengen_records_word(const TengenRecordSync *sync) {
-    uint16_t word = (uint16_t)(TENGEN_LOBBY_RECORDS << TENGEN_LOBBY_TAG_SHIFT);
+    uint16_t word = (uint16_t)((TENGEN_LOBBY_RECORDS << TENGEN_LOBBY_TAG_SHIFT) |
+                               REC_MARK);
     if (sync->out_pos < records_sendable(sync)) {
         word |= REC_HAVE | sync->out[sync->out_pos];
         if (sync->out_pos & 1) word |= REC_SEQ;
@@ -577,40 +623,104 @@ uint16_t tengen_records_word(const TengenRecordSync *sync) {
     return word;
 }
 
+/* Everything across both ways. Not before both consoles' players have been
+ * heard, and that needs no saying here: the other's message has a length
+ * only from its fifth byte, this one's `n` and `k` are added to `out` at its
+ * fourth, and they do not go (records_sendable) before this console's
+ * `want` is settled. */
 bool tengen_records_done(const TengenRecordSync *sync) {
-    return sync->out_pos == sync->out_len && sync->in_len &&
+    return sync->version && sync->out_pos == sync->out_len && sync->in_len &&
            sync->in_pos == sync->in_len;
+}
+
+/* This console's `want` is settled: the message's fourth byte. (Its fifth
+ * and the rest are the other console's to settle, and may be already.) */
+static void records_want(TengenRecordSync *sync, bool want) {
+    if (sync->want_decided) return;
+    sync->want_decided = true;
+    sync->want = want;
+    sync->asking = false;
+    sync->out[3] = want ? 1 : 0;
+    /* ...and the message is that long, until the other's `want` says how
+     * many rows follow (if it has not already). */
+    if (!sync->rows_decided) sync->out_len = 4;
+}
+
+void tengen_records_answer(TengenRecordSync *sync, bool take) {
+    if (sync->asking) records_want(sync, take);
 }
 
 void tengen_records_saved(TengenRecordSync *sync, uint8_t kept) {
     if (!sync->storage || !sync->out_held) return;
-    sync->out[1] = kept;
+    sync->out[sync->out_len - 1] = kept;
     sync->out_held = false;
+}
+
+/* The other's records, out of `in` from `at`, for the caller to merge. */
+static void records_theirs(TengenRecordSync *sync, int at, int n) {
+    sync->theirs_n = (uint8_t)n;
+    for (int i = 0; i < n; i++)
+        get_record(&sync->in[at + i * TENGEN_RECORD_BYTES], &sync->theirs[i]);
+    if (sync->storage) sync->theirs_ready = true;
+    else sync->theirs_n = 0;            /* nowhere to keep them */
 }
 
 static void records_take(TengenRecordSync *sync, uint8_t byte) {
     if (sync->in_len && sync->in_pos >= sync->in_len) return;
     sync->in[sync->in_pos++] = byte;
-    if (sync->in_pos == 1) {
-        sync->partner_storage = (byte & 1) != 0;
-        if (sync->partner_storage) sync->in_len = 2;
-        /* Two consoles with saves have nothing to give each other. */
-        if (sync->partner_storage) tengen_records_saved(sync, 0);
-    } else if (sync->in_pos == 2 && !sync->partner_storage) {
-        uint8_t n = byte > TENGEN_RECORDS_MAX ? TENGEN_RECORDS_MAX : byte;
-        sync->in_len = (uint8_t)(2 + n * TENGEN_RECORD_BYTES);
+    if (sync->in_pos == 1) sync->partner_storage = (byte & REC_STORAGE) != 0;
+
+    if (sync->version == 1) {
+        if (sync->in_pos == 1 && sync->partner_storage) {
+            sync->in_len = 2;
+            /* Two consoles with saves, one of them older: nothing to give. */
+            tengen_records_saved(sync, 0);
+        } else if (sync->in_pos == 2 && !sync->partner_storage) {
+            uint8_t n = byte > TENGEN_RECORDS_MAX ? TENGEN_RECORDS_MAX : byte;
+            sync->in_len = (uint8_t)(2 + n * TENGEN_RECORD_BYTES);
+        }
+        if (!sync->in_len || sync->in_pos < sync->in_len) return;
+        /* All of it. */
+        if (sync->partner_storage) sync->saved = sync->in[1];
+        else records_theirs(sync, 2, (sync->in_len - 2) / TENGEN_RECORD_BYTES);
+        return;
     }
-    if (!sync->in_len || sync->in_pos < sync->in_len) return;
-    /* All of it. */
-    if (sync->partner_storage) {
-        sync->saved = sync->in[1];
-    } else {
-        sync->theirs_n = (uint8_t)((sync->in_len - 2) / TENGEN_RECORD_BYTES);
-        for (int i = 0; i < sync->theirs_n; i++)
-            get_record(&sync->in[2 + i * TENGEN_RECORD_BYTES], &sync->theirs[i]);
-        if (sync->storage) sync->theirs_ready = true;
-        else sync->theirs_n = 0;        /* nowhere to keep them */
-        /* ...and a console without a save answers nothing to it. */
+
+    if (sync->in_pos == 3) {
+        /* ITS DIGEST IS IN, AND WITH IT WHAT THIS CONSOLE WANTS OF IT: a
+         * copy's rows, always; a save's, only if they are not this one's
+         * own and its player says so (asking); nothing, if this is a copy. */
+        sync->partner_digest = (uint16_t)((sync->in[1] << 8) | sync->in[2]);
+        if (!sync->storage) records_want(sync, false);
+        else if (!sync->partner_storage) records_want(sync, true);
+        else if (sync->partner_digest == sync->digest) records_want(sync, false);
+        else sync->asking = true;
+    } else if (sync->in_pos == 4) {
+        /* ITS `want`, AND WITH IT THIS CONSOLE'S `n`: its rows if they are
+         * wanted, none if not. */
+        uint8_t n = byte ? sync->mine_n : 0;
+        sync->out[4] = n;
+        sync->out_len = (uint8_t)(TENGEN_RECORDS_HEAD + n * TENGEN_RECORD_BYTES + 1);
+        sync->out[sync->out_len - 1] = 0;
+        sync->rows_decided = true;
+        /* Its `k` waits for the rows this console asked for, if any come
+         * (settled below, when the other's `n` is in). */
+        sync->out_held = sync->storage;
+    } else if (sync->in_pos == TENGEN_RECORDS_HEAD) {
+        uint8_t n = byte > TENGEN_RECORDS_MAX ? TENGEN_RECORDS_MAX : byte;
+        sync->in_len = (uint8_t)(TENGEN_RECORDS_HEAD + n * TENGEN_RECORD_BYTES + 1);
+    }
+    if (!sync->in_len) return;
+    /* Its rows — or none, and then there is nothing for the caller to merge
+     * and this console's `k` is 0 at once — and after them its `k`. */
+    if (sync->in_pos == sync->in_len - 1) {
+        int n = (sync->in_len - TENGEN_RECORDS_HEAD - 1) / TENGEN_RECORD_BYTES;
+        /* ...and only rows that were asked for: nothing gets onto a table
+         * because the other console chose to send it. */
+        if (n && sync->want) records_theirs(sync, TENGEN_RECORDS_HEAD, n);
+        if (!sync->theirs_ready) tengen_records_saved(sync, 0);
+    } else if (sync->in_pos == sync->in_len) {
+        sync->saved = byte;
     }
 }
 
@@ -630,6 +740,9 @@ void tengen_records_apply(TengenRecordSync *sync, bool got, uint16_t word) {
         return;
     }
     sync->idle = 0;
+    /* Its first word says which form it speaks, and so which this console
+     * answers in. */
+    if (!sync->version) records_form(sync, (word & REC_MARK) ? 2 : 1);
     /* Its receipt for the byte in flight. */
     if (sync->out_pos < records_sendable(sync) &&
         (((word & REC_ACK) != 0) == ((sync->out_pos & 1) != 0)))
