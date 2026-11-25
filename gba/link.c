@@ -137,6 +137,18 @@ static volatile uint16_t g_sent_word;
 static volatile uint8_t g_strangers;
 static volatile bool g_partner_played;
 
+/* A TITLE LISTENS (link_title_tick, far below): at rest, on its title, a
+ * console has the interrupt on for one thing — to take the two words of
+ * each transfer as it ends and load its own for the next — and this is
+ * what the interrupt leaves for the main loop to read. The interrupt on
+ * with the cable put away (g_armed) IS a title listening: nothing else
+ * has it on at rest, so there is no flag to say so and none to forget. */
+static volatile bool g_title_news;      /* a transfer since the loop last looked */
+static volatile uint16_t g_title_m, g_title_s;
+static volatile bool g_title_slave;     /* which slot was this console's (ID) */
+static volatile uint16_t g_title_word;  /* what it says at rest; 0 off the title */
+static void title_service(uint16_t cnt);
+
 static inline void load_send(void) {
     g_sent_word = g_tx_word;
     REG_SIOMLT_SEND = g_tx_word;
@@ -221,6 +233,11 @@ static void sio_reset(void) {
 IWRAM_CODE void link_serial_service(void);
 void link_serial_service(void) {
     uint16_t cnt = REG_SIOCNT;
+    /* At rest on a title (not in a hurry, and not in IWRAM): its words. */
+    if (!g_armed) {
+        title_service(cnt);
+        return;
+    }
     {
         uint16_t m = REG_SIOMULTI(0);
         uint16_t s = REG_SIOMULTI(1);
@@ -1029,83 +1046,136 @@ LinkPeer link_peer(void) {
  * enough for its LINK CABLE screen to say "waiting for the other player"
  * rather than "connect the cable". Not on the slave's end (only the master
  * starts transfers), not with SD low (nobody in multiplayer mode there),
- * and with the port's interrupt off, as it is at rest: nothing here reaches
- * this console's own lobby queue. */
+ * and with the port's interrupt off, as it is at rest — or on for a title,
+ * which takes its two words and nothing else (title_service): nothing here
+ * reaches this console's own lobby queue. */
 #define LINK_BEACON_EVERY 8
 static uint8_t g_beacon_clock;
 
-/* ...AND A TITLE SAYS IT IS A TITLE (cartridge only). Two cartridges left
+/* ...AND A TITLE SAYS IT IS A TITLE. Two consoles left
  * on their titles with a cable between them start their demos as ONE
  * cooperative game, the two computers on one board (main.c, the title) —
- * and for that each has to know where the other is, with the port at rest
- * and no interrupt on it. So the word a console at rest answers with, and
- * the master's beacon carries, is not always 0 on the title:
+ * and for that each has to know where the other is. So the word a console
+ * at rest answers with, and the master's beacon carries, is not always 0
+ * on the title:
  *
- *      0000 1nnn nnn0 00di      tag NONE, as 0 is; bit 11 says "a title";
- *                               n a count that moves every frame; i: nobody
- *                               has touched it for a while (LINK_TITLE_IDLE);
- *                               d: its demo is due (LINK_TITLE_DUE)
+ *      0000 1000 0000 00di      tag NONE, as 0 is; bit 11 says "a title";
+ *                               i: nobody has touched it for a while
+ *                               (LINK_TITLE_IDLE); d: its demo is due
+ *                               (LINK_TITLE_DUE)
  *
  * TAG NONE, so that every lobby there has ever been reads it as it reads
  * 0: a console that is there and not in a lobby. And nothing is asked of a
- * console that does not say it: a build from before this, a Single-Pak
- * copy, a console anywhere but its title answer 0 and are left alone.
+ * console that does not say it: a build from before this, a console
+ * without the chord or anywhere but its title answer 0 and are left alone.
+ * (A Single-Pak copy says it like a cartridge: the first build kept this
+ * to cartridges, and the first two consoles it was tried on were a
+ * cartridge and its copy.)
  *
- * READ WITH NO INTERRUPT, off the data registers, which hold both
- * consoles' words of the last transfer until the next one empties them:
- * the count is how a console tells that there HAS been a transfer since it
- * last looked — its own word comes back with a count it has not seen — and
- * so that what stands in the other slot is news and not what was said a
- * minute ago by a console since gone. Never while a transfer is passing
- * (the busy bit, read with the rest), which is also the only moment SI is
- * not the cable's answer (link_sample_role).
+ * TAKEN BY THE INTERRUPT, AS EVERY OTHER WORD ON THIS CABLE IS. The first
+ * build read the data registers from the main loop, once a frame, with no
+ * interrupt at rest — and never with a transfer passing, which is right
+ * and which was the hole in it: a master asking for a demo starts a
+ * transfer every frame, so a slave whose frame falls on those transfers
+ * finds one passing every time it looks, sees nothing, cannot even load
+ * its own next word, and stays that way for as long as the two consoles'
+ * frames stay in step — seconds, on two crystals. (The emulated cable
+ * whose transfers take the rest of the frame shows it every time; the one
+ * whose transfers take no time, which that build was checked on, never.)
+ * So a title has the port's interrupt on (title_listen): what a transfer
+ * carried is taken as it ENDS, both words whole and the port free for the
+ * next one's to be loaded, and the main loop reads what the interrupt
+ * left (g_title_news). Which slot is this console's is the transfer's own
+ * answer, the ID in SIOCNT.
  *
  * The master asks by simply starting the lobby of a demo
- * (tengen_lobby_demo): the slave's end sees its HELLO in the master's slot,
- * twice on two transfers (link_title_invited), and starts its own. */
-#ifndef TENGEN_MULTIBOOT
+ * (tengen_lobby_demo): the slave's end sees its HELLO in the master's
+ * slot, on two transfers running (link_title_invites), and starts its
+ * own. */
 #define LINK_TITLE_MARK   0x0800u
 #define LINK_TITLE_IS     0xF800u
-#define LINK_TITLE_COUNT(w) (((w) >> 4) & 0x3Fu)
-#define LINK_TITLE_FRESH  12      /* frames a word is news for: a beacon and a half */
+#define LINK_TITLE_FRESH  20      /* frames a word is news for: two beacons and a half,
+                                   * so that one transfer the cable drops is not a title gone */
 #define LINK_DEMO_HELLO   ((uint16_t)((TENGEN_LOBBY_HELLO << TENGEN_LOBBY_TAG_SHIFT) | \
                                       TENGEN_HELLO_COOP | TENGEN_HELLO_DEMO))
-static uint16_t g_title_word;       /* what this console says at rest; 0 off the title */
-static uint8_t g_title_count;
-static uint8_t g_title_seen = 0xFF; /* the count of its own word last seen back */
 static uint8_t g_title_age = 0xFF;  /* frames since the other's word; 0xFF: none */
 static int8_t g_title_other = -1;   /* the other's LINK_TITLE_*, or -1: no title */
 static uint8_t g_title_invites;
 static bool g_title_master;
 
-/* What was heard is forgotten — NOT which of this console's own words it
- * last saw come back (g_title_seen): that word is still in the data
- * register, and forgetting it made the same stale transfer news again
- * every LINK_TITLE_FRESH frames, for ever. */
+/* The interrupt's part: the transfer's two words for the loop, and this
+ * console's for the next transfer while the port is free. */
+static __attribute__((noinline)) void title_service(uint16_t cnt) {
+    g_title_m = REG_SIOMULTI(0);
+    g_title_s = REG_SIOMULTI(1);
+    g_title_slave = ((cnt >> SIO_ID_SHIFT) & 3) != 0;
+    g_title_news = true;
+    REG_SIOMLT_SEND = g_title_word;
+}
+
 static void title_forget(void) {
     g_title_age = 0xFF;
     g_title_other = -1;
     g_title_invites = 0;
 }
 
+/* The interrupt on for a title, or off again: only with no transfer
+ * passing (a write to SIOCNT under one is a write to its start bit). False
+ * if one was, and nothing was done: the next frame will do. */
+static bool title_listen(bool on) {
+    uint16_t cnt = REG_SIOCNT;
+    if (cnt & SIO_START) return false;
+    REG_IME = 0;
+    g_title_news = false;
+    if (on) {
+        REG_SIOMLT_SEND = g_title_word;
+        REG_IF = IRQ_SERIAL;            /* nothing of before is served */
+        REG_IE = (uint16_t)(REG_IE | IRQ_SERIAL);
+        REG_SIOCNT = (uint16_t)(cnt | SIO_IRQ);
+    } else {
+        REG_SIOCNT = (uint16_t)(cnt & ~SIO_IRQ);
+        REG_IE = (uint16_t)(REG_IE & ~IRQ_SERIAL);
+        REG_IF = IRQ_SERIAL;
+        REG_SIOMLT_SEND = 0;
+    }
+    REG_IME = IME_ON;
+    return true;
+}
+
 void link_title_tick(int flags) {
     uint16_t cnt = REG_SIOCNT;
-    if (g_armed || wireless_present() || gbp_owns_serial() ||
-        (cnt & 0x3000) != SIO_MODE_MULTI || (cnt & SIO_IRQ)) {
-        /* Not at rest: the port is somebody's, and says what they say. */
+    bool rest = !g_armed && !wireless_present() && !gbp_owns_serial() &&
+                (cnt & 0x3000) == SIO_MODE_MULTI;
+    bool listening = rest && (cnt & SIO_IRQ);
+    if (!rest || flags < 0) {
+        /* Off its title: 0 from the next transfer (the interrupt loads
+         * it), and the interrupt off as soon as no transfer is passing.
+         * (The port somebody's: whoever took it took the interrupt with
+         * it — link_init, link_shutdown — and it is not this to touch.) */
         g_title_word = 0;
+        if (listening) title_listen(false);
         title_forget();
         return;
     }
-    if (g_title_age < 0xFF && ++g_title_age > LINK_TITLE_FRESH) title_forget();
-    if (cnt & SIO_START) return;        /* a transfer passing */
-    g_title_master = !(cnt & SIO_SI);
-    uint16_t mine = REG_SIOMULTI(g_title_master ? 0 : 1);
-    uint16_t theirs = REG_SIOMULTI(g_title_master ? 1 : 0);
-    if ((mine & LINK_TITLE_IS) == LINK_TITLE_MARK &&
-        LINK_TITLE_COUNT(mine) != g_title_seen) {
-        g_title_seen = (uint8_t)LINK_TITLE_COUNT(mine);
+    /* THE WORD IS LOADED BY THE INTERRUPT, as each transfer ends, and by
+     * the master's beacon as it starts one; never from here, where a slave
+     * cannot know that a transfer is not about to start. So a change of
+     * this console's word is on the wire a transfer late, a beacon's eight
+     * frames at most, and nothing here is in that much of a hurry. */
+    g_title_word = (uint16_t)(LINK_TITLE_MARK |
+                              ((unsigned)flags & (LINK_TITLE_IDLE | LINK_TITLE_DUE)));
+    if (!listening && !title_listen(true)) return;
+
+    REG_IME = 0;
+    bool news = g_title_news;
+    uint16_t m = g_title_m, sl = g_title_s;
+    bool slave = g_title_slave;
+    g_title_news = false;
+    REG_IME = IME_ON;
+    uint16_t theirs = slave ? m : sl;
+    if (news) {
         g_title_age = 0;
+        g_title_master = !slave;
         g_title_other = (theirs & LINK_TITLE_IS) == LINK_TITLE_MARK
                             ? (int8_t)(theirs & (LINK_TITLE_IDLE | LINK_TITLE_DUE)) : -1;
         /* (Counted on either end; only the slave's is ever asked.) */
@@ -1114,13 +1184,9 @@ void link_title_tick(int flags) {
         } else {
             g_title_invites = 0;
         }
+    } else if (g_title_age < 0xFF && ++g_title_age > LINK_TITLE_FRESH) {
+        title_forget();
     }
-    uint16_t word = 0;
-    if (flags >= 0)
-        word = (uint16_t)(LINK_TITLE_MARK | ((++g_title_count & 0x3Fu) << 4) |
-                          ((unsigned)flags & (LINK_TITLE_IDLE | LINK_TITLE_DUE)));
-    if (word || g_title_word) REG_SIOMLT_SEND = word;
-    g_title_word = word;
 }
 
 int link_title_other(void) { return g_title_other; }
@@ -1137,17 +1203,15 @@ void link_lobby_start_demo(TengenLobby *lobby, uint16_t seed) {
     g_lobby_master = link_is_master();
     lobby_send(lobby);
 }
-#else
-#define g_title_word 0
-#endif
 
 void link_beacon(void) {
     if (g_armed || wireless_present()) return;
     if (++g_beacon_clock % LINK_BEACON_EVERY) return;
     uint16_t cnt = REG_SIOCNT;
     if ((cnt & 0x3000) != SIO_MODE_MULTI) return;   /* not at rest */
-    if (cnt & (SIO_SI | SIO_START | SIO_IRQ)) return;
+    /* (The interrupt may be on at rest: a title's, link_title_tick.) */
+    if (cnt & (SIO_SI | SIO_START)) return;
     if (!(cnt & SIO_SD)) return;
-    REG_SIOMLT_SEND = g_title_word;     /* 0, but on a title (link_title_tick) */
+    REG_SIOMLT_SEND = g_title_word;     /* 0, but on a title */
     REG_SIOCNT = (uint16_t)(cnt | SIO_START);
 }

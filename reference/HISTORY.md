@@ -1050,5 +1050,73 @@ cartridge is better left alone by now.
   of them on. "It should turn the cheat on, not change the skin: leftover
   code, I suppose." It was not leftover — it was written down in the
   README — but it was a title changed by a chord rung for something else.
-  The skins are a list in OPTIONS; the title's chord chirps, turns the
-  last credit, and leaves the picture as it was.
+  The skins are a list in OPTIONS; the title's chord chirps (the credit
+  that changes colour with it is on GAME SELECT) and leaves the picture as
+  it was.
+
+## The demo that was shared in the emulator and nowhere else
+
+Three lines came back from two consoles: after a cooperative game the
+master is back on its title before the clone; the plaque should say A:
+AGAIN and B: BACK; and waiting on the title, nothing happens. The first
+and the last were one evening seen from two ends.
+
+- **Two consoles that were two programs.** A linked match is played under
+  the master's chord on both consoles — pause menu, the sheet at the end,
+  the table that goes after five seconds when nobody made it. And then the
+  match ended and each console was itself again: the cartridge with the
+  chord, the copy it had sent without. The copy read the table for
+  seventeen seconds where the cartridge read it for five, because the
+  page asked its own console's chord and not the match's; and of the two
+  titles that should have shared their demo, one had never been told there
+  was anything to share. The chord is catching now: a console that plays
+  under it has it until the power switch.
+- **Cartridges only.** The demo had been compiled out of the copy, as
+  things the copy can never do are — and the first two consoles anybody
+  tried it on were a cartridge and its copy.
+- **The hole that was the design.** With both of those mended in the
+  emulator, on the cable whose transfers take a frame's worth of time and
+  not none, two CARTRIDGES with the chord rung on each still played two
+  demos. A title read the other's words off the data registers once a
+  frame, with no interrupt, never while a transfer was passing — and the
+  master's lobby starts a transfer every frame. A slave whose frame falls
+  on those transfers finds one passing every time it looks. That is not a
+  rare alignment: it is two consoles switched on, for however long their
+  crystals agree. The check that had passed forty mutants ran on the cable
+  where a transfer is over before anybody looks. So a title takes the
+  port's interrupt, as the lobby and the match always have, and reads what
+  the interrupt left; and the checks of anything read from the main loop
+  run on the slow cable, with a copy on either end.
+- **A sky to say so.** None of that could be seen on two real consoles:
+  two titles and nothing happening is what every failure of it looks like.
+  The title's night turns deep blue while the other title is heard, and
+  violet while the two shake hands — a tell for the next evening, and one
+  that can stay: it is a night all the same, under the chord.
+- **One button each.** "A AND B: AGAIN / START: LEAVE" was the
+  cartridge's chord and the port's way out, spelt out; the answer from the
+  players it was written for was A: AGAIN, B: BACK. Under the chord A alone
+  is that A and B, and B alone that START — but not on the frame it goes
+  down: two fingers meant to land together land a frame apart, B first as
+  often as not, and whoever had learnt A+B would have been back on the
+  title for playing again. B leaves when it is let go, or after a moment
+  held; an A meanwhile is AGAIN. Without the chord the pad is the
+  cartridge's, and neither button alone is anything.
+- **And not as the board dies.** Written and checked, the two buttons had
+  a trap in them that no check had been asked about: a board is lost with
+  both thumbs going, and the turn meant for the piece that did not fit
+  lands a frame after it did not. With one button for each job that turn
+  was AGAIN — the game gone before its player knew it was lost — or BACK,
+  out of the race altogether. For three-quarters of a second after a board
+  dies the two are nothing, and the plaque names them when they are
+  something.
+- **A cable that interrupted without being asked.** A build whose title
+  never switched its port's interrupt on heard the other title all the
+  same: the emulated cable raised the serial interrupt on both consoles at
+  the end of every transfer, whatever SIOCNT said, and the interrupt
+  enable register was all that stood in the way. The hardware requests one
+  only of a console that asked. Nothing in the port had leant on it — the
+  whole chain passed on the corrected cable — but the mutant that showed
+  it would have shipped as "caught".
+- **Thirty-two bytes.** Internal memory had exactly that to spare above
+  the four kilobytes the linker keeps for the stack, and the linker's own
+  comment still said ten. The sky's two bytes are locals.

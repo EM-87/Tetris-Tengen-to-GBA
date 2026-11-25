@@ -211,8 +211,9 @@ void link_rest(void);
  * link.c). */
 void link_beacon(void);
 
-/* TWO TITLES, ONE DEMO (cartridge only; see link.c). Once a frame, whatever
- * the screen: `flags` is LINK_TITLE_* on the title and -1 anywhere else.
+/* TWO TITLES, ONE DEMO (see link.c). Once a frame, whatever
+ * the screen, and before link_beacon, whose word this decides: `flags` is
+ * LINK_TITLE_* on the title and -1 anywhere else.
  * Then what the other console's title last said — its flags, or -1 if it
  * is not on one, or said nothing lately — for how many transfers running
  * this console has been asked into a demo (the slave's end; two is an

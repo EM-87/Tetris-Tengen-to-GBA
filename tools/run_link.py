@@ -79,11 +79,13 @@ IO_SIOCNT = 0x128 >> 1
 IO_SIOMLT_SEND = 0x12A >> 1
 
 REG_SIOCNT = 0x128
+REG_SIOMLT_SEND = 0x12A
 REG_RCNT = 0x134
 SIO_SI = 0x0004
 SIO_SD = 0x0008
 SIO_ERR = 0x0040
 SIO_START = 0x0080
+SIO_IRQ = 0x4000
 SIO_ID_SHIFT = 4
 SIO_MODE_SHIFT = 12
 SIO_MODE_MULTI = 2
@@ -151,6 +153,8 @@ class CableEnd(mgba.gba.GBASIODriver):
                     if end is not self and self.cable.plugged:
                         end.mute = True
             return value
+        if self.cable.pending and address in (REG_SIOCNT, REG_SIOMLT_SEND):
+            self.cable.under += 1
         if address != REG_SIOCNT:
             return value
         self.ready = ((value >> SIO_MODE_SHIFT) & 3) == SIO_MODE_MULTI
@@ -237,6 +241,12 @@ class Cable:
         self.slow = False
         self.pending = False
         self.latched = None
+        # ...and how many times either program wrote SIOCNT or its word
+        # with one of them passing. What that does to a real port nobody
+        # here has measured; the port's rule is not to (gba/link.c: the
+        # word goes in by the interrupt, as a transfer ends), and a check
+        # can hold a piece of code to the rule by this count.
+        self.under = 0
         # A SLAVE LATE WITH ITS WORD: at these good-transfer counts the
         # slave's slot carries the word of the transfer before — what a
         # console sends when the transfer starts before its program has
@@ -326,6 +336,16 @@ class Cable:
             bios.frame()
             self._set_bit(self.master, SIO_SD, self.all_ready())
 
+    def _raise(self, core):
+        """The serial interrupt at the end of a transfer — FOR A CONSOLE
+        THAT ASKED FOR IT (SIOCNT bit 14), which is the only kind the
+        hardware requests one of. This used to raise it on both whatever
+        the bit said, and IE was all that stood between a port at rest and
+        its handler: a build whose title never switched the bit on heard
+        the other title all the same."""
+        if core._native.memory.io[IO_SIOCNT] & SIO_IRQ:
+            lib.GBARaiseIRQ(core._native, IRQ_SIO, 0)
+
     def transfer(self):
         """True for a transfer that carried both words."""
         if not self.plugged:
@@ -338,7 +358,7 @@ class Cable:
             for slot in (IO_SIOMULTI0, IO_SIOMULTI1, IO_SIOMULTI2, IO_SIOMULTI3):
                 mio[slot] = ABSENT
             mio[IO_SIOCNT] &= ~SIO_START
-            lib.GBARaiseIRQ(self.master._native, IRQ_SIO, 0)
+            self._raise(self.master)
             return True
         mio = self.master._native.memory.io
         master_end = self.ends[0]
@@ -356,7 +376,7 @@ class Cable:
             for slot in (IO_SIOMULTI0, IO_SIOMULTI1, IO_SIOMULTI2, IO_SIOMULTI3):
                 mio[slot] = ABSENT
             mio[IO_SIOCNT] = (mio[IO_SIOCNT] & ~SIO_START) | SIO_ERR
-            lib.GBARaiseIRQ(self.master._native, IRQ_SIO, 0)
+            self._raise(self.master)
             self.failed += 1
             return False
         sio = self.slave._native.memory.io
@@ -415,8 +435,8 @@ class Cable:
             self.lagging = True
             for core in (self.master, self.slave):
                 self._set_bit(core, SIO_SD, False)
-        lib.GBARaiseIRQ(self.master._native, IRQ_SIO, 0)
-        lib.GBARaiseIRQ(self.slave._native, IRQ_SIO, 0)
+        self._raise(self.master)
+        self._raise(self.slave)
         if s != ABSENT and m != ABSENT:
             self.transfers += 1
         return True
@@ -1401,7 +1421,14 @@ def walkout_check(rom):
     step, unpaused, its tune going, RIVAL LEFT in the rival's cell for a
     moment. Either end leaving; and afterwards the two find each other on
     the cable again. And what the dead board's pad does is said under its
-    plaque, under the chord: A AND B: AGAIN, START: LEAVE.
+    plaque, under the chord: A: AGAIN, B: BACK — the plaque said "A AND B:
+    AGAIN / START: LEAVE" until the players it was written for answered
+    with one button for each job. Under the chord A alone puts the board
+    back on its feet and B alone is that START; B leaves when it is let go
+    or has been held a while, so that the cartridge's A and B together,
+    which land a frame or two apart and B first as often as not, are still
+    AGAIN. Without the chord the pad is the cartridge's: A and B together,
+    START, and nothing else does anything.
 
     Also here: a board put back on its feet with A+B has its tune back (its
     console went quiet for the game-over tune and stayed so).
@@ -1456,11 +1483,13 @@ def walkout_check(rom):
         # on the other console.
         hint = " ".join(run_rom.tilemap_text(gone, r) for r in range(8, 16))
         there = " ".join(run_rom.tilemap_text(stay, r) for r in range(8, 16))
-        if "A AND B:" not in hint or "AGAIN" not in hint or \
-                "START:" not in hint or "LEAVE" not in hint:
-            failures.append(f"el tablero muerto de {who} no dice que hacen A+B "
-                            f"y START: {hint.split()}")
-        if "AGAIN" in there or "LEAVE" in there:
+        if "A: AGAIN" not in hint or "B: BACK" not in hint:
+            failures.append(f"el tablero muerto de {who} no dice que hacen A "
+                            f"y B: {hint.split()}")
+        if "AND" in hint or "START" in hint or "LEAVE" in hint:
+            failures.append(f"el tablero muerto de {who} sigue con la pista "
+                            f"de antes: {hint.split()}")
+        if "AGAIN" in there or "BACK" in there:
             failures.append(f"la pista del tablero muerto sale tambien en {other}")
 
         # UNDER A PAUSE, START IS THE WAY BACK INTO THE GAME — the dead
@@ -1584,10 +1613,32 @@ def walkout_check(rom):
     hint = " ".join(run_rom.tilemap_text(cores[1], r) for r in range(0, 20))
     if alive(cores[1], 1) or not alive(cores[1], 0):
         failures.append("sin el acorde: no queda un tablero muerto y el otro vivo")
-    elif "AGAIN" in hint or "LEAVE" in hint or "A AND B" in hint:
+    elif "AGAIN" in hint or "BACK" in hint or "LEAVE" in hint:
         failures.append("sin el acorde, el tablero muerto lleva la pista de "
-                        f"A+B y START: {hint.split()}")
+                        f"sus botones: {hint.split()}")
     else:
+        # THE CARTRIDGE'S PAD: neither button alone is anything, tapped or
+        # held; the two together are the restart; START leaves.
+        tap("A", who=1)
+        tap("B", who=1)
+        both(30, [[], [KEYS["B"]]])
+        both(30, [[], [KEYS["A"]]])
+        both(20, [[], []])
+        state = ([flag(c, "g_linked") for c in cores],
+                 [flag(c, "g_link_alone") for c in cores],
+                 alive(cores[0], 1), alive(cores[1], 1))
+        if state != ([1, 1], [0, 0], 0, 0):
+            failures.append("sin el acorde, A sola o B sola hacen algo en el "
+                            "tablero muerto: enlazadas, solas, vivo (en cada "
+                            f"consola) = {state}")
+        both(20, [[], [KEYS["A"], KEYS["B"]]])
+        both(20, [[], []])
+        if (alive(cores[0], 1), alive(cores[1], 1)) != (1, 1) or \
+                not _same_match(rom, cores):
+            failures.append("sin el acorde, A y B a la vez no levantan el "
+                            "tablero muerto en las dos consolas")
+        _bury(cores, session_addr, off, 1)
+        both(240)
         tap("START", who=1)
         both(20)
         state = (flag(cores[1], "g_linked"), flag(cores[0], "g_linked"),
@@ -1596,9 +1647,222 @@ def walkout_check(rom):
             failures.append("sin el acorde, START en el tablero muerto no saca "
                             "a su consola y deja a la otra jugando sola: "
                             f"{state}")
-        else:
-            print("  sin el acorde: ninguna pista bajo el tablero muerto, y "
-                  "START sale igual")
+        elif not failures:
+            print("  sin el acorde: ninguna pista bajo el tablero muerto; A "
+                  "sola y B sola no hacen nada, las dos a la vez lo levantan, "
+                  "y START sale")
+
+    # UNDER THE CHORD, ONE BUTTON EACH. The dead board is the slave's or the
+    # master's by turns; the state read is both consoles'.
+    def dead_board(slot, held=()):
+        """A race under the chord, `slot`'s board dead and the other going —
+        with `held` down on its pad from before it died."""
+        made = _to_a_match(rom)
+        if made is None:
+            return None
+        cores, cable, both, tap = made
+        keys = [[KEYS[k] for k in held] if i == slot else [] for i in range(2)]
+        _bury(cores, session_addr, off, slot)
+        both(240, keys)
+        if alive(cores[0], slot) or not alive(cores[0], 1 - slot):
+            return None
+        return cores, both, tap
+
+    def state_of(cores, slot):
+        """(linked, alone, the dead board alive) on the two consoles."""
+        return ([flag(c, "g_linked") for c in cores],
+                [flag(c, "g_link_alone") for c in cores],
+                [alive(c, slot) for c in cores])
+
+    def pad(slot, *names):
+        return [[KEYS[n] for n in names] if i == slot else [] for i in range(2)]
+
+    def score(core, slot):
+        base = session_addr + off["score"] + slot * off["stride"]
+        return sum(core.memory.u8[base + k] << (8 * k) for k in range(4))
+
+    PLAYING = ([1, 1], [0, 0], [1, 1])
+    DEAD = ([1, 1], [0, 0], [0, 0])
+    for slot in (1, 0):
+        whose = "la esclava" if slot else "la maestra"
+
+        def gone(cores):
+            """Its console at its table, the other playing on alone."""
+            left, stay = cores[slot], cores[1 - slot]
+            return (flag(left, "g_linked"), flag(stay, "g_linked"),
+                    flag(stay, "g_link_alone"), alive(stay, 1 - slot),
+                    "-LINES" in run_rom.tilemap_text(left, 2, 0, 30)) == \
+                (0, 1, 1, 1, True)
+
+        # A ALONE: AGAIN.
+        made = dead_board(slot)
+        if made is None:
+            print("FALLA: no queda un tablero muerto y el otro vivo")
+            return 1
+        cores, both, tap = made
+        for core in cores:                  # something to lose
+            base = session_addr + off["score"] + slot * off["stride"]
+            for k in range(4):
+                core.memory.u8[base + k] = (33000 >> (8 * k)) & 0xFF
+        both(4, pad(slot, "A"))
+        both(20, [[], []])
+        again = state_of(cores, slot)
+        both(120, [[], []])
+        if again != PLAYING or score(cores[0], slot) >= 33000 or \
+                not _same_match(rom, cores):
+            failures.append(f"con el acorde, A sola no levanta el tablero "
+                            f"muerto de {whose} en las dos consolas: "
+                            f"enlazadas, solas, vivo = {again}, la misma "
+                            f"partida {_same_match(rom, cores)}")
+            continue
+
+        # B ALONE: BACK — let go...
+        made = dead_board(slot)
+        if made is None:
+            print("FALLA: no queda un tablero muerto y el otro vivo")
+            return 1
+        cores, both, tap = made
+        both(2, pad(slot, "B"))
+        mid = state_of(cores, slot)
+        both(2, pad(slot, "B"))
+        both(20, [[], []])
+        if mid != DEAD or not gone(cores):
+            failures.append(f"con el acorde, B sola (un toque) no saca a "
+                            f"{whose} de su tablero muerto al soltarla: a los "
+                            f"dos frames {mid}, y despues {state_of(cores, slot)}")
+            continue
+        # ...or held: out without letting go, and not at once.
+        made = dead_board(slot)
+        cores, both, tap = made
+        both(6, pad(slot, "B"))
+        soon = state_of(cores, slot)
+        both(14, pad(slot, "B"))
+        if soon != DEAD or not gone(cores):
+            failures.append(f"con el acorde, B mantenida no saca a {whose} "
+                            f"pasado un momento: a los 6 frames {soon}, a los "
+                            f"20 {state_of(cores, slot)}")
+            continue
+
+        # A AND B TOGETHER, AS FINGERS LAND: B first and A a moment after is
+        # AGAIN, not BACK; and A first, with the B that follows it a turn of
+        # the new game's first piece.
+        late = []
+        for first, second in (("B", "A"), ("A", "B")):
+            for gap in (1, 2, 4):
+                made = dead_board(slot)
+                cores, both, tap = made
+                both(gap, pad(slot, first))
+                both(8, pad(slot, first, second))
+                both(30, [[], []])
+                now = state_of(cores, slot)
+                both(60, [[], []])
+                if now != PLAYING or not _same_match(rom, cores):
+                    late.append(f"{first} y {second} a {gap} frames: {now}")
+                elif (first, gap) == ("B", 1):
+                    # ...and that B is forgotten with the board it was
+                    # pressed on: when this one dies again, nobody leaves.
+                    _bury(cores, session_addr, off, slot)
+                    both(240, [[], []])
+                    if state_of(cores, slot) != DEAD:
+                        late.append("levantado con B y A, el tablero vuelve a "
+                                    "morir y su jugador sale sin tocar nada: "
+                                    f"{state_of(cores, slot)}")
+        if late:
+            failures.append(f"con el acorde, A y B casi a la vez no levantan "
+                            f"el tablero muerto de {whose}: {late}")
+            continue
+
+        # A B HELD AS THE BOARD DIED is the last piece's, not a wish to
+        # leave: nothing while it is held, nothing when it is let go; and
+        # the next one pressed is BACK.
+        made = dead_board(slot, held=("B",))
+        if made is None:
+            failures.append(f"con B mantenida, el tablero de {whose} no muere")
+            continue
+        cores, both, tap = made
+        both(60, pad(slot, "B"))
+        held = state_of(cores, slot)
+        both(30, [[], []])
+        let_go = state_of(cores, slot)
+        both(4, pad(slot, "B"))
+        both(20, [[], []])
+        if held != DEAD or let_go != DEAD or not gone(cores):
+            failures.append(f"una B que ya estaba pulsada al morir el tablero "
+                            f"de {whose}: mantenida {held}, soltada {let_go}, "
+                            f"y la siguiente {state_of(cores, slot)}")
+            continue
+
+        # NOT AS THE BOARD DIES. A board is lost with both thumbs going,
+        # and the turn meant for the piece that did not fit lands after
+        # it: for three-quarters of a second A alone and B alone are
+        # nothing, tapped or held through the end of it, and the plaque
+        # does not name them until they are something.
+        made = _to_a_match(rom)
+        cores, cable, both, tap = made
+        _bury(cores, session_addr, off, slot)
+        for _ in range(240):
+            both(1)
+            if not alive(cores[0], slot):
+                break
+        both(2)
+        at_once = " ".join(run_rom.tilemap_text(cores[slot], r) for r in range(8, 16))
+        both(4, pad(slot, "A"))
+        both(4, [[], []])
+        both(4, pad(slot, "B"))
+        both(4, [[], []])
+        early = state_of(cores, slot)
+        both(50, pad(slot, "A"))            # down before they count, and kept down
+        kept = state_of(cores, slot)
+        later = " ".join(run_rom.tilemap_text(cores[slot], r) for r in range(8, 16))
+        both(6, [[], []])
+        both(4, pad(slot, "A"))
+        both(20, [[], []])
+        fresh_a = state_of(cores, slot)
+        # ...and the same the second time this board dies.
+        both(40, [[], []])
+        _bury(cores, session_addr, off, slot)
+        for _ in range(240):
+            both(1)
+            if not alive(cores[0], slot):
+                break
+        both(2)
+        both(4, pad(slot, "A"))
+        both(20, [[], []])
+        if early != DEAD or kept != DEAD or "AGAIN" in at_once or \
+                "A: AGAIN" not in later or fresh_a != PLAYING or \
+                state_of(cores, slot) != DEAD:
+            failures.append(f"recien muerto el tablero de {whose}: A y B "
+                            f"pulsadas al momento {early}, A mantenida desde "
+                            f"entonces {kept}, la pista ya puesta al morir "
+                            f"{'AGAIN' in at_once}, puesta despues "
+                            f"{'A: AGAIN' in later}, una A nueva {fresh_a}, "
+                            f"y una A al morir por segunda vez "
+                            f"{state_of(cores, slot)}")
+            continue
+
+        # A B THE OTHER PLAYER'S PAUSE CAME DOWN ON is the pause's: let go
+        # under it, nobody has left when the game is back.
+        made = dead_board(slot)
+        cores, both, tap = made
+        both(1, pad(slot, "B"))
+        both(4, [[KEYS["B"]] if i == slot else [KEYS["START"]] for i in range(2)])
+        both(6, pad(slot, "B"))
+        paused = [c.memory.u8[session_addr + off["paused"]] for c in cores]
+        both(20, [[], []])
+        both(4, pad(1 - slot, "START"))
+        both(40, [[], []])
+        after = (state_of(cores, slot),
+                 [c.memory.u8[session_addr + off["paused"]] for c in cores])
+        if paused != [1, 1] or after != (DEAD, [0, 0]):
+            failures.append(f"una B del tablero muerto de {whose} sobre la que "
+                            f"cae la pausa del otro: en pausa {paused}, y al "
+                            f"volver (enlazadas, solas, vivo), pausa = {after}")
+            continue
+        print(f"  con el acorde, el tablero muerto de {whose}: A sola lo "
+              "levanta; B sola sale al soltarla, o mantenida; A y B casi a la "
+              "vez lo levantan caiga la que caiga primero; una B de antes "
+              "de morir, o de antes de una pausa, no saca a nadie; y recien "
+              "muerto, ni A ni B hacen nada ni la pista las nombra")
 
     # A BOARD BACK ON ITS FEET HAS ITS TUNE BACK.
     made = _to_a_match(rom)
@@ -1788,7 +2052,7 @@ def coop_end_check(rom):
 DEMO_START_FRAME_PY = 5 * 256 + 0x20    # DEMO_START_FRAME, gba/port.h
 MUSIC_MIX_PY = 7                        # MUSIC_MIX, gba/port.h
 TITLE_IDLE_SKIP_PY = 40                 # a moment on a title before its clock is put forward
-DEMO_LINK_FRAMES_PY = 90                # DEMO_LINK_FRAMES, gba/main.c
+DEMO_LINK_FRAMES_PY = 180               # DEMO_LINK_FRAMES, gba/main.c
 
 
 def demo_link_check(rom):
@@ -2177,6 +2441,27 @@ def demo_link_check(rom):
         else:
             print(f"  le toca a {who} (frame {began[first]} de su titulo) y se "
                   f"lleva a la otra, quieta desde hace {began[late]} frames")
+    # ...AND A SLAVE THAT HAS BEGUN TO WAIT TO BE ASKED WAITS ITS SECOND OUT,
+    # whatever the cable carries meanwhile: what a master says as it starts
+    # its port over to ask is not always a title's word or an invitation.
+    # Here it says 0 for twenty-four frames (Cable.rests), from the frame
+    # after the slave's demo came due.
+    cores, cable, both, tap = titles()
+    fresh = to_title_again(both, tap, cores[0], 0)
+    title_reaches(cores[1], DEMO_START_FRAME_PY + 1, both)
+    cable.rests = {0}
+    both(24)
+    cable.rests = set()
+    began, linked = until_demos(cores, both, 300)
+    if not fresh:
+        failures.append("la prueba no consigue volver a un titulo a cero")
+    elif linked != [1, 1] or not _same_match(rom, cores):
+        failures.append(f"una esclava que ya esperaba a que la invitasen no "
+                        f"aguanta su segundo si la maestra dice 0 un momento "
+                        f"(empezadas {began}, enlazadas {linked})")
+    else:
+        print("  la esclava, esperando a que la inviten, aguanta su segundo "
+              "aunque la maestra diga 0 un momento: la demo es de las dos")
     for late in (0, 1):
         first = 1 - late
         cores, cable, both, tap = titles()
@@ -2263,6 +2548,30 @@ def demo_link_check(rom):
     else:
         print("  la otra consola en una partida suya: no se la espera, la "
               "demo a su hora")
+    # ...NOR ONE ON ITS MENUS, which still says it is there — the master's
+    # beacon — and says 0, as a console in its menus always has: not what
+    # its title was saying as it left, which a slave would wait a second
+    # to be asked by.
+    cores, cable, both, tap = titles()
+    title_reaches(cores[0], DEMO_START_FRAME_PY - 120, both)
+    tap("START", who=0)                         # GAME SELECT, and there it stays
+    both(20)
+    cable.wire = []
+    began, linked = until_demos(cores, both, 300, who=(1,))
+    said = sorted({t[2] for t in cable.wire})
+    if _screen_of(cores[0]) != "menu" or len(cable.wire) < 10:
+        failures.append("la prueba no deja a la maestra en GAME SELECT con su "
+                        f"baliza ({_screen_of(cores[0])}, {len(cable.wire)} "
+                        "transferencias)")
+    elif said != [0]:
+        failures.append("la maestra, ya en GAME SELECT, sigue diciendo por el "
+                        f"cable lo que decia su titulo: {[hex(w) for w in said]}")
+    elif began[1] != alone_at or linked[1]:
+        failures.append(f"con la maestra en GAME SELECT, la esclava no hace su "
+                        f"demo a su hora: frame {began[1]}, y es el {alone_at}")
+    else:
+        print("  la otra consola en sus menus: su baliza dice 0, y la demo a "
+              "su hora")
 
     # 7. THE CABLE PULLED.
     cores, cable, both, tap = titles()
@@ -2371,7 +2680,7 @@ def demo_link_check(rom):
         elif late is None or u8(cores[0], "g_linked"):
             failures.append(f"la consola que invita, si la otra se va {what}, "
                             "no hace su propia demo")
-        elif not 60 <= late <= DEMO_LINK_FRAMES_PY + 2:
+        elif not DEMO_LINK_FRAMES_PY - 30 <= late <= DEMO_LINK_FRAMES_PY + 2:
             failures.append(f"la consola que invita, si la otra se va {what}, "
                             f"tarda {late} frames en hacer su demo")
         else:
@@ -2422,6 +2731,402 @@ def demo_link_check(rom):
         return 1
     print("OK: dos titulos con el acorde comparten su demo, y sin el cada "
           "consola hace la del cartucho.")
+    return demo_copy_check(rom)
+
+
+def demo_copy_check(rom):
+    """THE SAME DEMO WHERE IT WAS FIRST TRIED, AND DID NOT HAPPEN: a
+    cartridge with the chord, the copy it had sent, a cooperative game, and
+    the two left on their titles afterwards.
+
+    Three things stood between that and the check above, which is two
+    cartridges switched on together with the chord rung on each, on a cable
+    whose transfers take no time:
+
+      - THE CABLE. A title read the other's words off the data registers,
+        once a frame, never with a transfer passing — and a master asking
+        for a demo starts one every frame. On the cable whose transfers
+        take the rest of the frame (Cable.slow; the nearer of the two to a
+        real one) the slave found one passing every time it looked. A title
+        listens with the port's interrupt now (link_title_tick);
+      - THE COPY. All of it was the cartridge's (TENGEN_MULTIBOOT);
+      - THE CHORD. It had to be rung on both, and the copy's player had
+        rung nothing: a match is played under the master's on both
+        consoles, and the other came out of it as it went in. It is
+        catching now — which is also why the master used to be back on its
+        title twelve seconds before the copy: the HIGH SCORES page goes
+        after five seconds with nothing to type under the chord, seventeen
+        without, and each console asked its own.
+
+    So, on the slow cable: two cartridges, a cartridge and its copy, a copy
+    and a cartridge — the chord on both titles, one game, a button out of
+    it. Then the evening itself: the chord on the master alone, a
+    cooperative game, the chord caught, the game over with nobody touching
+    anything — both back on their titles on the same frame, their skies
+    blue (title_sky: each hears the other), violet as they shake hands, and
+    the demo one game. And the chord on the slave alone: the match is the
+    master's, without; the master catches nothing, and the two still leave
+    the page together.
+    """
+    import run_rom
+    mb = os.path.splitext(rom)[0] + "_mb.mb"
+    if not os.path.exists(mb):
+        skip(f"no encuentro {mb}")
+        return 0
+    names = ("g_session", "g_linked", "g_link_alone", "g_link_lost", "g_demo",
+             "g_pause_unlocked", "g_title_frame")
+    images = {"cartucho": rom, "copia": mb}
+    tab = {}
+    for kind, path in images.items():
+        syms = {n: symbol(path, n) for n in names}
+        missing = [why for s_, why in syms.values() if s_ is None]
+        if missing:
+            skip(missing[0])
+            return 0
+        tab[kind] = {n: s_[0] for n, s_ in syms.items()}
+    off = run_rom.game_offsets(rom)
+    CHORD = [KEYS["L"], KEYS["R"]]
+    NOTES = ("RIVAL", "ISSUES", "CABLE", "LOST", "ADD THEM")
+    SKY = 0x05000000            # the backdrop: palette entry 0
+    # A buried board to its title again with nobody touching anything:
+    # under the chord about 1150 frames (the plaque, the sheet, five
+    # seconds of table), without it about 1550 (the plaque, seventeen).
+    PAGE_SHORT_BY = 1350
+    failures = []
+
+    class Two:
+        """Two consoles on a cable, each its own image."""
+        def __init__(self, kinds, slow=True):
+            self.kinds = kinds
+            self.cores, self.cable, self.both, self.tap = _pair(
+                images[kinds[0]], slow=slow, slave_rom=images[kinds[1]])
+
+        def u8(self, i, name):
+            return self.cores[i].memory.u8[tab[self.kinds[i]][name][0]]
+
+        def title_frame(self, i):
+            return self.cores[i].memory.u16[tab[self.kinds[i]]["g_title_frame"][0]]
+
+        def game(self, i):
+            at, size = tab[self.kinds[i]]["g_session"]
+            return at, size - 4
+
+        def step(self, i):
+            at, size = self.game(i)
+            return self.cores[i].memory.u8[at + size + 1]
+
+        def same(self):
+            a, b = (read_bytes(self.cores[i], *self.game(i)) for i in range(2))
+            return a != bytes(len(a)) and a == b
+
+        def sky(self, i):
+            return self.cores[i].memory.u16[SKY]
+
+        def to_titles(self, chords, sent=False):
+            """Each to its title, and the chord rung there on those `chords`
+            says. A copy starts in the cable's screen: B and B take it to
+            its title, and `sent` leaves it where it was sent to."""
+            self.both(1000 if "copia" in self.kinds else 60)
+            want = ["otra", "otra"]
+            for i, kind in enumerate(self.kinds):
+                if kind == "copia" and sent:
+                    want[i] = "cable"
+                elif kind == "copia":
+                    self.tap("B", who=i)
+                    self.tap("B", who=i)
+            self.both(20)
+            self.both(4, [CHORD if c else [] for c in chords])
+            self.both(12, [[], []])
+            return [_screen_of(c) for c in self.cores] == want and \
+                [self.u8(i, "g_pause_unlocked") for i in range(2)] == list(chords)
+
+        def hurry(self, to=900):
+            for i, core in enumerate(self.cores):
+                if self.title_frame(i) < to:
+                    core.memory.u16[tab[self.kinds[i]]["g_title_frame"][0]] = to
+
+        def until_shared(self, frames=700, watch=None):
+            """Until both are in a demo; whether it is one, on the cable."""
+            for _ in range(frames):
+                self.both(1)
+                if watch is not None:
+                    watch()
+                if all(self.u8(i, "g_demo") for i in range(2)):
+                    break
+            self.both(3)
+            return [self.u8(i, "g_demo") for i in range(2)] == [1, 1] and \
+                [self.u8(i, "g_linked") for i in range(2)] == [1, 1]
+
+        def bury(self):
+            for i, core in enumerate(self.cores):
+                _bury([core], self.game(i)[0], off, 0)
+
+        def page(self, i):
+            return " ".join(run_rom.tilemap_text(self.cores[i], r) for r in range(0, 20))
+
+    def name_of(kinds):
+        return f"{kinds[0]} (maestra) y {kinds[1]} (esclava)"
+
+    # THE NIGHT, for the skies below: a console alone, the chord rung.
+    mgba.log.silence()
+    lone = mgba.core.load_path(rom)
+    lone_screen = mgba.image.Image(SCREEN_W, SCREEN_H)
+    lone.set_video_buffer(lone_screen)
+    lone.reset()
+    _KEEP.append((lone, lone_screen))
+    for _ in range(60):
+        lone.run_frame()
+    lone.set_keys(*CHORD)
+    for _ in range(4):
+        lone.run_frame()
+    lone.set_keys()
+    skies = set()
+    for _ in range(200):
+        lone.run_frame()
+        skies.add(lone.memory.u16[SKY])
+    if len(skies) != 1:
+        failures.append(f"el cielo del titulo de una consola sola cambia: "
+                        f"{sorted(hex(c) for c in skies)}")
+    night = skies.pop()
+
+    # 1. THE CHORD ON BOTH TITLES, on the cable whose transfers take time.
+    for n, kinds in enumerate((("cartucho", "cartucho"), ("cartucho", "copia"),
+                               ("copia", "cartucho"))):
+        two = Two(kinds)
+        leaver = n % 2
+        if not two.to_titles((1, 1)):
+            failures.append(f"{name_of(kinds)}: no llegan las dos a su titulo "
+                            "con el acorde hecho")
+            continue
+        two.hurry()
+        if not two.until_shared() or not two.same():
+            failures.append(f"{name_of(kinds)}, cable lento: las dos demos no "
+                            f"son una partida (demo "
+                            f"{[two.u8(i, 'g_demo') for i in range(2)]}, "
+                            f"enlazadas {[two.u8(i, 'g_linked') for i in range(2)]})")
+            continue
+        before = [two.step(i) for i in range(2)]
+        two.both(240)
+        steps = [(two.step(i) - before[i]) % 256 for i in range(2)]
+        notes = [w for w in NOTES if w in two.page(0) + two.page(1)]
+        if not two.same() or steps != [240, 240] or notes:
+            failures.append(f"{name_of(kinds)}, cable lento: la demo compartida "
+                            f"no sigue igual en las dos y a su paso (pasos "
+                            f"{steps} en 240, avisos {notes})")
+            continue
+        stayer = 1 - leaver
+        before = two.step(stayer)
+        two.both(4, [[KEYS["START"]] if i == leaver else [] for i in range(2)])
+        two.both(56, [[], []])
+        moved = (two.step(stayer) - before) % 256
+        if two.u8(leaver, "g_demo") or _screen_of(two.cores[leaver]) != "menu":
+            failures.append(f"{name_of(kinds)}: START no saca a la "
+                            f"{'esclava' if leaver else 'maestra'} de la demo")
+        elif (two.u8(stayer, "g_demo"), two.u8(stayer, "g_link_alone")) != (1, 1) \
+                or not 57 <= moved <= 61:
+            failures.append(f"{name_of(kinds)}: al irse una, la otra no sigue "
+                            f"sola ({moved} pasos en 60)")
+        else:
+            print(f"  {name_of(kinds)}, cable lento, el acorde en los dos "
+                  "titulos: una sola partida, y un boton saca a una y deja a "
+                  "la otra sola")
+
+    # 2. THE EVENING: the chord on the master alone, a cooperative game,
+    # nobody touching anything after it.
+    for kinds, slow in ((("cartucho", "copia"), True),
+                        (("cartucho", "cartucho"), True),
+                        (("cartucho", "cartucho"), False)):
+        two = Two(kinds, slow)
+        what = f"{name_of(kinds)}, cable {'lento' if slow else 'rapido'}"
+        if not two.to_titles((1, 0), sent=True):
+            failures.append(f"{what}: no llegan la maestra a su titulo con el "
+                            "acorde hecho y la otra, sin el, a donde toca")
+            continue
+        for who in range(2):
+            if kinds[who] == "copia":
+                continue                    # in the cable's screen as sent
+            for key in ("START", "DOWN", "DOWN", "START"):
+                two.tap(key, who=who)       # GAME SELECT, COOPERATIVE
+        two.both(90)
+        if _screen_of(two.cores[0]) != "ajustes":
+            failures.append(f"{what}: la maestra no llega a LEVEL SETTINGS "
+                            f"({_screen_of(two.cores[0])})")
+            continue
+        two.tap("START", who=0)
+        two.both(120)
+        chords = [two.u8(i, "g_pause_unlocked") for i in range(2)]
+        if [two.u8(i, "g_linked") for i in range(2)] != [1, 1] or not two.same():
+            failures.append(f"{what}: la cooperativa no arranca")
+            continue
+        if chords != [1, 1]:
+            failures.append(f"{what}: jugando bajo el acorde de la maestra, la "
+                            f"esclava no lo coge (acordes {chords})")
+            continue
+        two.bury()
+        back = [None, None]
+        last = [two.title_frame(i) for i in range(2)]
+        for f in range(2600):
+            two.both(1)
+            for i in range(2):
+                now = two.title_frame(i)
+                if back[i] is None and not two.u8(i, "g_linked") and \
+                        0 < now < 40 and now == last[i] + 1 and f > 300:
+                    back[i] = f
+                last[i] = now
+            if None not in back:
+                break
+        if None in back or abs(back[0] - back[1]) > 2:
+            failures.append(f"{what}: acabada la partida sin tocar nada, las "
+                            f"dos no vuelven a su titulo a la vez (frames {back})")
+            continue
+        if back[0] > PAGE_SHORT_BY:
+            failures.append(f"{what}: con el acorde y nadie en la tabla, la "
+                            f"tabla no se va a los cinco segundos (de vuelta "
+                            f"en el frame {back[0]})")
+            continue
+        two.both(40)
+        heard = [two.sky(i) for i in range(2)]
+        if night in heard or heard[0] != heard[1]:
+            failures.append(f"{what}: los dos titulos, oyendose, no ponen su "
+                            f"cielo azul ({[hex(c) for c in heard]}, la noche "
+                            f"es {night:#x})")
+            continue
+        two.hurry()
+        # Each title's sky, frame by frame, until its demo: blue, then
+        # violet — and never the night in between, which the slave's was
+        # for the frames the master spent starting its port over to ask.
+        seen = [[], []]
+
+        def watch():
+            for i in range(2):
+                if not two.u8(i, "g_demo"):
+                    seen[i].append(two.sky(i))
+        shared = two.until_shared(watch=watch)
+        hands = [set(seen[i]) - {night, heard[0]} for i in range(2)]
+        if not shared or not two.same():
+            failures.append(f"{what}: tras la partida, las dos demos no son "
+                            f"una (demo {[two.u8(i, 'g_demo') for i in range(2)]}, "
+                            f"enlazadas {[two.u8(i, 'g_linked') for i in range(2)]})")
+        elif [len(h) for h in hands] != [1, 1] or hands[0] != hands[1]:
+            failures.append(f"{what}: el cielo de cada titulo no se pone de "
+                            f"otro color, el mismo en los dos, mientras se "
+                            f"saludan ({[sorted(hex(c) for c in set(q)) for q in seen]})")
+        elif night in seen[0] or night in seen[1]:
+            dark = [sum(1 for c in q if c == night) for q in seen]
+            failures.append(f"{what}: entre oirse y la demo, el cielo de algun "
+                            f"titulo vuelve a la noche ({dark} frames)")
+        else:
+            print(f"  {what}: el acorde solo en la maestra, una cooperativa "
+                  f"(la esclava lo coge), y sin tocar nada las dos a su "
+                  f"titulo en el mismo frame ({back[0]}), el cielo azul, "
+                  "violeta al saludarse, y la demo de las dos")
+
+    # 3. THE CHORD ON THE SLAVE ALONE: the match is the master's, without.
+    two = Two(("cartucho", "cartucho"), slow=False)
+    if not two.to_titles((0, 1)):
+        failures.append("no llegan a sus titulos con el acorde solo en la esclava")
+    else:
+        for key in ("START", "DOWN", "DOWN", "START"):
+            two.tap(key)
+        two.both(90)
+        two.tap("START", who=0)
+        two.both(120)
+        chords = [two.u8(i, "g_pause_unlocked") for i in range(2)]
+        two.bury()
+        back = [None, None]
+        last = [two.title_frame(i) for i in range(2)]
+        for f in range(2600):
+            two.both(1)
+            for i in range(2):
+                now = two.title_frame(i)
+                if back[i] is None and not two.u8(i, "g_linked") and \
+                        0 < now < 40 and now == last[i] + 1 and f > 300:
+                    back[i] = f
+                last[i] = now
+            if None not in back:
+                break
+        two.both(60)
+        skies = [two.sky(i) for i in range(2)]
+        if chords != [0, 1]:
+            failures.append(f"el acorde solo en la esclava: tras empezar la "
+                            f"partida los acordes son {chords}, y la maestra "
+                            "no tenia que coger nada")
+        elif None in back or abs(back[0] - back[1]) > 2:
+            failures.append(f"el acorde solo en la esclava: las dos no dejan "
+                            f"la tabla a la vez (frames {back})")
+        elif back[0] <= PAGE_SHORT_BY:
+            failures.append(f"el acorde solo en la esclava: la partida es sin "
+                            f"el, y la tabla no dura los diecisiete segundos "
+                            f"del cartucho (de vuelta en el frame {back[0]})")
+        elif skies != [night, night]:
+            failures.append("el acorde solo en la esclava: algun titulo pone "
+                            f"el cielo de otro color ({[hex(c) for c in skies]})")
+        else:
+            print(f"  el acorde solo en la esclava: la partida es la de la "
+                  f"maestra, sin el; las dos dejan la tabla a la vez (frame "
+                  f"{back[0]}) y sus cielos siguen de noche")
+
+    # 4. THE SKY IS THE CABLE'S, NOT A SWITCH: two titles hearing each
+    # other, the cable pulled — night again on both within a second — and
+    # put back: blue again.
+    two = Two(("cartucho", "cartucho"), slow=True)
+    if not two.to_titles((1, 1)):
+        failures.append("no llegan las dos a su titulo con el acorde hecho")
+    else:
+        two.both(60)
+        lit = [two.sky(i) for i in range(2)]
+        two.cable.plugged = False
+        two.both(70)
+        dark = [two.sky(i) for i in range(2)]
+        two.cable.plugged = True
+        two.both(60)
+        again = [two.sky(i) for i in range(2)]
+        if night in lit or lit[0] != lit[1]:
+            failures.append("dos titulos con el acorde no ponen su cielo azul "
+                            f"({[hex(c) for c in lit]})")
+        elif dark != [night, night]:
+            failures.append("quitado el cable, el cielo de algun titulo sigue "
+                            f"encendido pasado un segundo ({[hex(c) for c in dark]})")
+        elif again != lit:
+            failures.append("puesto otra vez el cable, los titulos no vuelven "
+                            f"a oirse ({[hex(c) for c in again]})")
+        else:
+            print("  el cielo es el del cable: azul oyendose, de noche al "
+                  "quitarlo, azul al volver a ponerlo")
+
+    # 5. A TITLE DOES NOT TOUCH ITS PORT WITH A TRANSFER PASSING: not to
+    # switch its interrupt on or off, not to load its word (title_listen
+    # waits a frame; the word goes in by the interrupt and by the beacon
+    # that starts one). The master's beacon is one frame in eight, so the
+    # chord is rung on each of eight frames running: on one of them the
+    # slave's title begins to listen with the beacon in flight.
+    touched = []
+    for shift in range(8):
+        two = Two(("cartucho", "cartucho"), slow=True)
+        two.both(60 + shift)
+        two.both(4, [CHORD, CHORD])
+        two.both(60, [[], []])
+        lit = [two.sky(i) for i in range(2)]
+        two.both(4, [[KEYS["START"]], [KEYS["START"]]])     # and off again
+        two.both(30, [[], []])
+        if night in lit:
+            touched.append(f"a {shift} frames, los titulos no llegan a oirse")
+        elif two.cable.under:
+            touched.append(f"a {shift} frames, {two.cable.under} escrituras "
+                           "con una transferencia en curso")
+    if touched:
+        failures.append("un titulo toca su puerto con una transferencia "
+                        f"pasando: {touched}")
+    else:
+        print("  un titulo no toca su puerto con una transferencia pasando, "
+              "empiece a escuchar en el frame que empiece (ocho de ocho)")
+
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: la demo compartida tambien con el cable lento, con una copia "
+          "en cualquier extremo y despues de una partida.")
     return skin_check(rom)
 
 

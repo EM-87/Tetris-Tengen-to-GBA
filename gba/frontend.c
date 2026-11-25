@@ -31,12 +31,16 @@ static bool g_music_unlocked;
  * start of every game. The high scores are the only thing that outlives a
  * power cycle.
  *
- * ...AND THE TITLE'S IS THE SAME CHORD. L+R on the title finds the
+ * ...AND THE TITLE'S IS THE SAME CHORD. L+R on the title found the
  * prototypes' titles, and the two used to be two secrets, then one behind
- * the other (the title's waited for this one); now either is both. Rung on
- * the title it opens everything here and puts the first prototype on; rung
- * on the menus it opens everything here and the prototypes with it, L and R
- * alone stepping through them on the title (g_title_skin_found). */
+ * the other (the title's waited for this one), then one that also put the
+ * first prototype on when it was rung there. It is one chord now, the same
+ * wherever it is rung, and it changes no picture: the prototypes are a
+ * list in GAME SELECT's OPTIONS (extras.c), which it opens with the rest.
+ *
+ * ...AND IT IS CATCHING: a console that plays a match over the cable under
+ * the other's chord has it from then on (cheats_restore, from main.c) —
+ * without the chirp, having rung nothing. */
 bool g_pause_unlocked;
 
 /* THE THIRD THING THE CHORD OPENS. See TENGEN_MAX_LEVEL_XE in
@@ -48,8 +52,7 @@ bool g_pause_unlocked;
 bool g_xe;
 
 bool unlock_cheats(void) {
-    if (g_music_unlocked && g_pause_unlocked && g_xe && g_title_skin_found)
-        return false;
+    if (g_music_unlocked && g_pause_unlocked && g_xe) return false;
     cheats_restore();
     nes_audio_play(NES_SOUND_CHIRP);
     return true;
@@ -59,7 +62,6 @@ void cheats_restore(void) {
     g_music_unlocked = true;
     g_pause_unlocked = true;
     g_xe = true;
-    g_title_skin_found = true;
     set_credit_colour();
 }
 
