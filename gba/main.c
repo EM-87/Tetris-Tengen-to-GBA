@@ -178,6 +178,14 @@ int main(void) {
     int radio_wait = 0;
 #endif
     bool auto_send_refused = false;
+#define AUTO_SEND_GONE_FRAMES 120
+    int auto_send_gone = 0;
+#ifndef TENGEN_MULTIBOOT
+    /* The other cartridge's records this player has been asked about
+     * (TengenRecordSync.partner_digest): not asked again for the same. */
+    bool records_answered = false, records_took = false;
+    uint16_t records_answered_for = 0;
+#endif
     uint8_t held_last = 0;
     bool sweeping = false;   /* true while the line-clear sweep owns the OAM */
     bool match_running = false;
@@ -994,7 +1002,9 @@ int main(void) {
             /* (Not on a Game Boy Player, whose port the cable borrows.) */
             if (!lobby.linked && !wireless_on() && !gbp_present() &&
                 link_peer() == LINK_PEER_NOBODY) {
-                if (++radio_wait >= RADIO_FIRST_TRY) {
+                /* ...and between two rounds of the probe, not across one
+                 * (link_probe_resting). */
+                if (++radio_wait >= RADIO_FIRST_TRY && link_probe_resting()) {
                     radio_wait = RADIO_FIRST_TRY - RADIO_RETRY;
                     link_shutdown();
                     wireless_detect();
@@ -1031,11 +1041,18 @@ int main(void) {
              * saying so first; B on the sending screen stops it, and then
              * it waits for SELECT until that console goes away and another
              * comes. */
+            /* ...GOES AWAY, not "is not seen for a frame": coming back from
+             * the sending screen the cable is started over and that console
+             * has to be found again, which used to count as its having
+             * gone — B stopped the send, and a second later it began again
+             * by itself. Two seconds of not finding it is gone. */
             if (!lobby.linked && link_peer() == LINK_PEER_EMPTY_GBA) {
                 if (auto_send_wait < AUTO_SEND_FRAMES) auto_send_wait++;
+                auto_send_gone = 0;
             } else {
                 auto_send_wait = 0;
-                auto_send_refused = false;
+                if (auto_send_gone < AUTO_SEND_GONE_FRAMES) auto_send_gone++;
+                else auto_send_refused = false;
             }
             bool auto_send = auto_send_wait >= AUTO_SEND_FRAMES &&
                              !auto_send_refused;
@@ -1129,26 +1146,77 @@ int main(void) {
             }
 
             if (lobby.ready) {
-                /* THE RECORDS A COPY MADE GO ACROSS FIRST (TengenRecordSync):
-                 * a Single-Pak copy, which has no save, hands the rows it put
+                /* THE RECORDS GO ACROSS FIRST (TengenRecordSync): a
+                 * Single-Pak copy, which has no save, hands the rows it put
                  * on its tables to a console that has one, every time they
-                 * link. Short when there is nothing to send. If any were
-                 * kept, both consoles say so for two seconds, keeping the
-                 * link turning meanwhile (over the air, a second and a half
-                 * of silence is a lost partner). */
+                 * link, unasked; and two cartridges whose tables differ
+                 * each ASK THEIR PLAYER whether to add the other's best
+                 * (draw_records_question) — once for what that other has,
+                 * until the power is cycled, so a player who said no is not
+                 * asked again before every match. Short when there is
+                 * nothing to send. If any were kept, both consoles say so
+                 * for two seconds, keeping the link turning meanwhile (over
+                 * the air, a second and a half of silence is a lost
+                 * partner). */
                 {
                     TengenRecordSync sync;
                     TengenRecord mine[TENGEN_RECORDS_MAX];
 #ifdef TENGEN_MULTIBOOT
                     const bool storage = false;
+                    int n = leader_unsent(mine, TENGEN_RECORDS_MAX);
 #else
                     const bool storage = true;
+                    int n = leader_offer(mine, TENGEN_RECORDS_MAX);
 #endif
-                    int n = storage ? 0 : leader_unsent(mine, TENGEN_RECORDS_MAX);
                     int kept = 0;
                     link_records_start(&sync, storage, mine, n);
+#ifndef TENGEN_MULTIBOOT
+                    int ask = -1;               /* not on the screen yet */
+                    uint8_t ask_held = 0xFF;
+#endif
                     while (!sync.complete && !sync.failed) {
                         link_records_step(&sync);
+#ifndef TENGEN_MULTIBOOT
+                        if (sync.asking && records_answered &&
+                            (!records_took ||
+                             sync.partner_digest == records_answered_for)) {
+                            /* ASKED ONCE. A player who said no is not asked
+                             * again before every match — nor when the other
+                             * console's tables change, which they do the
+                             * moment its own player says yes. One who said
+                             * yes is asked again only when the other has
+                             * something it did not have then. */
+                            tengen_records_answer(&sync, false);
+                        } else if (sync.asking) {
+                            uint8_t held = read_buttons();
+                            uint8_t hit = (uint8_t)(held & ~ask_held);
+                            ask_held = held;
+                            bool answer = false, take = false;
+                            if (ask < 0) {
+                                ask = RECORDS_ASK_NO;
+                                screen_blip();
+                                draw_records_question(ask);
+                            } else if (hit & (TENGEN_BTN_LEFT | TENGEN_BTN_RIGHT)) {
+                                ask = ask == RECORDS_ASK_NO ? RECORDS_ASK_YES
+                                                            : RECORDS_ASK_NO;
+                                cursor_blip();
+                                draw_records_question(ask);
+                            } else if (hit & TENGEN_BTN_B) {
+                                answer = true;
+                            } else if (hit & (TENGEN_BTN_A | TENGEN_BTN_START)) {
+                                answer = true;
+                                take = ask == RECORDS_ASK_YES;
+                            }
+                            if (answer) {
+                                tengen_records_answer(&sync, take);
+                                records_answered = true;
+                                records_took = take;
+                                records_answered_for = sync.partner_digest;
+                                screen_blip();
+                                draw_records_question(RECORDS_ASK_ANSWERED);
+                            }
+                        }
+#endif
                         if (sync.theirs_ready && sync.out_held) {
                             kept = leader_merge(sync.theirs, sync.theirs_n);
                             tengen_records_saved(&sync, (uint8_t)kept);
@@ -1156,12 +1224,16 @@ int main(void) {
                         vsync();
                         audio_frame();
                     }
-                    if (!storage && sync.complete && sync.partner_storage) {
+                    /* What the other kept of this console's: a copy's rows
+                     * are handed on and need not go again; a cartridge's
+                     * are simply on two tables now. */
+                    int given = sync.complete && sync.partner_storage ? sync.saved : 0;
+                    if (!storage && sync.complete && sync.partner_storage)
                         leader_mark_sent();
-                        kept = sync.saved;
-                    }
-                    if (sync.complete && kept > 0) {
-                        draw_records_saved(kept, storage);
+                    if (sync.complete && (kept > 0 || given > 0)) {
+                        if (kept > 0) draw_records_saved(kept, RECORDS_FROM_OTHER);
+                        else draw_records_saved(given, storage ? RECORDS_ON_OTHER
+                                                               : RECORDS_ON_CARTRIDGE);
                         nes_audio_play(NES_SOUND_MENU_SELECT);
                         for (int wait = 0; wait < RECORDS_SAVED_FRAMES; wait++) {
                             link_tick();
@@ -1555,9 +1627,16 @@ int main(void) {
                 /* EXIT on a linked pause menu: both consoles took it on the
                  * same transfer, so both put the cable away here and go the
                  * way a solo EXIT goes. */
-                if (g_linked && (quit_match || g_link_lost)) {
+                if (g_linked && g_link_alone) {
+                    /* The other player left this race a while ago and the
+                     * cable was put away then (link_go_alone): nobody to
+                     * swap a name with. */
+                } else if (g_linked && (quit_match || g_link_lost || g_link_walked)) {
                     /* ...and a cable gone for good takes nobody's name
-                     * across: there is no cable to take it (link_give_up). */
+                     * across: there is no cable to take it (link_give_up).
+                     * Nor does a player who leaves a race the other is
+                     * still playing (g_link_walked): that console has gone
+                     * on alone, its cable put away on the same step. */
                     link_play_end();
                     link_shutdown();
                 } else if (g_linked) {
@@ -1664,9 +1743,17 @@ int main(void) {
          * while `match_running` has just gone false. That put the attract mode
          * on the HIGH SCORES page with a score nobody played for. The demo
          * sees itself out above. */
+        /* ...AND THAT START IS TAKEN OFF THE CABLE, not off this keypad
+         * (link_play_frame, g_link_walked): the two consoles have to agree
+         * on the step it happened, or the one left behind waits for moves
+         * that are not coming. Off the keypad only while the cable is
+         * quiet (LINK ISSUES), when no word of it would get across. */
         bool own_board_dead = !g_session.game.player[g_view].game_active;
         uint8_t leave_buttons = (match_running && own_board_dead)
-                                 ? TENGEN_BTN_START : GAMEOVER_RESTART;
+                                 ? (g_link_waiting ? TENGEN_BTN_START : 0)
+                                 : GAMEOVER_RESTART;
+        bool walked = g_link_walked;
+        g_link_walked = false;
         /* AND THE PLAQUE LEAVES ON ITS OWN, WHICH IS THE CARTRIDGE'S WAY.
          * Its game over is a countdown to the high scores, not a prompt (see
          * GAMEOVER_HOLD_FRAMES); the port sat on the plaque until somebody
@@ -1683,7 +1770,7 @@ int main(void) {
                                             (g_end_rise >= 0 ? END_PAGE_READ_FRAMES : 0);
         /* ...and EXIT on the pause menu takes the same road, so a game you
          * quit still puts its score on the board. */
-        if (!g_demo && (quit_match || over_expired ||
+        if (!g_demo && (quit_match || over_expired || walked ||
                          ((!match_running || own_board_dead) &&
                           (pressed & leave_buttons)))) {
             g_pause_confirm = false;

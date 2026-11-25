@@ -209,6 +209,11 @@ class CableEnd(mgba.gba.GBASIODriver):
         return self.writeRegister(address, value)
 
 
+def _is_move(word):
+    """A match's word (tengen_link_is_match_word): mark 110, $C000-$DFFF."""
+    return (word & 0xE000) == 0xC000
+
+
 class Cable:
     def __init__(self, master, slave):
         self.master = master
@@ -232,8 +237,33 @@ class Cable:
         self.slow = False
         self.pending = False
         self.latched = None
+        # A SLAVE LATE WITH ITS WORD: at these good-transfer counts the
+        # slave's slot carries the word of the transfer before — what a
+        # console sends when the transfer starts before its program has
+        # loaded the next one (an interrupt held off a frame; the
+        # Single-Pak copy, which polls, on a heavy frame).
+        self.stale_slave_at = set()
+        self.slave_sent = None
+        # A SLAVE LATE INTO THE MATCH: for this many transfers from the first
+        # move the master sends, the slave's slot still carries the last
+        # word of the lobby's it sent — a console whose program is a few
+        # frames behind the other's into the match (a heavy frame, a save),
+        # its register still holding what it had loaded before.
+        self.late_start = 0
+        self.slave_lobby_word = None
+        # WHAT WENT OUT, for the checks that read the wire itself: with a
+        # list here, every transfer the master starts is put on it as
+        # (frame, speed bits of the master's SIOCNT, its word, the answer or
+        # $FFFF, SD as it was). `frames` counts settle().
+        self.wire = None
+        self.frames = 0
 
     def all_ready(self):
+        # A console in its BIOS is in multiplayer mode only part of the time
+        # (FakeMultibootBios.sd): SD is low for the rest.
+        bios = getattr(self, "fake_bios", None)
+        if bios is not None and self.plugged and not getattr(bios, "sd", lambda: True)():
+            return False
         return all(end.ready for end in self.ends) or not self.plugged
 
     def parent_drives_so(self):
@@ -281,6 +311,13 @@ class Cable:
             self.lagging = False
             for core in (self.master, self.slave):
                 self._set_bit(core, SIO_SD, self.all_ready())
+        self.frames += 1
+        # A frame of the stand-in BIOS's own (its modes turn by the frame),
+        # and SD as it leaves it on the master's end.
+        bios = getattr(self, "fake_bios", None)
+        if bios is not None and hasattr(bios, "frame"):
+            bios.frame()
+            self._set_bit(self.master, SIO_SD, self.all_ready())
 
     def transfer(self):
         """True for a transfer that carried both words."""
@@ -305,6 +342,9 @@ class Cable:
         if glitch:
             self.glitch_at.discard(self.transfers)
         if not self.all_ready() or master_end.error or glitch:
+            if self.wire is not None:
+                self.wire.append((self.frames, mio[IO_SIOCNT] & 3,
+                                  mio[IO_SIOMLT_SEND], ABSENT, self.all_ready()))
             master_end.error = not glitch
             for slot in (IO_SIOMULTI0, IO_SIOMULTI1, IO_SIOMULTI2, IO_SIOMULTI3):
                 mio[slot] = ABSENT
@@ -322,7 +362,27 @@ class Cable:
         # handshake's, not whatever the slave core has in its register (see
         # FakeMultibootBios).
         if getattr(self, "fake_bios", None) is not None:
-            s = self.fake_bios.answer(m)
+            # ...at the speed the master's port is set to (SIOCNT bits 0-1).
+            s = self.fake_bios.answer(m, mio[IO_SIOCNT] & 3)
+        elif (mio[IO_SIOCNT] & 3) != (sio[IO_SIOCNT] & 3):
+            # TWO SPEEDS ON ONE CABLE: neither console makes a word of what
+            # the other sent. The probe for a console in its BIOS runs at
+            # 115200 and the game at 38400 (gba/link.c), so a port left at
+            # the probe's speed — at rest, its beacon going out — would be a
+            # console the other end cannot hear at all.
+            m = s = ABSENT
+        if self.wire is not None:
+            self.wire.append((self.frames, mio[IO_SIOCNT] & 3, m, s, True))
+        if self.late_start and _is_move(m) and self.slave_lobby_word is not None:
+            self.late_start -= 1
+            s = self.slave_lobby_word
+        elif s != ABSENT and not _is_move(s):
+            self.slave_lobby_word = s
+        if self.transfers in self.stale_slave_at and self.slave_sent is not None:
+            self.stale_slave_at.discard(self.transfers)
+            s = self.slave_sent
+        else:
+            self.slave_sent = s
         if self.transfers in self.mute_slave_at:
             self.mute_slave_at.discard(self.transfers)
             self.ends[1].mute = True
@@ -1273,6 +1333,444 @@ def restart_check(rom):
         return 1
     print("OK: A+B levanta un tablero muerto sin parar la carrera ni romper "
            "el enlace.")
+    return walkout_check(rom)
+
+
+def _bury(cores, session_addr, off, slot):
+    """A board filled to the top but for one column, the same on every core
+    given: its next piece does not fit."""
+    field = session_addr + off["field"]
+    PF = TENGEN_PF_HEIGHT * TENGEN_PF_WIDTH
+    for core in cores:
+        for r in range(TENGEN_PF_HEIGHT):
+            for c in range(TENGEN_PF_WIDTH):
+                core.memory.u8[field + slot * PF + r * TENGEN_PF_WIDTH + c] = (
+                    CELL_WALL if c in (0, TENGEN_PF_WIDTH - 1)
+                    else (0 if c == 5 else 0x01))
+
+
+def _to_a_match(rom, coop=False, chord=True, tune=True):
+    """Two cartridges from power-on into a linked match: the chord rung on
+    both (so the match is under it, the master's), a tune chosen. Returns
+    (cores, cable, both, tap), or None if the match did not start."""
+    linked = symbol(rom, "g_linked")[0]
+    cores, cable, both, tap = _pair(rom)
+    both(8)
+    tap("START")
+    if chord:
+        both(4, [[KEYS["L"], KEYS["R"]]] * 2)
+        both(10, [[], []])
+    tap("DOWN")
+    if coop:
+        tap("DOWN")
+    tap("START")
+    both(60)
+    if tune:
+        tap("DOWN", who=0); tap("DOWN", who=0); tap("RIGHT", who=0)
+    tap("START", who=0)
+    both(90)
+    if [c.memory.u8[linked[0]] for c in cores] != [1, 1]:
+        return None
+    return cores, cable, both, tap
+
+
+def walkout_check(rom):
+    """START ON A DEAD BOARD LEAVES THE RACE, AND THE OTHER CONSOLE PLAYS ON.
+
+    Two cartridges, a real cable: one player lost a board, pressed START to
+    play again, and was on the title — and the other console froze with its
+    HUD still answering. The leaver's cable had been put away off its own
+    keypad; at rest it still answers transfers (with 0, and a master on its
+    menus sends a beacon of them), which the console left behind took for a
+    partner slow to play, for ever. The same START had crossed as a button
+    and paused the other player's game where it did arrive.
+
+    Now the START is taken off the wire on the step both consoles have it:
+    the leaver goes to the table, the other plays on alone from the next
+    step, unpaused, its tune going, RIVAL LEFT in the rival's cell for a
+    moment. Either end leaving; and afterwards the two find each other on
+    the cable again. And what the dead board's pad does is said under its
+    plaque, under the chord: A AND B: AGAIN, START: LEAVE.
+
+    Also here: a board put back on its feet with A+B has its tune back (its
+    console went quiet for the game-over tune and stayed so).
+    """
+    import run_rom
+    names = ("g_session", "g_linked", "g_link_alone", "g_link_waiting",
+             "g_link_lost")
+    syms = {n: symbol(rom, n) for n in names}
+    missing = [why for s, why in syms.values() if s is None]
+    if missing:
+        skip(missing[0])
+        return 0
+    at = {n: s[0][0] for n, s in syms.items()}
+    session_addr, session_size = syms["g_session"][0]
+    game_size = session_size - 4
+    off = run_rom.game_offsets(rom)
+
+    def flag(core, name):
+        return core.memory.u8[at[name]]
+
+    def alive(core, slot):
+        return core.memory.u8[session_addr + off["active"] + slot * off["stride"]]
+
+    def step_of(core):
+        return core.memory.u8[session_addr + game_size + 1]
+
+    failures = []
+    for leaver in (0, 1):
+        who = "la maestra" if leaver == 0 else "la esclava"
+        other = "la esclava" if leaver == 0 else "la maestra"
+        made = _to_a_match(rom)
+        if made is None:
+            print("FALLA: la carrera por cable no arranco")
+            return 1
+        cores, cable, both, tap = made
+        gone, stay = cores[leaver], cores[1 - leaver]
+
+        def loudest(core, frames):
+            top = 0
+            for _ in range(frames):
+                both(1)
+                top = max(top, run_rom.sound_state(core)["activos"])
+            return top
+
+        _bury(cores, session_addr, off, leaver)
+        both(240)
+        if alive(gone, leaver) or not alive(gone, 1 - leaver):
+            print("FALLA: no queda un tablero muerto y el otro vivo "
+                  f"({alive(gone, 0)}{alive(gone, 1)})")
+            return 1
+        # What the pad does, under the plaque of the dead board and nowhere
+        # on the other console.
+        hint = " ".join(run_rom.tilemap_text(gone, r) for r in range(8, 16))
+        there = " ".join(run_rom.tilemap_text(stay, r) for r in range(8, 16))
+        if "A AND B:" not in hint or "AGAIN" not in hint or \
+                "START:" not in hint or "LEAVE" not in hint:
+            failures.append(f"el tablero muerto de {who} no dice que hacen A+B "
+                            f"y START: {hint.split()}")
+        if "AGAIN" in there or "LEAVE" in there:
+            failures.append(f"la pista del tablero muerto sale tambien en {other}")
+
+        # UNDER A PAUSE, START IS THE WAY BACK INTO THE GAME — the dead
+        # board's as much as the other's: nobody leaves on it.
+        tap("START", who=1 - leaver)
+        paused = [c.memory.u8[session_addr + off["paused"]] for c in cores]
+        tap("START", who=leaver)
+        both(10)
+        after = ([flag(c, "g_linked") for c in cores],
+                 [flag(c, "g_link_alone") for c in cores],
+                 [c.memory.u8[session_addr + off["paused"]] for c in cores])
+        if paused != [1, 1]:
+            failures.append(f"START de {other} no pone la pausa en las dos: {paused}")
+        elif after != ([1, 1], [0, 0], [0, 0]):
+            failures.append(f"en pausa, el START de {who} (tablero muerto) no "
+                            "es volver al juego: enlazadas, solas, en pausa = "
+                            f"{after}")
+
+        tap("START", who=leaver)
+        both(20)
+        page = run_rom.tilemap_text(gone, 2, 0, 30)
+        if flag(gone, "g_linked") or "-LINES" not in page:
+            failures.append(f"START en el tablero muerto no lleva a {who} a su tabla "
+                            f"(enlazada {flag(gone, 'g_linked')}, {page.strip()!r})")
+        state = (flag(stay, "g_linked"), flag(stay, "g_link_alone"),
+                 flag(stay, "g_link_waiting"), flag(stay, "g_link_lost"),
+                 stay.memory.u8[session_addr + off["paused"]],
+                 alive(stay, 1 - leaver))
+        if state != (1, 1, 0, 0, 0, 1):
+            failures.append(f"al irse {who}, {other} no sigue sola y sin pausa: "
+                            f"enlazada, sola, esperando, perdida, pausa, viva = {state}")
+        note = " ".join(run_rom.tilemap_text(stay, r) for r in range(1, 9))
+        if "RIVAL" not in note or "LEFT" not in note:
+            failures.append(f"{other} no dice RIVAL LEFT: {note.split()}")
+        # THE CABLE PUT AWAY IS NOBODY ON IT (link_connected): the count of
+        # frames since the last transfer is only kept up while something
+        # steps the cable, and it stood where the session left it —
+        # "connected" until the power switch, which is what the cartridge's
+        # flash waits on before it writes its journal afresh (cartsave.c).
+        starved = symbol(rom, "g_starved")[0]
+        if starved is None:
+            failures.append("el ELF no tiene g_starved")
+        else:
+            heard = [c.memory.u16[starved[0]] for c in cores]
+            if min(heard) <= 30:        # CONNECTED_GRACE, gba/link.c
+                failures.append(f"guardado el cable, el juego sigue contando a "
+                                f"la otra consola como presente ({heard} frames "
+                                "sin oirla, y no pasan de ahi)")
+        # It PLAYS: a minute's worth of steps in a second, and its own pad
+        # moving its own piece.
+        # ...at the match's own pace: a step a frame, no more.
+        before = step_of(stay)
+        both(60)
+        moved = (step_of(stay) - before) % 256
+        if not 55 <= moved <= 61:
+            failures.append(f"{other} no sigue a su paso al irse {who}: "
+                            f"{moved} pasos en 60 frames")
+        y_at = session_addr + off["y"] + (1 - leaver) * off["stride"]
+        x_at = session_addr + off["x"] + (1 - leaver) * off["stride"]
+        x0 = stay.memory.u8[x_at]
+        both(3, [[KEYS["LEFT"]] if i != leaver else [] for i in range(2)])
+        both(6, [[], []])
+        if stay.memory.u8[x_at] == x0:
+            # Against the wall already: the other way.
+            both(3, [[KEYS["RIGHT"]] if i != leaver else [] for i in range(2)])
+            both(6, [[], []])
+        if stay.memory.u8[x_at] == x0:
+            failures.append(f"sola, {other} no mueve su pieza con su cruceta")
+        if not loudest(stay, 60):
+            failures.append(f"sola, {other} se queda sin su musica")
+        both(200)
+        note = " ".join(run_rom.tilemap_text(stay, r) for r in range(1, 9))
+        if "RIVAL" in note:
+            failures.append(f"RIVAL LEFT se queda puesto en {other}")
+        _ = y_at
+
+        # ...and to its own end: the table, with nobody to swap a name with,
+        # and the title.
+        _bury([stay], session_addr, off, 1 - leaver)
+        both(300)
+        tap("START", who=1 - leaver)
+        both(30)
+        if "-LINES" not in run_rom.tilemap_text(stay, 2, 0, 30):
+            failures.append(f"sola, la partida de {other} no acaba en su tabla")
+        # ...with its port at rest, 0 to send: nobody to swap a name with,
+        # and a swap begun anyway would answer the other console's next
+        # lobby with its own words.
+        both(30)
+        sending = stay._native.memory.io[IO_SIOMLT_SEND]
+        if sending:
+            failures.append(f"acabada sola su partida, {other} deja ${sending:04X} "
+                            "en el puerto: ha empezado un intercambio de nombres "
+                            "con nadie")
+        tap("START", who=1 - leaver)
+        tap("START", who=leaver)
+        both(30)
+        if any(flag(c, "g_linked") for c in cores):
+            failures.append("tras la carrera alguna consola sigue enlazada")
+        # THE CABLE IS WHOLE: both back to it, and a new race starts.
+        tap("START"); tap("START")
+        both(60)
+        tap("START", who=0)
+        both(90)
+        if [flag(c, "g_linked") for c in cores] != [1, 1] or not _same_match(rom, cores):
+            failures.append(f"tras irse {who} de una carrera, las dos consolas "
+                            "no vuelven a encontrarse por el cable")
+        elif not any(f for f in failures):
+            print(f"  {who} sale con START de su tablero muerto: a su tabla; "
+                  f"{other} sigue sola, sin pausa y con musica, y luego se "
+                  "reencuentran")
+
+    # WITHOUT THE CHORD THE SCREEN IS THE CARTRIDGE'S, and the cartridge
+    # says nothing under a dead board: no hint. START leaves all the same.
+    made = _to_a_match(rom, chord=False)
+    if made is None:
+        print("FALLA: la carrera por cable (sin el acorde) no arranco")
+        return 1
+    cores, cable, both, tap = made
+    _bury(cores, session_addr, off, 1)
+    both(240)
+    hint = " ".join(run_rom.tilemap_text(cores[1], r) for r in range(0, 20))
+    if alive(cores[1], 1) or not alive(cores[1], 0):
+        failures.append("sin el acorde: no queda un tablero muerto y el otro vivo")
+    elif "AGAIN" in hint or "LEAVE" in hint or "A AND B" in hint:
+        failures.append("sin el acorde, el tablero muerto lleva la pista de "
+                        f"A+B y START: {hint.split()}")
+    else:
+        tap("START", who=1)
+        both(20)
+        state = (flag(cores[1], "g_linked"), flag(cores[0], "g_linked"),
+                 flag(cores[0], "g_link_alone"), alive(cores[0], 0))
+        if state != (0, 1, 1, 1):
+            failures.append("sin el acorde, START en el tablero muerto no saca "
+                            "a su consola y deja a la otra jugando sola: "
+                            f"{state}")
+        else:
+            print("  sin el acorde: ninguna pista bajo el tablero muerto, y "
+                  "START sale igual")
+
+    # A BOARD BACK ON ITS FEET HAS ITS TUNE BACK.
+    made = _to_a_match(rom)
+    if made is None:
+        print("FALLA: la carrera por cable no arranco")
+        return 1
+    cores, cable, both, tap = made
+
+    def loudest(core, frames):
+        top = 0
+        for _ in range(frames):
+            both(1)
+            top = max(top, run_rom.sound_state(core)["activos"])
+        return top
+
+    _bury(cores, session_addr, off, 1)
+    both(420)                       # dead, and its game-over tune played out
+    quiet = loudest(cores[1], 60)
+    both(20, [[], [KEYS["A"], KEYS["B"]]])
+    both(10, [[], []])
+    back = loudest(cores[1], 60)
+    if alive(cores[1], 1) != 1:
+        failures.append("A+B no levanta el tablero muerto (con musica elegida)")
+    elif quiet:
+        failures.append(f"el tablero muerto sigue con musica ({quiet})")
+    elif not back:
+        failures.append("el tablero que A+B levanta sigue en silencio: su "
+                        "consola no recupera la musica de la partida")
+    else:
+        print("  y el tablero que A+B levanta recupera su musica")
+
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: salir de una carrera con START no deja a la otra consola "
+          "colgada: sigue jugando sola.")
+    return gone_check(rom)
+
+
+def gone_check(rom):
+    """A CONSOLE THAT IS THERE AND NO LONGER IN THE MATCH.
+
+    Started over under a match — the soft reset, the power switch — a
+    console of ours answers the cable from its menus: 0, not a move. The
+    one still in the match used to take every such transfer for "the
+    partner is there" and wait for a move for ever: no LINK ISSUES, no
+    CABLE LOST, no way out. Now: a race goes on alone (its board is its
+    own), and a shared board, which cannot, ends as a cable gone does —
+    the CABLE LOST window at once, START to the title.
+    """
+    import run_rom
+    names = ("g_session", "g_linked", "g_link_alone", "g_link_lost")
+    syms = {n: symbol(rom, n) for n in names}
+    missing = [why for s, why in syms.values() if s is None]
+    if missing:
+        skip(missing[0])
+        return 0
+    at = {n: s[0][0] for n, s in syms.items()}
+    session_addr, session_size = syms["g_session"][0]
+    game_size = session_size - 4
+    off = run_rom.game_offsets(rom)
+    RESET = [KEYS[k] for k in ("A", "B", "START", "SELECT")]
+    failures = []
+    for coop in (False, True):
+        for quitter in (0, 1):
+            mode = "cooperativa" if coop else "carrera"
+            who = "la maestra" if quitter == 0 else "la esclava"
+            made = _to_a_match(rom, coop=coop)
+            if made is None:
+                print(f"FALLA: la {mode} por cable no arranco")
+                return 1
+            cores, cable, both, tap = made
+            stay = cores[1 - quitter]
+            both(8, [RESET if i == quitter else [] for i in range(2)])
+            # However long the other takes to come up again: until this one
+            # has made up its mind, and not for ever.
+            for _ in range(LINK_GIVEUP_FRAMES_PY // 10):
+                both(10, [[], []])
+                if stay.memory.u8[at["g_link_alone"]] or stay.memory.u8[at["g_link_lost"]]:
+                    break
+            both(20, [[], []])
+            flags = (stay.memory.u8[at["g_linked"]], stay.memory.u8[at["g_link_alone"]],
+                     stay.memory.u8[at["g_link_lost"]])
+            if not coop:
+                # The reset's START crossed as a button first: paused, and
+                # START again plays on.
+                if flags != (1, 1, 0):
+                    failures.append(f"{mode}: se reinicia {who} y la otra no "
+                                    f"sigue sola (enlazada, sola, perdida = {flags})")
+                    continue
+                if stay.memory.u8[session_addr + off["paused"]]:
+                    tap("START", who=1 - quitter)
+                before = stay.memory.u8[session_addr + game_size + 1]
+                both(60)
+                moved = (stay.memory.u8[session_addr + game_size + 1] - before) % 256
+                if not 55 <= moved <= 61:
+                    failures.append(f"{mode}: reiniciada {who}, la otra no "
+                                    f"sigue a su paso ({moved} pasos en 60 frames)")
+                else:
+                    print(f"  {mode}: {who} se reinicia a media partida y la "
+                          "otra sigue sola")
+            else:
+                heads = run_rom.tilemap_text(stay, run_rom.PM_HEAD)
+                if flags != (1, 0, 1) or "CABLE LOST" not in heads:
+                    failures.append(f"{mode}: se reinicia {who} y la otra no da "
+                                    f"el cable por perdido (enlazada, sola, "
+                                    f"perdida = {flags}; {heads.strip()!r})")
+                    continue
+                tap("START", who=1 - quitter)
+                both(30)
+                page = " ".join(run_rom.tilemap_text(stay, r) for r in range(0, 20))
+                if stay.memory.u8[at["g_linked"]] or "SCORES" in page or "-LINES" in page:
+                    failures.append(f"{mode}: con la otra reiniciada, START no "
+                                    "saca al titulo")
+                else:
+                    print(f"  {mode}: {who} se reinicia a media partida y la "
+                          "otra lo da por perdido: CABLE LOST, y START al titulo")
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: una consola que se reinicia en mitad de una partida por cable "
+          "no deja colgada a la otra.")
+    return coop_end_check(rom)
+
+
+def coop_end_check(rom):
+    """A SHARED BOARD'S END IS BOTH CONSOLES'.
+
+    Two cartridges in COOPERATIVE: at the game over the tune went on
+    playing on one of them — under the plaque, the table, to the title —
+    and that one never played the game-over tune. A coop top-out takes both
+    players (top_out, tengen_core.c) and is reported on the player whose
+    piece did not fit; each console announced only its own player's.
+    """
+    import run_rom
+    sym, why = symbol(rom, "g_session")
+    if sym is None:
+        skip(why)
+        return 0
+    session_addr = sym[0]
+    off = run_rom.game_offsets(rom)
+    failures = []
+    for tune in (True, False):
+        made = _to_a_match(rom, coop=True, tune=tune)
+        if made is None:
+            print("FALLA: la cooperativa por cable no arranco")
+            return 1
+        cores, cable, both, tap = made
+
+        def loudest(frames):
+            top = [0, 0]
+            for _ in range(frames):
+                both(1)
+                for i, c in enumerate(cores):
+                    top[i] = max(top[i], run_rom.sound_state(c)["activos"])
+            return top
+
+        _bury(cores, session_addr, off, 0)
+        over = loudest(200)             # the top-out, and its tune
+        both(160)                       # ...played out
+        after = loudest(90)             # the plaque still up
+        dead = [c.memory.u8[session_addr + off["active"] + s * off["stride"]]
+                for c in cores for s in (0, 1)]
+        what = "con musica" if tune else "sin musica"
+        if any(dead):
+            print(f"FALLA: el tablero compartido no llego a morir ({dead})")
+            return 1
+        if 0 in over:
+            failures.append(f"cooperativa {what}: el game over no suena en las "
+                            f"dos consolas (maestra {over[0]}, esclava {over[1]})")
+        elif any(after):
+            failures.append(f"cooperativa {what}: tras el game over sigue sonando "
+                            f"(maestra {after[0]}, esclava {after[1]})")
+        else:
+            print(f"  cooperativa {what}: el game over suena en las dos y "
+                  "despues callan las dos")
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: el final de un tablero compartido se oye igual en las dos consolas.")
     return skin_check(rom)
 
 
@@ -2143,8 +2641,10 @@ def late_check(rom):
     return mute_check(rom)
 
 
-def _disturbed_match(rom, name, mute_at=(), glitch_at=()):
-    """The match mute_check and glitch_check play; returns failures."""
+def _disturbed_match(rom, name, mute_at=(), glitch_at=(), stale_at=(),
+                     late_start=0):
+    """The match mute_check, glitch_check and stale_check play; returns
+    failures."""
     sym, why = symbol(rom, "g_session")
     if sym is None:
         skip(f"{why}")
@@ -2167,6 +2667,8 @@ def _disturbed_match(rom, name, mute_at=(), glitch_at=()):
         core.attach_sio(end, lib.SIO_MULTI)
     cable.mute_slave_at = set(mute_at)
     cable.glitch_at = set(glitch_at)
+    cable.stale_slave_at = set(stale_at)
+    cable.late_start = late_start
 
     def both(frames, keys=None):
         for _ in range(frames):
@@ -2196,9 +2698,12 @@ def _disturbed_match(rom, name, mute_at=(), glitch_at=()):
     m = read_bytes(cores[0], session_addr, game_size)
     sl = read_bytes(cores[1], session_addr, game_size)
     failures = []
-    if cable.mute_slave_at or cable.glitch_at:
-        failures.append(f"la prueba no llego a {name} en "
-                        f"{sorted(cable.mute_slave_at | cable.glitch_at)}")
+    left = cable.mute_slave_at | cable.glitch_at | cable.stale_slave_at
+    if left:
+        failures.append(f"la prueba no llego a {name} en {sorted(left)}")
+    if cable.late_start:
+        failures.append(f"la prueba no llego a {name}: quedan "
+                        f"{cable.late_start} transferencias de retraso")
     if not started:
         failures.append(f"al {name} en el lobby la partida no arranco "
                         f"({cable.transfers} buenas, {cable.failed} malas)")
@@ -2256,6 +2761,43 @@ def glitch_check(rom):
     if failures:
         return 1
     print("OK: una transferencia fallida no deja el cable muerto.")
+    return stale_check(rom)
+
+
+def stale_check(rom):
+    """A CONSOLE LATE WITH ITS MOVE, ONCE.
+
+    A move is loaded for the next transfer as the last one ends, by the
+    serial interrupt (and on the Single-Pak copy by a poll). A console that
+    does not get to it in time sends the move before again — and that word,
+    queued, was "a word for the wrong frame": desynced, CABLE LOST, the
+    match over for one late interrupt. Both consoles have the same two
+    words, so both can see that they are not for the same step: neither
+    takes them, both send again, and the match has lost one transfer.
+    The cable makes the slave late (Cable.stale_slave_at) eight times in
+    the match, the last two running.
+
+    AND NONE OF IT IS A CONSOLE THAT HAS LEFT (link_partner_left counts the
+    transfers in which this console's move crossed and the other slot held
+    no move for this step): a late word is one, so the count has to start
+    again with every move that does arrive — eight late words in a match
+    are not six in a row — and it does not start at all before the other
+    console's first move: a slave a fifth of a second behind the master
+    into the match (Cable.late_start, twelve transfers) is a slave that is
+    coming.
+    """
+    failures = _disturbed_match(rom, "llegar tarde el esclavo con su jugada",
+                                stale_at=(150, 170, 190, 210, 230, 250, 260, 261))
+    if failures is None:
+        return 0
+    late = _disturbed_match(rom, "entrar tarde el esclavo en la partida",
+                            late_start=12)
+    failures += late or []
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: una jugada que llega tarde cuesta una transferencia, no la partida.")
     return jitter_check(rom)
 
 
@@ -2800,6 +3342,7 @@ def singlepak_check(rom):
         return 1
     print("OK: la imagen de Single-Pak juega contra el cartucho.")
     return (mb_send_check(rom) or records_dump_check(rom) or
+            records_carts_check(rom) or
             clone_reset_check(rom) or clone_budget_check(rom) or
             flash_wait_check(rom))
 
@@ -2898,6 +3441,263 @@ def records_dump_check(rom):
     print(f"  la copia entrega {SCORE} / {LINES} lineas, y {COOP_SCORE} en "
           "COOPERATIVE; el cartucho los guarda y las dos dicen RECORDS SAVED")
     print("OK: los records de una copia se guardan en el cartucho al enlazar.")
+    return 0
+
+
+def records_carts_check(rom):
+    """TWO CARTRIDGES SHOW EACH OTHER THEIR BEST, IF THEIR PLAYERS SAY SO.
+
+    Each has a save, and until now gave the other nothing: only a
+    Single-Pak copy handed its rows on. But a table is its owner's — a
+    friend's monstrous scores push the owner's own off the bottom — so
+    between two cartridges nothing crosses unasked: as they link
+    (TengenRecordSync, between the lobby's GO and the match) each console
+    whose tables differ from the other's asks its player, NO under the
+    arrow. Here the master has a 1 PLAYER record and the slave a
+    COOPERATIVE one:
+
+      - the first time, the master says yes and the slave no: the slave's
+        row is on the master's tables and in its save, the master's is NOT
+        on the slave's, and both say RECORDS SAVED;
+      - the second time, the same evening, nobody is asked and nothing
+        crosses (the slave's player said no; the master's has the rows);
+      - the slave makes a new record and they link again: the master's
+        player, who said yes, is asked about it — a yes is to those rows,
+        not to whatever comes after — and the slave's, who said no, is not;
+      - switched off and on, they are asked again; now the slave says yes
+        and has both rows too;
+      - and after that, off and on again, the tables are the same and
+        nobody is asked at all.
+    """
+    tables, why = symbol(rom, "g_tables")
+    linked = symbol(rom, "g_linked")[0]
+    if tables is None or linked is None:
+        skip(f"{why}")
+        return 0
+    import run_rom
+    lay = run_rom.check_layout(rom)
+    entries = lay["leader_entries"]
+    entry = 12                                  # sizeof(LeaderEntry); see below
+    coop = lay["skin_tables"] + 1
+    MINE = (123456, 77, (3, 12, 26))            # the master's, 1 PLAYER
+    THEIRS = (65432, 55, (15, 1, 4))            # the slave's, COOPERATIVE
+    COLD = (17000, 0, (1, 1, 1))
+    cores, cable, both, tap = _pair(rom)
+    both(300)
+
+    def row(core, table, i=0):
+        at = tables[0] + (table * entries + i) * entry
+        return (core.memory.u32[at], core.memory.u16[at + 4],
+                tuple(core.memory.u8[at + 6 + c] for c in range(3)))
+
+    def plant(core, table, rec):
+        at = tables[0] + table * entries * entry
+        # The rows under it keep the cold table's order: 17000 goes second.
+        for i in range(entries - 1, 0, -1):
+            for b in range(entry):
+                core.memory.u8[at + i * entry + b] = core.memory.u8[at + (i - 1) * entry + b]
+        core.memory.u32[at] = rec[0]
+        core.memory.u16[at + 4] = rec[1]
+        for c, v in enumerate(rec[2]):
+            core.memory.u8[at + 6 + c] = v
+
+    # The size of a row, from the cold table itself: 17000 and then 16000.
+    if row(cores[0], 0) != COLD or row(cores[0], 0, 1)[0] != 16000:
+        print(f"FALLA: no leo la tabla fria del cartucho ({row(cores[0], 0)}, "
+              f"{row(cores[0], 0, 1)})")
+        return 1
+    plant(cores[0], 0, MINE)
+    # Three of the slave's, so that the offer is seen to go down a table and
+    # not only across the tops: planted lowest first, each goes in at the top.
+    MORE = ((55000, 30, (2, 2, 2)), (60000, 40, (5, 5, 5)))
+    for rec in MORE:
+        plant(cores[1], coop, rec)
+    plant(cores[1], coop, THEIRS)
+
+    def screen(core):
+        return " ".join(run_rom.tilemap_text(core, r) for r in range(8, 17))
+
+    def link_up(answers, first):
+        """Both to the cable and into a match. `answers`: what each player
+        says if asked (True yes, False no). Returns (frames from the
+        master's START to the match, who was asked, who said RECORDS
+        SAVED and what the line under it read)."""
+        asked, said, lines = [False, False], [False, False], ["", ""]
+        # Each to the cable's screen from wherever it is — the title after
+        # the power switch, the table or the title after a match — and not
+        # by counting presses: one START too many here is the master's,
+        # and the match has begun before anybody looks.
+        for i, core in enumerate(cores):
+            for _ in range(8):
+                where = _screen_of(core)
+                if where == "cable":
+                    break
+                if where == "menu" and first:
+                    tap("DOWN", who=i); tap("DOWN", who=i)  # COOPERATIVE; it stays
+                tap("START", who=i)
+            else:
+                return None, asked, said, lines
+        if any(c.memory.u8[linked[0]] for c in cores):
+            return None, asked, said, lines
+        both(90)
+        both(4, [[KEYS["START"]], []])
+        took = None
+        for f in range(900):
+            both(1, [[], []])
+            for i, core in enumerate(cores):
+                text = screen(core)
+                if "ADD THEM HERE?" in text and not asked[i]:
+                    asked[i] = True
+                    if "> NO" not in text:
+                        lines[i] = "la flecha no empieza en NO"
+                    if answers[i]:
+                        both(3, [[KEYS["RIGHT"]] if k == i else [] for k in range(2)])
+                        both(4, [[], []])
+                        both(3, [[KEYS["A"]] if k == i else [] for k in range(2)])
+                    else:
+                        both(3, [[KEYS["B"]] if k == i else [] for k in range(2)])
+                if "SAVED" in run_rom.tilemap_text(core, 11):
+                    said[i] = True
+                    lines[i] = " ".join(run_rom.tilemap_text(core, 13).split()[1:-1])
+            if all(c.memory.u8[linked[0]] for c in cores):
+                took = f
+                break
+        return took, asked, said, lines
+
+    def leave_the_match():
+        session = symbol(rom, "g_session")[0]
+        # Once the match has laid its board out: buried before that, the
+        # board is simply cleared again.
+        both(60)
+        _bury(cores, session[0], run_rom.game_offsets(rom), 0)
+        both(300)
+        # ...and START until both are out of it (the plaque, the table).
+        for _ in range(6):
+            if not any(c.memory.u8[linked[0]] for c in cores):
+                break
+            tap("START")
+            both(40)
+        return not any(c.memory.u8[linked[0]] for c in cores)
+
+    def power_cycle():
+        for core in cores:
+            core.reset()
+        both(300)
+
+    failures = []
+
+    # 1. The master says yes, the slave says no.
+    took, asked, said, lines = link_up([True, False], first=True)
+    if took is None:
+        print(f"FALLA: dos cartuchos con tablas distintas no llegan a la partida "
+              f"(preguntadas {asked}; {screen(cores[0]).split()})")
+        return 1
+    if asked != [True, True]:
+        failures.append(f"con tablas distintas no se pregunta a las dos: {asked}")
+    if row(cores[0], coop) != THEIRS or row(cores[0], 0) != MINE:
+        failures.append(f"la maestra dijo que si y no tiene el record de la esclava "
+                        f"con el suyo: {row(cores[0], coop)}, {row(cores[0], 0)}")
+    if (row(cores[0], coop, 1), row(cores[0], coop, 2)) != (MORE[1], MORE[0]):
+        failures.append(f"de las tres filas de la esclava la maestra no tiene la "
+                        f"segunda y la tercera: {row(cores[0], coop, 1)}, "
+                        f"{row(cores[0], coop, 2)}")
+    if row(cores[1], 0) != COLD:
+        failures.append(f"la esclava dijo que NO y tiene el record de la maestra: "
+                        f"{row(cores[1], 0)}")
+    if said != [True, True] or lines[0] != "3 FROM THE OTHER GBA" or \
+            lines[1] != "3 ON THE OTHER GBA":
+        failures.append(f"RECORDS SAVED en maestra/esclava: {said}, {lines}")
+    at = 0x0E000000 + lay["save_mode"] + lay["save_table_bytes"]
+    if bytes(cores[0].memory.u8[at + i] for i in range(4)) != THEIRS[0].to_bytes(4, "little"):
+        failures.append("el record de la esclava no llego al guardado de la maestra")
+    if MINE[0].to_bytes(4, "little") in bytes(cores[1].memory.u8[0x0E000000 + i]
+                                               for i in range(64)):
+        failures.append("el record de la maestra esta en el guardado de la esclava, "
+                        "que dijo que no")
+    both(60)
+    if not _same_match(rom, cores):
+        failures.append("tras la pregunta, las dos no juegan la misma partida")
+    if not failures:
+        print(f"  tablas distintas: se pregunta a las dos (NO bajo la flecha); la "
+              f"maestra dice que si y recibe {THEIRS[0]}, la esclava dice que no y "
+              f"se queda como estaba; '{lines[0]}' / '{lines[1]}'")
+
+    # 2. The same evening: nobody is asked.
+    if not leave_the_match():
+        failures.append("las dos consolas no salen de la primera partida")
+    took, asked, said, lines = link_up([True, True], first=False)
+    if took is None:
+        failures.append("la segunda vez no llegan a la partida")
+    elif any(asked) or any(said) or row(cores[1], 0) != COLD:
+        failures.append(f"la misma tarde se vuelve a preguntar o a cruzar: "
+                        f"preguntadas {asked}, avisos {said}, {row(cores[1], 0)}")
+    elif took > 60:
+        failures.append(f"sin nada que cruzar la partida tarda {took} frames")
+    else:
+        print(f"  la misma tarde: ni se pregunta ni cruza nada ({took} frames "
+              "hasta la partida)")
+
+    # 2b. ...UNLESS THE OTHER HAS SOMETHING NEW, and then only the player
+    # who said yes: the answer was to those rows.
+    if not leave_the_match():
+        failures.append("las dos consolas no salen de la segunda partida")
+    NEW = (70000, 60, (7, 7, 7))
+    plant(cores[1], coop, NEW)
+    took, asked, said, lines = link_up([True, True], first=False)
+    if took is None:
+        failures.append("con un record nuevo en la esclava no llegan a la partida")
+    elif asked != [True, False]:
+        failures.append("la esclava tiene un record nuevo: se pregunta a "
+                        f"maestra/esclava {asked}, y era solo a la maestra "
+                        "(dijo que si a los de antes; la esclava dijo que no)")
+    elif row(cores[0], coop) != NEW or row(cores[1], 0) != COLD or \
+            lines != ["1 FROM THE OTHER GBA", "1 ON THE OTHER GBA"]:
+        failures.append(f"el record nuevo de la esclava: la maestra tiene "
+                        f"{row(cores[0], coop)}, la esclava {row(cores[1], 0)}, "
+                        f"avisos {lines}")
+    else:
+        print(f"  la esclava hace un record nuevo: solo se pregunta a la "
+              f"maestra, que dijo que si a los de antes; '{lines[0]}'")
+
+    # 3. Switched off and on: asked again, and now the slave says yes.
+    if not leave_the_match():
+        failures.append("las dos consolas no salen de la tercera partida")
+    power_cycle()
+    if row(cores[0], coop) != NEW or row(cores[1], coop) != NEW:
+        failures.append("tras apagar y encender los records no estan en los guardados")
+    took, asked, said, lines = link_up([False, True], first=True)
+    if took is None:
+        failures.append("tras apagar y encender no llegan a la partida")
+    elif asked != [True, True]:
+        failures.append(f"tras apagar y encender, con tablas distintas, no se "
+                        f"pregunta a las dos: {asked}")
+    elif row(cores[1], 0) != MINE:
+        failures.append(f"la esclava dijo que si y no tiene el record de la "
+                        f"maestra: {row(cores[1], 0)}")
+    else:
+        print(f"  apagadas y encendidas se pregunta de nuevo; ahora la esclava "
+              f"dice que si y recibe {MINE[0]}")
+
+    # 4. The same tables on both: nobody is asked, ever.
+    if not leave_the_match():
+        failures.append("las dos consolas no salen de la cuarta partida")
+    power_cycle()
+    took, asked, said, lines = link_up([True, True], first=True)
+    if took is None:
+        failures.append("con las tablas iguales no llegan a la partida")
+    elif any(asked) or any(said):
+        failures.append(f"con las mismas tablas en las dos se pregunta o se avisa: "
+                        f"{asked}, {said}")
+    elif took > 60:
+        failures.append(f"con las mismas tablas la partida tarda {took} frames")
+    else:
+        print(f"  y con las mismas tablas en las dos no se pregunta nada "
+              f"({took} frames hasta la partida)")
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: dos cartuchos solo se pasan records si sus jugadores dicen que si.")
     return 0
 
 
@@ -3096,11 +3896,44 @@ class FakeMultibootBios:
     was meant to be sent. It says nothing for its first few transfers, like
     a console that is still being switched on, and answers the first
     end-of-image request with "not yet" ($0074), as a slave still checking
-    would."""
+    would.
+
+    AND IT LISTENS THE WAY THE BIOS DOES, which is what the first probe for
+    it never met (gba/link.c, link_probe; read off PikalaxALT/gba_bios,
+    asm/bios.s, sub_2B34 and the handlers from sub_2D70):
+
+      - three modes in turn, a frame at a time: multiplayer at 115200 for
+        thirty-one frames, normal for seven, JOY BUS for seven. Out of
+        multiplayer mode SD is low (sd) and nothing is heard;
+      - a mode's first two frames are setting up: its interrupt is not on,
+        and a transfer then carries what its send register holds (0) and
+        changes nothing;
+      - a word that is not at 115200 arrives with the error bit, and that
+        puts it back to the start of those two frames. The master reads
+        nothing it can use from it ($FFFF here);
+      - its answer to $6200 is for the NEXT transfer: the first reads 0,
+        the ones after $7202; each keeps it in multiplayer mode eleven
+        frames more, and once the handshake is past $61xx the clock stops;
+      - having said $7202, anything but $6200 or $61xx puts it back to the
+        start, with 0 to send.
+
+    `strict=False` is the stand-in as it was before any of that was known:
+    always listening, in the one mode, deaf to the speed.
+
+    `deaf` is how many frames a word of the wrong speed costs it. Two, as
+    read above — and a probe that asked between the lobby's words, one a
+    frame, should then have got through every other time; on two real
+    consoles it never did. So the real thing is harder on such words than
+    that reading (how, is not known), and the checks ask the port to find
+    this console with `deaf` at two, twelve and twenty."""
 
     CRC_XOR, DATA_XOR, SEED_MUL = 0xA517, 0x6465646F, 0x6F646573
+    MULTI, NORMAL, JOY = 0, 1, 2
+    DWELL = {MULTI: 30, NORMAL: 6, JOY: 6}
+    BAUD_115200 = 3
 
-    def __init__(self):
+    def __init__(self, strict=True, deaf=2):
+        self.deaf = deaf
         self.state = "asleep"
         self.naps = 5
         self.header = []
@@ -3110,6 +3943,43 @@ class FakeMultibootBios:
         self.random = 0x42
         self.done = 0          # images received whole, checksum agreed
         self.received = None
+        self.strict = strict
+        self.mode = self.MULTI
+        self.dwell = self.DWELL[self.MULTI]
+        self.setup = 2         # frames until its interrupt is on
+        self.held = False      # a handshake under way: the clock is stopped
+        self.heard = 0         # $6200s it took, for the checks
+        self.restarts = 0      # times a word of the wrong speed set it back
+        # ANSWERS THAT GO ASTRAY: for the frames lose[0] <= n < lose[1],
+        # counted from its first $7202, it hears as ever and what it
+        # answers does not arrive ($FFFF) — a bad stretch on the cable.
+        self.lose = (0, 0)
+        self.since_found = None
+
+    def sd(self):
+        return self.state == "done" or self.mode == self.MULTI
+
+    def _start_over(self, frames=2):
+        if self.state != "done":
+            self.state = "asleep"
+        self.setup = max(self.setup, frames)
+        self.held = False
+
+    def frame(self):
+        """Once a frame: sub_2B34."""
+        if self.since_found is not None:
+            self.since_found += 1
+        if not self.strict or self.state == "done":
+            return
+        if self.setup:
+            self.setup -= 1
+        if self.held:
+            return
+        self.dwell -= 1
+        if self.dwell < 0:
+            self.mode = (self.mode + 1) % 3
+            self.dwell = self.DWELL[self.mode]
+            self._start_over()
 
     @classmethod
     def crc(cls, crc, data):
@@ -3121,7 +3991,16 @@ class FakeMultibootBios:
                 crc ^= cls.CRC_XOR
         return crc
 
-    def answer(self, m):
+    def answer(self, m, baud=BAUD_115200):
+        word = self._answer(m, baud)
+        if word == 0x7202 and self.since_found is None:
+            self.since_found = 0
+        if self.since_found is not None and \
+                self.lose[0] <= self.since_found < self.lose[1]:
+            return ABSENT
+        return word
+
+    def _answer(self, m, baud):
         if self.naps:
             self.naps -= 1
             return ABSENT
@@ -3130,11 +4009,38 @@ class FakeMultibootBios:
         # from the checksum on it answers as the game at rest does (0).
         if st == "done":
             return 0x0000
+        if self.strict:
+            if self.mode != self.MULTI:
+                return ABSENT
+            if self.setup:
+                # No interrupt yet: nothing is taken — but a word of the
+                # wrong speed still starts the wait again when the wait is
+                # longer than the BIOS's own two frames (see `deaf`).
+                if baud != self.BAUD_115200 and self.deaf > 2:
+                    self.setup = self.deaf
+                    return ABSENT
+                return 0x0000
+            if baud != self.BAUD_115200:
+                self.restarts += 1
+                self._start_over(self.deaf)
+                return ABSENT
+            if m == 0x6200 and st in ("asleep", "failed"):
+                # Its answer is for the next transfer.
+                self.state, self.header = "found", []
+                self.dwell = 11
+                self.heard += 1
+                return 0x0000
+            if st == "found" and m != 0x6200 and (m & 0xFF00) != 0x6100:
+                self._start_over()
+                return 0x7202           # what it had loaded; 0 from now
         if m == 0x6200 and st in ("asleep", "found", "failed"):
             self.state, self.header = "found", []
+            self.dwell = 11
+            self.heard += 1
             return 0x7202
         if m == 0x6102 and st == "found":
             self.state = "header"
+            self.held = True
             return 0x7202
         if st == "header":
             left = 0x60 - len(self.header)
@@ -3336,7 +4242,7 @@ class DeadEnd:
     state = "off"
     done = 0
 
-    def answer(self, m):
+    def answer(self, m, baud=3):
         return ABSENT
 
 
@@ -3358,6 +4264,10 @@ def peer_check(rom):
 
     cases = (("una GBA sin cartucho", FakeMultibootBios(),
               "THE OTHER GBA IS EMPTY", True),
+             ("una GBA sin cartucho, sorda doce frames tras cada palabra del lobby",
+              FakeMultibootBios(deaf=12), "THE OTHER GBA IS EMPTY", True),
+             ("una GBA sin cartucho, sorda veinte", FakeMultibootBios(deaf=20),
+              "THE OTHER GBA IS EMPTY", True),
              ("otra GBA con el juego, en su menu", None,
               "WAITING FOR OTHER PLAYER", False),
              ("la otra GBA apagada", DeadEnd(),
@@ -3374,7 +4284,7 @@ def peer_check(rom):
         # itself (main.c, AUTO_SEND_FRAMES). Nobody presses SELECT here.
         saw = sending = False
         last = ""
-        for _ in range(120):
+        for _ in range(600):
             both(1)
             last = rows(cores[0])
             saw = saw or want in last
@@ -3409,6 +4319,195 @@ def peer_check(rom):
             else:
                 print(f"  enviando: la pieza I crece, "
                       f"'{run_rom.tilemap_text(cores[0], 14).strip()}'")
+
+    # WHAT THE PROBE PUTS ON THE WIRE. The stand-in above was found by a
+    # probe no real console ever answered, so "it finds the stand-in" is
+    # not the whole of what there is to hold on to: the probe is the send
+    # that works, done in the silence it works in, and that is a pattern on
+    # the cable (gba/link.c, link_probe; Cable.wire). With somebody in
+    # multiplayer mode who never answers: twenty-four frames of the lobby's
+    # words, then twenty-four with none of them and an attempt on the
+    # eighth, sixteenth and twenty-fourth — four times $6200 at 115200 —
+    # and round again.
+    def on_the_wire(other, frames, until=None):
+        cores, cable, both, tap = _pair(rom)
+        cable.fake_bios = other
+        both(300)
+        tap("START", who=0)
+        tap("DOWN", who=0)
+        cable.wire = []
+        start = cable.frames
+        tap("START", who=0)
+        screens = []
+        for _ in range(frames):
+            both(1)
+            screens.append(rows(cores[0]))
+            if until and until in screens[-1]:
+                break
+        per = {}
+        for f, baud, m, got, sd in cable.wire:
+            per.setdefault(f - start, []).append((baud, m, got, sd))
+        return per, screens, cable.frames - start - len(screens)
+
+    FAST = FakeMultibootBios.BAUD_115200
+    per, _, _ = on_the_wire(DeadEnd(), 340)
+    text = ""
+    for f in range(max(per) + 1):
+        sent = per.get(f, [])
+        fast = [t for t in sent if t[0] == FAST]
+        if fast and len(fast) != len(sent):
+            text += "?"                 # both speeds in one frame
+        elif fast:
+            text += "P" if [t[1] for t in fast] == [0x6200] * 4 else "p"
+        else:
+            text += "L" if sent else "."
+    cycle = "L" * 24 + ("." * 7 + "P") * 3
+    at = text.find(cycle)
+    turns = (len(text) - at) // len(cycle) if at >= 0 else 0
+    if at < 0 or turns < 4 or text[at:at + turns * len(cycle)] != cycle * turns:
+        failures.append("la sonda no hace en el cable lo que dice (24 frames "
+                        "de lobby, 24 callada con cuatro $6200 a 115200 en el "
+                        f"8, el 16 y el 24): {text}")
+    else:
+        print(f"  la sonda en el cable, {turns} vueltas: 24 frames de lobby y "
+              "24 de silencio con tres intentos de cuatro $6200")
+
+    # ...WITH NOBODY IN MULTIPLAYER MODE (SD low: a console in its BIOS for
+    # two of its three modes, a cable half in), it asks nothing: a start
+    # there is a transfer with the error bit and no one to hear it.
+    class NotListening(DeadEnd):
+        def sd(self):
+            return False
+
+    per, _, _ = on_the_wire(NotListening(), 200)
+    asked = sum(1 for sent in per.values() for t in sent if t[0] == FAST)
+    if asked:
+        failures.append(f"con SD baja la sonda pregunta igualmente: {asked} "
+                        "transferencias a 115200 en 200 frames")
+    else:
+        print("  con SD baja la sonda no pregunta")
+
+    # ...AND ONCE A CONSOLE HAS ANSWERED, NOT A WORD OF THE LOBBY'S until
+    # the game is sent: that console restarts its listening at every one
+    # (FakeMultibootBios.restarts; a real one, INFERRED, the same or worse).
+    # One $6200 every eighth frame, inside the eleven each keeps it there.
+    bios = FakeMultibootBios()
+    per, screens, lead = on_the_wire(bios, 600, until="SENDING THE GAME")
+    found = min((f for f, sent in per.items() if any(t[2] == 0x7202 for t in sent)),
+                default=None)
+    sending = lead + len(screens) - 1
+    if found is None or "SENDING THE GAME" not in screens[-1]:
+        failures.append("la sonda no encuentra a la GBA sin cartucho (para "
+                        "mirar que hace despues en el cable)")
+    else:
+        last = min(sending, found + 44)
+        hold = {f: per.get(f, []) for f in range(found + 1, last)}
+        slow = sum(1 for sent in hold.values() for t in sent if t[0] != FAST)
+        beats = sorted(f - found for f, sent in hold.items() if sent)
+        want = [n for n in range(8, last - found, 8)]
+        single = all(len(sent) == 1 and sent[0][1] == 0x6200 and sent[0][2] == 0x7202
+                     for sent in hold.values() if sent)
+        if slow or beats != want or not single or len(want) < 4:
+            failures.append("encontrada la GBA sin cartucho, el cable no lleva "
+                            "solo un $6200 cada ocho frames hasta el envio: "
+                            f"{slow} palabras del lobby, intentos en {beats}")
+        else:
+            print(f"  encontrada, ni una palabra del lobby hasta el envio: un "
+                  f"$6200 cada ocho frames ({len(want)} antes de enviar)")
+
+    # ...AND ONE THAT GOES ASTRAY DOES NOT TAKE THE SCREEN WITH IT
+    # (LINK_PROBE_KEEP): two attempts running with their answers lost, and
+    # the screen says the same thing every frame until the game goes.
+    bios = FakeMultibootBios()
+    bios.lose = (4, 20)
+    per, screens, _ = on_the_wire(bios, 600, until="SENDING THE GAME")
+    seen = [i for i, text in enumerate(screens) if "THE OTHER GBA IS EMPTY" in text]
+    lost = sum(1 for sent in per.values() for t in sent
+               if t[0] == FAST and t[1] == 0x6200 and t[2] == ABSENT and t[3])
+    if not seen or "SENDING THE GAME" not in screens[-1]:
+        failures.append("con dos intentos de la sonda perdidos por el camino, "
+                        "el juego no llega a enviarse solo")
+    elif lost < 8:
+        failures.append(f"la prueba no llego a perder dos intentos ({lost} "
+                        "respuestas perdidas)")
+    elif any("THE OTHER GBA IS EMPTY" not in text
+             for text in screens[seen[0]:-1]):
+        failures.append("un intento de la sonda perdido y la pantalla deja de "
+                        "decir que hay una GBA vacia")
+    else:
+        print(f"  dos intentos perdidos por el camino ({lost} respuestas) y la "
+              "pantalla no se inmuta")
+
+    # B ON THE SENDING SCREEN STOPS IT, AND IT STAYS STOPPED: the screen
+    # goes on saying what is there, with SELECT to send, until that console
+    # goes away. (Coming back, the cable is started over and the console
+    # has to be found again; that used to count as gone, and the send began
+    # again by itself a second later.)
+    cores, cable, both, tap = _pair(rom)
+    bios = FakeMultibootBios()
+    cable.fake_bios = bios
+    both(300)
+    tap("START", who=0)
+    tap("DOWN", who=0)
+    tap("START", who=0)
+    began = False
+    for _ in range(300):
+        both(1)
+        if "SENDING THE GAME" in rows(cores[0]):
+            began = True
+            break
+    both(3, [[KEYS["B"]], []])
+    again = False
+    seen = ""
+    for _ in range(360):
+        both(1, [[], []])
+        seen = rows(cores[0])
+        again = again or "SENDING THE GAME" in seen
+    if not began:
+        failures.append("para parar el envio con B: no llega a empezar solo")
+    elif again or bios.done:
+        failures.append("B para el envio y al momento vuelve a empezar solo")
+    elif "THE OTHER GBA IS EMPTY" not in seen:
+        failures.append(f"parado el envio con B, la pantalla no sigue diciendo "
+                        f"que hay una GBA vacia: {' '.join(seen.split())!r}")
+    else:
+        tap("SELECT", who=0)
+        for _ in range(120):
+            both(30)
+            if bios.done:
+                break
+        if not bios.done:
+            failures.append("parado con B, SELECT no envia el juego")
+        else:
+            print("  B para el envio y se queda parado; SELECT lo envia")
+
+    # LEAVING THE CABLE'S SCREEN LEAVES THE PORT AT THE GAME'S SPEED. While
+    # it looks for a console in its BIOS the master's port is at 115200 for
+    # stretches of a third of a second; B at any moment, and from its menus
+    # it has to be heard by a lobby on the other end (its beacon, at 38400),
+    # or that end asks for a cable that is plugged in.
+    cores, cable, both, tap = _pair(rom)
+    both(300)
+    tap("START", who=0)
+    tap("DOWN", who=0)
+    tap("START", who=1)
+    tap("DOWN", who=1)                      # both on 2 PLAYER, on GAME SELECT
+    for wait in (2, 12, 22, 27, 33, 38, 44):
+        tap("START", who=0)                 # into the lobby
+        both(wait)
+        both(3, [[KEYS["B"]], []])          # ...and out, whatever it was doing
+        both(20, [[], []])
+        tap("START", who=1)                 # the slave into its own
+        both(90)
+        text = rows(cores[1])
+        both(3, [[], [KEYS["B"]]]); both(12, [[], []])     # ...and back out
+        if "WAITING FOR OTHER PLAYER" not in text:
+            failures.append(f"la maestra sale del cable a los {wait} frames y el "
+                            f"otro extremo ya no la oye: {' '.join(text.split())!r}")
+            break
+    else:
+        print("  saliendo del cable en cualquier momento de la sonda, el otro "
+              "extremo sigue oyendo a la maestra en sus menus")
 
     # THE SLAVE'S END OF THE CABLE, ITS PARTNER IN ITS MENUS. With no
     # transfers that end could not tell this from no cable at all; the
@@ -3521,7 +4620,6 @@ def flash_wait_check(rom):
                             f"(pendiente {r['dirty']}, {words - words0} palabras)")
     for c in carts:
         failures.extend(c.faults + c.chip.faults)
-
     # ...and it is there with the power gone, on the master's board.
     cart = carts[0]
     saved = bytes(cart.core.memory.u8[image_at[0] + i] for i in range(0x7FE0))

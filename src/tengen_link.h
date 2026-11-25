@@ -370,7 +370,8 @@ static inline bool tengen_name_have(const TengenNameSwap *swap) {
 uint32_t tengen_gbp_reply(uint32_t received, bool rumble);
 
 /* ----------------------------------------------------------------------- *
- * The records a copy made, across to a cartridge that can keep them
+ * The records a copy made, across to a cartridge that can keep them — and
+ * two cartridges' tables, each to the other
  *
  * A SINGLE-PAK COPY HAS NO SAVE. Two copies can play each other for an hour
  * with no cartridge anywhere — one copy sends the game on, the batteries of
@@ -379,15 +380,45 @@ uint32_t tengen_gbp_reply(uint32_t received, bool rumble);
  * rows it put on its tables in memory, and the next time it links up with a
  * console that has a save, they go across and that console keeps them.
  *
+ * AND TWO CARTRIDGES CAN SHOW EACH OTHER THEIR BEST — IF THEIR PLAYERS SAY
+ * SO. Each has a save and gave the other nothing: two friends' tables
+ * stayed two tables however often they played. But a table is its owner's,
+ * and a friend's monstrous scores push the owner's own off the bottom of
+ * it: so nothing of a cartridge's goes onto another unasked. Each says a
+ * sixteen-bit digest of what it would offer (the rows somebody made at the
+ * top of its tables: the caller's choice, fifteen at most); when the two
+ * differ, each console ASKS ITS PLAYER whether to add the other's
+ * (`asking`, tengen_records_answer), and only a console whose player said
+ * yes is sent them. When the digests are the same — two cartridges that
+ * have taken each other's and have nothing new — nobody is asked and the
+ * exchange is a dozen transfers. A copy is never asked about and never
+ * asks: its rows go to a save unasked, as they always did (it was sent by
+ * a cartridge an hour ago and is going to be switched off), and nothing is
+ * sent to it.
+ *
  * WHEN: as the lobby finishes, before the first piece, on every link.
  * Both consoles run one of these; it is short when there is nothing to send.
  *
- * WHAT: each console sends ONE message, a byte at a time. A console without
- * a save sends [0, n, n records of 9 bytes]; one with a save sends [1, k],
- * its first byte at once and `k` — how many of the other's records made its
- * tables — only once it has the other's message and has merged it
- * (tengen_records_saved). Two with saves answer k = 0 to each other at once;
- * two without send to nobody, and nothing is kept.
+ * WHAT: each console sends ONE message, a byte at a time:
+ *
+ *     [flags, digest high, digest low, want, n, n records of 9 bytes, k]
+ *
+ * flags bit 0 is "this console has a save". The first three bytes go at
+ * once. `want` — "send me your rows" — waits for the other's three: a save
+ * wants a copy's at once, wants nothing of a save with the same digest,
+ * and of a save with another waits for its player's answer; a copy wants
+ * nothing. `n` waits for the other's `want`: the rows, if they are wanted,
+ * and none otherwise. `k` is how many of the OTHER's rows this console
+ * kept — it waits for those rows and for the caller's merge
+ * (tengen_records_saved); with none to wait for it is 0 at once.
+ *
+ * AND THE BUILDS BEFORE THIS ONE, which sent [0, n, records] from a copy
+ * and [1, k] from a save and expect the same back: every word of this
+ * version carries a mark they never set (bit 11 of the payload), and
+ * nothing of the message goes until a word of the other's has arrived, so a
+ * console that sees no mark answers in the old form — a copy's rows still
+ * reach an older cartridge, and an older copy's still reach this one. Two
+ * cartridges of which one is older give each other nothing, as before.
  *
  * HOW: both directions at once, each word carrying one byte of this
  * console's message and the receipt for the other's, alternating bit: byte
@@ -395,7 +426,8 @@ uint32_t tengen_gbp_reply(uint32_t received, bool rumble);
  * and the receipt is the sequence bit of the last byte taken (1 before the
  * first). A lost or repeated transfer costs a turn, never a byte, and the
  * order the link keeps is all it needs. Payload: bits 0-7 the byte, 8 its
- * sequence bit, 9 the receipt, 10 set when there is a byte at all.
+ * sequence bit, 9 the receipt, 10 set when there is a byte at all, 11 the
+ * version's mark.
  *
  * THE END: each console lingers once it has everything, as the names swap
  * does and for the same reason (the other may still be waiting for the
@@ -404,7 +436,8 @@ uint32_t tengen_gbp_reply(uint32_t received, bool rumble);
  * ----------------------------------------------------------------------- */
 #define TENGEN_RECORDS_MAX 15
 #define TENGEN_RECORD_BYTES 9
-#define TENGEN_RECORDS_MSG (2 + TENGEN_RECORDS_MAX * TENGEN_RECORD_BYTES)
+#define TENGEN_RECORDS_HEAD 5       /* flags, the digest's two bytes, want, n */
+#define TENGEN_RECORDS_MSG (TENGEN_RECORDS_HEAD + TENGEN_RECORDS_MAX * TENGEN_RECORD_BYTES + 1)
 #define TENGEN_RECORDS_TIMEOUT 300
 #define TENGEN_RECORDS_LINGER 8
 
@@ -418,7 +451,7 @@ typedef struct {
 typedef struct {
     uint8_t out[TENGEN_RECORDS_MSG];
     uint8_t out_len, out_pos;
-    bool out_held;          /* a save's `k` waits for the merge */
+    bool out_held;          /* `k` waits for the merge (tengen_records_saved) */
     uint8_t in[TENGEN_RECORDS_MSG];
     uint8_t in_pos, in_len; /* in_len 0: not known yet */
     bool storage;           /* this console has a save */
@@ -428,17 +461,34 @@ typedef struct {
     TengenRecord theirs[TENGEN_RECORDS_MAX];
     uint8_t theirs_n;
     bool theirs_ready;
-    /* For a console without one: how many of its records the other kept. */
+    /* How many of this console's records the other kept. */
     uint8_t saved;
     uint8_t linger;
     bool complete, failed;
     uint16_t idle;
+    /* Which form the other console speaks: 0 until a word of its has come
+     * (nothing is sent meanwhile), 1 the builds before the mark, 2 this. */
+    uint8_t version;
+    uint8_t mine_n;         /* the records given to tengen_records_start */
+    uint16_t digest;        /* ...and their digest */
+    uint16_t partner_digest;    /* the other's, once its three bytes are in */
+    /* THE PLAYER IS TO BE ASKED whether this console takes the other
+     * cartridge's rows: true from the other's digest arriving, different
+     * from this one's, until tengen_records_answer. The link is kept
+     * turning meanwhile; the other waits. */
+    bool asking;
+    bool want_decided, want;    /* this console's `want`, once settled */
+    bool rows_decided;          /* ...and its `n` */
 } TengenRecordSync;
 
+/* `mine`: a copy's rows not handed on yet, or a cartridge's offer. */
 void tengen_records_start(TengenRecordSync *sync, bool storage,
                           const TengenRecord *mine, int n);
 uint16_t tengen_records_word(const TengenRecordSync *sync);
 void tengen_records_apply(TengenRecordSync *sync, bool got, uint16_t word);
+/* The player's answer while `asking`: take the other cartridge's rows, or
+ * not. Does nothing at any other time. */
+void tengen_records_answer(TengenRecordSync *sync, bool take);
 /* A console with a save has merged `theirs`: `kept` of them made its tables. */
 void tengen_records_saved(TengenRecordSync *sync, uint8_t kept);
 /* Everything is across: the message both ways, receipts included. */

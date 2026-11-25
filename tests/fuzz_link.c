@@ -27,6 +27,7 @@
 #include <string.h>
 
 #include "../src/tengen_link.h"
+#include "records_v1.h"
 
 static unsigned long long g_rs;
 
@@ -141,6 +142,27 @@ static bool names_run(int run) {
 
 #define RECORD_TURNS 6000
 
+static void random_records(TengenRecord *r, int n) {
+    for (int i = 0; i < n; i++) {
+        r[i].table = (uint8_t)(rnd() % 5);
+        r[i].score = rnd() % 1000000;
+        r[i].lines = (uint16_t)(rnd() % 1000);
+        for (int k = 0; k < 3; k++)
+            r[i].initials[k] = (uint8_t)(rnd() % LEADER_LETTERS);
+    }
+}
+
+static bool same_records(const TengenRecord *got, const TengenRecord *sent, int n) {
+    for (int i = 0; i < n; i++)
+        if (memcmp(got[i].initials, sent[i].initials, 3) ||
+            got[i].score != sent[i].score || got[i].lines != sent[i].lines ||
+            got[i].table != sent[i].table)
+            return false;
+    return true;
+}
+
+/* Two consoles of this version: a copy's rows to a save, two saves' offers
+ * to each other unless they are the same, nothing to a copy. */
 static bool records_run(int run) {
     TengenRecordSync s[2];
     TengenRecord mine[2][TENGEN_RECORDS_MAX];
@@ -148,17 +170,20 @@ static bool records_run(int run) {
     int n[2];
     for (int c = 0; c < 2; c++) {
         n[c] = (int)(rnd() % (TENGEN_RECORDS_MAX + 1));
-        for (int i = 0; i < n[c]; i++) {
-            mine[c][i].table = (uint8_t)(rnd() % 5);
-            mine[c][i].score = rnd() % 1000000;
-            mine[c][i].lines = (uint16_t)(rnd() % 1000);
-            for (int k = 0; k < 3; k++)
-                mine[c][i].initials[k] = (uint8_t)(rnd() % LEADER_LETTERS);
-        }
-        tengen_records_start(&s[c], storage[c], mine[c], n[c]);
+        random_records(mine[c], n[c]);
     }
+    /* Now and then, two saves with the same rows: nothing should cross. */
+    if (storage[0] && storage[1] && (rnd() % 4) == 0) {
+        n[1] = n[0];
+        for (int i = 0; i < n[0]; i++) mine[1][i] = mine[0][n[0] - 1 - i];
+    }
+    for (int c = 0; c < 2; c++) tengen_records_start(&s[c], storage[c], mine[c], n[c]);
     bool merged[2] = { false, false };
     uint8_t kept[2] = { 0, 0 };
+    /* What each player says if asked, and how long they take to say it. */
+    bool take[2] = { rnd() & 1, rnd() & 1 };
+    long think[2] = { (long)(rnd() % 300), (long)(rnd() % 300) };
+    bool asked[2] = { false, false };
     unsigned loss = rnd() % 50;
     bool one_sided = rnd() & 1;
     for (long t = 0; t < RECORD_TURNS; t++) {
@@ -172,6 +197,10 @@ static bool records_run(int run) {
         bool got1 = one_sided ? (rnd() % 100) >= loss : got0;
         if (on[0]) tengen_records_apply(&s[0], got0, w[1]);
         if (on[1]) tengen_records_apply(&s[1], got1, w[0]);
+        for (int c = 0; c < 2; c++) {
+            asked[c] = asked[c] || s[c].asking;
+            if (s[c].asking && t >= think[c]) tengen_records_answer(&s[c], take[c]);
+        }
         for (int c = 0; c < 2; c++)
             if (s[c].theirs_ready && !merged[c]) {
                 merged[c] = true;
@@ -181,33 +210,164 @@ static bool records_run(int run) {
     }
     for (int c = 0; c < 2; c++) {
         int o = c ^ 1;
-        if (s[c].theirs_ready) {
-            if (s[c].theirs_n != n[o] || !storage[c] || storage[o]) {
-                printf("FAIL records %d: took %d records, %d were sent\n",
-                       run, s[c].theirs_n, n[o]);
-                return false;
-            }
-            for (int i = 0; i < n[o]; i++)
-                if (memcmp(&s[c].theirs[i].initials, mine[o][i].initials, 3) ||
-                    s[c].theirs[i].score != mine[o][i].score ||
-                    s[c].theirs[i].lines != mine[o][i].lines ||
-                    s[c].theirs[i].table != mine[o][i].table) {
-                    printf("FAIL records %d: record %d arrived wrong\n", run, i);
-                    return false;
-                }
-        }
-        /* A copy that finished believing a save has them: it did merge. */
-        if (!storage[c] && s[c].complete && s[c].partner_storage &&
-            (!merged[o] || s[c].saved != kept[o])) {
-            printf("FAIL records %d (loss %u%%): the copy heard %d kept, "
-                   "merged=%d kept=%d\n", run, loss, s[c].saved, merged[o], kept[o]);
+        /* What should have crossed from o to c: a copy's rows to a save; a
+         * save's to a save with another digest whose player said yes — and
+         * that one, and only that one, was asked. */
+        bool differ = s[0].digest != s[1].digest;
+        if (asked[c] != (storage[c] && storage[o] && differ)) {
+            printf("FAIL records %d: console %d was %sasked (saves %d %d, "
+                   "digests %s)\n", run, c, asked[c] ? "" : "not ",
+                   storage[0], storage[1], differ ? "differ" : "the same");
             return false;
         }
+        bool due = storage[c] && n[o] > 0 &&
+                   (!storage[o] || (differ && take[c]));
         if (!s[c].complete) {
             printf("FAIL records %d (loss %u%%%s): console %d never finished\n",
                    run, loss, one_sided ? ", one-sided" : "", c);
             return false;
         }
+        if (s[c].theirs_ready != due) {
+            printf("FAIL records %d: console %d %s the other's %d records "
+                   "(saves %d %d)\n", run, c,
+                   due ? "did not take" : "took", n[o], storage[0], storage[1]);
+            return false;
+        }
+        if (due && (s[c].theirs_n != n[o] || !same_records(s[c].theirs, mine[o], n[o]))) {
+            printf("FAIL records %d: the records arrived wrong\n", run);
+            return false;
+        }
+        /* ...and what each heard of its own: what the other kept, if the
+         * other has a save and merged; nothing otherwise. Only where this
+         * one finished by its own count and not by the other's first move. */
+        bool gave = storage[o] && n[c] > 0 &&
+                    (!storage[c] || (differ && take[o]));
+        if (tengen_records_done(&s[c]) && s[c].saved != (gave ? kept[o] : 0)) {
+            printf("FAIL records %d (loss %u%%): console %d heard %d kept, "
+                   "the other kept %d (merged %d)\n", run, loss, c, s[c].saved,
+                   gave ? kept[o] : 0, merged[o]);
+            return false;
+        }
+    }
+    return true;
+}
+
+/* A console of this version and one of the last (records_v1.h), either as
+ * either: the older form both ways. */
+static bool records_mixed_run(int run) {
+    TengenRecordSync now;
+    V1RecordSync old;
+    TengenRecord mine[2][TENGEN_RECORDS_MAX];
+    bool storage[2] = { rnd() & 1, rnd() & 1 };     /* now, old */
+    int n[2];
+    for (int c = 0; c < 2; c++) {
+        n[c] = (int)(rnd() % (TENGEN_RECORDS_MAX + 1));
+        random_records(mine[c], n[c]);
+    }
+    tengen_records_start(&now, storage[0], mine[0], n[0]);
+    v1_records_start(&old, storage[1], storage[1] ? NULL : mine[1], storage[1] ? 0 : n[1]);
+    bool merged[2] = { false, false };
+    uint8_t kept[2] = { 0, 0 };
+    unsigned loss = rnd() % 50;
+    bool one_sided = rnd() & 1;
+    for (long t = 0; t < RECORD_TURNS; t++) {
+        bool on[2] = { !now.complete && !now.failed, !old.complete && !old.failed };
+        if (!on[0] && !on[1]) break;
+        uint16_t w0 = on[0] ? tengen_records_word(&now) : tengen_link_pack(0, (uint8_t)t);
+        uint16_t w1 = on[1] ? v1_records_word(&old) : tengen_link_pack(0, (uint8_t)t);
+        bool got0 = (rnd() % 100) >= loss;
+        bool got1 = one_sided ? (rnd() % 100) >= loss : got0;
+        if (on[0]) tengen_records_apply(&now, got0, w1);
+        if (on[1]) v1_records_apply(&old, got1, w0);
+        if (now.theirs_ready && !merged[0]) {
+            merged[0] = true;
+            kept[0] = (uint8_t)(rnd() % (now.theirs_n + 1));
+            tengen_records_saved(&now, kept[0]);
+        }
+        if (old.theirs_ready && !merged[1]) {
+            merged[1] = true;
+            kept[1] = (uint8_t)(rnd() % (old.theirs_n + 1));
+            v1_records_saved(&old, kept[1]);
+        }
+    }
+    if (!now.complete || !old.complete) {
+        printf("FAIL mixed records %d (loss %u%%%s, saves %d %d): %s never finished\n",
+               run, loss, one_sided ? ", one-sided" : "", storage[0], storage[1],
+               now.complete ? "the older one" : "this one");
+        return false;
+    }
+    /* A copy's rows reach a save of the other version, whole. */
+    if (storage[0] && !storage[1] &&
+        (!now.theirs_ready || now.theirs_n != n[1] ||
+         !same_records(now.theirs, mine[1], n[1]))) {
+        printf("FAIL mixed records %d: the older copy's rows did not arrive\n", run);
+        return false;
+    }
+    if (!storage[0] && storage[1] &&
+        (!old.theirs_ready || old.theirs_n != n[0] ||
+         !same_records(old.theirs, mine[0], n[0]))) {
+        printf("FAIL mixed records %d: this copy's rows did not reach the "
+               "older cartridge\n", run);
+        return false;
+    }
+    /* Two saves of two versions, or two copies: nothing is taken. */
+    if (storage[0] == storage[1] && (now.theirs_ready || old.theirs_ready) &&
+        storage[0]) {
+        printf("FAIL mixed records %d: two saves of two versions exchanged rows\n", run);
+        return false;
+    }
+    return true;
+}
+
+/* A CONSOLE AND WHATEVER COMES DOWN THE CABLE: words of the exchange with
+ * every other bit at random, now and then no word at all or one of another
+ * kind — a console of some build to come, a cable with a bad pin. Nothing
+ * it hears may make it write outside its own state, take more rows than a
+ * message holds, take a save's rows its player did not say yes to, or give
+ * a copy anything to keep. */
+#define NOISE_TURNS 1500
+
+static bool records_noise_run(int run) {
+    struct { uint32_t before; TengenRecordSync s; uint32_t after; } box;
+    TengenRecord mine[TENGEN_RECORDS_MAX];
+    int n = (int)(rnd() % (TENGEN_RECORDS_MAX + 1));
+    bool storage = rnd() & 1;
+    bool marked = rnd() % 4 != 0;       /* the other speaks this form, mostly */
+    bool answered = false, said_yes = false;
+    random_records(mine, n);
+    box.before = box.after = 0xC0FFEE11u;
+    tengen_records_start(&box.s, storage, mine, n);
+    TengenRecordSync *s = &box.s;
+    for (int turn = 0; turn < NOISE_TURNS && !s->complete && !s->failed; turn++) {
+        uint16_t word = (uint16_t)((TENGEN_LOBBY_RECORDS << TENGEN_LOBBY_TAG_SHIFT) |
+                                   (rnd() & 0x7FFu) | (marked ? 0x800u : 0));
+        unsigned kind = rnd() % 64;
+        (void)tengen_records_word(s);
+        if (kind == 0) tengen_records_apply(s, false, 0xFFFF);
+        else if (kind == 1) tengen_records_apply(s, true, (uint16_t)(rnd() & 0xBFFF));
+        else tengen_records_apply(s, true, word);
+        if (s->asking && rnd() % 16 == 0) {
+            said_yes = rnd() & 1;
+            answered = true;
+            tengen_records_answer(s, said_yes);
+        }
+        const char *bad = NULL;
+        if (box.before != 0xC0FFEE11u || box.after != 0xC0FFEE11u)
+            bad = "wrote outside its state";
+        else if (s->theirs_n > TENGEN_RECORDS_MAX) bad = "more rows than a message holds";
+        else if (s->in_pos > TENGEN_RECORDS_MSG || s->out_pos > TENGEN_RECORDS_MSG ||
+                 s->out_len > TENGEN_RECORDS_MSG || s->out_pos > s->out_len)
+            bad = "a position past the end of a message";
+        else if (s->theirs_ready && !storage) bad = "a copy with rows to keep";
+        else if (s->theirs_ready && s->partner_storage && !(answered && said_yes))
+            bad = "a save's rows taken with nobody having said yes";
+        if (bad) {
+            printf("records noise run %d, turn %d: %s (storage %d, marked %d)\n",
+                   run, turn, bad, storage, marked);
+            return false;
+        }
+        if (s->theirs_ready && s->out_held)
+            tengen_records_saved(s, (uint8_t)(rnd() % (s->theirs_n + 1)));
     }
     return true;
 }
@@ -221,8 +381,12 @@ int main(int argc, char **argv) {
         if (!lobby_run(r)) fails++;
         if (!names_run(r)) fails++;
         if (!records_run(r)) fails++;
+        if (!records_mixed_run(r)) fails++;
+        if (!records_noise_run(r)) fails++;
     }
-    printf("fuzz_link: %d lobbies, %d name swaps and %d records dumps over a "
-           "lossy link, %d failures\n", runs, runs, runs, fails);
+    printf("fuzz_link: %d lobbies, %d name swaps and %d records exchanges, as "
+           "many between two versions and as many against noise, over a lossy "
+           "link, %d failures\n",
+           runs, runs, runs, fails);
     return fails != 0;
 }

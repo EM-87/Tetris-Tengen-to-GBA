@@ -62,6 +62,18 @@ bool g_link_lost;         /* ...and the cable stopped answering */
 /* ...or it has gone quiet and the match is waiting for it to come back. */
 bool g_link_waiting;
 static uint8_t g_link_wait_frames;   /* for the two sounds; see link_wait */
+/* THE OTHER PLAYER HAS LEFT A RACE AND THIS ONE PLAYS ON ALONE: the cable is
+ * put away and each frame is stepped with this console's pad and the other
+ * pad at rest (link_play_frame). The match is still a linked one in every
+ * other way — the shared pause menu, both boards, both rows on the table —
+ * and ends as one, without the names swap there is nobody left to make. */
+bool g_link_alone;
+/* ...and this console's own player did (START on a dead board, the other
+ * still going): main.c takes it to the table. */
+bool g_link_walked;
+/* Frames RIVAL LEFT is still to be said for, in the rival's cell. */
+static uint8_t g_link_left_note;
+#define LINK_LEFT_NOTE_FRAMES 180
 bool g_repaint;           /* the static screen needs putting back */
 uint8_t g_front_tune = FRONT_NOTHING;
 
@@ -1234,6 +1246,9 @@ void link_match_begin(bool menu) {
     g_levelup_resume = 0;
     g_link_prev[0] = g_link_prev[1] = 0xFF;   /* see swallow_held_buttons */
     g_link_waiting = false;
+    g_link_alone = false;
+    g_link_walked = false;
+    g_link_left_note = 0;
     g_pad_swap = false;    /* until the first frame says (link_frame_done) */
 }
 
@@ -1305,17 +1320,45 @@ static bool link_frame_done(bool going) {
     return going;
 }
 
+/* THE OTHER CONSOLE IS GONE FROM A RACE: this one's board is its own, so it
+ * plays on, the cable put away. See g_link_alone. */
+static void link_go_alone(void) {
+    g_link_alone = true;
+    g_link_left_note = LINK_LEFT_NOTE_FRAMES;
+    link_play_end();
+    link_shutdown();
+    /* A match that was waiting for the cable has its tune and its panel
+     * back: there is no cable to wait for any more. */
+    if (g_link_waiting) link_wait(false);
+}
+
 bool link_play_frame(uint8_t pressed, bool *quit) {
     /* The master starts one transfer per frame off its own vblank; the slave
      * has nothing to start. Either way the interrupt does the collecting. */
-    link_pump();
-    link_tick();
+    if (!g_link_alone) {
+        link_pump();
+        link_tick();
+    }
+    /* Who this console is in the match: the lobby's answer, kept with the
+     * game, and not the cable's of this moment (alone, there is none). */
+    const int me = g_session.local_slot;
 
     LinkFrame f;
     int stepped = 0;
-    while (stepped < LINK_MAX_CATCHUP && link_pop(&f)) {
-        uint16_t local  = link_is_master() ? f.master : f.slave;
-        uint16_t remote = link_is_master() ? f.slave  : f.master;
+    for (;;) {
+        if (g_link_alone) {
+            /* ALONE: one step a frame by this console's own clock, its pad
+             * as the interrupt would have read it and the other at rest. */
+            if (stepped) break;
+            uint16_t mine = tengen_link_pack(link_read_buttons(), g_session.frame);
+            uint16_t rest = tengen_link_pack(0, g_session.frame);
+            f.master = me == 0 ? mine : rest;
+            f.slave = me == 0 ? rest : mine;
+        } else if (stepped >= LINK_MAX_CATCHUP || !link_pop(&f)) {
+            break;
+        }
+        uint16_t local  = me == 0 ? f.master : f.slave;
+        uint16_t remote = me == 0 ? f.slave  : f.master;
 
         /* A multiplayer transfer hands back every console's word INCLUDING
          * this one's, which is the only honest account of what we actually
@@ -1337,9 +1380,39 @@ bool link_play_frame(uint8_t pressed, bool *quit) {
         uint8_t menu_pressed = (uint8_t)(new0 | new1);
         g_link_prev[0] = b0;
         g_link_prev[1] = b1;
+
+        /* START ON A DEAD BOARD, THE OTHER STILL GOING, IS ITS PLAYER
+         * LEAVING THE RACE — and it happens HERE, on the word that carried
+         * it, which both consoles have. It used to be read off the leaver's
+         * own keypad (main.c), and the cable was simply put away: the
+         * console left behind went on hearing a console at rest answer its
+         * transfers (0, and a master's beacon the same), took that for a
+         * partner slow to play, and waited for a move for ever — its board
+         * frozen, no way out to the menu, the HUD still changing. And the
+         * same START had crossed as a button, so where it did arrive it
+         * paused the other player's game. Taken here it is neither a pause
+         * nor a mystery: the leaver goes to the table on this step, and the
+         * other console plays on alone from the next (link_go_alone). Not
+         * under a pause, where START is the way back into the game. */
+        if (!g_session.game.coop && !g_session.game.paused) {
+            for (int p = 0; p < 2; p++) {
+                if (!((p == 0 ? new0 : new1) & TENGEN_BTN_START)) continue;
+                if (g_session.game.player[p].game_active ||
+                    !g_session.game.player[p ^ 1].game_active)
+                    continue;
+                if (p == me) {
+                    g_link_walked = true;
+                    return link_frame_done(false);
+                }
+                remote = (uint16_t)(remote & ~TENGEN_BTN_START);
+                menu_pressed = (uint8_t)(menu_pressed & ~TENGEN_BTN_START);
+                if (!g_link_alone) link_go_alone();
+            }
+        }
+
         if (g_session.game.paused && pause_menu_on()) {
             bool leaving = false, resume = false;
-            if (pause_menu_input(menu_pressed, link_is_master() ? new0 : new1,
+            if (pause_menu_input(menu_pressed, me == 0 ? new0 : new1,
                                  &leaving, &resume)) {
                 local_buttons = 0;
                 remote = (uint16_t)(remote & ~TENGEN_LINK_BUTTON_MASK);
@@ -1348,7 +1421,7 @@ bool link_play_frame(uint8_t pressed, bool *quit) {
                  * on both consoles, which both have both presses. */
                 for (int p = 0; p < 2; p++) {
                     if (!((p == 0 ? new0 : new1) & TENGEN_BTN_B)) continue;
-                    if ((p == 0) == link_is_master())
+                    if (p == me)
                         local_buttons |= TENGEN_BTN_START;
                     else
                         remote |= TENGEN_BTN_START;
@@ -1363,7 +1436,6 @@ bool link_play_frame(uint8_t pressed, bool *quit) {
 
         /* ...and that B is the menu's until it is let go, on both. */
         {
-            int me = link_is_master() ? 0 : 1;
             local_buttons = menu_b_swallow(me, local_buttons);
             remote = (uint16_t)((remote & ~TENGEN_LINK_BUTTON_MASK) |
                                 menu_b_swallow(me ^ 1, tengen_link_buttons(remote)));
@@ -1398,7 +1470,24 @@ bool link_play_frame(uint8_t pressed, bool *quit) {
          * and from there the two consoles played different music. Both see
          * both results on the same step, so both do the same thing. The
          * clears, drops and rumble stay this console's player's. */
-        announce(out[g_view], out[0].leveled_up || out[1].leveled_up);
+        /* ...AND SO IS A SHARED BOARD'S END. A coop top-out takes both
+         * players with it (top_out, tengen_core.c) and is reported on the
+         * one whose piece would not fit: the other console never heard of
+         * it, played no game-over tune and left the match's going — under
+         * the plaque, the table and its typing, to the title. On two
+         * cartridges it looked like the slave's doing; it was whichever
+         * console's player had not dealt the last piece. */
+        TengenStepResult mine = out[g_view];
+        if (g_session.game.coop && out[g_view ^ 1].topped_out)
+            mine.topped_out = true;
+        announce(mine, out[0].leveled_up || out[1].leveled_up);
+        /* A RACE'S BOARD BACK ON ITS FEET (A+B) HAS ITS TUNE BACK. Its
+         * console went quiet for the game-over tune when it died, as this
+         * player's speaker; the cartridge's one engine never stopped for a
+         * board with the other still going (MUSIC_SILENCE is sent only once
+         * both are down, main.asm.txt:83E7-83F5), and a board restarted
+         * here played on in silence to the end of the match. */
+        if (out[g_view].restarted) start_music(g_music);
         stepped++;
     }
 
@@ -1416,6 +1505,22 @@ bool link_play_frame(uint8_t pressed, bool *quit) {
     if (g_session.desynced) {
         link_give_up();
         return link_frame_done(false);
+    }
+    if (g_link_alone) return link_frame_done(!match_over());
+    /* THE OTHER CONSOLE IS THERE AND NOT IN THE MATCH (link_partner_left):
+     * started over, or left some way its START never crossed — switched off
+     * and on, the soft reset, a cable that was quiet as its player walked
+     * out. Nothing it sends is a move and nothing will be, and it is not a
+     * quiet cable either, so the wait below would never end. With every move
+     * that did arrive played (nothing stepped this frame), a race goes on
+     * alone and a shared board, which cannot, ends as a cable gone does. */
+    if (stepped == 0 && link_partner_left()) {
+        if (g_session.game.coop) {
+            link_give_up();
+            return link_frame_done(false);
+        }
+        link_go_alone();
+        return link_frame_done(!match_over());
     }
     link_wait(stepped == 0 && link_starved() > LINK_LOST_FRAMES);
     if (g_link_waiting && link_starved() > LINK_GIVEUP_FRAMES) {
@@ -1757,6 +1862,31 @@ static void end_page_frame(void) {
     g_end_curtain = (int8_t)(down > TENGEN_PF_HEIGHT ? TENGEN_PF_HEIGHT : down);
 }
 
+/* WHAT A DEAD BOARD'S PAD DOES WHILE THE RACE GOES ON, said under its
+ * plaque: A and B together put it back on its feet, which is the
+ * cartridge's and which nothing on the cartridge's screen says, and START
+ * leaves the race, which is the port's (link_play_frame). The first player
+ * to lose a board over a real cable pressed START to play again and was on
+ * the title. Under the match's chord, as whatever the port puts on the
+ * screen is, in the plaque's frame and lettering, the board's width. */
+static bool race_hint_on(void) {
+    return g_linked && !g_link_lost && match_chord() &&
+           !g_session.game.coop &&
+           g_session.game.player[g_view ^ 1].game_active;
+}
+
+#define RACE_HINT_ROWS 4
+static void draw_race_hint(void) {
+    static const char *const kLines[RACE_HINT_ROWS] = {
+        "A AND B:", "   AGAIN", "START:", "   LEAVE",
+    };
+    int tx = field_tx();
+    int ty = GAMEOVER_TY + SCREEN_1P_GAMEOVER_H + 1;
+    draw_box_frame(tx, ty, field_cols(), RACE_HINT_ROWS + 2);
+    for (int i = 0; i < RACE_HINT_ROWS; i++)
+        draw_text(tx + 1, ty + 1 + i, kLines[i], plaque_bank());
+}
+
 void draw_match(bool *sweeping) {
     /* The ghosts, before the computer takes what is left of the frame to
      * think in and before the blank: see ghost_prepare. */
@@ -1809,8 +1939,15 @@ void draw_match(bool *sweeping) {
     draw_field();
     draw_panel();
     /* THE CABLE IS QUIET: said in the rival's cell for as long as the
-     * frozen board stays up. See draw_link_issues and link_wait. */
-    if (g_link_lost || g_link_waiting) draw_link_issues();
+     * frozen board stays up. See draw_link_note and link_wait. */
+    if (g_link_lost || g_link_waiting) {
+        draw_link_note("LINK", "ISSUES");
+    } else if (g_link_left_note) {
+        /* ...and for three seconds, that the rival has left a race this
+         * console plays on in (link_go_alone). */
+        draw_link_note("RIVAL", "LEFT");
+        if (!--g_link_left_note) g_repaint = true;
+    }
 
     /* The sweep's sprites. */
     if (clearing) {
@@ -1822,7 +1959,10 @@ void draw_match(bool *sweeping) {
     draw_points();
 
     /* Last, so they sit over whatever was just drawn. */
-    if (!g_session.game.player[g_view].game_active) draw_game_over();
+    if (!g_session.game.player[g_view].game_active) {
+        draw_game_over();
+        if (race_hint_on()) draw_race_hint();
+    }
     /* The cable gone for good covers everything else, pause included. Over
      * the cable the menu is there when the MASTER found the chord; see
      * link_match_begin. */

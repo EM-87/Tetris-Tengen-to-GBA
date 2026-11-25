@@ -10,6 +10,7 @@
 #include "../src/tengen_link.h"
 #include "../src/tengen_ai.h"
 #include "../src/tengen_stats.h"
+#include "records_v1.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -1581,6 +1582,10 @@ static void test_the_rivals_name_crosses_the_cable(void) {
  * The records a copy made (TengenRecordSync)
  * ----------------------------------------------------------------------- */
 
+/* What each player answers when asked whether to take the other
+ * cartridge's rows (TengenRecordSync.asking): yes, unless a test says. */
+static bool g_records_take[2] = { true, true };
+
 /* One transfer of it, and the merge a console with a save does as soon as
  * the other's records are in: it keeps those scoring over `bar`. */
 static void records_transfer(TengenRecordSync *a, TengenRecordSync *b,
@@ -1590,6 +1595,8 @@ static void records_transfer(TengenRecordSync *a, TengenRecordSync *b,
     tengen_records_apply(a, carries, bw);
     tengen_records_apply(b, carries, aw);
     TengenRecordSync *both[2] = { a, b };
+    for (int i = 0; i < 2; i++)
+        if (both[i]->asking) tengen_records_answer(both[i], g_records_take[i]);
     for (int i = 0; i < 2; i++)
         if (both[i]->theirs_ready && both[i]->out_held) {
             uint8_t kept = 0;
@@ -1648,12 +1655,14 @@ static void test_two_saves_or_two_copies_send_nothing(void) {
     TengenRecord mine[4];
     fill_records(mine, 4);
     TengenRecordSync a, b;
-    /* Two cartridges: each says it has a save and answers 0 at once. */
+    /* Two cartridges with nothing to show: each says it has a save, the two
+     * digests are the same, and each answers 0 at once. */
     tengen_records_start(&a, true, NULL, 0);
     tengen_records_start(&b, true, NULL, 0);
     for (int i = 0; i < 40; i++) records_transfer(&a, &b, true, 0);
     CHECK(a.complete && b.complete);
     CHECK(!a.theirs_ready && !b.theirs_ready);
+    CHECK(a.partner_storage && b.partner_storage);
     /* Two copies: they send, and neither keeps anything or says it did. */
     tengen_records_start(&a, false, mine, 4);
     tengen_records_start(&b, false, mine, 4);
@@ -1661,6 +1670,324 @@ static void test_two_saves_or_two_copies_send_nothing(void) {
     CHECK(a.complete && b.complete);
     CHECK(!a.partner_storage && !b.partner_storage);
     CHECK(a.saved == 0 && b.saved == 0 && a.theirs_n == 0 && b.theirs_n == 0);
+}
+
+static void test_two_cartridges_show_each_other_their_best(void) {
+    /* Each has a save and rows of its own: each gets the other's, keeps the
+     * ones over its bar, and hears how many of its own the other kept. Over
+     * a link that drops two transfers in three as well. */
+    for (int lossy = 0; lossy < 2; lossy++)
+        for (int na = 0; na <= TENGEN_RECORDS_MAX; na += 5)
+            for (int nb = 1; nb <= TENGEN_RECORDS_MAX; nb += 7) {
+                TengenRecord ra[TENGEN_RECORDS_MAX], rb[TENGEN_RECORDS_MAX];
+                fill_records(ra, na);
+                fill_records(rb, nb);
+                for (int i = 0; i < nb; i++) rb[i].score -= 7;  /* not a's rows */
+                TengenRecordSync a, b;
+                tengen_records_start(&a, true, ra, na);
+                tengen_records_start(&b, true, rb, nb);
+                int turns = 0;
+                while (!(a.complete && b.complete) && turns < 4000) {
+                    records_transfer(&a, &b, !lossy || (turns % 3) == 0, 900000);
+                    turns++;
+                }
+                CHECK(a.complete && b.complete && !a.failed && !b.failed);
+                CHECK(a.partner_storage && b.partner_storage);
+                CHECK(a.theirs_n == nb && b.theirs_n == na);
+                uint8_t a_keeps = 0, b_keeps = 0;
+                for (int i = 0; i < nb; i++) {
+                    CHECK(a.theirs[i].score == rb[i].score);
+                    CHECK(a.theirs[i].table == rb[i].table);
+                    CHECK(a.theirs[i].lines == rb[i].lines);
+                    CHECK(!memcmp(a.theirs[i].initials, rb[i].initials, 3));
+                    if (rb[i].score > 900000) a_keeps++;
+                }
+                for (int i = 0; i < na; i++) {
+                    CHECK(b.theirs[i].score == ra[i].score);
+                    if (ra[i].score > 900000) b_keeps++;
+                }
+                CHECK(a.saved == b_keeps && b.saved == a_keeps);
+            }
+}
+
+static void test_a_cartridge_takes_nothing_its_player_did_not_ask_for(void) {
+    /* THE TABLE IS ITS OWNER'S. Two cartridges with different rows: each is
+     * asked, and a row crosses only to the one whose player said yes. One
+     * yes and one no; two noes; and a player who takes a while to answer
+     * holds the exchange up without breaking it. */
+    TengenRecord ra[6], rb[9];
+    fill_records(ra, 6);
+    fill_records(rb, 9);
+    for (int i = 0; i < 9; i++) rb[i].score -= 3;
+    for (int yes_a = 0; yes_a < 2; yes_a++)
+        for (int yes_b = 0; yes_b < 2; yes_b++) {
+            TengenRecordSync a, b;
+            tengen_records_start(&a, true, ra, 6);
+            tengen_records_start(&b, true, rb, 9);
+            bool asked_a = false, asked_b = false;
+            int turns = 0;
+            while (!(a.complete && b.complete) && turns < 4000) {
+                uint16_t aw = tengen_records_word(&a), bw = tengen_records_word(&b);
+                tengen_records_apply(&a, true, bw);
+                tengen_records_apply(&b, true, aw);
+                asked_a |= a.asking;
+                asked_b |= b.asking;
+                /* a answers at once, b after two hundred turns of thinking. */
+                if (a.asking) tengen_records_answer(&a, yes_a);
+                if (b.asking && turns > 200) tengen_records_answer(&b, yes_b);
+                if (turns == 150) CHECK(!a.complete && !b.complete && !a.failed);
+                if (a.theirs_ready && a.out_held) tengen_records_saved(&a, a.theirs_n);
+                if (b.theirs_ready && b.out_held) tengen_records_saved(&b, b.theirs_n);
+                turns++;
+            }
+            CHECK(a.complete && b.complete && !a.failed && !b.failed);
+            CHECK(asked_a && asked_b);
+            CHECK(a.theirs_ready == (bool)yes_a && b.theirs_ready == (bool)yes_b);
+            CHECK(a.theirs_n == (yes_a ? 9 : 0) && b.theirs_n == (yes_b ? 6 : 0));
+            CHECK(a.saved == (yes_b ? 6 : 0) && b.saved == (yes_a ? 9 : 0));
+        }
+    /* An answer nobody asked for changes nothing: a copy's rows are taken
+     * whatever is said, and a cartridge is not asked about a copy. */
+    TengenRecordSync cart, copy;
+    tengen_records_start(&cart, true, ra, 6);
+    tengen_records_start(&copy, false, rb, 4);
+    for (int turns = 0; !(cart.complete && copy.complete) && turns < 1000; turns++) {
+        uint16_t aw = tengen_records_word(&cart), bw = tengen_records_word(&copy);
+        tengen_records_apply(&cart, true, bw);
+        tengen_records_apply(&copy, true, aw);
+        CHECK(!cart.asking && !copy.asking);
+        tengen_records_answer(&cart, false);
+        tengen_records_answer(&copy, true);
+        if (cart.theirs_ready && cart.out_held) tengen_records_saved(&cart, 4);
+    }
+    CHECK(cart.theirs_n == 4 && copy.saved == 4 && copy.theirs_n == 0);
+}
+
+static void test_two_cartridges_with_the_same_rows_send_none(void) {
+    /* The same rows on both, in another order (two builds walk their tables
+     * differently): the digests agree, no row crosses, and it is over in
+     * the time of the three bytes each way. */
+    TengenRecord ra[6], rb[6];
+    fill_records(ra, 6);
+    for (int i = 0; i < 6; i++) rb[i] = ra[5 - i];
+    TengenRecordSync a, b;
+    tengen_records_start(&a, true, ra, 6);
+    tengen_records_start(&b, true, rb, 6);
+    CHECK(a.digest == b.digest);
+    int turns = 0;
+    while (!(a.complete && b.complete) && turns < 400) {
+        records_transfer(&a, &b, true, 0);
+        turns++;
+    }
+    CHECK(a.complete && b.complete);
+    CHECK(!a.theirs_ready && !b.theirs_ready);
+    CHECK(a.saved == 0 && b.saved == 0);
+    CHECK(!a.want && !b.want);          /* ...and nobody was asked */
+    CHECK(turns < 40);
+    /* A name different and nothing else: not the same rows. */
+    rb[2].initials[1] = (uint8_t)((rb[2].initials[1] + 1) % 27);
+    tengen_records_start(&b, true, rb, 6);
+    CHECK(a.digest != b.digest);
+    rb[2] = ra[3];
+    /* One row different, and they all go. */
+    rb[2].lines ^= 1;
+    tengen_records_start(&a, true, ra, 6);
+    tengen_records_start(&b, true, rb, 6);
+    CHECK(a.digest != b.digest);
+    for (turns = 0; !(a.complete && b.complete) && turns < 1000; turns++)
+        records_transfer(&a, &b, true, 0);
+    CHECK(a.theirs_ready && b.theirs_ready && a.theirs_n == 6 && b.theirs_n == 6);
+}
+
+static void test_a_cartridge_gives_a_copy_nothing(void) {
+    /* The copy's three go to the cartridge; the cartridge's offer stays
+     * where it is, since a copy has nowhere to keep it. */
+    TengenRecord offer[10], unsent[3];
+    fill_records(offer, 10);
+    fill_records(unsent, 3);
+    TengenRecordSync cart, copy;
+    tengen_records_start(&cart, true, offer, 10);
+    tengen_records_start(&copy, false, unsent, 3);
+    int turns = 0;
+    while (!(cart.complete && copy.complete) && turns < 1000) {
+        records_transfer(&cart, &copy, true, 0);
+        turns++;
+    }
+    CHECK(cart.complete && copy.complete);
+    CHECK(cart.theirs_ready && cart.theirs_n == 3);
+    CHECK(copy.theirs_n == 0 && !copy.theirs_ready);
+    CHECK(copy.partner_storage && copy.saved == 3);
+    CHECK(turns < 120);         /* three rows' worth, not thirteen */
+}
+
+/* A CONSOLE THAT DOES NOT WAIT ITS TURN: it sends a whole message, byte
+ * after byte, as fast as each is received — never mind what it was asked or
+ * whether it was asked at all. The wire's own rules (the alternating bit,
+ * the receipt, the mark) it keeps. What a console of ours makes of one. */
+typedef struct {
+    const uint8_t *msg;
+    int len, out_pos, in_pos;
+} RudeConsole;
+
+static uint16_t rude_word(const RudeConsole *r) {
+    uint16_t word = (uint16_t)((TENGEN_LOBBY_RECORDS << TENGEN_LOBBY_TAG_SHIFT) | 0x800u);
+    if (r->out_pos < r->len) {
+        word |= 0x400u | r->msg[r->out_pos];
+        if (r->out_pos & 1) word |= 0x100u;
+    }
+    if (r->in_pos == 0 || ((r->in_pos - 1) & 1)) word |= 0x200u;
+    return word;
+}
+
+static void rude_apply(RudeConsole *r, uint16_t word) {
+    if (r->out_pos < r->len && (((word & 0x200u) != 0) == ((r->out_pos & 1) != 0)))
+        r->out_pos++;
+    if ((word & 0x400u) && (((word & 0x100u) != 0) == ((r->in_pos & 1) != 0)))
+        r->in_pos++;
+}
+
+static void test_rows_nobody_asked_for_are_not_taken(void) {
+    /* A save with another digest sends two rows without waiting to be
+     * asked for them, and its `k` after them. Whatever this console's
+     * player answers, and whenever: those rows are not taken — and the
+     * exchange is not over while the player is still being asked. */
+    static const uint8_t kMsg[] = {
+        1, 0x12, 0x34, 0, 2,
+        0, 0x0F, 0x42, 0x3F, 0, 9, 1, 2, 3,
+        0, 0x0F, 0x42, 0x3E, 0, 9, 1, 2, 3,
+        0,
+    };
+    TengenRecord mine[3];
+    fill_records(mine, 3);
+    for (int answer = 0; answer < 2; answer++) {
+        TengenRecordSync s;
+        RudeConsole r = { kMsg, (int)sizeof kMsg, 0, 0 };
+        tengen_records_start(&s, true, mine, 3);
+        bool asked = false;
+        for (int turn = 0; turn < 400 && !s.complete && !s.failed; turn++) {
+            uint16_t sw = tengen_records_word(&s), rw = rude_word(&r);
+            tengen_records_apply(&s, true, rw);
+            rude_apply(&r, sw);
+            asked |= s.asking;
+            /* Its whole message is in long before turn 150. */
+            if (turn < 150) CHECK(!s.complete);
+            if (turn == 150) {
+                CHECK(s.asking && r.out_pos == r.len);
+                tengen_records_answer(&s, answer);
+            }
+            CHECK(!s.theirs_ready);
+        }
+        CHECK(asked && s.complete && !s.failed);
+        CHECK(s.theirs_n == 0 && !s.theirs_ready);
+    }
+}
+
+static void test_a_message_holds_no_more_rows_than_it_can(void) {
+    /* A copy that says it has twenty-seven rows — the most whose length
+     * still fits the byte it is kept in — and sends them. A save takes a
+     * copy's rows unasked, and takes fifteen: what a message holds, and
+     * what `in` and `theirs` have room for. */
+    enum { SAID = 27 };
+    static uint8_t msg[TENGEN_RECORDS_HEAD + SAID * TENGEN_RECORD_BYTES + 1];
+    memset(msg, 0, sizeof msg);
+    msg[4] = SAID;
+    for (int i = 0; i < SAID; i++) {
+        uint8_t *row = &msg[TENGEN_RECORDS_HEAD + i * TENGEN_RECORD_BYTES];
+        row[0] = 0; row[1] = 0; row[2] = (uint8_t)(i + 1); row[3] = 0;
+        row[6] = row[7] = row[8] = 1;
+    }
+    struct { uint32_t before; TengenRecordSync s; uint32_t after; } box;
+    box.before = box.after = 0x5AFE5AFEu;
+    RudeConsole r = { msg, (int)sizeof msg, 0, 0 };
+    tengen_records_start(&box.s, true, NULL, 0);
+    for (int turn = 0; turn < 2000 && !box.s.complete && !box.s.failed; turn++) {
+        uint16_t sw = tengen_records_word(&box.s), rw = rude_word(&r);
+        tengen_records_apply(&box.s, true, rw);
+        rude_apply(&r, sw);
+        if (box.s.theirs_ready && box.s.out_held)
+            tengen_records_saved(&box.s, box.s.theirs_n);
+    }
+    CHECK(box.s.complete && !box.s.failed);
+    CHECK(box.s.theirs_n == TENGEN_RECORDS_MAX);
+    CHECK(box.s.in_pos <= TENGEN_RECORDS_MSG);
+    CHECK(box.before == 0x5AFE5AFEu && box.after == 0x5AFE5AFEu);
+    CHECK(box.s.theirs[TENGEN_RECORDS_MAX - 1].score ==
+          (uint32_t)TENGEN_RECORDS_MAX << 8);
+}
+
+/* One transfer between this version and the one before it (records_v1.h). */
+static void records_transfer_v1(TengenRecordSync *now, V1RecordSync *old,
+                                bool carries, uint32_t bar) {
+    uint16_t nw = tengen_records_word(now);
+    uint16_t ow = v1_records_word(old);
+    tengen_records_apply(now, carries, ow);
+    v1_records_apply(old, carries, nw);
+    if (now->theirs_ready && now->out_held) {
+        uint8_t kept = 0;
+        for (int r = 0; r < now->theirs_n; r++)
+            if (now->theirs[r].score > bar) kept++;
+        tengen_records_saved(now, kept);
+    }
+    if (old->theirs_ready && old->out_held) {
+        uint8_t kept = 0;
+        for (int r = 0; r < old->theirs_n; r++)
+            if (old->theirs[r].score > bar) kept++;
+        v1_records_saved(old, kept);
+    }
+}
+
+static void test_the_records_cross_between_this_version_and_the_last(void) {
+    /* A copy sent by an older cartridge meets a newer one, and the other
+     * way round: its rows cross and it hears how many were kept, exactly as
+     * between two of a kind. An older cartridge and a newer one give each
+     * other nothing, and neither waits for the other. */
+    TengenRecord rows[TENGEN_RECORDS_MAX], offer[8];
+    fill_records(rows, 7);
+    fill_records(offer, 8);
+    for (int lossy = 0; lossy < 2; lossy++) {
+        /* An older copy, this cartridge. */
+        TengenRecordSync now;
+        V1RecordSync old;
+        tengen_records_start(&now, true, offer, 8);
+        v1_records_start(&old, false, rows, 7);
+        int turns = 0;
+        for (; !(now.complete && old.complete) && turns < 3000; turns++)
+            records_transfer_v1(&now, &old, !lossy || (turns % 3) == 0, 900000);
+        CHECK(now.complete && old.complete && !now.failed && !old.failed);
+        CHECK(now.version == 1 && now.theirs_n == 7);
+        uint8_t want = 0;
+        for (int i = 0; i < 7; i++) {
+            CHECK(now.theirs[i].score == rows[i].score);
+            CHECK(!memcmp(now.theirs[i].initials, rows[i].initials, 3));
+            if (rows[i].score > 900000) want++;
+        }
+        CHECK(old.partner_storage && old.saved == want);
+
+        /* This copy, an older cartridge. */
+        tengen_records_start(&now, false, rows, 7);
+        v1_records_start(&old, true, NULL, 0);
+        for (turns = 0; !(now.complete && old.complete) && turns < 3000; turns++)
+            records_transfer_v1(&now, &old, !lossy || (turns % 3) == 0, 900000);
+        CHECK(now.complete && old.complete && !now.failed && !old.failed);
+        CHECK(old.theirs_n == 7 && old.theirs[6].score == rows[6].score);
+        CHECK(now.partner_storage && now.saved == want);
+
+        /* Two cartridges, one of each. */
+        tengen_records_start(&now, true, offer, 8);
+        v1_records_start(&old, true, NULL, 0);
+        for (turns = 0; !(now.complete && old.complete) && turns < 3000; turns++)
+            records_transfer_v1(&now, &old, !lossy || (turns % 3) == 0, 0);
+        CHECK(now.complete && old.complete && !now.failed && !old.failed);
+        CHECK(!now.theirs_ready && !old.theirs_ready && now.saved == 0);
+
+        /* Two copies, one of each: nobody keeps anything. */
+        tengen_records_start(&now, false, rows, 7);
+        v1_records_start(&old, false, rows, 7);
+        for (turns = 0; !(now.complete && old.complete) && turns < 3000; turns++)
+            records_transfer_v1(&now, &old, !lossy || (turns % 3) == 0, 0);
+        CHECK(now.complete && old.complete);
+        CHECK(!now.partner_storage && now.saved == 0 && now.theirs_n == 0);
+    }
 }
 
 static void test_the_records_end_when_the_other_is_playing(void) {
@@ -4982,6 +5309,13 @@ int main(void) {
     test_the_records_swap_rides_out_lost_transfers();
     test_a_copys_records_cross_to_the_cartridge();
     test_two_saves_or_two_copies_send_nothing();
+    test_two_cartridges_show_each_other_their_best();
+    test_a_cartridge_takes_nothing_its_player_did_not_ask_for();
+    test_rows_nobody_asked_for_are_not_taken();
+    test_a_message_holds_no_more_rows_than_it_can();
+    test_two_cartridges_with_the_same_rows_send_none();
+    test_a_cartridge_gives_a_copy_nothing();
+    test_the_records_cross_between_this_version_and_the_last();
     test_the_records_end_when_the_other_is_playing();
     test_the_lobby_takes_the_records_as_leaving();
     test_a_records_swap_with_nobody_there_gives_up();
