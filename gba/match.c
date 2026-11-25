@@ -73,6 +73,16 @@ bool g_link_alone;
 bool g_link_walked;
 /* Frames RIVAL LEFT is still to be said for, in the rival's cell. */
 static uint8_t g_link_left_note;
+/* A dead board's B, pressed there and not yet let go (link_play_frame):
+ * how many steps it has been down, per player; and how many steps the
+ * board has been dead, up to the DEAD_GRACE_STEPS its one-button A and B
+ * wait before they mean anything. Both consoles count both players'. (In
+ * EWRAM, which nothing clears: a live board's step sets them, and there is
+ * no dead board before a live one.) */
+#define DEAD_B_STEPS 8
+#define DEAD_GRACE_STEPS 45
+__attribute__((section(".ewram"))) static uint8_t g_dead_b[2];
+__attribute__((section(".ewram"))) static uint8_t g_dead_for[2];
 #define LINK_LEFT_NOTE_FRAMES 180
 bool g_repaint;           /* the static screen needs putting back */
 uint8_t g_front_tune = FRONT_NOTHING;
@@ -355,7 +365,6 @@ uint8_t ai_input(void) {
                        &g_ai_last_partner, &g_ai_frame);
 }
 
-#ifndef TENGEN_MULTIBOOT
 /* THE DEMO TWO TITLES SHARE (main.c, link.c: link_title_tick): one
  * cooperative game, a computer on each pad. BOTH COMPUTERS RUN ON BOTH
  * CONSOLES, inside the step the cable keeps them on (link_play_frame) —
@@ -379,8 +388,10 @@ uint8_t ai_input(void) {
 /* (In EWRAM: a second head is half a kilobyte of working state, and the
  * stack has what is left of IWRAM.) */
 __attribute__((section(".ewram"))) static TengenAi g_ai_two;
-static TengenTetromino g_ai_two_piece, g_ai_two_partner;
-static uint8_t g_ai_two_frame;
+/* ...and what goes with it, every byte set by link_demo_begin before it is
+ * read (nothing in that section is zeroed for anybody). */
+__attribute__((section(".ewram"))) static TengenTetromino g_ai_two_piece, g_ai_two_partner;
+__attribute__((section(".ewram"))) static uint8_t g_ai_two_frame;
 
 void link_demo_begin(bool chord) {
     tengen_ai_reset(&g_ai);
@@ -408,7 +419,6 @@ static void link_demo_moves(uint8_t moves[2]) {
                           &g_ai_two_partner, &g_ai_two_frame);
     }
 }
-#endif
 
 static void ai_play_frame(void) {
     if (!g_ai_active || g_ai_slot != TENGEN_PLAYER_2) return;
@@ -1444,7 +1454,6 @@ bool link_play_frame(uint8_t pressed, bool *quit) {
         g_link_prev[0] = b0;
         g_link_prev[1] = b1;
 
-#ifndef TENGEN_MULTIBOOT
         /* IN THE DEMO TWO TITLES SHARE, A PAD IS THE WAY OUT AND NOTHING
          * ELSE (main.c; link_demo_begin): the buttons that leave a demo,
          * pressed on either console, are that console leaving — on the
@@ -1465,7 +1474,6 @@ bool link_play_frame(uint8_t pressed, bool *quit) {
             remote = (uint16_t)((remote & ~TENGEN_LINK_BUTTON_MASK) | moves[me ^ 1]);
             menu_pressed = 0;
         }
-#endif
 
         /* START ON A DEAD BOARD, THE OTHER STILL GOING, IS ITS PLAYER
          * LEAVING THE RACE — and it happens HERE, on the word that carried
@@ -1480,12 +1488,60 @@ bool link_play_frame(uint8_t pressed, bool *quit) {
          * nor a mystery: the leaver goes to the table on this step, and the
          * other console plays on alone from the next (link_go_alone). Not
          * under a pause, where START is the way back into the game. */
-        if (!g_session.game.coop && !g_session.game.paused) {
+        /* ...AND UNDER THE MATCH'S CHORD THE DEAD BOARD'S PAD IS TWO
+         * BUTTONS, the two its plaque names (draw_race_hint): A: AGAIN,
+         * B: BACK. A alone puts the board back on its feet — the core asks
+         * for A and B held together, the cartridge's way, which still
+         * works and which nobody who has not read the cartridge's code has
+         * ever found, so the B is put in for them; B alone is the START
+         * above. NOT THE FRAME B GOES DOWN, though: two fingers meant to
+         * land together land a frame or two apart, and half the time B is
+         * first — the player who learnt A+B would be back on the title for
+         * playing again. B leaves when it is let go, or has been held
+         * DEAD_B_STEPS with no A beside it; an A meanwhile is AGAIN. And a
+         * B held as the board died is the last piece's turn, not a wish to
+         * leave: only one pressed on the dead board counts (g_dead_b) — and
+         * not one a pause came down on, which is the pause's to read.
+         *
+         * NOR ONE PRESSED AS THE BOARD DIES. A board is lost with both
+         * thumbs going: the turn meant for the piece that did not fit
+         * lands a frame after it, and with one button for each job that
+         * turn would be AGAIN — the lost game gone before its player knew
+         * it was lost — or BACK, and out of the race. For DEAD_GRACE_STEPS
+         * (three-quarters of a second) the two buttons are nothing, and
+         * the plaque does not name them until they are something
+         * (race_hint_on); one held through that is not a press either.
+         * The cartridge's A and B together have no such wait, as on the
+         * cartridge, and nor has START. */
+        if (g_session.game.coop || g_session.game.paused) {
+            g_dead_b[0] = g_dead_b[1] = 0;
+        } else {
             for (int p = 0; p < 2; p++) {
-                if (!((p == 0 ? new0 : new1) & TENGEN_BTN_START)) continue;
+                uint8_t held = p == 0 ? b0 : b1, fresh = p == 0 ? new0 : new1;
                 if (g_session.game.player[p].game_active ||
-                    !g_session.game.player[p ^ 1].game_active)
+                    !g_session.game.player[p ^ 1].game_active) {
+                    g_dead_b[p] = 0;
+                    g_dead_for[p] = 0;
                     continue;
+                }
+                bool leave = (fresh & TENGEN_BTN_START) != 0;
+                if (pause_menu_on()) {
+                    if (g_dead_for[p] < DEAD_GRACE_STEPS) {
+                        g_dead_for[p]++;
+                    } else if (fresh & TENGEN_BTN_A) {
+                        if (p == me)
+                            local_buttons |= TENGEN_BTN_A | TENGEN_BTN_B;
+                        else
+                            remote |= TENGEN_BTN_A | TENGEN_BTN_B;
+                    } else if (fresh & TENGEN_BTN_B) {
+                        g_dead_b[p] = 1;
+                    } else if (g_dead_b[p]) {
+                        if (!(held & TENGEN_BTN_B) || ++g_dead_b[p] > DEAD_B_STEPS)
+                            leave = true;
+                    }
+                }
+                if (!leave) continue;
+                g_dead_b[p] = 0;
                 if (p == me) {
                     g_link_walked = true;
                     return link_frame_done(false);
@@ -1588,7 +1644,6 @@ bool link_play_frame(uint8_t pressed, bool *quit) {
     }
     /* A DESYNC IS FINAL at once — the two consoles are no longer playing the
      * same game — and a cable quiet for LINK_GIVEUP_FRAMES is taken for gone. */
-#ifndef TENGEN_MULTIBOOT
     /* ...BUT NOT A DEMO'S, which nobody is watching for a cable: whatever
      * becomes of it — out of step, quiet, the other console gone — its two
      * computers play on, on this console alone. No LINK ISSUES, no CABLE
@@ -1600,7 +1655,6 @@ bool link_play_frame(uint8_t pressed, bool *quit) {
         g_session.desynced = false;
         link_go_alone();
     }
-#endif
     if (g_session.desynced) {
         link_give_up();
         return link_frame_done(false);
@@ -1962,22 +2016,27 @@ static void end_page_frame(void) {
 }
 
 /* WHAT A DEAD BOARD'S PAD DOES WHILE THE RACE GOES ON, said under its
- * plaque: A and B together put it back on its feet, which is the
- * cartridge's and which nothing on the cartridge's screen says, and START
- * leaves the race, which is the port's (link_play_frame). The first player
- * to lose a board over a real cable pressed START to play again and was on
- * the title. Under the match's chord, as whatever the port puts on the
- * screen is, in the plaque's frame and lettering, the board's width. */
+ * plaque: A: AGAIN, B: BACK (link_play_frame). The first player to lose a
+ * board over a real cable pressed START to play again and was on the
+ * title; the plaque then said "A AND B: AGAIN / START: LEAVE", which was
+ * the cartridge's chord and the port's way out spelt out, and the player's
+ * answer was two buttons with one job each. Under the match's chord, as
+ * whatever the port puts on the screen is — and as those two buttons are:
+ * without it the pad is the cartridge's, A and B together, and START. In
+ * the plaque's frame and lettering, the board's width; and from the moment
+ * the two buttons are live, not from the one the board died
+ * (DEAD_GRACE_STEPS). */
 static bool race_hint_on(void) {
     return g_linked && !g_link_lost && match_chord() &&
            !g_session.game.coop &&
-           g_session.game.player[g_view ^ 1].game_active;
+           g_session.game.player[g_view ^ 1].game_active &&
+           g_dead_for[g_view] >= DEAD_GRACE_STEPS;
 }
 
-#define RACE_HINT_ROWS 4
+#define RACE_HINT_ROWS 2
 static void draw_race_hint(void) {
     static const char *const kLines[RACE_HINT_ROWS] = {
-        "A AND B:", "   AGAIN", "START:", "   LEAVE",
+        "A: AGAIN", "B: BACK",
     };
     int tx = field_tx();
     int ty = GAMEOVER_TY + SCREEN_1P_GAMEOVER_H + 1;

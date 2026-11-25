@@ -134,8 +134,9 @@ Lo que el GBA tiene de más:
 | GAME SELECT | A o START en un modo marcado ▣ | vuelve a su partida guardada con SAVE, en pausa, y con ella el acorde (abajo) |
 | Título, con el acorde | SELECT | las tablas de HIGH SCORES, una por modo (Izquierda/Derecha las recorren); sin el acorde, SELECT es otro START, como en el cartucho |
 | Pantalla LINK CABLE | SELECT | Single-Pak: envía el juego a una GBA sin cartucho |
-| Carrera, tablero muerto | A+B | se levanta y sigue, como en el cartucho (con el acorde lo dice bajo el GAME OVER) |
+| Carrera, tablero muerto | A+B | se levanta y sigue, como en el cartucho |
 | Carrera por cable, tablero muerto | START | deja la carrera y va a su tabla; la otra consola sigue jugando sola |
+| Carrera por cable, tablero muerto, con el acorde | A, o B | un botón para cada cosa, y lo dice bajo el GAME OVER: **A: AGAIN** (A sola lo levanta) y **B: BACK** (B sola es ese START). Valen desde que sale el letrero, tres cuartos de segundo después de morir. A+B y START siguen valiendo |
 | En cualquier sitio salvo una partida por cable | L+R+SELECT | reposo: pantalla y sonido apagados, casi sin gastar pila (una partida en solitario se pausa antes); A, B, START o SELECT despiertan |
 | En cualquier momento | A+B+START+SELECT | reinicia el juego (en la EZ-Flash IV lo intercepta el propio cartucho) |
 
@@ -315,19 +316,39 @@ se va, las dos lo detectan. Las dos necesitan esta misma versión del ROM
 En una **carrera** cada tablero es de su jugador: el que pierde el suyo lo
 levanta con **A+B** y sigue, o se va con **START** — y entonces la otra
 consola dice RIVAL LEFT un momento y sigue jugando sola hasta el final, sin
-pausa ni corte. Si una consola se reinicia o se apaga a media partida, la
-otra no se queda esperando: en carrera sigue sola, y en cooperativo (un solo
-tablero para los dos) lo da por perdido con CABLE LOST.
+pausa ni corte. Con el acorde (el de la partida, que por cable es el del
+maestro) son dos botones y están escritos bajo el GAME OVER: **A: AGAIN** y
+**B: BACK**. B sale al soltarla, o si se mantiene un momento, para que el
+A+B del cartucho —dos dedos que nunca caen en el mismo frame— siga siendo
+levantarse caiga el que caiga primero. Y ninguno de los dos cuenta hasta
+tres cuartos de segundo después de morir el tablero, que es cuando sale el
+letrero: se pierde con los dos pulgares en marcha, y el giro que iba para la
+pieza que ya no cabía no debe ser ni otra partida ni irse. Si una consola se reinicia o se apaga
+a media partida, la otra no se queda esperando: en carrera sigue sola, y en
+cooperativo (un solo tablero para los dos) lo da por perdido con CABLE LOST.
 
-**Dos títulos, una demo** (con el acorde en las dos). Dos cartuchos
-enlazados y dejados en su pantalla de título —lo que pasa solo al acabar
-una partida entre dos— arrancan sus demos a la vez, y con el acorde hecho
+**El acorde se contagia por el cable.** Una partida enlazada se juega con el
+acorde del maestro en las dos consolas (el menú de pausa, la hoja del final,
+la tabla que se va a los cinco segundos); la consola que juega una así se
+queda con el acorde hasta que se apague, sin haberlo hecho. Antes salía de
+la partida como entró, y un cartucho con el acorde y la copia que había
+mandado volvían al título con doce segundos de diferencia: cada una leía la
+tabla de récords con su propio reloj.
+
+**Dos títulos, una demo** (con el acorde en las dos). Dos consolas
+enlazadas —dos cartuchos, o un cartucho y la copia Single-Pak que ha
+mandado— y dejadas en su pantalla de título, que es lo que pasa solo al
+acabar una partida entre dos, arrancan sus demos a la vez, y con el acorde
 en ambas esas dos demos son una sola partida cooperativa: los dos
-ordenadores del port en el mismo tablero, igual en las dos pantallas.
+ordenadores del port en el mismo tablero, igual en las dos pantallas. Como
+el acorde se contagia, basta con que lo tuviera el maestro de esa partida.
 Cualquier botón saca a esa consola a GAME SELECT, como de cualquier demo, y
-la otra sigue con la partida ella sola. Sin el acorde en las dos no hay
-nada de esto: cada consola hace la demo del cartucho, a su hora, y por el
-cable no dice nada que no dijera ya.
+la otra sigue con la partida ella sola. **El cielo del título lo avisa**:
+la noche de la catedral se pone azul oscuro mientras los dos títulos se
+oyen por el cable, y violeta mientras se saludan para empezar. Sin el
+acorde en las dos no hay nada de esto: cada consola hace la demo del
+cartucho, a su hora, su cielo es negro y por el cable no dice nada que no
+dijera ya.
 
 **Los récords entre dos cartuchos se preguntan.** Cada cartucho tiene sus
 tablas, y las del amigo con puntuaciones monstruosas echarían de ellas las

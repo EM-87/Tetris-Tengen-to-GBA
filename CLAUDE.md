@@ -115,7 +115,7 @@ minus those).
 | --- | --- | --- |
 | `make test` | no | always — the rules, in milliseconds |
 | `make gba` | headers | to build `build/tengen.gba` |
-| `make gba-check` | headers | before calling any change done: 80 checks on the running ROM in mGBA, twenty-five of them on two consoles with a cable, and then the Wireless Adapter's (`run_wireless.py`) |
+| `make gba-check` | headers | before calling any change done: 81 checks on the running ROM in mGBA, twenty-six of them on two consoles with a cable, and then the Wireless Adapter's (`run_wireless.py`) |
 | `make trace ROM=... [MODE=coop\|versus\|with\|demo]` | yes | after touching `tengen_step` or `tengen_ai.c`: the port against the cartridge, iteration by iteration. The 1P and coop scripts never complete a row; `MODE="with --pad1"` plays player 1 with the port's computer and clears plenty; add `--handicap N` to any mode |
 | `make tune-check ROM=...` | yes | after touching audio: the four tunes against the cartridge, note by note |
 | `make dance-check ROM=...` | yes | after touching the dancers: their choreography against the cartridge's driver |
@@ -210,10 +210,13 @@ story behind each; the item number is in brackets.
   256 KB and the link asserts it. It was nearly FULL — thirty-two bytes to
   spare once UP's drop went in — until the view went from the whole 64 KB
   address space to the program's half, $8000-$FFFF (`NES6502_CODE_SIZE`):
-  about 31 KB spare now. Watch it anyway: `arm-none-eabi-nm -n
+  about 31 KB spare then, and ABOUT 2 KB NOW — everything since has gone
+  into the copy as well, the demo two titles share last (3 KB). Whatever
+  goes into the copy next finds its room first: `arm-none-eabi-nm -n
   build/tengen_mb.elf | grep __ewram_end` against 0x02040000, and IWRAM's
   4 KB for the stacks on both builds (the link asserts that one too, and a
-  test inlined at each of the interpreter's reads cost 1.7 KB of it). Code the copy can never run says so at the
+  test inlined at each of the interpreter's reads cost 1.7 KB of it; the
+  cartridge's has thirty-two bytes to spare — see the stack, below). Code the copy can never run says so at the
   call, where link-time optimisation can see it (`#ifdef TENGEN_MULTIBOOT`):
   the logos, and the Game Boy Player, found only by its logo — leaving its
   pages out is what made room for the computer's ARM loops. A `false` from a
@@ -626,7 +629,16 @@ story behind each; the item number is in brackets.
     lobby at GO takes a match word as the end of the handshake; a console in
     the match takes a lobby word as "not yet" and resends its first move.
     `Cable.slow` makes transfers last to the end of the frame, with the busy
-    bit and the slave's SI low meanwhile.
+    bit and the slave's SI low meanwhile. IT IS THE CABLE TO TRUST: anything
+    that looks at the port from the main loop is checked on it, and with a
+    Single-Pak copy on either end (`_pair(rom, slow=True, slave_rom=mb)`).
+    The demo two titles share was checked on the cable whose transfers take
+    no time, worked there every time, and never once on two consoles.
+    And the cable requests the serial interrupt only of a console that asked
+    for it (SIOCNT bit 14, `Cable._raise`), as the hardware does: it used to
+    raise it on both whatever the bit said, with IE all that stood between a
+    port at rest and its handler, and a build that never switched the bit
+    on passed.
   - The lobby never fails. It waits for a partner as long as it takes (B
     leaves), forgets one that goes quiet for TENGEN_LOBBY_LOST turns and goes
     back to waiting (the master off LEVEL SETTINGS); the slave takes the
@@ -722,35 +734,60 @@ story behind each; the item number is in brackets.
   top-out to both; and a race's board put back with A+B has its tune back
   (`coop_end_check`, `walkout_check`).
 - **Two titles, one demo — under the chord, and only there.** Two
-  cartridges left on their titles with a cable between them (what happens
+  consoles left on their titles with a cable between them (what happens
   by itself after any game two players shared) start their demos as ONE
   cooperative game, the port's two computers on one board. Nothing the
   cartridge does: a console without the chord says 0 on the cable as ever,
   is asked nothing, and its demo starts on the cartridge's frame
-  (`demo_link_check` holds it to the frame, and the wire to 0).
-  - *Where the other is*, with the port at rest and no interrupt: on its
-    title a console answers (and the master's beacon carries) not 0 but
-    `$08xx` — tag NONE, so every lobby ever built reads it as it reads 0;
-    bit 11 "a title", a count that moves every frame, IDLE (five seconds
-    untouched) and DUE (`link_title_tick`). Read off the data registers,
-    never with a transfer passing; the count is how a console knows there
-    HAS been a transfer since it last looked, so that a word left in the
-    registers by a console since gone to a game is not news. What was
-    heard is forgotten after twelve frames — NOT which of its own words
-    this console last saw come back (`g_title_seen`): the first build
-    forgot both, and the same stale transfer was news again every twelve
-    frames, for ever. No check saw it until one waited for the LATE
-    console's own demo, long after the other had gone into its own.
+  (`demo_link_check` holds it to the frame, and the wire to 0). Two
+  cartridges or a cartridge and the copy it sent, at either end
+  (`demo_copy_check`): the first build kept it to cartridges, and the
+  first two consoles it was tried on were a cartridge and its copy.
+  - *Where the other is*: on its title a console answers (and the
+    master's beacon carries) not 0 but `$080x` — tag NONE, so every lobby
+    ever built reads it as it reads 0; bit 11 "a title", IDLE (five
+    seconds untouched) and DUE (`link_title_tick`). TAKEN BY THE PORT'S
+    INTERRUPT, which a title has on at rest for this alone
+    (`title_listen`, `title_service`): both words as the transfer ends,
+    this console's loaded for the next (by the interrupt and by the
+    master's beacon, never from the main loop), and the main loop reads
+    what the interrupt left. The interrupt on with the cable put away
+    (`g_armed`) IS a title listening — no flag says so, so none can be
+    left saying it. The first build read the data registers from the main
+    loop once a frame, never with a transfer passing — and a master
+    asking for a demo starts one every frame, so a slave whose frame fell
+    on them found one passing every time it looked, for as long as two
+    crystals keep two frames in step. `Cable.slow` shows it every time;
+    the build had been checked on the other. What was heard is forgotten
+    after twenty frames with no transfer (two beacons and a half).
   - *Who asks*: the master, the only one that can start a transfer, when
     its demo is due and the other title is IDLE, or the other's is DUE and
-    its own is IDLE; a slave due first waits `DEMO_LINK_WAIT` frames to be
-    asked. The asking is simply the lobby of a demo
+    its own is IDLE; a slave due first waits `DEMO_LINK_WAIT` frames (a
+    second) to be asked, whatever the cable carries once it has begun to
+    wait (`demo_waiting`). The asking is simply the lobby of a demo
     (`tengen_lobby_demo`, a bit in HELLO both ways: a player's lobby never
-    answers one, nor a Single-Pak copy's, and a build before the bit is
-    never asked), with the title still on the screen; ready, it goes
-    through the LINK CABLE screen's own match start, the records exchange
-    left out. `link_lobby_start_held` sends its HELLO before a caller can
-    say what for: `link_lobby_start_demo`.
+    answers one, and a build before the bit is never asked), with the
+    title still on the screen and `DEMO_LINK_FRAMES` (three seconds) to
+    get through it; ready, it goes through the LINK CABLE screen's own
+    match start, the records exchange left out. `link_lobby_start_held`
+    sends its HELLO before a caller can say what for:
+    `link_lobby_start_demo`.
+  - *The sky says it* (`title_sky`): the title's night turns deep blue
+    while the other title is heard and violet while the two shake hands —
+    the only tell a title has, and on two real consoles the only way to
+    know which half did not happen. Lit, it stays lit `SKY_HOLD_FRAMES`
+    with nothing to light it: the master starting its port over to ask
+    says a word or two that are neither.
+  - *THE CHORD IS CATCHING.* A linked match is played under the master's
+    chord on both consoles, and the other used to come out of it as it
+    went in: a cartridge with the chord and its copy were two different
+    programs again the moment the game ended — the HIGH SCORES page going
+    after five seconds on one and seventeen on the other ("the master is
+    back on its title before the clone"), and no demo to share, the copy
+    never having been told. A console that plays a linked match under the
+    chord has it until the power switch (`cheats_restore` at the match's
+    start, no chirp), and what a linked match's end does it asks
+    `match_chord()`, never `g_pause_unlocked` (`leader_nothing_new`).
   - *Who plays*: BOTH computers on BOTH consoles, inside the step
     (`link_demo_moves`) — the same board and the same two heads, so the
     same game with nothing but the cable's clock between them. Each
@@ -766,7 +803,9 @@ story behind each; the item number is in brackets.
     other plays on alone; and whatever becomes of the cable — pulled,
     quiet, out of step — each console plays on alone, with no LINK ISSUES
     and no CABLE LOST over an attract mode. INFERRED on hardware until
-    two consoles have done it: the reading of the data registers at rest.
+    two consoles have done it: all of it. The interrupt at rest is the
+    lobby's own mechanism, which two consoles have run for hours; that a
+    title's use of it works there nobody has seen.
 - **A linked match has no level-up show**, and the show is what brings a
   hand-entered tune back after the intro; the cartridge's own engine picks
   its tunes back up by itself. So a linked level-up asks for Korobeiniki,
@@ -1038,8 +1077,10 @@ story behind each; the item number is in brackets.
 - **The stack is measured, not assumed** (`--stack`; `stack_paint` and
   `stack_depth` in the harness, and over the cable in `coop_ghosts_check`).
   Internal WRAM holds the hot code, `.data`, `.bss` and both stacks, and
-  what is left above `.bss` has gone from about 10.7KB to about 4.3KB as
-  code moved in; the linker only refuses under 4KB. Deepest today: 2104
+  what is left above `.bss` has gone from about 10.7KB to 4KB AND THIRTY-TWO
+  BYTES as code moved in; the linker refuses under 4KB, so a new variable
+  in `.bss` is a link that fails (a local of the function that uses it, or
+  `.ewram`). Deepest today: 2104
   bytes (linked coop), 2028 against the port's computer; the serial
   interrupt's, 40 of its 256. A check fails under a kilobyte to spare. A
   new buffer of any size goes in `.ewram` (which nothing clears: write it
@@ -1153,7 +1194,7 @@ the engine to say who is writing a channel, which is asked AS IT WRITES
 (Nes6502Bus.channel_written): the voice at the chain node in $03F2, its
 number at $03DC,node and its class at $0292,voice — tunes $1D-$23, effects
 $74 and over, measured; the chain's head is not the writer four times in
-ten. (`unlock_cheats`, `g_title_skin_found`; the title's L+R and the
+ten. (`unlock_cheats`; the title's L+R and the
 menus' used to be two secrets, and then one waiting for the other; L and R
 used to step the skins, and the title's chord to put the first one on.) And under the chord the HUD STATS cossack's
 colour on L+R;
@@ -1208,9 +1249,14 @@ SAVED on both (`TengenRecordSync`, `records_dump_check`), and two
 cartridges' best rows to each other only where the player says yes to THE
 OTHER GBA HAS HIGH SCORES OF ITS OWN / ADD THEM HERE? (`records_carts_check`);
 START on a dead board of a linked race leaving it for the table while the
-other console plays on alone under RIVAL LEFT, and under the chord what
-that board's pad does said under its plaque, A AND B: AGAIN / START: LEAVE
-(`draw_race_hint`); a handicap of its own
+other console plays on alone under RIVAL LEFT, and under the chord that
+board's pad two buttons with one job each, said under its plaque, A: AGAIN /
+B: BACK (`draw_race_hint`; A alone is the cartridge's A+B, B alone that
+START, leaving when it is let go or held `DEAD_B_STEPS` so that A and B
+landing a frame apart are still AGAIN; neither anything, nor named, for the
+`DEAD_GRACE_STEPS` after the board dies, when what lands is the turn meant
+for the piece that did not fit — `link_play_frame`, `walkout_check`);
+a handicap of its own
 for the computer in VERSUS COMPUTER under the chord; the pause menu over the
 cable, there if the MASTER found the chord and driven by both players'
 presses through lockstep (`link_match_begin`); a linked match that waits

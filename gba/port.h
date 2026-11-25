@@ -2041,7 +2041,6 @@ void upload_title_tiles(void);
 void upload_proto_tiles(int skin);
 bool proto_tiles_loaded(int skin);
 extern uint8_t g_title_skin;
-extern bool g_title_skin_found;
 void apply_skin(int skin);
 void skin_begin_match(bool linked, int cable_skin);
 int skin_prints(uint16_t *out, int max);
@@ -2254,9 +2253,12 @@ extern bool g_link_lost;
 extern bool g_link_waiting;
 extern bool g_link_alone;       /* the other player left a race; this one plays on */
 extern bool g_link_walked;      /* ...and this console's own did */
-/* The demo two titles share: a computer on each pad (match.c; cartridge
- * only). `chord` is the master's, and makes them the port's computers. */
+/* The demo two titles share: a computer on each pad (match.c). `chord` is
+ * the master's, and makes them the port's computers. */
 void link_demo_begin(bool chord);
+/* ...and what the title's sky says of the cable meanwhile (video.c). */
+enum { TITLE_SKY_NIGHT, TITLE_SKY_HEARD, TITLE_SKY_HANDS };
+void title_sky(int sky);
 extern bool g_repaint;
 extern uint8_t g_front_tune;
 extern uint8_t g_music;

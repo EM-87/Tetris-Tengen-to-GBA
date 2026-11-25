@@ -362,7 +362,7 @@ def put_skin_on(core, settle=24):
     given, off the OPTIONS page's list (choose_skin). True when one went on
     (g_title_skin), False on a build without them."""
     rom = getattr(core, "_tengen_rom", "")
-    found, _ = game_state_address(rom, "g_title_skin_found")
+    found, _ = game_state_address(rom, "g_pause_unlocked")
     if found is None or not core.memory.u8[found]:
         core.set_keys(KEYS["L"], KEYS["R"])
         run(core, 4)
