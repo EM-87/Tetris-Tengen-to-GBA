@@ -115,7 +115,7 @@ minus those).
 | --- | --- | --- |
 | `make test` | no | always — the rules, in milliseconds |
 | `make gba` | headers | to build `build/tengen.gba` |
-| `make gba-check` | headers | before calling any change done: 79 checks on the running ROM in mGBA, twenty-four of them on two consoles with a cable, and then the Wireless Adapter's (`run_wireless.py`) |
+| `make gba-check` | headers | before calling any change done: 80 checks on the running ROM in mGBA, twenty-five of them on two consoles with a cable, and then the Wireless Adapter's (`run_wireless.py`) |
 | `make trace ROM=... [MODE=coop\|versus\|with\|demo]` | yes | after touching `tengen_step` or `tengen_ai.c`: the port against the cartridge, iteration by iteration. The 1P and coop scripts never complete a row; `MODE="with --pad1"` plays player 1 with the port's computer and clears plenty; add `--handicap N` to any mode |
 | `make tune-check ROM=...` | yes | after touching audio: the four tunes against the cartridge, note by note |
 | `make dance-check ROM=...` | yes | after touching the dancers: their choreography against the cartridge's driver |
@@ -152,12 +152,15 @@ prototypes or the logos through). A check that did not REACH what it checks
 — the cable's match never starting, a board that would not die, a skin that
 did not go on — prints FALLA, not SALTADO. Reach the port's extras the way
 the player does: `ring_chord_from_title`, and `put_skin_on` for a
-prototype's title (L+R on the title once; after the chord has been rung,
-GAME SELECT's OPTIONS and its PROTOTYPES, `step_skin`: rung already, L+R on
-the title stands down and does nothing — while the title's
-chord waited for the menus', `--loans` and `--demo` pressed it where it did
-nothing and checked the cartridge's title twice). `ROMCHECK_AUDIT=1` prints
-every L+R on the title that changes nothing, with the check's line.
+prototype's title (L+R on the title, which is the chord and nothing else,
+and then GAME SELECT's OPTIONS and its PROTOTYPES, `choose_skin`,
+`step_skin` — the title's chord put the first prototype on by itself
+until the player said that a chord rung for something else should leave
+the title alone; rung already, L+R on the title does nothing, and while
+the title's chord waited for the menus', `--loans` and `--demo` pressed it
+where it did nothing and checked the cartridge's title twice).
+`ROMCHECK_AUDIT=1` prints every L+R on the title that changes nothing,
+with the check's line.
 
 ## Traps
 
@@ -718,6 +721,52 @@ story behind each; the item number is in brackets.
   whichever had not dealt the last piece). `link_play_frame` gives the
   top-out to both; and a race's board put back with A+B has its tune back
   (`coop_end_check`, `walkout_check`).
+- **Two titles, one demo — under the chord, and only there.** Two
+  cartridges left on their titles with a cable between them (what happens
+  by itself after any game two players shared) start their demos as ONE
+  cooperative game, the port's two computers on one board. Nothing the
+  cartridge does: a console without the chord says 0 on the cable as ever,
+  is asked nothing, and its demo starts on the cartridge's frame
+  (`demo_link_check` holds it to the frame, and the wire to 0).
+  - *Where the other is*, with the port at rest and no interrupt: on its
+    title a console answers (and the master's beacon carries) not 0 but
+    `$08xx` — tag NONE, so every lobby ever built reads it as it reads 0;
+    bit 11 "a title", a count that moves every frame, IDLE (five seconds
+    untouched) and DUE (`link_title_tick`). Read off the data registers,
+    never with a transfer passing; the count is how a console knows there
+    HAS been a transfer since it last looked, so that a word left in the
+    registers by a console since gone to a game is not news. What was
+    heard is forgotten after twelve frames — NOT which of its own words
+    this console last saw come back (`g_title_seen`): the first build
+    forgot both, and the same stale transfer was news again every twelve
+    frames, for ever. No check saw it until one waited for the LATE
+    console's own demo, long after the other had gone into its own.
+  - *Who asks*: the master, the only one that can start a transfer, when
+    its demo is due and the other title is IDLE, or the other's is DUE and
+    its own is IDLE; a slave due first waits `DEMO_LINK_WAIT` frames to be
+    asked. The asking is simply the lobby of a demo
+    (`tengen_lobby_demo`, a bit in HELLO both ways: a player's lobby never
+    answers one, nor a Single-Pak copy's, and a build before the bit is
+    never asked), with the title still on the screen; ready, it goes
+    through the LINK CABLE screen's own match start, the records exchange
+    left out. `link_lobby_start_held` sends its HELLO before a caller can
+    say what for: `link_lobby_start_demo`.
+  - *Who plays*: BOTH computers on BOTH consoles, inside the step
+    (`link_demo_moves`) — the same board and the same two heads, so the
+    same game with nothing but the cable's clock between them. Each
+    console's computer over the wire like a player would steer by the
+    board of two steps ago: a word is loaded as the last one arrives.
+    `smart`, `coop_aware`, `partner_known` as `ai_bench.c` plays two of
+    them; never `deep`, which thinks for as long as a frame has time left
+    and two consoles do not have the same time left. The second head
+    lives in EWRAM: IWRAM has 4 KB of stack left and the linker says so.
+  - *The way out* is a demo's: the buttons that leave one, on the step
+    both consoles have them, send that console to GAME SELECT (its cursor
+    and tune given back: `demo_mode_back`, `demo_music_back`) and the
+    other plays on alone; and whatever becomes of the cable — pulled,
+    quiet, out of step — each console plays on alone, with no LINK ISSUES
+    and no CABLE LOST over an attract mode. INFERRED on hardware until
+    two consoles have done it: the reading of the data registers at rest.
 - **A linked match has no level-up show**, and the show is what brings a
   hand-entered tune back after the intro; the cartridge's own engine picks
   its tunes back up by itself. So a linked level-up asks for Korobeiniki,
@@ -1106,7 +1155,7 @@ number at $03DC,node and its class at $0292,voice — tunes $1D-$23, effects
 $74 and over, measured; the chain's head is not the writer four times in
 ten. (`unlock_cheats`, `g_title_skin_found`; the title's L+R and the
 menus' used to be two secrets, and then one waiting for the other; L and R
-used to step the skins.) And under the chord the HUD STATS cossack's
+used to step the skins, and the title's chord to put the first one on.) And under the chord the HUD STATS cossack's
 colour on L+R;
 credits rotating every four seconds — the cartridge's six, GAME SELECT's
 LICENSED BY MIRRORSOFT LTD. among them (`ppuPatchLicensedBy`, $A1EF), then

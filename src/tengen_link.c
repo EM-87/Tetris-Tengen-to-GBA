@@ -153,15 +153,21 @@ void tengen_lobby_release(TengenLobby *lobby, uint16_t seed,
     lobby->hold = false;
 }
 
+/* What this console's HELLO says of why it is here. */
+static uint16_t hello_of(const TengenLobby *lobby) {
+    return (uint16_t)((lobby->mode_coop ? TENGEN_HELLO_COOP : 0) |
+                      (lobby->mode_demo ? TENGEN_HELLO_DEMO : 0));
+}
+
 uint16_t tengen_lobby_word(const TengenLobby *lobby, bool master) {
     if (!master)
         return tagged((TengenLobbyTag)lobby->echo,
                        lobby->echo == TENGEN_LOBBY_SKIN  ? lobby->echo_payload
-                     : lobby->echo == TENGEN_LOBBY_HELLO ? (uint16_t)lobby->mode_coop
+                     : lobby->echo == TENGEN_LOBBY_HELLO ? hello_of(lobby)
                      : 0);
     switch ((TengenLobbyTag)lobby->stage) {
         case TENGEN_LOBBY_HELLO:
-            return tagged(TENGEN_LOBBY_HELLO, (uint16_t)lobby->mode_coop);
+            return tagged(TENGEN_LOBBY_HELLO, hello_of(lobby));
         case TENGEN_LOBBY_SEED_HI:
             return tagged(TENGEN_LOBBY_SEED_HI, (uint16_t)(lobby->seed >> 8));
         case TENGEN_LOBBY_SEED_LO:
@@ -199,6 +205,10 @@ void tengen_lobby_mode(TengenLobby *lobby, bool coop) {
 
 void tengen_lobby_mode_any(TengenLobby *lobby) {
     lobby->mode_any = true;
+}
+
+void tengen_lobby_demo(TengenLobby *lobby) {
+    lobby->mode_demo = true;
 }
 
 /* THIS CONSOLE TURNED OUT TO BE THE OTHER ONE. Its role comes off the cable
@@ -284,9 +294,10 @@ void tengen_lobby_apply(TengenLobby *lobby, bool master, bool got,
             return;
         }
         /* An echo of HELLO from a console that came for the other mode is
-         * not an answer (tengen_lobby_mode). */
+         * not an answer (tengen_lobby_mode) — nor one from a console with a
+         * player in its lobby to a demo, or the other way (tengen_lobby_demo). */
         if (echo == TENGEN_LOBBY_HELLO &&
-            (bool)(slave_word & 1u) != lobby->mode_coop) {
+            (slave_word & (TENGEN_HELLO_COOP | TENGEN_HELLO_DEMO)) != hello_of(lobby)) {
             lobby_quiet_turn(lobby, master);
             if (lobby->stage != TENGEN_LOBBY_HELLO) lobby->stage = TENGEN_LOBBY_HELLO;
             return;
@@ -348,8 +359,10 @@ void tengen_lobby_apply(TengenLobby *lobby, bool master, bool got,
      * in its echo); one that chose does not follow a master that chose the
      * other. */
     if (tag == TENGEN_LOBBY_HELLO && lobby->mode_any)
-        lobby->mode_coop = (payload & 1u) != 0;
-    if (tag == TENGEN_LOBBY_HELLO && (bool)(payload & 1u) != lobby->mode_coop) {
+        lobby->mode_coop = (payload & TENGEN_HELLO_COOP) != 0;
+    /* ...and nobody follows a demo's HELLO but a demo (tengen_lobby_demo). */
+    if (tag == TENGEN_LOBBY_HELLO &&
+        (payload & (TENGEN_HELLO_COOP | TENGEN_HELLO_DEMO)) != hello_of(lobby)) {
         lobby_quiet_turn(lobby, false);
         lobby->stage = TENGEN_LOBBY_NONE;
         lobby->echo = TENGEN_LOBBY_NONE;

@@ -180,41 +180,51 @@ def skin_check(rom_path):
         failures.append("R a solas cambia la skin sin haber sonado el acorde")
 
     # L+R EN EL TITULO ES EL ACORDE DEL JUEGO, el mismo que en GAME SELECT o
-    # LEVEL SETTINGS (unlock_cheats): pone el primer prototipo y destapa lo
-    # demas que el port anade, el menu de pausa entre ello (g_pause_unlocked).
+    # LEVEL SETTINGS (unlock_cheats): destapa lo que el port anade, el menu
+    # de pausa entre ello (g_pause_unlocked) — Y NADA MAS. Ponia ademas el
+    # primer prototipo: un titulo cambiado por un acorde que se hacia para
+    # otra cosa. Los prototipos se ponen donde estan listados, en OPTIONS.
     unlocked, why = game_state_address(rom_path, "g_pause_unlocked")
     if unlocked is None:
         skip(f"{why}: no se mira que el acorde del titulo sea el del juego")
     elif core.memory.u8[unlocked]:
         failures.append("el acorde del juego suena sin que nadie lo haya hecho")
     tap(KEYS["L"], KEYS["R"])
-    proto = frame_tiles()
     if unlocked is not None and not core.memory.u8[unlocked]:
         failures.append("L+R en el titulo no hace el acorde del juego: el "
                         "menu de pausa sigue escondido")
+    elif frame_tiles() != release:
+        failures.append("L+R en el titulo cambia el titulo: el acorde no es "
+                        "para poner un prototipo")
     elif unlocked is not None:
-        print("  L+R en el titulo es el acorde del juego: destapa lo demas")
-    if proto == release:
-        # ...which on a build WITH the prototypes is no skip: it went on
-        # passing here while the skins could not be reached at all.
-        if build_has_protos(rom_path):
-            failures.append("la ROM trae prototipos y L+R en el titulo no pone "
-                            "ninguno")
-        else:
-            skip("esta ROM se construyo sin prototipo: L+R no tiene skin que poner")
+        print("  L+R en el titulo es el acorde del juego: destapa lo demas, y "
+              "deja el titulo como estaba")
+    if not build_has_protos(rom_path):
+        skip("esta ROM se construyo sin prototipo: no hay skin que poner")
         for f in failures:
             print(f"FALLA: {f}")
         if failures:
             return 1
         print("OK: sin skin de prototipo, y el titulo no se rompe por pulsar L o R.")
         return 0
-    print("  L+R pone el marco del prototipo, que es de otros tiles; "
-           "antes del acorde un hombro suelto no hace nada")
+    # THE FIRST OF THEM, off the list (choose_skin: GAME SELECT, OPTIONS,
+    # PROTOTYPES, its line, A).
+    choose_skin(core, 1, settle=12)
+    proto = frame_tiles()
+    if proto == release:
+        # ...which on a build WITH the prototypes is no skip: it went on
+        # passing here while the skins could not be reached at all.
+        failures.append("la ROM trae prototipos y la lista de OPTIONS no pone "
+                        "el primero")
+        for f in failures:
+            print(f"FALLA: {f}")
+        return 1
+    print("  la lista de OPTIONS pone el marco del prototipo, que es de otros "
+           "tiles; antes del acorde un hombro suelto no hace nada")
 
-    # ...Y AL REVES: el acorde de los menus encuentra tambien los prototipos.
-    # De vuelta al titulo, L+R ya no hace nada, y la lista de OPTIONS
-    # (choose_skin: GAME SELECT, OPTIONS, PROTOTYPES, su linea, A) pone el
-    # mismo que el L+R del titulo.
+    # ...Y EL ACORDE DE LOS MENUS ES EL MISMO: encuentra tambien los
+    # prototipos. De vuelta al titulo, L+R ya no hace nada, y la lista de
+    # OPTIONS pone el mismo.
     other, other_screen = load(rom_path)    # `other_screen` must stay alive
     run(other, 40)
     other_release = [other.memory.u16[SCREENBLOCK_ADDR + (r * 32 + c) * 2]
@@ -283,8 +293,8 @@ def skin_check(rom_path):
     listed = ([core.memory.u8[rows_at + i] for i in range(1, len(seen))] + [0]
               if rows_at is not None else walked)
     if proto not in seen:
-        failures.append("la lista de OPTIONS no pasa por la skin que pone el L+R "
-                        "del titulo")
+        failures.append("la lista de OPTIONS, recorrida, no pasa por su "
+                        "primera skin")
     elif walked != listed:
         failures.append(f"la lista de OPTIONS no recorre las skins en su orden: "
                         f"{walked}, no {listed}")
@@ -347,9 +357,8 @@ def skin_check(rom_path):
         this, this_screen = load(rom_path)
         _ = this_screen                      # must stay alive; see load()
         run(this, 40)
-        for _i in range(chords):              # the title's chord: the first skin
-            this.set_keys(KEYS["L"], KEYS["R"]); run(this, 4)
-            this.set_keys(); run(this, 20)
+        if chords:                            # the chord, and the first skin
+            put_skin_on(this, settle=20)
         press_start(this); run(this, 20)      # title -> GAME SELECT
         press_start(this); run(this, 20)      # -> LEVEL SETTINGS
         press_start(this); run(this, 60)      # -> playing
@@ -371,9 +380,8 @@ def skin_check(rom_path):
         this, this_screen = load(rom_path)
         _ = this_screen
         run(this, 40)
-        for _i in range(chords):              # the title's chord: the first skin
-            this.set_keys(KEYS["L"], KEYS["R"]); run(this, 4)
-            this.set_keys(); run(this, 20)
+        if chords:                            # the chord, and the first skin
+            put_skin_on(this, settle=20)
         press_start(this); run(this, 24)          # -> GAME SELECT
         px = pixels(this_screen)
         # The frame's own columns, top to bottom, down the left edge.

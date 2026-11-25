@@ -1034,6 +1034,113 @@ LinkPeer link_peer(void) {
 #define LINK_BEACON_EVERY 8
 static uint8_t g_beacon_clock;
 
+/* ...AND A TITLE SAYS IT IS A TITLE (cartridge only). Two cartridges left
+ * on their titles with a cable between them start their demos as ONE
+ * cooperative game, the two computers on one board (main.c, the title) —
+ * and for that each has to know where the other is, with the port at rest
+ * and no interrupt on it. So the word a console at rest answers with, and
+ * the master's beacon carries, is not always 0 on the title:
+ *
+ *      0000 1nnn nnn0 00di      tag NONE, as 0 is; bit 11 says "a title";
+ *                               n a count that moves every frame; i: nobody
+ *                               has touched it for a while (LINK_TITLE_IDLE);
+ *                               d: its demo is due (LINK_TITLE_DUE)
+ *
+ * TAG NONE, so that every lobby there has ever been reads it as it reads
+ * 0: a console that is there and not in a lobby. And nothing is asked of a
+ * console that does not say it: a build from before this, a Single-Pak
+ * copy, a console anywhere but its title answer 0 and are left alone.
+ *
+ * READ WITH NO INTERRUPT, off the data registers, which hold both
+ * consoles' words of the last transfer until the next one empties them:
+ * the count is how a console tells that there HAS been a transfer since it
+ * last looked — its own word comes back with a count it has not seen — and
+ * so that what stands in the other slot is news and not what was said a
+ * minute ago by a console since gone. Never while a transfer is passing
+ * (the busy bit, read with the rest), which is also the only moment SI is
+ * not the cable's answer (link_sample_role).
+ *
+ * The master asks by simply starting the lobby of a demo
+ * (tengen_lobby_demo): the slave's end sees its HELLO in the master's slot,
+ * twice on two transfers (link_title_invited), and starts its own. */
+#ifndef TENGEN_MULTIBOOT
+#define LINK_TITLE_MARK   0x0800u
+#define LINK_TITLE_IS     0xF800u
+#define LINK_TITLE_COUNT(w) (((w) >> 4) & 0x3Fu)
+#define LINK_TITLE_FRESH  12      /* frames a word is news for: a beacon and a half */
+#define LINK_DEMO_HELLO   ((uint16_t)((TENGEN_LOBBY_HELLO << TENGEN_LOBBY_TAG_SHIFT) | \
+                                      TENGEN_HELLO_COOP | TENGEN_HELLO_DEMO))
+static uint16_t g_title_word;       /* what this console says at rest; 0 off the title */
+static uint8_t g_title_count;
+static uint8_t g_title_seen = 0xFF; /* the count of its own word last seen back */
+static uint8_t g_title_age = 0xFF;  /* frames since the other's word; 0xFF: none */
+static int8_t g_title_other = -1;   /* the other's LINK_TITLE_*, or -1: no title */
+static uint8_t g_title_invites;
+static bool g_title_master;
+
+/* What was heard is forgotten — NOT which of this console's own words it
+ * last saw come back (g_title_seen): that word is still in the data
+ * register, and forgetting it made the same stale transfer news again
+ * every LINK_TITLE_FRESH frames, for ever. */
+static void title_forget(void) {
+    g_title_age = 0xFF;
+    g_title_other = -1;
+    g_title_invites = 0;
+}
+
+void link_title_tick(int flags) {
+    uint16_t cnt = REG_SIOCNT;
+    if (g_armed || wireless_present() || gbp_owns_serial() ||
+        (cnt & 0x3000) != SIO_MODE_MULTI || (cnt & SIO_IRQ)) {
+        /* Not at rest: the port is somebody's, and says what they say. */
+        g_title_word = 0;
+        title_forget();
+        return;
+    }
+    if (g_title_age < 0xFF && ++g_title_age > LINK_TITLE_FRESH) title_forget();
+    if (cnt & SIO_START) return;        /* a transfer passing */
+    g_title_master = !(cnt & SIO_SI);
+    uint16_t mine = REG_SIOMULTI(g_title_master ? 0 : 1);
+    uint16_t theirs = REG_SIOMULTI(g_title_master ? 1 : 0);
+    if ((mine & LINK_TITLE_IS) == LINK_TITLE_MARK &&
+        LINK_TITLE_COUNT(mine) != g_title_seen) {
+        g_title_seen = (uint8_t)LINK_TITLE_COUNT(mine);
+        g_title_age = 0;
+        g_title_other = (theirs & LINK_TITLE_IS) == LINK_TITLE_MARK
+                            ? (int8_t)(theirs & (LINK_TITLE_IDLE | LINK_TITLE_DUE)) : -1;
+        /* (Counted on either end; only the slave's is ever asked.) */
+        if (theirs == LINK_DEMO_HELLO) {
+            if (g_title_invites < 0xFF) g_title_invites++;
+        } else {
+            g_title_invites = 0;
+        }
+    }
+    uint16_t word = 0;
+    if (flags >= 0)
+        word = (uint16_t)(LINK_TITLE_MARK | ((++g_title_count & 0x3Fu) << 4) |
+                          ((unsigned)flags & (LINK_TITLE_IDLE | LINK_TITLE_DUE)));
+    if (word || g_title_word) REG_SIOMLT_SEND = word;
+    g_title_word = word;
+}
+
+int link_title_other(void) { return g_title_other; }
+int link_title_invites(void) { return g_title_invites; }
+bool link_title_master(void) { return g_title_master; }
+
+/* The lobby of a demo, its first word a demo's: link_lobby_start_held
+ * sends HELLO before a caller can say what for, and that one word would
+ * be a player's. */
+void link_lobby_start_demo(TengenLobby *lobby, uint16_t seed) {
+    tengen_lobby_start_held(lobby, seed);
+    tengen_lobby_mode(lobby, true);
+    tengen_lobby_demo(lobby);
+    g_lobby_master = link_is_master();
+    lobby_send(lobby);
+}
+#else
+#define g_title_word 0
+#endif
+
 void link_beacon(void) {
     if (g_armed || wireless_present()) return;
     if (++g_beacon_clock % LINK_BEACON_EVERY) return;
@@ -1041,6 +1148,6 @@ void link_beacon(void) {
     if ((cnt & 0x3000) != SIO_MODE_MULTI) return;   /* not at rest */
     if (cnt & (SIO_SI | SIO_START | SIO_IRQ)) return;
     if (!(cnt & SIO_SD)) return;
-    REG_SIOMLT_SEND = 0;
+    REG_SIOMLT_SEND = g_title_word;     /* 0, but on a title (link_title_tick) */
     REG_SIOCNT = (uint16_t)(cnt | SIO_START);
 }

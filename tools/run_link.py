@@ -251,6 +251,13 @@ class Cable:
         # its register still holding what it had loaded before.
         self.late_start = 0
         self.slave_lobby_word = None
+        # A CONSOLE AT REST ALL OF A SUDDEN: the ends in this set (0 the
+        # master's, 1 the slave's) put 0 on the wire whatever their program
+        # loaded — what a console back in its menus answers, with not one
+        # transfer missed on the way there (a real one that is started over
+        # is off the cable for a moment first, and that moment is a quiet
+        # cable, which is another road to the same place).
+        self.rests = set()
         # WHAT WENT OUT, for the checks that read the wire itself: with a
         # list here, every transfer the master starts is put on it as
         # (frame, speed bits of the master's SIOCNT, its word, the answer or
@@ -371,6 +378,10 @@ class Cable:
             # the probe's speed — at rest, its beacon going out — would be a
             # console the other end cannot hear at all.
             m = s = ABSENT
+        if 0 in self.rests:
+            m = 0
+        if 1 in self.rests:
+            s = 0
         if self.wire is not None:
             self.wire.append((self.frames, mio[IO_SIOCNT] & 3, m, s, True))
         if self.late_start and _is_move(m) and self.slave_lobby_word is not None:
@@ -1771,6 +1782,646 @@ def coop_end_check(rom):
     if failures:
         return 1
     print("OK: el final de un tablero compartido se oye igual en las dos consolas.")
+    return demo_link_check(rom)
+
+
+DEMO_START_FRAME_PY = 5 * 256 + 0x20    # DEMO_START_FRAME, gba/port.h
+MUSIC_MIX_PY = 7                        # MUSIC_MIX, gba/port.h
+TITLE_IDLE_SKIP_PY = 40                 # a moment on a title before its clock is put forward
+DEMO_LINK_FRAMES_PY = 90                # DEMO_LINK_FRAMES, gba/main.c
+
+
+def demo_link_check(rom):
+    """TWO TITLES, TWO DEMOS, ONE BOARD — UNDER THE CHORD.
+
+    Two cartridges left on their titles with a cable between them start
+    their demos together, as one cooperative game the two computers play
+    (gba/main.c, the title; link.c, link_title_tick; match.c,
+    link_demo_begin). It is nothing the cartridge does, so nothing a
+    console does without the chord: that one says 0 on the cable as it
+    always has, is asked nothing, and its demo starts on the cartridge's
+    frame.
+
+      - the chord on both, rung on the title (which it leaves as it is):
+        the two demos are one game, the same on both consoles, at a step a
+        frame, the computers steering their pieces, its tune playing and
+        no note about any cable;
+      - a button on either console: that one is on GAME SELECT, its cursor
+        and its tune where its player left them, and the other plays on
+        alone without missing a step;
+      - the game over: both back to their titles with their tables as they
+        were (and nobody asked about anybody's records on the way in) —
+        and the next demo is shared again;
+      - the chord on one console only, or on neither: two demos, each on
+        the frame a console alone starts its own, and not a word on the
+        wire from a console without the chord that is not 0;
+      - whichever title's demo is due first takes the other along, if
+        that one has stood untouched for five seconds, and leaves it alone
+        if it has only just been come to;
+      - a player waiting in the cable's screen is not taken into a demo,
+        whichever end they are on, and that screen reads a title on the
+        other end as it reads any console of ours in its menus;
+      - a console gone from its title to a game is not waited for;
+      - the cable pulled in the middle of one: each console plays on, with
+        no LINK ISSUES and no CABLE LOST over an attract mode;
+      - a title left as the other asks, or while the two shake hands: the
+        asker gives up in a second and a half and plays its own demo, and
+        the one that left has its port at rest.
+    """
+    import run_rom
+    names = ("g_session", "g_linked", "g_link_alone", "g_link_lost", "g_demo",
+             "g_pause_unlocked", "g_title_frame", "g_title_skin", "g_tables",
+             "g_music", "g_ai")
+    syms = {n: symbol(rom, n) for n in names}
+    missing = [why for s_, why in syms.values() if s_ is None]
+    if missing:
+        skip(missing[0])
+        return 0
+    at = {n: s_[0][0] for n, s_ in syms.items()}
+    session_addr, session_size = syms["g_session"][0]
+    tables_at, tables_size = syms["g_tables"][0]
+    game_size = session_size - 4
+    off = run_rom.game_offsets(rom)
+    CHORD = [KEYS["L"], KEYS["R"]]
+    NOTES = ("RIVAL", "ISSUES", "CABLE", "LOST", "ADD THEM")
+    TUNE = 2                    # a tune of the player's, to be given back
+    failures = []
+
+    def u8(core, name):
+        return core.memory.u8[at[name]]
+
+    def title_frame(core):
+        return core.memory.u16[at["g_title_frame"]]
+
+    def step_of(core):
+        return core.memory.u8[session_addr + game_size + 1]
+
+    def page(core):
+        return " ".join(run_rom.tilemap_text(core, r) for r in range(0, 20))
+
+    def at_rest(core):
+        io = core._native.memory.io
+        return not io[IO_SIOMLT_SEND] and not (io[IO_SIOCNT] & 0x4000)
+
+    def ports_computer(core):
+        """Whether the computer on player 1's pad is the port's own: the
+        cartridge's keeps a target and a few bytes of scratch, the port's
+        a plan (TengenAi, from `smart` on: nothing of it is written
+        otherwise)."""
+        ai_at, ai_size = syms["g_ai"][0]
+        return any(read_bytes(core, ai_at + 16, ai_size - 16))
+
+    def hurry(cores, to=900):
+        """The titles' clocks put forward: fifteen seconds of nothing
+        happening that most of what follows has no need to sit through."""
+        for core in cores:
+            if title_frame(core) < to:
+                core.memory.u16[at["g_title_frame"]] = to
+
+    def titles(chords=(1, 1), wire=False, skip=True):
+        """Two consoles switched on together and left on their titles,
+        the chord rung on the title of those `chords` says."""
+        cores, cable, both, tap = _pair(rom)
+        if wire:
+            cable.wire = []
+        both(60)
+        both(4, [CHORD if c else [] for c in chords])
+        both(12, [[], []])
+        if skip:
+            hurry(cores)
+        return cores, cable, both, tap
+
+    def until_demos(cores, both, frames=DEMO_START_FRAME_PY + 200, who=(0, 1)):
+        """The title frame each console's demo started on (None: it did
+        not), and whether each is on the cable."""
+        began = [None, None]
+        for _ in range(frames):
+            both(1)
+            for i, core in enumerate(cores):
+                if began[i] is None and u8(core, "g_demo"):
+                    began[i] = title_frame(core)
+            if all(began[i] is not None for i in who):
+                break
+        both(3)
+        return began, [u8(c, "g_linked") if began[i] is not None else 0
+                       for i, c in enumerate(cores)]
+
+    def title_reaches(core, frame, both):
+        """Run until this console's title has counted to `frame` — and not
+        for ever: the count stops the moment the title is left."""
+        for _ in range(DEMO_START_FRAME_PY + 400):
+            if title_frame(core) >= frame:
+                return True
+            both(1)
+        return False
+
+    def to_title_again(both, tap, core, who):
+        """Off the title and straight back: its count starts again."""
+        tap("START", who=who)
+        tap("B", who=who)
+        return _screen_of(core) == "otra" and title_frame(core) < 60
+
+    # ALONE, for the frame a demo starts on when nobody else is anywhere.
+    mgba.log.silence()
+    lone = mgba.core.load_path(rom)
+    lone_screen = mgba.image.Image(SCREEN_W, SCREEN_H)
+    lone.set_video_buffer(lone_screen)
+    lone.reset()
+    _KEEP.append((lone, lone_screen))
+    alone_at = None
+    for _ in range(DEMO_START_FRAME_PY + 200):
+        lone.run_frame()
+        if lone.memory.u8[at["g_demo"]]:
+            alone_at = lone.memory.u16[at["g_title_frame"]]
+            break
+    if alone_at is None:
+        print("FALLA: una consola sola no llega a su demo")
+        return 1
+
+    # 1. THE CHORD ON BOTH, and a button on one of them.
+    for leaver in (1, 0):
+        stayer = 1 - leaver
+        cores, cable, both, tap = titles(skip=not leaver)   # once, every frame of it
+        for core in cores:
+            core.memory.u8[at["g_music"]] = TUNE
+        if [u8(c, "g_pause_unlocked") for c in cores] != [1, 1]:
+            failures.append("L+R en el titulo no hace el acorde")
+        if any(u8(c, "g_title_skin") for c in cores):
+            failures.append("L+R en el titulo cambia el titulo: pone un prototipo")
+        began, linked = until_demos(cores, both)
+        if None in began or linked != [1, 1] or not _same_match(rom, cores):
+            print(f"FALLA: con el acorde en las dos, las demos no son una sola "
+                  f"partida (empezadas {began}, enlazadas {linked})")
+            return 1
+        if max(began) > DEMO_START_FRAME_PY + 40:
+            failures.append(f"la demo compartida tarda en empezar: frames "
+                            f"{began} del titulo, y toca en el "
+                            f"{DEMO_START_FRAME_PY}")
+        # THE COMPUTERS STEER: a piece that changes column or turns while
+        # it falls was moved by somebody, and the pads are nobody's.
+        def piece(p):
+            base = session_addr + p * off["stride"]
+            m = cores[0].memory.u8
+            return (m[base + off["current"]], m[base + off["x"]],
+                    m[base + off["orientation"]], m[base + off["y"]])
+        steered = [0, 0]
+        was = [piece(0), piece(1)]
+        before = [step_of(c) for c in cores]
+        sound = 0
+        for _ in range(720):
+            both(1)
+            for p in range(2):
+                now = piece(p)
+                if now[0] == was[p][0] and now[3] >= was[p][3] and \
+                        now[1:3] != was[p][1:3]:
+                    steered[p] += 1
+                was[p] = now
+            sound = max(sound, min(run_rom.sound_state(c)["activos"] for c in cores))
+        steps = [(step_of(c) - b) % 256 for c, b in zip(cores, before)]
+        text = [page(c) for c in cores]
+        tunes = [u8(c, "g_music") for c in cores]
+        ok = False
+        if not _same_match(rom, cores):
+            failures.append("a los doce segundos la demo ya no es la misma en "
+                            "las dos")
+        elif steps != [720 % 256] * 2:
+            failures.append(f"la demo compartida no va a un paso por frame: "
+                            f"{steps} (mod 256) en 720")
+        elif min(steered) < 3:
+            failures.append("en la demo compartida los ordenadores no llevan "
+                            f"sus piezas: {steered} movimientos en doce segundos")
+        elif any(word in t for t in text for word in NOTES):
+            failures.append("la demo compartida lleva un aviso: "
+                            f"{[w for w in NOTES if w in text[0] + text[1]]}")
+        elif not sound or tunes != [MUSIC_MIX_PY, MUSIC_MIX_PY]:
+            failures.append(f"la demo compartida, con el acorde, no suena en "
+                            f"las dos con su MUSIC MIX (canales {sound}, "
+                            f"canciones {tunes})")
+        elif not all(ports_computer(c) for c in cores):
+            failures.append("los ordenadores de la demo compartida no son los "
+                            "del port")
+        else:
+            ok = True
+        # A BUTTON ON ONE: that one out to GAME SELECT, the other alone,
+        # and not a step lost over it.
+        who = "la esclava" if leaver else "la maestra"
+        before = step_of(cores[stayer])
+        both(4, [[KEYS["START"]] if i == leaver else [] for i in range(2)])
+        both(56, [[], []])
+        moved = (step_of(cores[stayer]) - before) % 256
+        flags = (u8(cores[stayer], "g_demo"), u8(cores[stayer], "g_link_alone"),
+                 u8(cores[stayer], "g_link_lost"))
+        if u8(cores[leaver], "g_demo") or _screen_of(cores[leaver]) != "menu":
+            failures.append(f"START en {who} no la saca de la demo compartida "
+                            f"a GAME SELECT ({_screen_of(cores[leaver])})")
+        elif not at_rest(cores[leaver]):
+            failures.append(f"{who}, salida de la demo compartida, no deja su "
+                            "puerto en reposo")
+        elif u8(cores[leaver], "g_music") != TUNE:
+            failures.append(f"{who} sale de la demo compartida sin la cancion "
+                            f"que tenia elegida ({u8(cores[leaver], 'g_music')})")
+        elif flags != (1, 1, 0) or not 58 <= moved <= 61:
+            failures.append(f"al irse {who} de la demo compartida la otra no "
+                            f"sigue sola sin perder el paso (demo, sola, "
+                            f"perdida = {flags}; {moved} pasos en 60)")
+        elif any(word in page(cores[stayer]) for word in NOTES):
+            failures.append("la consola que sigue sola en la demo lleva un aviso")
+        elif not at_rest(cores[stayer]):
+            failures.append("la consola que sigue sola en la demo no deja el "
+                            "puerto en reposo")
+        else:
+            tap("START", who=leaver)
+            if _screen_of(cores[leaver]) == "cable":
+                failures.append("tras la demo compartida, GAME SELECT se queda "
+                                "en COOPERATIVE: START lleva al cable")
+                continue
+            both(4, [[KEYS["A"]] if i == stayer else [] for i in range(2)])
+            both(20, [[], []])
+            if u8(cores[stayer], "g_demo") or _screen_of(cores[stayer]) != "menu":
+                failures.append("la consola que seguia sola no sale de su demo "
+                                "con un boton")
+            elif u8(cores[stayer], "g_music") != TUNE:
+                failures.append("la consola que seguia sola sale de la demo "
+                                "sin la cancion que tenia elegida")
+            elif ok:
+                print(f"  el acorde en las dos: una sola partida, la misma en "
+                      f"las dos, a su paso, con los ordenadores llevando sus "
+                      f"piezas y su musica; START en {who}: a GAME SELECT con "
+                      "su cursor y su cancion, y la otra sigue sola")
+
+    # 2. THE GAME OVER, AND THE NEXT ONE. The master has a record the slave
+    # has not: two cartridges meeting in a lobby would be asked about it.
+    cores, cable, both, tap = titles()
+    cores[0].memory.u32[tables_at] = 123456
+    cores[0].memory.u16[tables_at + 4] = 77
+    for c_, v in enumerate((3, 12, 26)):
+        cores[0].memory.u8[tables_at + 6 + c_] = v
+    tables = [read_bytes(c, tables_at, tables_size) for c in cores]
+    began, linked = until_demos(cores, both)
+    if linked != [1, 1]:
+        print(f"FALLA: con un record distinto en una, la demo compartida no "
+              f"arranca (empezadas {began}; {page(cores[0]).split()[:12]})")
+        return 1
+    both(120)
+    _bury(cores, session_addr, off, 0)
+    seen = ""
+    dead_for, put_away = 0, None
+    for _ in range(2400):
+        both(1)
+        if not seen:
+            for core in cores:
+                text = page(core)
+                if any(word in text for word in NOTES):
+                    seen = text
+        # THE CABLE IS PUT AWAY AS THE BOARD DIES: two computers have no
+        # names to swap under the plaque.
+        if not any(c.memory.u8[session_addr + off["active"] + p * off["stride"]]
+                   for c in cores for p in (0, 1)):
+            dead_for += 1
+            if dead_for == 20:
+                put_away = [not (c._native.memory.io[IO_SIOCNT] & 0x4000)
+                            for c in cores]
+        if not any(u8(c, "g_demo") for c in cores):
+            break
+    both(30)
+    if any(u8(c, "g_demo") for c in cores):
+        failures.append("la demo compartida no acaba al llenarse el tablero")
+    elif put_away != [True, True]:
+        failures.append("acabada la demo compartida el cable sigue en marcha "
+                        f"bajo la placa (guardado: {put_away}): no hay nombres "
+                        "que cruzar")
+    elif seen:
+        failures.append(f"el final de la demo compartida lleva un aviso: "
+                        f"{' '.join(seen.split())[:80]!r}")
+    elif [read_bytes(c, tables_at, tables_size) for c in cores] != tables:
+        failures.append("la demo compartida deja algo escrito en las tablas")
+    elif any(title_frame(c) > 400 for c in cores):
+        failures.append("tras la demo compartida las consolas no vuelven a "
+                        f"su titulo ({[title_frame(c) for c in cores]})")
+    else:
+        # GAME SELECT's cursor is where it was: START, START is LEVEL
+        # SETTINGS and not the cable.
+        tap("START", who=1)
+        tap("START", who=1)
+        where = _screen_of(cores[1])
+        tap("B", who=1)
+        tap("B", who=1)
+        both(TITLE_IDLE_SKIP_PY)
+        hurry(cores)
+        began, linked = until_demos(cores, both, DEMO_START_FRAME_PY + 800)
+        if where == "cable":
+            failures.append("tras el game over de la demo compartida, GAME "
+                            "SELECT se queda en COOPERATIVE")
+        elif linked != [1, 1] or not _same_match(rom, cores):
+            failures.append("tras una demo compartida, la siguiente ya no lo "
+                            f"es (empezadas {began}, enlazadas {linked})")
+        else:
+            print("  el game over: las dos a su titulo, las tablas como "
+                  "estaban y nadie preguntado por records; la demo siguiente "
+                  "vuelve a ser de las dos")
+
+    # 3. WITHOUT THE CHORD ON BOTH, THE CARTRIDGE'S DEMO AND NOTHING ON THE
+    # WIRE THAT WAS NOT THERE BEFORE.
+    quiet = True
+    for chords in ((1, 0), (0, 1), (0, 0)):
+        cores, cable, both, tap = titles(chords, wire=True, skip=False)
+        began, linked = until_demos(cores, both)
+        said = [sorted({t[2] for t in cable.wire}), sorted({t[3] for t in cable.wire})]
+        loud = [i for i in range(2) if not chords[i] and said[i] not in ([0], [])]
+        what = {(1, 0): "solo en la maestra", (0, 1): "solo en la esclava",
+                (0, 0): "en ninguna"}[chords]
+        both(300)
+        own = [ports_computer(c) for c in cores]
+        if any(linked):
+            failures.append(f"con el acorde {what} hay demo compartida")
+        elif own != [bool(c) for c in chords]:
+            failures.append(f"con el acorde {what}, el ordenador de cada demo "
+                            f"no es el suyo (del port: {own}): la prueba de "
+                            "cual juega no distingue")
+        elif began != [alone_at, alone_at]:
+            failures.append(f"con el acorde {what} las demos no empiezan en el "
+                            f"frame de una consola sola ({began}, y es {alone_at})")
+        elif loud:
+            failures.append(f"con el acorde {what}, una consola sin el dice por "
+                            f"el cable algo que no es 0: "
+                            f"{[hex(w) for w in said[loud[0]]][:6]}")
+        elif len(cable.wire) < 100:
+            failures.append("la prueba no vio las balizas de la maestra en "
+                            f"los titulos ({len(cable.wire)} transferencias)")
+        else:
+            continue
+        quiet = False
+    if quiet:
+        print(f"  el acorde en una sola o en ninguna: cada una su demo, en el "
+              f"frame {alone_at} del titulo como una consola sola, y la que no "
+              "tiene el acorde no dice mas que 0")
+
+    # 4. WHOSE DEMO IS DUE FIRST TAKES THE OTHER ALONG — one that has stood
+    # untouched, not one just come to.
+    for late in (0, 1):
+        first = 1 - late
+        cores, cable, both, tap = titles()
+        fresh = to_title_again(both, tap, cores[late], late)
+        began, linked = until_demos(cores, both)
+        who = ("la maestra", "la esclava")[first]
+        if not fresh:
+            failures.append("la prueba no consigue volver a un titulo a cero")
+        elif linked != [1, 1] or not _same_match(rom, cores):
+            failures.append(f"le toca la demo a {who} con la otra quieta en su "
+                            f"titulo y no se la lleva (empezadas {began}, "
+                            f"enlazadas {linked})")
+        elif not DEMO_START_FRAME_PY <= began[first] <= DEMO_START_FRAME_PY + 40 \
+                or began[late] >= DEMO_START_FRAME_PY:
+            failures.append(f"le toca la demo a {who} y la compartida no "
+                            f"empieza a su hora: frames {began}")
+        else:
+            print(f"  le toca a {who} (frame {began[first]} de su titulo) y se "
+                  f"lleva a la otra, quieta desde hace {began[late]} frames")
+    for late in (0, 1):
+        first = 1 - late
+        cores, cable, both, tap = titles()
+        title_reaches(cores[first], DEMO_START_FRAME_PY - 160, both)
+        fresh = to_title_again(both, tap, cores[late], late)
+        began, linked = until_demos(cores, both, 400, who=(first,))
+        who = ("la maestra", "la esclava")[first]
+        if not fresh:
+            failures.append("la prueba no consigue volver a un titulo a cero")
+        elif began[first] != alone_at or any(linked) or u8(cores[late], "g_demo"):
+            failures.append(f"le toca la demo a {who} con la otra recien "
+                            f"llegada a su titulo ({title_frame(cores[late])} "
+                            f"frames): empezadas {began}, enlazadas {linked}, "
+                            f"y debia hacer la suya en el {alone_at}")
+        elif _screen_of(cores[late]) != "otra":
+            failures.append("la consola recien llegada a su titulo ya no esta "
+                            "en el")
+        else:
+            # ...AND WHEN ITS OWN TURN COMES, the other is in a demo of its
+            # own and says nothing: what it said from its title, "here,
+            # untouched, my demo due", still stands in the data registers
+            # of a slave nobody has spoken to since — old news, and no
+            # reason to wait to be asked.
+            both(TITLE_IDLE_SKIP_PY)
+            hurry([cores[late]])
+            own, own_linked = until_demos(cores, both, DEMO_START_FRAME_PY,
+                                          who=(late,))
+            if own[late] != alone_at or own_linked[late]:
+                failures.append(f"le toca despues a la recien llegada, con "
+                                f"{who} ya en su demo, y no hace la suya a su "
+                                f"hora: frame {own[late]}, y es el {alone_at}")
+            else:
+                print(f"  le toca a {who} con la otra recien llegada a su "
+                      "titulo: hace su demo a su hora y la deja en paz, y "
+                      "esa hace despues la suya a la suya")
+
+    # 5. A PLAYER IN THE CABLE'S SCREEN IS NOT TAKEN INTO ONE.
+    lobby_ok = True
+    for waiting in (1, 0):
+        cores, cable, both, tap = titles()
+        tap("START", who=waiting)
+        tap("DOWN", who=waiting)
+        tap("DOWN", who=waiting)
+        tap("START", who=waiting)               # COOPERATIVE: its LINK CABLE
+        other = 1 - waiting
+        began, linked = until_demos(cores, both, who=(other,))
+        both(DEMO_LINK_FRAMES_PY + 30)
+        who = "esclavo" if waiting else "maestro"
+        if _screen_of(cores[waiting]) != "cable" or u8(cores[waiting], "g_linked") \
+                or u8(cores[waiting], "g_demo"):
+            failures.append(f"un jugador esperando en el cable (extremo {who}) "
+                            "es arrastrado a la demo de la otra consola")
+        elif began[other] != alone_at or u8(cores[other], "g_linked"):
+            failures.append(f"con un jugador esperando en el cable (extremo "
+                            f"{who}), la otra consola no hace su demo a su "
+                            f"hora (frame {began[other]})")
+        else:
+            continue
+        lobby_ok = False
+    cores, cable, both, tap = titles()
+    tap("START", who=0); tap("DOWN", who=0); tap("DOWN", who=0)
+    tap("START", who=0)
+    both(200)
+    text = " ".join(run_rom.tilemap_text(cores[0], r) for r in range(8, 16))
+    if "WAITING FOR OTHER PLAYER" not in text:
+        failures.append("la pantalla del cable, con un titulo al otro lado, "
+                        f"no espera a su jugador: {' '.join(text.split())!r}")
+    elif lobby_ok:
+        print("  un jugador en la pantalla del cable no es arrastrado a "
+              "ninguna demo, y esa pantalla lee un titulo como a cualquier "
+              "consola en sus menus")
+
+    # 6. A CONSOLE GONE FROM ITS TITLE TO A GAME IS NOT WAITED FOR: what it
+    # last said stays in the data registers, and is not news.
+    cores, cable, both, tap = titles()
+    title_reaches(cores[0], DEMO_START_FRAME_PY - 120, both)
+    tap("START", who=0); tap("START", who=0); tap("START", who=0)   # 1 PLAYER
+    began, linked = until_demos(cores, both, 300, who=(1,))
+    if u8(cores[0], "g_demo") or _screen_of(cores[0]) != "otra":
+        failures.append("la prueba no lleva a la maestra a una partida suya")
+    elif began[1] != alone_at or linked[1]:
+        failures.append(f"con la maestra en una partida, la esclava no hace su "
+                        f"demo a su hora: frame {began[1]}, y es el {alone_at}")
+    else:
+        print("  la otra consola en una partida suya: no se la espera, la "
+              "demo a su hora")
+
+    # 7. THE CABLE PULLED.
+    cores, cable, both, tap = titles()
+    began, linked = until_demos(cores, both)
+    both(200)
+    cable.plugged = False
+    seen = ""
+    for _ in range(240):
+        both(1)
+        for core in cores:
+            text = page(core)
+            if not seen and any(word in text for word in NOTES):
+                seen = text
+    before = [step_of(c) for c in cores]
+    both(60)
+    steps = [(step_of(c) - b) % 256 for c, b in zip(cores, before)]
+    flags = [(u8(c, "g_demo"), u8(c, "g_link_alone"), u8(c, "g_link_lost"))
+             for c in cores]
+    if linked != [1, 1]:
+        failures.append("la demo compartida (para quitarle el cable) no arranca")
+    elif seen:
+        failures.append("sin cable, la demo compartida saca un aviso: "
+                        f"{' '.join(seen.split())[:80]!r}")
+    elif flags != [(1, 1, 0), (1, 1, 0)] or any(not 58 <= n <= 61 for n in steps):
+        failures.append(f"sin cable, las dos consolas no siguen cada una con "
+                        f"su demo (demo, sola, perdida = {flags}; pasos {steps})")
+    else:
+        print("  el cable fuera a media demo: cada consola sigue con la suya, "
+              "sin avisos")
+
+    # ...AND A CONSOLE STARTED OVER IN THE MIDDLE OF ONE (the soft reset):
+    # it answers from its menus, which is not a quiet cable, and the other
+    # is not left waiting for a move.
+    for quitter in (0, 1):
+        cores, cable, both, tap = titles()
+        began, linked = until_demos(cores, both)
+        both(200)
+        stay = cores[1 - quitter]
+        both(8, [[KEYS[k] for k in ("A", "B", "START", "SELECT")]
+                 if i == quitter else [] for i in range(2)])
+        seen = ""
+        for _ in range(120):
+            both(1, [[], []])
+            text = page(stay)
+            if not seen and any(word in text for word in NOTES):
+                seen = text
+        before = step_of(stay)
+        both(60, [[], []])
+        moved = (step_of(stay) - before) % 256
+        flags = (u8(stay, "g_demo"), u8(stay, "g_link_alone"), u8(stay, "g_link_lost"))
+        who = ("la maestra", "la esclava")[quitter]
+        if linked != [1, 1]:
+            failures.append("la demo compartida (para reiniciar una consola) "
+                            "no arranca")
+        elif seen or flags != (1, 1, 0) or not 58 <= moved <= 61:
+            failures.append(f"se reinicia {who} a media demo compartida y la "
+                            f"otra no sigue sola y callada (demo, sola, perdida "
+                            f"= {flags}; {moved} pasos en 60; "
+                            f"{' '.join(seen.split())[:60]!r})")
+        else:
+            print(f"  {who} se reinicia a media demo: la otra sigue con la suya")
+    # ...OR SIMPLY AT REST, with not a transfer missed (Cable.rests): no
+    # quiet cable to go by, only words that are not moves.
+    for quitter in (0, 1):
+        cores, cable, both, tap = titles()
+        began, linked = until_demos(cores, both)
+        both(200)
+        stay = cores[1 - quitter]
+        before = step_of(stay)
+        cable.rests = {quitter}
+        both(90)
+        moved = (step_of(stay) - before) % 256
+        flags = (u8(stay, "g_demo"), u8(stay, "g_link_alone"), u8(stay, "g_link_lost"))
+        who = ("la maestra", "la esclava")[quitter]
+        if linked != [1, 1]:
+            failures.append("la demo compartida (para dejar una consola en "
+                            "reposo) no arranca")
+        elif flags != (1, 1, 0) or moved < 70 or \
+                any(word in page(stay) for word in NOTES):
+            failures.append(f"{who} contesta en reposo a media demo compartida "
+                            f"y la otra no sigue sola (demo, sola, perdida = "
+                            f"{flags}; {moved} pasos en 90)")
+        else:
+            print(f"  {who} en reposo de golpe, sin faltar una transferencia: "
+                  f"la otra sigue sola ({90 - moved} frames de duda)")
+
+    # 8. A TITLE LEFT AS THE OTHER ASKS, AND ONE LEFT WHILE THEY SHAKE HANDS.
+    for when, what in ((-3, "cuando la otra la invita"),
+                       (5, "a medio saludo")):
+        cores, cable, both, tap = titles()
+        title_reaches(cores[0], DEMO_START_FRAME_PY + when, both)
+        both(4, [[], [KEYS["START"]]])          # the slave's player, just then
+        began = None
+        for _ in range(DEMO_LINK_FRAMES_PY + 60):
+            both(1, [[], []])
+            if began is None and u8(cores[0], "g_demo"):
+                began = title_frame(cores[0])
+        late = None if began is None else began - DEMO_START_FRAME_PY
+        if u8(cores[1], "g_demo") or u8(cores[1], "g_linked") or \
+                _screen_of(cores[1]) != "menu":
+            failures.append(f"la consola que deja su titulo {what} acaba en "
+                            "una demo")
+        elif not at_rest(cores[1]):
+            failures.append(f"la consola que deja su titulo {what} no deja su "
+                            "puerto en reposo")
+        elif late is None or u8(cores[0], "g_linked"):
+            failures.append(f"la consola que invita, si la otra se va {what}, "
+                            "no hace su propia demo")
+        elif not 60 <= late <= DEMO_LINK_FRAMES_PY + 2:
+            failures.append(f"la consola que invita, si la otra se va {what}, "
+                            f"tarda {late} frames en hacer su demo")
+        else:
+            print(f"  un titulo que se va {what}: su puerto en reposo, y la "
+                  f"que invita se cansa y hace su demo ({late} frames tarde)")
+
+    # ...AND B, ON ANY FRAME OF IT. On the title B is nothing, and the two
+    # go on shaking hands; in the match it is a way out; and on the one
+    # frame between, the cable's screen's own B. Wherever it lands: either
+    # the demo plays (and START leaves it) or the console is on GAME SELECT
+    # — its port at rest there, and back on its title it is on its title,
+    # not in a demo it "began" with the lobby it walked out of.
+    swept, lands = True, set()
+    for when in range(6, 24):
+        cores, cable, both, tap = titles()
+        title_reaches(cores[1], DEMO_START_FRAME_PY, both)
+        both(when)              # (its title's clock stops as the match starts)
+        both(4, [[], [KEYS["B"]]])
+        both(30, [[], []])
+        there = (_screen_of(cores[1]), u8(cores[1], "g_demo"))
+        lands.add(there)
+        if there == ("otra", 1):                # B was nothing: the demo plays
+            tap("START", who=1)
+        rest = (_screen_of(cores[1]), u8(cores[1], "g_demo"), at_rest(cores[1]))
+        tap("B", who=1)                         # GAME SELECT -> the title
+        both(120, [[], []])
+        back = (_screen_of(cores[1]), u8(cores[1], "g_demo"),
+                title_frame(cores[1]) > 100)
+        if there not in (("otra", 1), ("menu", 0)) or \
+                rest != ("menu", 0, True) or back != ("otra", 0, True):
+            failures.append(f"B en la esclava {when} frames despues de tocarle "
+                            f"la demo: {there}; luego en GAME SELECT, sin demo, "
+                            f"puerto en reposo = {rest}; de vuelta en su "
+                            f"titulo, sin demo, contando = {back}")
+            swept = False
+            break
+    if swept and len(lands) < 2:
+        failures.append("el barrido de B no llega a caer a los dos lados del "
+                        f"arranque de la demo: {sorted(lands)}")
+    elif swept:
+        print("  B en cualquier frame del saludo o del arranque: o no es "
+              "nada o saca a GAME SELECT con el puerto en reposo, y su titulo "
+              "vuelve a ser su titulo")
+
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: dos titulos con el acorde comparten su demo, y sin el cada "
+          "consola hace la del cartucho.")
     return skin_check(rom)
 
 
@@ -1828,11 +2479,19 @@ def skin_check(rom):
 
         both(60)
         # THE TITLE'S CHORD, which is the game's, on whichever console is
-        # asked to wear a skin: it puts the first prototype on.
+        # asked to wear a skin — and then the first prototype off GAME
+        # SELECT's OPTIONS, where the skins are listed (choose_skin; the
+        # title's chord put it on by itself, once). One console at a time,
+        # the other standing still meanwhile.
+        from romcheck.harness import choose_skin, build_has_protos
         chord = [[KEYS["L"], KEYS["R"]] if want else []
                  for want in (master_chord, slave_chord)]
         both(4, chord)
         both(30, [[], []])
+        for want, core in zip((master_chord, slave_chord), cores):
+            if want and build_has_protos(rom):
+                core._tengen_rom = rom
+                choose_skin(core, 1, settle=24)
         titles = [core.memory.u8[title_sym[0]] for core in cores]
         tap("START"); tap("DOWN"); tap("START")   # -> 2 PLAYER -> the cable
         both(50)

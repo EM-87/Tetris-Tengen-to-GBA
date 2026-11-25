@@ -51,6 +51,12 @@ static bool lobby_run(int run) {
     tengen_lobby_mode(&m, coop);
     if (rnd() % 4) tengen_lobby_mode(&s, coop);
     else tengen_lobby_mode_any(&s);           /* the Single-Pak copy */
+    /* Two titles whose demos share a board (tengen_lobby_demo) — or one of
+     * them a console with a player in its lobby, and then they never meet. */
+    unsigned demo = rnd() % 8;
+    bool m_demo = demo == 0 || demo == 1, s_demo = demo == 0 || demo == 2;
+    if (m_demo) tengen_lobby_demo(&m);
+    if (s_demo) tengen_lobby_demo(&s);
     static const uint16_t prints[3] = { 0x123, 0x456, 0x789 };
     int m_count = (int)(rnd() % 4);
     int s_count = (int)(rnd() % 3);
@@ -81,6 +87,14 @@ static bool lobby_run(int run) {
                run, loss, one_sided ? ", one-sided" : "",
                m.ready ? "master" : "slave");
         return false;
+    }
+    if (m_demo != s_demo) {
+        if (m.ready || m.linked || s.linked) {
+            printf("FAIL lobby %d: a demo and a player's lobby met (master's "
+                   "a demo %d, slave's %d)\n", run, m_demo, s_demo);
+            return false;
+        }
+        return true;
     }
     if (!m.ready) {
         printf("FAIL lobby %d (loss %u%%): never linked\n", run, loss);

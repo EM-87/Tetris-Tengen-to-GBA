@@ -129,7 +129,7 @@ Lo que el GBA tiene de más:
 |---|---|---|
 | Partida | SELECT | cambia de HUD (dos por modo); con HOLD, guarda la pieza |
 | Partida, HUD Stats, con el acorde | L+R | cambia el color del cosaco; con HOLD, cambia de HUD (en cualquier HUD) |
-| GAME SELECT, LEVEL SETTINGS o el título | L+R | el acorde, el mismo en las tres: destapa las canciones ocultas (Korobeiniki, Katiuska, MUSIC MIX), los niveles 18-19, el menú de pausa, los títulos de los prototipos y lo demás que añade el port (abajo); hecho en el título, además pone el primer prototipo |
+| GAME SELECT, LEVEL SETTINGS o el título | L+R | el acorde, el mismo en las tres: destapa las canciones ocultas (Korobeiniki, Katiuska, MUSIC MIX), los niveles 18-19, el menú de pausa, los títulos de los prototipos y lo demás que añade el port (abajo). El título no cambia: los prototipos se ponen desde OPTIONS |
 | GAME SELECT, con el acorde | Arriba desde 1 PLAYER, y A | OPTIONS, la sexta línea: los ajustes, los prototipos, las cifras de toda la vida y el borrado (abajo) |
 | GAME SELECT | A o START en un modo marcado ▣ | vuelve a su partida guardada con SAVE, en pausa, y con ella el acorde (abajo) |
 | Título, con el acorde | SELECT | las tablas de HIGH SCORES, una por modo (Izquierda/Derecha las recorren); sin el acorde, SELECT es otro START, como en el cartucho |
@@ -318,6 +318,16 @@ consola dice RIVAL LEFT un momento y sigue jugando sola hasta el final, sin
 pausa ni corte. Si una consola se reinicia o se apaga a media partida, la
 otra no se queda esperando: en carrera sigue sola, y en cooperativo (un solo
 tablero para los dos) lo da por perdido con CABLE LOST.
+
+**Dos títulos, una demo** (con el acorde en las dos). Dos cartuchos
+enlazados y dejados en su pantalla de título —lo que pasa solo al acabar
+una partida entre dos— arrancan sus demos a la vez, y con el acorde hecho
+en ambas esas dos demos son una sola partida cooperativa: los dos
+ordenadores del port en el mismo tablero, igual en las dos pantallas.
+Cualquier botón saca a esa consola a GAME SELECT, como de cualquier demo, y
+la otra sigue con la partida ella sola. Sin el acorde en las dos no hay
+nada de esto: cada consola hace la demo del cartucho, a su hora, y por el
+cable no dice nada que no dijera ya.
 
 **Los récords entre dos cartuchos se preguntan.** Cada cartucho tiene sus
 tablas, y las del amigo con puntuaciones monstruosas echarían de ellas las
@@ -511,7 +521,7 @@ Lo que hay detrás del acorde no es un modo: es el juego terminado.
   cartucho, como pieles que llegan hasta el tablero.
 
 En cifras: unas 6.500 líneas de C sin nada de GBA (`src/`: las reglas, y el
-diario con que se guarda en la flash; probadas en el PC con 182 tests y un
+diario con que se guarda en la flash; probadas en el PC con 183 tests y un
 fuzzer), 18.000 de capa GBA y 32.000 de herramientas y
 comprobaciones — 61 baterías en `make gba-check`, más de ochenta
 comprobaciones que arrancan la ROM en un emulador, la juegan y miran la

@@ -1449,6 +1449,74 @@ static void test_a_single_pak_slave_takes_the_masters_mode(void) {
     }
 }
 
+static void test_two_demos_share_a_board_and_nobody_else_joins_one(void) {
+    /* Two titles whose demos start together play ONE cooperative game
+     * (tengen_lobby_demo). Their lobby is the lobby, with the word in HELLO
+     * both ways: $1003 from the master, and the same in the echo. */
+    const uint8_t handicap[2] = { 0, 0 };
+    TengenLobby master, slave;
+    tengen_lobby_start_held(&master, 0x1234);
+    tengen_lobby_mode(&master, true);
+    tengen_lobby_demo(&master);
+    tengen_lobby_start_held(&slave, 0);
+    tengen_lobby_mode(&slave, true);
+    tengen_lobby_demo(&slave);
+    CHECK(tengen_lobby_word(&master, true) ==
+          ((TENGEN_LOBBY_HELLO << TENGEN_LOBBY_TAG_SHIFT) | TENGEN_HELLO_COOP |
+           TENGEN_HELLO_DEMO));
+    tengen_lobby_release(&master, 0xD3E0, 9, 0, handicap, true, true);
+    for (int i = 0; i < 100 && !master.ready; i++)
+        lobby_transfer(&master, &slave, true);
+    CHECK(master.ready && slave.ready);
+    CHECK(slave.seed == 0xD3E0 && slave.start_level == 9 && slave.coop && slave.xe);
+
+    /* A SLAVE FROM BEFORE THE BIT looks at the mode alone and echoes a
+     * HELLO with the mode alone: $1001. That is not an answer to a demo,
+     * and the master is no further on for any number of them. */
+    {
+        TengenLobby demo;
+        tengen_lobby_start_held(&demo, 0x1234);
+        tengen_lobby_mode(&demo, true);
+        tengen_lobby_demo(&demo);
+        tengen_lobby_release(&demo, 0xD3E0, 9, 0, handicap, true, false);
+        uint16_t old_echo = (uint16_t)((TENGEN_LOBBY_HELLO << TENGEN_LOBBY_TAG_SHIFT) |
+                                       TENGEN_HELLO_COOP);
+        for (int i = 0; i < TENGEN_LOBBY_LOST * 2; i++) {
+            tengen_lobby_apply(&demo, true, true, tengen_lobby_word(&demo, true),
+                               old_echo);
+            CHECK(!demo.linked && !demo.ready);
+            CHECK(demo.stage == TENGEN_LOBBY_HELLO);
+        }
+    }
+
+    /* A PLAYER IN A LOBBY IS NOT TAKEN INTO A DEMO, whichever end the
+     * player is on and whichever game they came for — nor a Single-Pak
+     * copy, which follows any mode but not this. And a lobby that has
+     * forgotten its partner and started over (tengen_lobby_forget) is
+     * still what it was. */
+    for (int who = 0; who < 2; who++)
+        for (int kind = 0; kind < 3; kind++) {
+            TengenLobby demo, real;
+            tengen_lobby_start_held(&demo, 0x1234);
+            tengen_lobby_mode(&demo, true);
+            tengen_lobby_demo(&demo);
+            tengen_lobby_start_held(&real, 0x4321);
+            if (kind == 2) tengen_lobby_mode_any(&real);
+            else tengen_lobby_mode(&real, kind == 1);
+            TengenLobby *m = who == 0 ? &demo : &real;
+            TengenLobby *sl = who == 0 ? &real : &demo;
+            tengen_lobby_release(m, 0xD3E0, 9, 0, handicap, true, false);
+            for (int i = 0; i < TENGEN_LOBBY_LOST * 4; i++)
+                lobby_transfer(m, sl, true);
+            CHECK(!demo.linked && !real.linked && !demo.ready && !real.ready);
+            tengen_lobby_forget(&demo, who == 0);
+            CHECK(demo.mode_demo);
+            for (int i = 0; i < TENGEN_LOBBY_LOST; i++)
+                lobby_transfer(m, sl, true);
+            CHECK(!demo.linked && !real.linked && !demo.ready && !real.ready);
+        }
+}
+
 static void test_a_single_pak_probe_is_not_a_go(void) {
     /* The master asks the cable for a console with no cartridge with $6200
      * (link_probe), which reads as GO with something in it. A slave hears
@@ -5299,6 +5367,7 @@ int main(void) {
     test_a_slave_that_saw_one_go_does_not_carry_it_over();
     test_two_consoles_that_chose_different_modes_never_link();
     test_a_single_pak_slave_takes_the_masters_mode();
+    test_two_demos_share_a_board_and_nobody_else_joins_one();
     test_a_single_pak_probe_is_not_a_go();
     test_the_game_boy_players_handshake();
     test_the_lobby_ends_even_when_one_side_leaves_first();

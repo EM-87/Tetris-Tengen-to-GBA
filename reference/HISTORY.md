@@ -1004,3 +1004,51 @@ when the other is no longer where it thinks.
   matter — it was sent by this cartridge an hour ago, starts from the cold
   table and is about to be switched off — and go across unasked as before.
   Between cartridges each player is asked, once, with NO under the arrow.
+
+## Two titles, one demo — and a chord that leaves the title alone
+
+The same evening's wish list had a joke in it: two consoles that have just
+finished a game together go back to their titles at once, and their demos
+start at once; "linking them would be funny". And then its limit, from the
+player, before it was built: under the chord, of course — the port of the
+cartridge is better left alone by now.
+
+- **What a title says.** A console at rest answered the cable with 0, and
+  that was all another console could know of it. On its title, under the
+  chord, it now answers with a word that every lobby ever built still
+  reads as 0 (the tag is NONE) and that says: a title, for this long, its
+  demo due or not. There is no interrupt at rest, so it is read off the
+  data registers, and the first question was how to tell news from what a
+  console said a minute ago before it went off to a game: each word
+  carries a count, and a console knows a transfer has happened when its
+  own comes back with a count it has not seen.
+- **Who plays.** The first plan had each console's computer play its own
+  pad and send its moves like a player. But a word is loaded for the next
+  step as the last one arrives, before this console has played it: a
+  computer there steers by the board of two steps ago. Both computers run
+  on both consoles instead, inside the step; the cable keeps time and
+  carries only whether somebody has picked a console up.
+- **Two bugs in one frame.** The first run: the master asked, and on that
+  very frame the slave started a demo of its own. The lobby's helper had
+  sent a HELLO before it could be told what the lobby was for — one word
+  of a player's, where an invitation was meant — and the slave, its demo
+  due, was waiting on "a title on the master's end", which the master had
+  stopped being the moment it began to ask.
+- **Old news, every twelve frames.** What a console hears of the other
+  title is forgotten after twelve frames without a transfer. The first
+  build forgot, with it, which of its own words it had last seen come
+  back — and so the word still standing in the register was "a transfer
+  since I last looked" again, and what a console had said before going
+  off to its own demo was heard for ever. Two mutants of exactly that
+  logic survived every check, which is how it was found: the check that
+  would have caught them failed on the build as it stood.
+- **Half a kilobyte.** The second computer's working state did not fit:
+  the linker keeps four kilobytes of IWRAM for the stack and said so. It
+  lives in EWRAM.
+- **The chord on the title.** L+R on the title rang the chord and, since
+  the title was where the prototypes had first been found, put the first
+  of them on. "It should turn the cheat on, not change the skin: leftover
+  code, I suppose." It was not leftover — it was written down in the
+  README — but it was a title changed by a chord rung for something else.
+  The skins are a list in OPTIONS; the title's chord chirps, turns the
+  last credit, and leaves the picture as it was.
