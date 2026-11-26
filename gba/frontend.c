@@ -105,23 +105,70 @@ uint8_t music_choices(void) {
  * whole engine again, as this did, sped the line clear's zip up with it. */
 uint8_t g_tempo_quarters;
 static uint8_t g_tempo_acc;
+/* ...AND OVER THE CABLE IT IS COUNTED BY THE MATCH'S STEPS, NOT BY THIS
+ * CONSOLE'S FRAMES (tempo_step, g_tempo_by_step). The two consoles of a
+ * linked match play the same steps and not the same number of them in each
+ * frame: one that is handed a move late plays none this frame and two the
+ * next. Counted a frame at a time, the stack as each console happened to
+ * see it, the two came to different sums — and the quarters left over are
+ * thrown away when the stack comes down, so a sum one short is a whole step
+ * of the tune short, for good: two speakers a frame apart, then two. A step
+ * at a time both count the same quarters and owe the tune the same steps
+ * (g_tempo_owed), which each plays in the frame it gets there. */
+bool g_tempo_by_step;
+static uint8_t g_tempo_owed;
+#define TEMPO_OWED_MAX 4
+
+void tempo_step(uint8_t quarters) {
+    if (!quarters) {
+        g_tempo_acc = 0;
+        return;
+    }
+    g_tempo_acc = (uint8_t)(g_tempo_acc + quarters);
+    if (g_tempo_acc >= 4) {
+        g_tempo_acc = (uint8_t)(g_tempo_acc - 4);
+        if (g_tempo_owed < TEMPO_OWED_MAX) g_tempo_owed++;
+    }
+}
+
+/* The blank the sound was last played up to (audio_turn). */
+static uint32_t g_audio_at;
 
 void audio_frame(void) {
-    uint8_t q = g_tempo_quarters;
-    g_tempo_quarters = 0;
+    g_audio_at = g_vblank_count;
     nes_audio_frame();
     handtune_frame();
-    if (q) {
-        g_tempo_acc = (uint8_t)(g_tempo_acc + q);
-        if (g_tempo_acc >= 4) {
-            g_tempo_acc = (uint8_t)(g_tempo_acc - 4);
-            nes_audio_tempo_step();
-            handtune_frame();
-        }
-    } else {
-        g_tempo_acc = 0;
+    /* (Counted here by the frame; by a linked match's steps, where they
+     * are played, and g_tempo_quarters is then the last one's.) */
+    if (!g_tempo_by_step) {
+        uint8_t q = g_tempo_quarters;
+        g_tempo_quarters = 0;
+        tempo_step(q);
+    }
+    while (g_tempo_owed) {
+        g_tempo_owed--;
+        nes_audio_tempo_step();
+        handtune_frame();
     }
     nes_audio_effect_frame();
+}
+
+/* A MATCH'S TURN OF SOUND: THE TUNE KEEPS THE CONSOLE'S CLOCK, NOT THE
+ * TURN'S. The engines count their notes in calls, one a turn, and a turn is
+ * a frame — until one runs over: a cartridge's waits out the whole of the
+ * next frame (vsync), a Single-Pak copy's runs into it, and a second one
+ * straight after has lost it too. That console's tune is then a frame
+ * behind the clock for good, and behind the other console's, which lost no
+ * frame: nothing on a cable can tell the two, each playing every step of
+ * the match. So a turn that finds two blanks gone since the last one's
+ * sound plays two frames of it (three for three; more than that is not a
+ * turn that ran over, it is a screen that was doing something else). A
+ * tune that has just begun is owed nothing (start_music). */
+void audio_turn(void) {
+    uint32_t gone = g_vblank_count - g_audio_at;
+    audio_frame();
+    if (gone == 2 || gone == 3)
+        while (--gone) audio_frame();
 }
 
 void stop_music_class(uint8_t klass) {
@@ -159,6 +206,7 @@ void stop_music(void) {
  * still frozen and only then letting it go has no such window, and a tune
  * that is no tune (NO MUSIC) simply never lets it go at all. */
 void start_music(uint8_t music) {
+    g_audio_at = g_vblank_count;    /* owed nothing from before it began */
     if (music == MUSIC_MIX) music = mix_tune();
     if (MUSIC_IS_HANDTUNE(music)) {
         stop_music();            /* the cartridge's engine steps aside */

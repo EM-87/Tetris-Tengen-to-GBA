@@ -140,6 +140,37 @@ static volatile bool g_partner_played;
  * names' exchange (link_partner_over), which is not a console gone. */
 static volatile uint16_t g_stranger_word;
 
+/* A STEP THE OTHER CONSOLE NEVER GOT IS SENT AGAIN. A transfer both consoles
+ * make and only one takes — a bit of the frame the cable changed for one
+ * of them; a Single-Pak copy, which has to ask for its interrupts, asking
+ * after the NEXT transfer had already written over this one — leaves the
+ * two a step apart, and they stayed there: the one ahead sending its move
+ * for the next step, the one behind its move for this, no pair of them
+ * ever a pair again, until each had counted six of the other's and called
+ * it gone. CABLE LOST over a whole cable, for one transfer; in the demo two
+ * titles share, which says nothing, two consoles each playing on alone.
+ *
+ * The one ahead can tell: the other's move is for the step before its own,
+ * LINK_AGAIN_AFTER transfers running (once is a console late with its
+ * word, which the next transfer mends by itself). It then sends the move
+ * it made for THAT step once more (g_last_word, g_again): the console
+ * behind sees the pair it missed — its own word for that step is still the
+ * one in its register, it has loaded nothing since — plays it, and the two
+ * are on the same step again. The console ahead does not play it twice: a
+ * pair is this console's to play only if it is for the step this console
+ * is on (the frame its own next word carries), which the pair it sends
+ * again is not. And while the other's moves are a step from this
+ * console's, either way, it is not counted with the consoles that have
+ * left — for long enough to send twice (LINK_APART_PATIENCE); after that
+ * it is, as before. A build from before this never sends again, and takes
+ * one sent to it like any pair. */
+#define LINK_AGAIN_AFTER 2
+#define LINK_APART_PATIENCE 8
+static volatile uint16_t g_last_word;   /* this console's move in the last pair it took */
+static volatile uint8_t g_behind_run;   /* transfers running with the other a step behind */
+static volatile uint8_t g_apart_run;    /* ...and a step either way, since the last pair */
+static volatile bool g_again;           /* ...and that move is in the register again */
+
 /* A TITLE LISTENS (link_title_tick, far below): at rest, on its title, a
  * console has the interrupt on for one thing — to take the two words of
  * each transfer as it ends and load its own for the next — and this is
@@ -233,6 +264,47 @@ static void sio_reset(void) {
  * test. The flags are not looked at. (While the cable was being made to
  * work on two SPs they were counted, with the words, for a line on the LINK
  * CABLE screen; that line is in the history, and the counters went with it.) */
+/* A TRANSFER IN A MATCH THAT IS NOT A PAIR OF ITS MOVES. If the other
+ * console has played, it is no longer in the match — counted only where
+ * this console's own word crossed whole, so that a transfer the cable
+ * mangled is not taken for a console's answer — or it is in it and a step
+ * behind (g_last_word). (A pair this console sent again and saw land is
+ * neither, and does not come here: the other has it now, or will be found
+ * a step behind again.) */
+static __attribute__((noinline)) void stranger_service(uint16_t m, uint16_t s) {
+    bool mine_m = m == g_sent_word && tengen_link_is_match_word(m);
+    bool mine_s = s == g_sent_word && tengen_link_is_match_word(s);
+    if (!g_partner_played || mine_m == mine_s) return;
+    uint16_t theirs = mine_m ? s : m;
+    /* Its move is for the step before this console's (1) or the step
+     * after (the mask's own value, one less than nothing): the other is IN
+     * the match and a step from here, which a move sent again mends. Not
+     * a console gone — for LINK_APART_PATIENCE transfers, which is two of
+     * those and the wait before each; one that goes on being a step away
+     * after that is not taking them, and is counted like any other. */
+    uint8_t ahead = (uint8_t)((tengen_link_frame(g_sent_word) -
+                               tengen_link_frame(theirs)) & TENGEN_LINK_FRAME_MASK);
+    bool move = tengen_link_is_match_word(theirs);
+    if (move && (ahead == 1 || ahead == TENGEN_LINK_FRAME_MASK) &&
+        g_apart_run < LINK_APART_PATIENCE) {
+        g_apart_run++;
+    } else {
+        if (g_strangers < 0xFF) g_strangers++;
+        g_stranger_word = theirs;
+    }
+    /* A step behind this console, and still: its last move goes out
+     * again. */
+    if (move && ahead == 1) {
+        if (++g_behind_run >= LINK_AGAIN_AFTER) {
+            g_behind_run = 0;
+            g_again = true;
+            g_tx_word = g_last_word;
+        }
+    } else {
+        g_behind_run = 0;
+    }
+}
+
 IWRAM_CODE void link_serial_service(void);
 void link_serial_service(void) {
     uint16_t cnt = REG_SIOCNT;
@@ -267,10 +339,18 @@ void link_serial_service(void) {
          * the same two words and both send theirs again. Once late costs a
          * transfer; a console that keeps it up is counted with the ones
          * that have left (g_strangers). */
+        /* ...AND FOR THE STEP THIS CONSOLE IS ON: see g_last_word. */
         bool heard = m != LINK_ABSENT && s != LINK_ABSENT;
+        bool pair = tengen_link_is_match_word(m) && tengen_link_is_match_word(s) &&
+                    tengen_link_frame(m) == tengen_link_frame(s);
         bool lobby_word = heard && g_auto_tx &&
-            !(tengen_link_is_match_word(m) && tengen_link_is_match_word(s) &&
-              tengen_link_frame(m) == tengen_link_frame(s));
+            !(pair && tengen_link_frame(m) ==
+                          (g_tx_frame & TENGEN_LINK_FRAME_MASK));
+        /* A move sent again was for one transfer, taken or not: the
+         * register goes back to the step this console is on (`fresh`,
+         * below — one reading of the pad for either reason to take one). */
+        bool fresh = g_again;
+        g_again = false;
         /* Any transfer that heard both consoles ends a run of empty ones —
          * the lobby's last GO in the match included, or a partner halfway
          * out of the lobby could add its empty transfers to the ones
@@ -278,15 +358,9 @@ void link_serial_service(void) {
         if (heard) g_absent_run = 0;
         if (lobby_word) {
             g_starved = 0;                    /* the partner is there */
-            /* ...and, if it has played, no longer in the match: only where
-             * this console's own word crossed whole, so that a transfer
-             * the cable mangled is not taken for a console's answer. */
-            bool mine_m = m == g_sent_word && tengen_link_is_match_word(m);
-            bool mine_s = s == g_sent_word && tengen_link_is_match_word(s);
-            if (g_partner_played && mine_m != mine_s) {
-                if (g_strangers < 0xFF) g_strangers++;
-                g_stranger_word = mine_m ? s : m;
-            }
+            /* (Not in a hurry, and not in IWRAM: a match's own pairs do
+             * not come this way.) */
+            if (!pair) stranger_service(m, s);
         } else if (!heard) {
             if (++g_absent_run >= LINK_ABSENT_LIMIT) {
                 g_absent_run = 0;
@@ -320,12 +394,17 @@ void link_serial_service(void) {
              * transfer. This is the whole reason the cable runs on an
              * interrupt. */
             if (g_auto_tx) {
+                g_last_word = g_sent_word;
+                g_behind_run = 0;
+                g_apart_run = 0;
                 g_tx_frame++;
-                g_tx_word = tengen_link_pack(link_read_buttons(), g_tx_frame);
+                fresh = true;
                 g_partner_played = true;
                 g_strangers = 0;
             }
         }
+        if (fresh)
+            g_tx_word = tengen_link_pack(link_read_buttons(), g_tx_frame);
     }
     /* The port is free until the master's next start: the word the main
      * loop wants goes in now (see load_send). */
@@ -524,6 +603,10 @@ void link_pump(void) {
      * as in gba-link-connection. */
     if (!(cnt & SIO_SD)) return;
     REG_SIOCNT = cnt | SIO_START;
+}
+
+uint8_t link_queued(void) {
+    return (uint8_t)((g_rx_head + RX_QUEUE - g_rx_tail) % RX_QUEUE);
 }
 
 bool link_pop(LinkFrame *out) {

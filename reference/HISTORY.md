@@ -1211,3 +1211,83 @@ and three more lines came back with the news.
   through did not. The same search found `link_lobby_start`, a lobby that
   is not parked, which nothing had called since the choosing moved after
   the connecting: gone.
+
+## The music that was not the music
+
+One line came back about the build that had put the tune on the match's
+first step: "The music is still out of step in the demo, cartridge against
+clone. I don't understand it, because in a cooperative game it is fine."
+
+- **The fix before this one mended what the emulator showed.** Two tunes
+  a frame apart at the start, measured, mended, measured again at zero —
+  on a cable whose transfers take no time and land on the edge of the
+  other console's frame. Two consoles were hearing something else, and
+  the sentence that said so was the second one: fine in a game.
+- **What a game does not have is two computers thinking in every step.**
+  A turn of a linked match looked for another move after each step it
+  played — to catch up, whenever there was anything to catch up with. A
+  step two players' pads make is over in a few scanlines. A step of the
+  shared demo is a third of a frame and more, and a transfer takes a
+  millisecond on a real cable: the one the master started as its turn
+  began LANDED during the step, the look after the step found it, and the
+  turn played a second step — four computers' worth of thinking, past the
+  blank, a frame gone. The next turn had nothing to play, having played
+  its move a frame early; the one after had two. With a transfer given
+  its millisecond the emulator did it at once: 1578 steps in 1800 frames
+  between a cartridge and its copy, a quarter of the master's turns
+  playing no step or two — and each console's tune, which counted its
+  notes one call a turn, eighteen frames behind the other's after five
+  seconds and ninety after fifteen. Between two cartridges nearly half
+  the master's turns, and the two tunes within five frames of each other,
+  coming and going. One step a turn now; a second only for a console that
+  is behind as its turn begins.
+- **And the clone was losing the cable without a word.** It takes no
+  interrupts; it asks after its port, and asked only while it waited for
+  the blank. Its heaviest turn of the demo is a frame and an eighth: a
+  transfer that landed just after one wait was looked at behind the next
+  one, whose words had written over it. The cartridge had played a step
+  the copy never saw; the two were a step apart for good, each counted
+  six of the other's moves that were not for its step, and each called
+  the other gone — in a demo, which says nothing: two consoles each
+  playing on alone, seven seconds in, with the copy's frame five
+  scanlines after the cartridge's transfers. It asks from inside its turn
+  now. And the step itself is mended, for any cable: the console ahead
+  sees the other's moves are for the step before its own and sends that
+  step's move again.
+- **Why nothing had seen any of it.** The rig runs one console a frame and
+  then the other. A transfer the master makes during its frame found the
+  slave standing on the edge of its own — the first scanline of its
+  blank, the one place where a console that only asks while it waits is
+  always asking, and the one moment no step is ever in the way. The slow
+  cable landed its transfers as the frame ended: the same place. `_pair`
+  takes a phase and a length now, and the demo is played at sixteen of
+  them.
+- **Five places to ask from, of which three were nothing.** The first
+  draft had the copy asking before its sound, after it, as the turn
+  began, between the two computers and after each step. A build without
+  any one of the five passed every check — and so did the build that
+  waited for its blank the old way, the one that added up the turns it
+  kept a move in hand, the one that sent a move again at the first late
+  word, and twelve more: sixteen deliberately broken builds of thirty-nine
+  not caught. Measured, two of the five places changed nothing at all and
+  a third only shortened the longest wait for an answer from a hundred
+  scanlines to seventy-four, which nothing else can tell: the three went,
+  and the two that are left are held to a number, half a frame (150
+  scanlines with the first of them alone, 240 with neither — and a frame
+  is 228). The rest were the checks': the tune's distance is now exactly
+  the one frame the rig makes of it and not "within one"; not a blank
+  lost; not a transfer that is not a pair; the same disturbance on an
+  even step and an odd one, and three times in a match; each case held
+  to the frames it has to cost. A second round of forty found four more
+  — two of them a counter whose check held a console up, which begins
+  the count again by itself, where the thing to do was to move one
+  console's frame across the other's transfers as two crystals do — and
+  the last, forty-one on the tree as it went out, none.
+- **Two consoles at rest send the same word.** The build that answered
+  one late word by sending its own last move again should have been
+  answered in kind for ever — each console in turn a step "behind" the
+  other's repeat. It passed, because with both pads at rest the two words
+  of a transfer are the same sixteen bits and a console cannot tell which
+  slot was its own: both sent again together and met. With LEFT held on
+  one pad it lost the cable for one late word. The checks of who answers
+  what hold a button down.

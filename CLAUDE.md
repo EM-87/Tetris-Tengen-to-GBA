@@ -115,7 +115,7 @@ minus those).
 | --- | --- | --- |
 | `make test` | no | always — the rules, in milliseconds |
 | `make gba` | headers | to build `build/tengen.gba` |
-| `make gba-check` | headers | before calling any change done: 83 checks on the running ROM in mGBA, twenty-eight of them on two consoles with a cable, and then the Wireless Adapter's (`run_wireless.py`) |
+| `make gba-check` | headers | before calling any change done: 87 checks on the running ROM in mGBA, thirty-two of them on two consoles with a cable, and then the Wireless Adapter's (`run_wireless.py`) |
 | `make trace ROM=... [MODE=coop\|versus\|with\|demo]` | yes | after touching `tengen_step` or `tengen_ai.c`: the port against the cartridge, iteration by iteration. The 1P and coop scripts never complete a row; `MODE="with --pad1"` plays player 1 with the port's computer and clears plenty; add `--handicap N` to any mode |
 | `make tune-check ROM=...` | yes | after touching audio: the four tunes against the cartridge, note by note |
 | `make dance-check ROM=...` | yes | after touching the dancers: their choreography against the cartridge's driver |
@@ -220,9 +220,9 @@ story behind each; the item number is in brackets.
   in 256 KB and the link asserts it. It was nearly FULL — thirty-two bytes to
   spare once UP's drop went in — until the view went from the whole 64 KB
   address space to the program's half, $8000-$FFFF (`NES6502_CODE_SIZE`):
-  about 31 KB spare then, and ABOUT 1.6 KB NOW — everything since has gone
-  into the copy as well, the demo two titles share (3 KB) and what the
-  cable has learnt since. Whatever
+  about 31 KB spare then, and ABOUT A KILOBYTE NOW — everything since has
+  gone into the copy as well, the demo two titles share (3 KB) and what
+  the cable has learnt since. Whatever
   goes into the copy next finds its room first: `arm-none-eabi-nm -n
   build/tengen_mb.elf | grep __ewram_end` against 0x02040000, and IWRAM's
   4 KB for the stacks on both builds (the link asserts that one too, and a
@@ -243,8 +243,12 @@ story behind each; the item number is in brackets.
     CPU was in system mode, as GBATEK says; internal WRAM intact; why is
     NOT known). So the slave never sets IME (`IME_ON` is 0 there) and
     vsync() polls IF for the vertical blank and the end of a transfer and
-    serves each as the handler would (`poll_interrupts`, video.c). The
-    master starts one transfer a frame, so that is soon enough.
+    serves each as the handler would (`poll_interrupts`, video.c). "The
+    master starts one transfer a frame, so that is soon enough", this
+    said, and it was — of a turn that is over long before the next blank.
+    A LINKED TURN ASKS FROM INSIDE ITSELF TOO, as it begins and between
+    the shared demo's two computers: see "a transfer takes a millisecond",
+    under the real cable, below.
   - **The sending is all software** (`link_multiboot_send`): the BIOS's
     handshake, then GBATEK's SWI $25 pseudo-code (length, seed, each word
     encrypted in two halves, the checksum), as gba-link-connection's
@@ -646,6 +650,81 @@ story behind each; the item number is in brackets.
     Single-Pak copy on either end (`_pair(rom, slow=True, slave_rom=mb)`).
     The demo two titles share was checked on the cable whose transfers take
     no time, worked there every time, and never once on two consoles.
+  - **A TRANSFER TAKES A MILLISECOND AND LANDS ANYWHERE IN THE OTHER
+    CONSOLE'S FRAME.** Thirty-six bits at 38400 a second: thirteen
+    scanlines, and two crystals put it wherever they happen to. Both of the
+    checks' cables put it on a frame's edge — the quick one in no time, the
+    slow one as the frame ends, and the two consoles' frames began together
+    — and what lived in between came back as "the music is still out of
+    step in the demo, cartridge against clone; in a cooperative game it is
+    fine". `_pair(..., phase=N, takes=TRANSFER_CYCLES)` is that cable: a
+    transfer lands its millisecond after the master starts it, with the
+    slave N scanlines into its own frame. ANYTHING ABOUT THE PACE OF A
+    LINKED TURN IS CHECKED ON IT (`phase_check`: the shared demo at sixteen
+    phases and pairings, a played game at three).
+    - *One step a turn* (`link_play_frame`). A turn looked for another
+      move after every step it played. A player's step is a few scanlines
+      and nothing lands meanwhile; the shared demo's has two computers
+      thinking in it, a third of a frame and more, the next transfer
+      landed DURING it, and the turn played two — past its blank, a frame
+      gone — none the next turn, two the one after. 1578 steps in 1800
+      frames between a cartridge and its copy (1562 between two
+      cartridges), and each console's tune, which counted its notes in
+      turns, behind by its own amount: eighteen frames apart after five
+      seconds, thirty-six after ten, ninety after fifteen. A move that
+      lands while a turn works is the NEXT turn's. A second step is for a
+      console that is behind AS ITS TURN BEGINS: three moves waiting
+      (`LINK_DEEP_NOW`), or two for sixty-four turns running
+      (`LINK_DEEP_TURNS`) — one in hand is a move that came a moment
+      early and is wanted next turn; played at once it is a frame stood
+      still and then two steps, every time two consoles' frames drift
+      across each other (eight turns did exactly that in a played game).
+      Counted RUNNING, not added up; and a demo keeps the one it has in
+      hand for good, two of its steps being the long turn (`pace_check`
+      holds a console up and reads the catching up, and moves the slave's
+      frame across the master's transfers and back as two crystals do:
+      `both.phase`. A console held up finds three waiting, which is
+      another rule: the check of the count is the frame moved).
+    - *The copy asks from inside its turn* (`poll_interrupts`: as the turn
+      begins, and between the demo's two computers). Asked only from
+      vsync, with the demo's heaviest turn a frame and an eighth on the
+      copy, a transfer that landed just after a wait was served behind
+      the NEXT one — its words written over, a step the cartridge played
+      and the copy never did. And a move that landed while the copy drew
+      was played a turn late. Two places and not five: asked as well
+      before the sound, after it and after each step, nothing a player or
+      a cable can tell changed (`_Answers`: the longest a transfer waits
+      for its answer is a hundred scanlines with the two and seventy-four
+      with all five, half a frame being the check's limit; 150 with the
+      first alone, 240 with none — longer than a frame is a transfer
+      lost). A turn that counted its blank from inside draws at once
+      (`g_vsync_at`): waiting for the next is a frame lost every time a
+      turn runs over, each one putting the copy further behind — 134
+      blanks of 1900 on the build that waited as before.
+    - *A step the other console never got is sent again* (`g_last_word`,
+      `stranger_service`, link.c). A transfer both make and ONE takes — a
+      bit of the frame field changed for one receiver; a copy asking too
+      late — left the two a step apart for good, each resending, until
+      each had counted six of the other's and called it gone: CABLE LOST
+      over a whole cable, and in a demo two consoles playing on alone
+      without a word. The console AHEAD can tell — the other's move is for
+      the step before its own, two transfers running (`LINK_AGAIN_AFTER`;
+      ONCE is a console late with its word, and a console that answered
+      that with its own last move would be answered in kind, for good) —
+      and sends the move it made for that step once more; the console
+      behind sees the pair it missed and plays it. A pair is a console's
+      to play only if it is for the step it is ON, so the one ahead does
+      not play it twice. And a console whose moves are a step from this
+      one's, either way, is not counted with the ones that left for eight
+      transfers (`LINK_APART_PATIENCE`: two of those repeats and the wait
+      before each), every time and not eight an evening. A build from
+      before this never sends again and takes one sent to it like any
+      pair. `again_check`, `Cable.garble_at`.
+    - TWO CONSOLES AT REST SEND THE SAME WORD, and neither can then tell
+      whose slot is whose (`mine_m`, `mine_s`): a check of who answers
+      what holds a button on one pad. The build that sent again at the
+      first late word passed every check with the pads at rest, and lost
+      the cable for one late word with LEFT held.
     And the cable requests the serial interrupt only of a console that asked
     for it (SIOCNT bit 14, `Cable._raise`), as the hardware does: it used to
     raise it on both whatever the bit said, with IE all that stood between a
@@ -846,18 +925,47 @@ story behind each; the item number is in brackets.
     by a player that lives in the test, a number each): when it fails,
     say in README and here from which build on the game is another, and
     only then change the numbers. THE GAME OF TODAY IS 2.20'S.
-  - *Not mended, and worth knowing:* a transfer ONE console takes and the
-    other does not (a bit changed in the frame field for one of them; a
-    copy that polls too late and finds the next transfer's words) leaves
-    them a step apart for good, each resending — six transfers later both
-    call the other gone. The stale-word rule assumes both saw the same
-    pair.
+  - A transfer ONE console takes and the other does not (a bit changed in
+    the frame field for one of them; a copy that asked too late and found
+    the next transfer's words) used to leave them a step apart for good —
+    the stale-word rule assumes both saw the same pair. The move is sent
+    again now: "a transfer takes a millisecond", under the real cable.
 - **A linked match's tune starts on its first step** (`link_tune_begin`),
   not as each console gets out of the lobby: those are a transfer or two
   apart, and one tune from two speakers two frames apart is an echo ("the
   music between the GBAs is out of step in the coop demo"). Everything
   else the music does in a linked match was on a step already.
-  `_tunes_apart` measures it: zero frames, every pairing.
+  `_tunes_apart` measures it: zero frames, every pairing — on the cable
+  whose transfers take no time. It was true and it was not what two
+  consoles were hearing: the demo itself ran unevenly there ("a transfer
+  takes a millisecond", above), and each tune fell behind with its
+  console's turns. Two more things keep a tune with the other console's:
+  - **It keeps the console's clock, not its turns'** (`audio_turn`). The
+    engines count notes in calls, a call a turn, and a turn that runs
+    past its blank takes two frames: that console's tune is a frame
+    behind for good. A match's turn plays a frame of sound for every
+    blank gone since the last (two, or three; more is a screen that was
+    doing something else), and a tune that has just begun is owed nothing
+    from before it began (`start_music`). Since one step a turn it is
+    never needed in the shared demo — `phase_check` holds both consoles
+    to not one blank lost — and it is what is left if a turn does run
+    over.
+  - **Its tempo is the match's** (`tempo_step`, `g_tempo_by_step`). The
+    tempo by the stack was counted a frame at a time, each console's own
+    frames; two consoles play the same steps and not the same number in
+    each frame, and a sum a quarter short when the stack came down was a
+    step of the tune short for good. Counted on the match's steps, the
+    same on both (`tune_clock_check`).
+  - What is left between two speakers is under a frame, and the same in a
+    played game: the master starts a transfer in one turn and plays its
+    pair in the next, the slave plays it in the turn it lands in. On the
+    rig that is the slave's tune one frame before the master's at every
+    phase, and `phase_check` holds it to exactly that. INFERRED ON
+    HARDWARE UNTIL TWO CONSOLES HAVE DONE IT: all of this was measured in
+    the emulator, with a transfer given its length and the frames a
+    phase; what two consoles had said was "out of step in the demo, fine
+    in a game", which is what the old pace does there and nothing else
+    found does.
 - **Each console says which build it is** in HELLO, bits 4-11
   (`tengen_lobby_version`, `g_link_version`: the number after "2." on the
   VERSION credit). Every build before the field reads the mode's bits and

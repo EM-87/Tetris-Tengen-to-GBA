@@ -78,7 +78,15 @@ static uint8_t g_link_wait_frames;   /* for the two sounds; see link_wait */
  * intro, the tune after it, the pause, the game over. The first step is
  * played by both within a frame of each other, which is as near as two
  * consoles with a frame of their own each can get. */
+static uint8_t match_tempo(void);
 static bool g_link_tune_due;
+/* Turns running that began with two moves waiting (link_play_frame). */
+static uint8_t g_deep_turns;
+/* ...and the two numbers that pace is kept by, for the check that holds a
+ * console up and watches it catch up (run_link's pace_check): read out of
+ * the ROM, not written out again there. */
+__attribute__((used))
+const uint8_t kLinkPace[2] = { LINK_DEEP_TURNS, LINK_DEEP_NOW };
 
 void link_tune_begin(void) {
     g_link_tune_due = true;
@@ -434,6 +442,12 @@ static void link_demo_moves(uint8_t moves[2]) {
                           &g_ai_last_partner, &g_ai_frame)
             : ai_input_of(&g_ai_two, TENGEN_PLAYER_2, &g_ai_two_piece,
                           &g_ai_two_partner, &g_ai_two_frame);
+        /* Two heads are the longest stretch of any turn there is — two
+         * thirds of a frame on the Single-Pak copy when both have a piece
+         * to place — and the cable is asked after between them
+         * (poll_interrupts): a transfer never waits half a frame for its
+         * answer, whatever the turn is doing. */
+        poll_interrupts();
     }
 }
 
@@ -1473,7 +1487,12 @@ static void link_step_done(const TengenStepResult out[2]) {
 
 bool link_play_frame(uint8_t pressed, bool *quit) {
     /* The master starts one transfer per frame off its own vblank; the slave
-     * has nothing to start. Either way the interrupt does the collecting. */
+     * has nothing to start. Either way the interrupt does the collecting —
+     * which the Single-Pak copy has to be asked for (poll_interrupts), here
+     * and between the demo's two computers: what landed while the screen
+     * was being drawn and the sound played is this turn's move, not the
+     * next one's. */
+    poll_interrupts();
     if (!g_link_alone) {
         link_pump();
         link_tick();
@@ -1482,8 +1501,45 @@ bool link_play_frame(uint8_t pressed, bool *quit) {
      * game, and not the cable's of this moment (alone, there is none). */
     const int me = g_session.local_slot;
 
+    /* ONE STEP A TURN, AND A SECOND ONLY FOR A CONSOLE THAT IS BEHIND —
+     * counted as the turn begins, not found on the way. This used to look
+     * for another move after every step it played, to catch up whenever
+     * there was anything to catch up with. A step a player's pad makes is
+     * over in a few scanlines and nothing lands meanwhile. A step of the
+     * demo two titles share has two computers thinking in it, a third of
+     * a frame and more: the transfer the master started as the turn began
+     * LANDS during it — a millisecond on a real cable; no time at all on
+     * the checks' quick one, and the end of the frame on their slow one,
+     * which is why nothing here saw it — and the look after the step
+     * found it. Two steps that turn, four computers' worth of thinking,
+     * the turn past its blank and a frame gone; none the next, having
+     * played tomorrow's move today; two the turn after. On a cable whose
+     * transfers take their millisecond the demo lost one frame in eight,
+     * in fits of two-frame turns, and each console's tune, which counted
+     * its notes in turns, fell behind by its own amount — and what two
+     * consoles had said was "the music is out of step in the demo, and in
+     * a game it is fine".
+     *
+     * A move that arrives while the turn is at work is the NEXT turn's.
+     * Two waiting as a turn begins are one that came a moment early (its
+     * console's frame and the other's transfers drift across each other
+     * all evening) and is kept for the turn it would otherwise go without;
+     * only if that goes on — or three are waiting, which is a console a
+     * frame and more behind — does a turn play two. A demo keeps the one
+     * it has in hand: nobody is holding its pad to feel a frame's delay,
+     * and two of its steps are the long turn this is here to avoid. */
     LinkFrame f;
-    int stepped = 0;
+    int stepped = 0, steps = 1;
+    {
+        uint8_t waiting = link_queued();
+        if (waiting >= LINK_DEEP_NOW) {
+            steps = LINK_MAX_CATCHUP;
+        } else if (waiting < 2 || g_demo) {
+            g_deep_turns = 0;       /* running, not added up */
+        } else if (++g_deep_turns >= LINK_DEEP_TURNS) {
+            steps = LINK_MAX_CATCHUP;
+        }
+    }
     for (;;) {
         if (g_link_alone) {
             /* ALONE: one step a frame by this console's own clock, its pad
@@ -1493,7 +1549,7 @@ bool link_play_frame(uint8_t pressed, bool *quit) {
             uint16_t rest = tengen_link_pack(0, g_session.frame);
             f.master = me == 0 ? mine : rest;
             f.slave = me == 0 ? rest : mine;
-        } else if (stepped >= LINK_MAX_CATCHUP || !link_pop(&f)) {
+        } else if (stepped >= steps || !link_pop(&f)) {
             break;
         }
         uint16_t local  = me == 0 ? f.master : f.slave;
@@ -1658,6 +1714,10 @@ bool link_play_frame(uint8_t pressed, bool *quit) {
         }
         if (was_paused != g_session.game.paused) pause_toggled(was_paused);
         link_step_done(out);
+        /* The tempo is the match's, counted on its steps (tempo_step):
+         * the stack as this step left it, the same on both consoles. */
+        g_tempo_quarters = match_tempo();
+        tempo_step(g_tempo_quarters);
         stepped++;
     }
 
@@ -1981,6 +2041,14 @@ static void record_watch(void) {
  * piece passing a threshold on its way down. */
 #define TEMPO_ROWS_QUARTER 12
 #define TEMPO_ROWS_HALF    15
+static uint8_t stack_tempo(void);
+/* ...while there is a game on this console's board to speed up for. */
+static uint8_t match_tempo(void) {
+    if (!pause_menu_on() || g_session.game.paused || g_link_waiting ||
+        g_link_lost || !g_session.game.player[g_view].game_active)
+        return 0;
+    return stack_tempo();
+}
 static uint8_t stack_tempo(void) {
     const TengenGame *g = &g_session.game;
     const TengenPlayfield *f = &g->field[g->coop ? 0 : g_view];
@@ -2181,7 +2249,11 @@ void draw_match(bool *sweeping) {
 
     /* And the sound engine afterwards, out of the blank, where it costs
      * nothing but CPU time. */
-    audio_frame();
+    if (g_tempo_by_step != g_linked) {
+        g_tempo_by_step = g_linked;
+        g_tempo_quarters = 0;
+    }
+    audio_turn();
 
     /* Under the chord: the jingle for a new record, and the tempo for the
      * NEXT frame's audio_frame. After it, not before: anything here before
@@ -2189,7 +2261,6 @@ void draw_match(bool *sweeping) {
      * and scanning the board put the frame that leaves a pause at line 226
      * of 227 (`--vblank`). A frame late is not something an ear hears. */
     record_watch();
-    if (pause_menu_on() && !g_session.game.paused && !g_link_waiting &&
-        !g_link_lost && g_session.game.player[g_view].game_active)
-        g_tempo_quarters = stack_tempo();
+    /* (A linked match's is counted on its steps: link_play_frame.) */
+    if (!g_linked) g_tempo_quarters = match_tempo();
 }

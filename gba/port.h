@@ -1662,6 +1662,15 @@ typedef enum {
 /* Never spend a frame doing nothing but catching up. Two is all the drift
  * between two crystals can ever put in the queue at once. */
 #define LINK_MAX_CATCHUP 2
+/* ...AND A TURN THAT IS NOT BEHIND PLAYS ONE STEP (link_play_frame). The
+ * second is for a console that IS behind: three moves waiting as its turn
+ * begins, or two for LINK_DEEP_TURNS turns running — a second, which is
+ * not a move that came a moment early and will be wanted the turn after
+ * (played at once it leaves that turn with nothing: a frame stood still,
+ * then two steps in one, every time the two consoles' frames drift across
+ * each other). */
+#define LINK_DEEP_NOW   3
+#define LINK_DEEP_TURNS 64
 
 /* ----------------------------------------------------------------------- *
  * The pause menu — L+R while the plaque is up
@@ -1954,6 +1963,14 @@ extern uint32_t g_high_score;
 extern bool g_ai_active;
 extern uint8_t g_view;
 void vsync(void);
+/* The Single-Pak copy's interrupts, asked for (video.c): from vsync, and
+ * from inside a turn that is long. Nothing on a cartridge, which takes
+ * them as they come. */
+#ifdef TENGEN_MULTIBOOT
+void poll_interrupts(void);
+#else
+static inline void poll_interrupts(void) {}
+#endif
 uint8_t read_buttons(void);
 /* A and B the other way round (OPT_SWAP_AB), for the pad of a match only:
  * the pause menu's A is A whatever the switch says. */
@@ -2204,6 +2221,9 @@ void audio_frame(void);
 extern uint32_t g_record_bar;
 extern bool g_record_sung;
 extern uint8_t g_tempo_quarters;   /* this frame's extra music steps, in quarters */
+extern bool g_tempo_by_step;       /* ...counted by a linked match's steps instead */
+void tempo_step(uint8_t quarters); /* one step of it */
+void audio_turn(void);             /* a match's turn of sound; see frontend.c */
 void stop_music_class(uint8_t klass);
 void stop_music(void);
 void start_music(uint8_t music);

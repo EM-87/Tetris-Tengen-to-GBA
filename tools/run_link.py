@@ -42,9 +42,12 @@ two would drift apart and this would say on which frame.
 
 Requires: pip install pygba  (plus the mGBA shared library)
 """
+import collections
 import os
+import random
 import subprocess
 import sys
+import zlib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import romcheck.harness  # noqa: E402,F401 - skips the splash; see there
@@ -55,7 +58,7 @@ try:
     import mgba.gba
     import mgba.image
     import mgba.log
-    from mgba import lib
+    from mgba import ffi, lib
 except ImportError as exc:  # pragma: no cover - environment problem
     sys.exit(f"mGBA python bindings unavailable ({exc}).\n"
              "Install with: pip install pygba && apt-get install libmgba0.10")
@@ -200,6 +203,17 @@ class CableEnd(mgba.gba.GBASIODriver):
             self.cable._set_bit(self.cable.slave, SIO_START, True)
             self.cable._set_bit(self.cable.slave, SIO_SI, False)
             return value
+        if self.master and (value & SIO_START) and self.cable.takes:
+            # ...OR A MILLISECOND (Cable.takes): busy the same way, and
+            # landed by the master's own clock that long after its start.
+            self.cable.pending = True
+            self.cable.latched = (
+                self.cable.master._native.memory.io[IO_SIOMLT_SEND],
+                self.cable.slave._native.memory.io[IO_SIOMLT_SEND])
+            self.cable._set_bit(self.cable.slave, SIO_START, True)
+            self.cable._set_bit(self.cable.slave, SIO_SI, False)
+            self.cable.land_in(self.cable.takes)
+            return value
         if self.master and (value & SIO_START):
             if self.cable.transfer():
                 value &= ~SIO_ERR
@@ -241,6 +255,17 @@ class Cable:
         self.slow = False
         self.pending = False
         self.latched = None
+        # A TRANSFER TAKES A MILLISECOND, on the quick cable: with a number
+        # of cycles here it lands that long after the master starts it, by
+        # the master's clock, in the middle of whatever the master went on
+        # to do — not before the instruction after the start. Two words at
+        # the game's speed are thirty-six bits at 38400 a second: about
+        # sixteen thousand cycles, thirteen scanlines. A step a player's
+        # pad makes is over long before that; one two computers think in
+        # is not, and a console that looks for another move after each step
+        # it plays finds the one that has just landed (pace_check, phase_check).
+        self.takes = 0
+        self._land = None
         # ...and how many times either program wrote SIOCNT or its word
         # with one of them passing. What that does to a real port nobody
         # here has measured; the port's rule is not to (gba/link.c: the
@@ -268,6 +293,15 @@ class Cable:
         # is off the cable for a moment first, and that moment is a quiet
         # cable, which is another road to the same place).
         self.rests = set()
+        # A WORD ONE CONSOLE HEARS WRONG: at these good-transfer counts,
+        # {count: (end, bits)}, the console on that end (0 the master's, 1
+        # the slave's) has the OTHER console's word with those bits turned
+        # over, and the other console has both words whole — what a cable
+        # does to one receiver and not the other (each console's own word
+        # is its own register's, never the wire's). A bit of the frame
+        # (0x0100) makes it a transfer one console takes for the match's
+        # next pair and the other does not.
+        self.garble_at = {}
         # WHAT WENT OUT, for the checks that read the wire itself: with a
         # list here, every transfer the master starts is put on it as
         # (frame, speed bits of the master's SIOCNT, its word, the answer or
@@ -306,11 +340,36 @@ class Cable:
                 continue
             self._set_bit(core, SIO_SD, sd)
 
+    def land_in(self, cycles):
+        """A transfer in flight lands this many cycles of the master's
+        clock from now (Cable.takes)."""
+        if self._land is None:
+            @ffi.callback("void(struct mTiming *, void *, uint32_t)")
+            def landed(timing, context, late):
+                if not self.pending:
+                    return
+                self.pending = False
+                ok = self.transfer()
+                for core in (self.master, self.slave):
+                    self._set_bit(core, SIO_START, False)
+                self._set_bit(self.master, SIO_ERR, not ok)
+                self._set_bit(self.slave, SIO_SI, self.parent_drives_so())
+            label = ffi.new("char[]", b"transfer")
+            event = ffi.new("struct mTimingEvent *")
+            event.callback = landed
+            event.context = ffi.NULL
+            event.name = label
+            event.priority = 0x7E
+            self._land = (landed, label, event)
+        lib.mTimingDeschedule(ffi.addressof(self.master._native.timing), self._land[2])
+        lib.mTimingSchedule(ffi.addressof(self.master._native.timing),
+                            self._land[2], cycles)
+
     def settle(self):
         """The end of a frame: a slow transfer in flight lands, and SD, if a
         transfer left it down (sd_lags), is back where the consoles' modes
         put it."""
-        if self.pending:
+        if self.pending and not self.takes:
             self.pending = False
             ok = self.transfer()
             for core in (self.master, self.slave):
@@ -424,9 +483,14 @@ class Cable:
         if m == ABSENT or s == ABSENT:
             self.failed += 1
 
-        for io in (mio, sio):
-            io[IO_SIOMULTI0] = m
-            io[IO_SIOMULTI1] = s
+        heard = [(m, s), (m, s)]
+        garble = self.garble_at.pop(self.transfers, None)
+        if garble is not None and m != ABSENT and s != ABSENT:
+            end, bits = garble
+            heard[end] = (m, s ^ bits) if end == 0 else (m ^ bits, s)
+        for io, (hm, hs) in zip((mio, sio), heard):
+            io[IO_SIOMULTI0] = hm
+            io[IO_SIOMULTI1] = hs
             io[IO_SIOMULTI2] = ABSENT
             io[IO_SIOMULTI3] = ABSENT
             io[IO_SIOCNT] &= ~SIO_START
@@ -1408,12 +1472,13 @@ def _tunes_apart(cores, both, frames=360, span=12):
     return best
 
 
-def _to_a_match(rom, coop=False, chord=True, tune=True, slow=False):
+def _to_a_match(rom, coop=False, chord=True, tune=True, slow=False, phase=0,
+                takes=0):
     """Two cartridges from power-on into a linked match: the chord rung on
     both (so the match is under it, the master's), a tune chosen. Returns
     (cores, cable, both, tap), or None if the match did not start."""
     linked = symbol(rom, "g_linked")[0]
-    cores, cable, both, tap = _pair(rom, slow=slow)
+    cores, cable, both, tap = _pair(rom, slow=slow, phase=phase, takes=takes)
     both(8)
     tap("START")
     if chord:
@@ -3280,6 +3345,621 @@ def demo_copy_check(rom):
         return 1
     print("OK: la demo compartida tambien con el cable lento, con una copia "
           "en cualquier extremo y despues de una partida.")
+    return phase_check(rom)
+
+
+class _Watch:
+    """Two consoles of one match, followed a frame at a time: each one's
+    game AS OF EACH STEP it has played, and the notes each is sounding.
+
+    BY THE STEP, because on a cable whose transfers land inside a frame the
+    two are a step apart for most of every frame — one has played the move
+    that has just crossed and the other is about to — and two games read at
+    one moment are then two different steps of the same game. And each
+    console's game is read ON THE EDGE OF ITS OWN FRAME AND ONLY WHILE IT
+    WAITS THERE (a cartridge halted for its blank; a Single-Pak copy, which
+    cannot halt, inside vsync): anywhere else it may be half way through a
+    step, the board moved and the count not yet. A turn that ran over is a
+    step not looked at; the next one is.
+
+    `games` is each console's (address, size) of g_session, which ends in
+    the link's own four bytes — whose console, the step it is on, whether
+    it has given up — and `waits` each console's functions it waits for
+    its blank in, as (address, size)s: none for a cartridge, vsync and
+    poll_interrupts for a copy (_waits).
+
+    `clocks`, each console's addresses of g_vblank_count and g_audio_at,
+    counts THE BLANKS A CONSOLE LOST (`lost`): on the edge of a frame its
+    sound has been played for every blank so far, unless a whole frame
+    went by under one turn — a cartridge whose turn ran past its blank
+    waits the next one out; a copy does if it has forgotten that it counted
+    the blank from inside its turn (vsync, g_vsync_at)."""
+
+    def __init__(self, cores, games, waits=((), ()), clocks=None):
+        self.cores, self.games, self.waits = cores, games, waits
+        self.clocks = clocks
+        self.lost = [0, 0]
+        self.seen = [self._step(i) for i in range(2)]
+        # The two are counted from one step: the slave's count begins as
+        # far from the master's as it stands from it now.
+        self.steps = [0, ((self.seen[1] - self.seen[0] + 128) & 0xFF) - 128]
+        self.first = list(self.steps)
+        self.states = [{}, {}]
+        self.heard = [[], []]
+        # How many frames each console played no step in, one, two...
+        self.turns = [collections.Counter(), collections.Counter()]
+        self.whole = [False, False]
+
+    def _step(self, i):
+        at, size = self.games[i]
+        return self.cores[i].memory.u8[at + size - 4 + 1]
+
+    def _waiting(self, i):
+        cpu = self.cores[i]._native.cpu
+        if cpu.halted:
+            return True
+        pc = cpu.gprs[15] & ~1
+        return any(at <= pc < at + size + 4 for at, size in self.waits[i])
+
+    def edge(self, i):
+        """Console `i` on the edge of its frame (see _pair's both)."""
+        now = self._step(i)
+        if self.whole[i]:               # not the part of a frame it began in
+            self.turns[i][(now - self.seen[i]) & 0xFF] += 1
+        self.whole[i] = True
+        self.steps[i] += (now - self.seen[i]) & 0xFF
+        self.seen[i] = now
+        if self._waiting(i):
+            at, size = self.games[i]
+            self.states[i][self.steps[i]] = zlib.crc32(
+                read_bytes(self.cores[i], at, size - 4))
+        if self.clocks is not None:
+            blank, sound = self.clocks[i]
+            mem = self.cores[i].memory
+            if mem.u32[blank] != mem.u32[sound]:
+                self.lost[i] += 1
+
+    def frame(self):
+        for i, core in enumerate(self.cores):
+            io = core._native.memory.io
+            self.heard[i].append((io[0x64 >> 1] & 0x7FF, io[0x6C >> 1] & 0x7FF,
+                                  io[0x74 >> 1] & 0x7FF))
+
+    def run(self, both, frames, keys=None, each=None):
+        for f in range(frames):
+            both(1, keys(f) if keys else None, edge=self.edge)
+            self.frame()
+            if each is not None:
+                each(f)
+
+    def played(self):
+        """Steps each console has played since the watch began."""
+        return [self.steps[i] - self.first[i] for i in range(2)]
+
+    def uneven(self):
+        """Frames each console played no step in, or more than one."""
+        return [sum(n for steps, n in self.turns[i].items() if steps != 1)
+                for i in range(2)]
+
+    def same(self):
+        """(steps both consoles were seen at, how many of them differ)."""
+        common = [k for k in self.states[0] if k in self.states[1]]
+        return len(common), sum(1 for k in common
+                                if self.states[0][k] != self.states[1][k])
+
+    def tunes(self, last=480, span=12):
+        """How many frames apart the two tunes are over the last `last`
+        frames, and how alike at that distance (_tunes_apart, on what was
+        heard): (0, 0.0) for two consoles sounding nothing."""
+        n = min(len(self.heard[0]), len(self.heard[1]))
+        lo = max(span, n - last - span)
+        if n - span <= lo or min(len(set(h[lo:n - span])) for h in self.heard) < 4:
+            return 0, 0.0
+        best = (0, 0.0)
+        for d in range(-span, span + 1):
+            pairs = [(self.heard[0][t], self.heard[1][t + d])
+                     for t in range(lo, n - span)]
+            share = sum(1 for a, b in pairs if a == b) / len(pairs)
+            if share > best[1]:
+                best = (d, share)
+        return best
+
+
+def _waits(path):
+    """Where a console running this image waits for its blank, for _Watch:
+    nowhere it can be found if it is a cartridge's (it halts), and in vsync
+    and what vsync asks with if it is a Single-Pak copy's."""
+    if not path.endswith("_mb.mb"):
+        return ()
+    found = [symbol(path, name)[0] for name in ("vsync", "poll_interrupts")]
+    return tuple(f for f in found if f is not None)
+
+
+# Two words at the game's 38400 bits a second: about a millisecond, sixteen
+# thousand cycles, thirteen scanlines (Cable.takes).
+TRANSFER_CYCLES = 16000
+
+
+class _Answers:
+    """HOW LONG A TRANSFER WAITS FOR THE SLAVE TO ANSWER IT, in scanlines:
+    from its landing to the slave's program loading its next word (the end
+    of link_serial_service, whoever called it), by the slave's own clock.
+    Nothing for a cartridge, whose interrupt is there within the scanline;
+    for a Single-Pak copy, which asks, it is the longest stretch of a turn
+    it does not ask from — and a stretch longer than a frame is a transfer
+    written over by the next. `worst` and `count`; `pairs` and `others`
+    are the transfers that carried a pair of moves for one step and the
+    ones that did not (a move sent again, a lobby's word, a port late)."""
+
+    def __init__(self, cable, slave):
+        self.worst, self.count, self.pairs, self.others = 0.0, 0, 0, 0
+        timing = ffi.addressof(slave._native.timing)
+        landed = []
+        end = cable.ends[1]
+        write, transfer = end.writeRegister, cable.transfer
+
+        def answered(address, value):
+            if address == REG_SIOMLT_SEND and landed:
+                took = (lib.mTimingGlobalTime(timing) - landed[0]) / SCANLINE_CYCLES
+                del landed[:]
+                self.worst = max(self.worst, took)
+                self.count += 1
+            return write(address, value)
+
+        def lands():
+            landed.append(lib.mTimingGlobalTime(timing))
+            mio = cable.master._native.memory.io
+            sio = cable.slave._native.memory.io
+            ok = transfer()
+            m, s = mio[IO_SIOMULTI0], sio[IO_SIOMULTI1]
+            if _is_move(m) and _is_move(s) and (m ^ s) & 0x1F00 == 0:
+                self.pairs += 1
+            else:
+                self.others += 1
+            return ok
+        end.writeRegister = end.write_register = answered
+        cable.transfer = lands
+
+
+def _shared_demo(images, tab, kinds, phase=0, takes=0):
+    """Two consoles (`kinds`: "cartucho" or "copia" each) from power-on to
+    the demo their two titles share, the chord rung on both. Returns
+    (cores, cable, both, tap), or None if they did not come to share one."""
+    cores, cable, both, tap = _pair(images[kinds[0]], slave_rom=images[kinds[1]],
+                                    phase=phase, takes=takes)
+
+    def u8(i, name):
+        return cores[i].memory.u8[tab[kinds[i]][name][0]]
+    both(1000 if "copia" in kinds else 60)
+    for i, kind in enumerate(kinds):
+        if kind == "copia":             # it wakes on the cable's screen
+            tap("B", who=i)
+            tap("B", who=i)
+    both(20)
+    both(4, [[KEYS["L"], KEYS["R"]]] * 2)
+    both(12, [[], []])
+    for i in range(2):
+        at = tab[kinds[i]]["g_title_frame"][0]
+        if cores[i].memory.u16[at] < 900:
+            cores[i].memory.u16[at] = 900
+    for _ in range(900):
+        both(1)
+        if all(u8(i, "g_demo") for i in range(2)):
+            break
+    both(3)
+    if [u8(i, "g_demo") for i in range(2)] != [1, 1] or \
+            [u8(i, "g_linked") for i in range(2)] != [1, 1]:
+        return None
+    return cores, cable, both, tap
+
+
+def phase_check(rom):
+    """A TRANSFER TAKES A MILLISECOND AND LANDS ANYWHERE IN THE OTHER
+    CONSOLE'S FRAME.
+
+    "The music is still out of step in the demo, cartridge against clone;
+    in a cooperative game it is fine." It was not the music, and no check
+    could have seen it: every transfer here took no time (or all of the
+    frame, on the slow cable) and landed on the edge of the other console's
+    frame (_pair). On two real consoles it takes a millisecond and lands
+    anywhere, and somewhere else an hour later. Three things lived in
+    between, and the demo two titles share — two computers thinking in
+    every step, a third of a frame and more — found them all:
+
+      - A turn looked for another move after every step it played. With
+        players a step is over in a few scanlines; in the demo the next
+        transfer lands DURING it, and the turn played two steps, ran past
+        its blank, played none the next turn and two the one after: turns
+        of two frames for seconds at a time, and each console's tune,
+        which counted its notes in turns, behind by its own amount (a
+        cartridge and its copy a third of a second apart after five
+        seconds and a second and a half after fifteen, 1578 steps played
+        in 1800 frames: v2.26 as shipped, on this cable). One step a turn
+        (link_play_frame; pace_check for the console that really is
+        behind).
+      - The Single-Pak copy takes no interrupts: it asks after its port,
+        and it asked only while it waited for the blank. Its heaviest
+        turn of the demo is a frame and an eighth; a transfer that landed
+        just after one wait was looked at behind the NEXT one, whose words
+        had written over it — a step the cartridge played and the copy
+        never did, the two a step apart for good, and in a demo, which
+        says nothing, two consoles each playing on alone. It asks from
+        inside its turn (poll_interrupts): as the turn begins, and between
+        the two computers.
+      - And the tune, which starts on the match's first step, starts a
+        turn late on a console that plays the step a turn late.
+
+    So the demo is played here on a cable whose transfers take their
+    millisecond, at ten phases with the copy on the slave's end, three
+    with it on the master's and three between two cartridges, and has to
+    be: shared from its first step to the last one watched; the same game
+    step for step; a step in every frame; not a blank lost by either
+    console; every transfer a pair of moves for one step, none to send
+    again; none waiting half a frame for its answer; and one tune — the
+    slave's a frame before the master's by this rig's count (it plays a
+    pair in the frame it lands in, the master the frame after: under a
+    frame apart by the clock on the wall, as it is with two players), and
+    the same at every phase. And a game two players share, cartridge and
+    copy, pads going, at three phases.
+    """
+    import run_rom
+    mb = os.path.splitext(rom)[0] + "_mb.mb"
+    if not os.path.exists(mb):
+        skip(f"no encuentro {mb}")
+        return 0
+    names = ("g_session", "g_linked", "g_link_alone", "g_link_lost", "g_demo",
+             "g_title_frame", "g_vblank_count", "g_audio_at")
+    images = {"cartucho": rom, "copia": mb}
+    tab = {}
+    for kind, path in images.items():
+        syms = {n: symbol(path, n) for n in names}
+        missing = [why for s_, why in syms.values() if s_ is None]
+        if missing:
+            skip(missing[0])
+            return 0
+        tab[kind] = {n: s_[0] for n, s_ in syms.items()}
+    # Where each kind of console waits for its blank (_Watch), and its two
+    # clocks: the blanks it has counted and the one its sound is up to.
+    wait = {kind: _waits(path) for kind, path in images.items()}
+    clock = {kind: (tab[kind]["g_vblank_count"][0], tab[kind]["g_audio_at"][0])
+             for kind in images}
+    failures = []
+    LONG, SHORT = 1900, 900             # v2.26 is alone by 1719 at the latest
+    HALF = SCANLINES // 2
+    plan = [(("cartucho", "copia"), p) for p in (0, 3, 8, 14, 22, 30, 57, 114, 171, 222)]
+    plan += [(("copia", "cartucho"), p) for p in (5, 22, 114)]
+    plan += [(("cartucho", "cartucho"), p) for p in (5, 22, 114)]
+    for kinds, phase in plan:
+        what = (f"la demo compartida, {kinds[0]} (maestra) y {kinds[1]} "
+                f"(esclava), {phase} lineas de desfase")
+        made = _shared_demo(images, tab, kinds, phase, TRANSFER_CYCLES)
+        if made is None:
+            failures.append(f"{what}: las dos no llegan a compartir una demo")
+            continue
+        cores, cable, both, tap = made
+        watch = _Watch(cores, [tab[k]["g_session"] for k in kinds],
+                       [wait[k] for k in kinds], [clock[k] for k in kinds])
+        answers = _Answers(cable, cores[1])
+        alone = [None, None]
+
+        def each(f, cores=cores, kinds=kinds, alone=alone):
+            for i in range(2):
+                if alone[i] is None and \
+                        cores[i].memory.u8[tab[kinds[i]]["g_link_alone"][0]]:
+                    alone[i] = f
+        frames = LONG if phase < 40 else SHORT
+        watch.run(both, frames, each=each)
+        common, differ = watch.same()
+        apart, alike = watch.tunes()
+        if alone != [None, None]:
+            failures.append(f"{what}: se quedan solas, cada una con su demo "
+                            f"(frames {alone} de {frames})")
+        elif differ:
+            failures.append(f"{what}: no es la misma partida paso a paso "
+                            f"({differ} pasos distintos de {common} vistos en "
+                            f"las dos, en {frames} frames)")
+        elif min(watch.played()) < frames - 2 or max(watch.uneven()) > frames // 50:
+            failures.append(f"{what}: no va a un paso por frame "
+                            f"({watch.played()} pasos en {frames} frames; "
+                            f"frames sin paso o con dos, {watch.uneven()})")
+        elif watch.lost != [0, 0]:
+            failures.append(f"{what}: se pierden frames enteros bajo un turno "
+                            f"(maestra y esclava, {watch.lost} de {frames})")
+        elif answers.others or answers.pairs < frames - 2:
+            failures.append(f"{what}: {answers.others} transferencias que no "
+                            f"son un par de jugadas del mismo paso (y "
+                            f"{answers.pairs} que si, en {frames} frames)")
+        elif answers.worst > HALF:
+            failures.append(f"{what}: una transferencia espera "
+                            f"{answers.worst:.0f} lineas a que la esclava la "
+                            f"atienda; medio frame son {HALF}")
+        elif common < frames * 9 // 10:
+            failures.append(f"{what}: solo {common} pasos vistos en las dos "
+                            f"consolas, de {frames}: no hay con que comparar")
+        elif apart != -1 or alike < 0.8:
+            failures.append(f"{what}: la musica no va a la vez (la esclava a "
+                            f"{apart:+d} frames y no a -1, {alike:.0%} igual)")
+        else:
+            print(f"  {what}: una partida, {min(watch.played())} pasos en "
+                  f"{frames} frames, la que mas espera {answers.worst:.0f} "
+                  f"lineas, la musica a {apart:+d}")
+
+    # ...AND WITH TWO PLAYERS, a cartridge and its copy, pads going.
+    game = (tab["cartucho"]["g_session"], tab["copia"]["g_session"])
+    for phase in (3, 22, 114):
+        what = (f"cooperativa, cartucho y copia, {phase} lineas de desfase")
+        cores, cable, both, tap = _pair(rom, slave_rom=mb, phase=phase,
+                                        takes=TRANSFER_CYCLES)
+        both(1000)
+        tap("START", who=0)
+        both(4, [[KEYS["L"], KEYS["R"]], []])
+        both(10, [[], []])
+        tap("DOWN", who=0); tap("DOWN", who=0); tap("START", who=0)
+        both(90)
+        tap("START", who=0)
+        both(90)
+        linked = [cores[i].memory.u8[tab[k]["g_linked"][0]]
+                  for i, k in enumerate(("cartucho", "copia"))]
+        if linked != [1, 1]:
+            failures.append(f"{what}: la partida no arranca (enlazadas {linked})")
+            continue
+        watch = _Watch(cores, game, ((), wait["copia"]),
+                       (clock["cartucho"], clock["copia"]))
+        answers = _Answers(cable, cores[1])
+        rng = random.Random(phase)
+        hold, until = [[], []], [0, 0]
+
+        def keys(f, hold=hold, until=until, rng=rng):
+            for i in range(2):
+                if f >= until[i]:
+                    hold[i] = [KEYS[rng.choice(("LEFT", "RIGHT", "A", "B", "DOWN"))]] \
+                        if rng.random() < 0.7 else []
+                    until[i] = f + rng.randint(2, 12)
+            return hold
+        watch.run(both, 900, keys=keys)
+        common, differ = watch.same()
+        lost = [cores[i].memory.u8[tab[k]["g_link_lost"][0]]
+                for i, k in enumerate(("cartucho", "copia"))]
+        if any(lost) or differ or common < 800 or min(watch.played()) < 898:
+            failures.append(f"{what}: perdido el cable {lost}, {differ} pasos "
+                            f"distintos de {common}, {watch.played()} pasos en "
+                            f"900 frames")
+        elif watch.lost != [0, 0] or answers.others or answers.worst > HALF:
+            failures.append(f"{what}: frames perdidos {watch.lost}, "
+                            f"{answers.others} transferencias que no son un "
+                            f"par, la que mas espera {answers.worst:.0f} lineas")
+        else:
+            print(f"  {what}: la misma partida, {min(watch.played())} pasos "
+                  f"en 900 frames, la que mas espera {answers.worst:.0f} lineas")
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: caiga donde caiga la transferencia en el frame de la otra "
+          "consola, la demo compartida y la partida siguen siendo una.")
+    return tune_clock_check(rom)
+
+
+def tune_clock_check(rom):
+    """THE TUNE KEEPS THE CONSOLE'S CLOCK, AND ITS TEMPO THE MATCH'S.
+
+    Two consoles' tunes stay together only if nothing that moves either
+    one is its console's own business. Two things were.
+
+    A TURN THAT RUNS OVER. The engines count notes in calls, a call a
+    turn, and a turn that runs past the blank takes two frames (a
+    cartridge waits the next one out). That console's tune is a frame
+    behind the clock for good, and behind the other console's. A match's
+    turn plays a frame of sound for every blank gone since the last one's
+    (audio_turn). A console cannot be made to run over on purpose here, so
+    its count of blanks is pushed on between two frames, which is all a
+    turn that ran over leaves behind it: with one blank more than the one
+    that really went by, that console's tune is a frame ahead of the
+    other's (no frame having really gone by); with two more, two; and not
+    at all with six more, which is not a turn that ran over — it is a
+    screen that was doing something else.
+
+    AND A TUNE THAT BEGINS IS OWED NOTHING FROM BEFORE IT BEGAN
+    (start_music): the blanks that went by without sound before it — a
+    screen being put up; the long turn of a demo's first step, both
+    computers placing their first piece — are not frames of ITS notes. The
+    slave is walked instruction by instruction to the call that starts the
+    match's tune, and its sound made two blanks stale there: the two tunes
+    must begin together all the same.
+
+    THE TEMPO BY THE STACK, under the chord, was counted a frame at a
+    time: a quarter of a step more of the tune each frame the stack stood
+    at twelve rows, a half at fifteen, the quarters left over thrown away
+    when it came down. Two consoles play the same steps and not the same
+    number of them in each frame, so they did not count the same frames,
+    and a sum a quarter short at the wrong moment is a whole step of the
+    tune short, for good. It is counted by the match's steps (tempo_step).
+    Here the stack is kept at twelve rows on both consoles and one
+    transfer is made to be taken by the master only: the slave stands a
+    frame fewer than the master while the move is sent again, and the two
+    must still have counted the same quarters at every step both were
+    seen on. And the tune does run faster for it: a quarter as many notes
+    again as in the same match with the board empty. The quarters left
+    over are thrown away when the stack comes down, on both consoles: the
+    next time it is high the count starts afresh.
+    """
+    from romcheck.harness import CELL_BLOCK, PF_W
+    import run_rom
+    syms = {n: symbol(rom, n) for n in ("g_session", "g_vblank_count",
+                                        "g_tempo_acc", "g_tempo_quarters",
+                                        "g_link_lost", "g_audio_at",
+                                        "g_link_tune_due", "start_music")}
+    missing = [why for s_, why in syms.values() if s_ is None]
+    if missing:
+        skip(missing[0])
+        return 0
+    at = {n: s_[0][0] for n, s_ in syms.items()}
+    game = [syms["g_session"][0]] * 2
+    off = run_rom.game_offsets(rom)
+    failures = []
+
+    made = _to_a_match(rom, coop=True)
+    if made is None:
+        print("FALLA: la cooperativa por cable no arranco")
+        return 1
+    cores, cable, both, tap = made
+    watch = _Watch(cores, game)
+    watch.run(both, 360)
+    was = watch.tunes(last=300)
+    got = []
+    for who, push in ((1, 1), (0, 2), (1, 6)):
+        cores[who].memory.u32[at["g_vblank_count"]] += push
+        watch.run(both, 360)
+        got.append(watch.tunes(last=300)[0])
+    if was[0] != 0 or was[1] < 0.9:
+        failures.append(f"antes de nada, la musica de las dos no va a la vez "
+                        f"({was[0]:+d} frames, {was[1]:.0%} igual)")
+    elif got != [-1, 1, 1]:
+        failures.append("un turno que se pasa de frame: con la cuenta de "
+                        "blancos de la esclava adelantada uno, la de la "
+                        "maestra dos y la de la esclava seis, la musica de "
+                        f"la esclava queda a {got} frames de la de la maestra, "
+                        "no a [-1, 1, 1]")
+    else:
+        print("  un turno que se pasa de frame toca los frames de musica que "
+              "se le fueron (uno, dos), y una pantalla ocupada en otra cosa "
+              "(seis) ninguno")
+
+    # A tune that begins is owed nothing. Two cartridges to the master's
+    # last START, as _to_a_match goes there; then the slave by hand.
+    cores, cable, both, tap = _pair(rom)
+    both(8)
+    tap("START")
+    both(4, [[KEYS["L"], KEYS["R"]]] * 2)
+    both(10, [[], []])
+    tap("DOWN"); tap("DOWN"); tap("START")
+    both(60)
+    tap("DOWN", who=0); tap("DOWN", who=0); tap("RIGHT", who=0)
+    both(4, [[KEYS["START"]], []])
+    slave = cores[1]
+    cpu = slave._native.cpu
+    begun = 0
+    for _ in range(200):
+        if not slave.memory.u8[at["g_link_tune_due"]]:
+            if begun:
+                break
+            both(1)
+            continue
+        # The tune is due on the slave's next step: this frame of its by
+        # the instruction, to the call that starts it.
+        cores[0].set_keys()
+        cores[0].run_frame()
+        slave.set_keys()
+        frame = slave.frame_counter
+        while slave.frame_counter == frame:
+            slave.step()
+            if (cpu.gprs[15] & ~1) - 2 == at["start_music"]:
+                begun += 1
+                slave.memory.u32[at["g_audio_at"]] = \
+                    slave.memory.u32[at["g_vblank_count"]] - 2
+        cable.settle()
+    apart, alike = _tunes_apart(cores, both)
+    if begun != 1:
+        failures.append("una cancion que empieza: la prueba no llega a la "
+                        f"llamada que la arranca en la esclava ({begun} veces)")
+    elif apart != 0 or alike < 0.9:
+        failures.append("una cancion que empieza no debe nada: con dos "
+                        "blancos sin sonido antes de arrancar la suya, la "
+                        f"esclava queda a {apart:+d} frames de la maestra "
+                        f"({alike:.0%} igual), no a +0")
+    else:
+        print("  una cancion que empieza no toca los frames que pasaron sin "
+              "sonido antes de ella")
+
+    # The tempo: counted by the step, the same on both; and it is a tempo.
+    def high(cores):
+        PF = 20 * PF_W
+        for core in cores:
+            field = at["g_session"] + off["field"]
+            for row in range(20):
+                for col in range(PF_W):
+                    core.memory.u8[field + row * PF_W + col] = \
+                        0 if row < 8 or col in (5, 6) else CELL_BLOCK
+
+    def notes_changed(watch, i, last):
+        h = watch.heard[i][-last:]
+        return sum(1 for a, b in zip(h, h[1:]) if a != b)
+    counts = {}
+    for stack in (False, True):
+        made = _to_a_match(rom, coop=True)
+        if made is None:
+            print("FALLA: la cooperativa por cable no arranco")
+            return 1
+        cores, cable, both, tap = made
+        if stack:
+            high(cores)
+        both(20)
+        cable.garble_at[cable.transfers + 30] = (1, 0x0100)
+        watch = _Watch(cores, game)
+        acc = [{}, {}]
+
+        def each(f, cores=cores, watch=watch, acc=acc, stack=stack):
+            if stack:
+                high(cores)             # whatever the pieces made of it
+            for i in range(2):
+                acc[i][watch.steps[i]] = cores[i].memory.u8[at["g_tempo_acc"]]
+        watch.run(both, 420, each=each)
+        counts[stack] = [notes_changed(watch, i, 360) for i in range(2)]
+        if not stack:
+            continue
+        quarters = [c.memory.u8[at["g_tempo_quarters"]] for c in cores]
+        common = [k for k in acc[0] if k in acc[1]]
+        differ = [k for k in common if acc[0][k] != acc[1][k]]
+        lost = [c.memory.u8[at["g_link_lost"]] for c in cores]
+        if cable.garble_at or any(lost):
+            failures.append("el tempo: la prueba no llega a la transferencia "
+                            f"que solo toma la maestra, o se pierde el cable {lost}")
+        elif quarters != [1, 1]:
+            failures.append(f"el tempo con la pila a doce filas es "
+                            f"{quarters} cuartos, no [1, 1]")
+        elif differ or len(common) < 300:
+            failures.append("el tempo no se cuenta por pasos: tras una "
+                            "transferencia que solo toma la maestra, las dos "
+                            f"consolas llevan cuartos distintos en {len(differ)} "
+                            f"de {len(common)} pasos")
+        else:
+            print(f"  el tempo, con la pila a doce filas y una consola un "
+                  f"frame mas parada que la otra: los mismos cuartos en las dos "
+                  f"en {len(common)} pasos")
+
+        # ...and what is left over goes when the stack comes down.
+        def left(cores=cores):
+            return [c.memory.u8[at["g_tempo_acc"]] for c in cores]
+        for _ in range(8):
+            if all(left()):
+                break
+            both(1)
+            high(cores)
+        over = left()
+        for _ in range(12):
+            for core in cores:
+                field = at["g_session"] + off["field"]
+                for cell in range(20 * PF_W):
+                    core.memory.u8[field + cell] = 0
+            both(1)
+        if not all(over) or any(left()):
+            failures.append(f"el tempo: con {over} cuartos sueltos al bajar "
+                            f"la pila, quedan {left()} y no [0, 0]")
+        else:
+            print(f"  ...y los cuartos sueltos ({over}) se tiran al bajar la pila")
+    slow, fast = counts[False], counts[True]
+    if not failures and not all(f_ * 100 >= s_ * 115 for f_, s_ in zip(fast, slow)):
+        failures.append(f"el tempo no acelera la cancion: {fast} cambios de "
+                        f"nota en 360 frames con la pila alta, {slow} sin ella")
+    elif not failures:
+        print(f"  ...y la cancion va mas deprisa: {fast} cambios de nota en "
+              f"360 frames con la pila alta, {slow} sin ella")
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: la cancion lleva el reloj de la consola y su tempo el de la "
+          "partida.")
     return skin_check(rom)
 
 
@@ -4315,15 +4995,429 @@ def stale_check(rom):
     if failures:
         return 1
     print("OK: una jugada que llega tarde cuesta una transferencia, no la partida.")
+    return again_check(rom)
+
+
+def again_check(rom):
+    """A STEP ONE CONSOLE NEVER GOT IS SENT AGAIN.
+
+    Both consoles make every transfer, and each takes it for the match's
+    next pair of moves only if the two words are for the same step. A
+    transfer ONE of them takes and the other does not — a bit of the frame
+    the cable changed for one receiver (each console's own word is its
+    register's, never the wire's); a Single-Pak copy asking after its port
+    a transfer too late — left the two a step apart for good: the one ahead
+    sending its move for the next step, the one behind its move for this
+    one, never a pair again, until each had counted six and called the
+    other gone. CABLE LOST over a whole cable, for one bit; v2.26 as
+    shipped does exactly that here.
+
+    The console ahead sees the other's moves are for the step before its
+    own, two transfers running, and sends the move it made for that step
+    once more (gba/link.c, g_last_word); the console behind takes the pair
+    it had missed. Here: a shared board and a race, the master deaf to one
+    transfer and the slave to one; the move sent again not heard either,
+    and sent again — on an even step and on an odd one, because the bit
+    the cable turns over makes the move one for the step AFTER on one and
+    for the step BEFORE on the other, and a console a step away either way
+    is not yet a console gone; three times in one match, because that
+    patience is for each time and not for the evening; the demo two titles
+    share, which would otherwise go on as two demos without a word. Each
+    time the match must go on as one game, step for step, for the cost of
+    a few frames.
+
+    ONCE LATE IS NOT BEHIND. A console that did not get to load its next
+    move in time sends the one before, both see it, both send again, and
+    the next transfer is the pair: one transfer, as ever (stale_check). A
+    console that took that one late word for a console behind and sent its
+    own last move again would be answered in kind — each in turn a step
+    "behind" the other's repeat, for good. With the two pads different
+    (two consoles at rest send the same word, and neither can then tell
+    whose slot is whose) and the slave late once, and once more a second
+    later: two transfers that are not a pair, and no more — twice in an
+    evening is not twice running. And every case here costs the frames it
+    has to and not one more: a move sent again that nobody was waiting for
+    is a frame of a match standing still.
+
+    AND A PAIR IS A CONSOLE'S TO PLAY ONLY IF IT IS FOR THE STEP IT IS ON:
+    with the slave's slot carrying the move before for six transfers
+    (Cable.stale_slave_at, a port that goes on answering with what it last
+    loaded) the master sends its own last move again, and the pair those
+    two make is one both consoles have already played — taken, it was a
+    move for the wrong step and the end of the match. Sixteen transfers of
+    it are still a console that is there: its moves a step away are borne
+    with for eight, the pairs sent again are nobody's strangers, and six
+    more are not six in a row. Forty are a console gone.
+    """
+    import run_rom
+    mb = os.path.splitext(rom)[0] + "_mb.mb"
+    names = ("g_session", "g_linked", "g_link_alone", "g_link_lost", "g_demo",
+             "g_title_frame", "g_strangers")
+    syms = {n: symbol(rom, n) for n in names}
+    missing = [why for s_, why in syms.values() if s_ is None]
+    if missing:
+        skip(missing[0])
+        return 0
+    at = {n: s_[0][0] for n, s_ in syms.items()}
+    game = [syms["g_session"][0]] * 2
+    failures = []
+    NOTES = ("CABLE", "LOST", "ISSUES", "RIVAL")
+    FRAME_BIT = 0x0100
+
+    def page(core):
+        return " ".join(run_rom.tilemap_text(core, r) for r in range(0, 20))
+
+    def judge(what, cores, cable, both, frames=300, cost=40, keys=None,
+              others=None):
+        watch = _Watch(cores, game)
+        answers = _Answers(cable, cores[1])
+        watch.run(both, frames, keys=keys)
+        common, differ = watch.same()
+        lost = [c.memory.u8[at["g_link_lost"]] for c in cores]
+        alone = [c.memory.u8[at["g_link_alone"]] for c in cores]
+        strangers = [c.memory.u8[at["g_strangers"]] for c in cores]
+        notes = [w for w in NOTES if w in page(cores[0]) + page(cores[1])]
+        if cable.garble_at or cable.stale_slave_at:
+            failures.append(f"{what}: la prueba no llega a estropear la "
+                            "transferencia")
+        elif any(lost) or any(alone) or notes:
+            failures.append(f"{what}: la partida no sigue (perdido el cable "
+                            f"{lost}, solas {alone}, en pantalla {notes})")
+        elif differ:
+            failures.append(f"{what}: no es la misma partida paso a paso "
+                            f"({differ} pasos distintos de {common})")
+        elif min(watch.played()) < frames - cost or common < frames - cost \
+                or strangers != [0, 0]:
+            failures.append(f"{what}: cuesta mas de {cost} frames "
+                            f"({watch.played()} pasos en {frames}, {common} "
+                            f"vistos en las dos, extranos {strangers})")
+        elif others is not None and answers.others != others:
+            failures.append(f"{what}: {answers.others} transferencias que no "
+                            f"son un par de jugadas del mismo paso, no {others}")
+        else:
+            print(f"  {what}: la partida sigue, la misma en las dos, "
+                  f"{frames - min(watch.played())} frames de coste")
+
+    for coop, end, again, odd, times in (
+            (True, 1, 1, 0, 1), (True, 0, 1, 0, 1), (True, 1, 2, 0, 1),
+            (True, 0, 2, 0, 1), (True, 1, 2, 1, 1), (True, 0, 2, 1, 1),
+            (True, 1, 2, 0, 3), (False, 1, 1, 0, 1), (False, 0, 1, 0, 1)):
+        what = (f"{'cooperativa' if coop else 'carrera'}, una transferencia "
+                f"que la {'esclava' if end else 'maestra'} no oye bien"
+                + (", ni la jugada que se le repite" if again > 1 else "")
+                + (" (un paso despues)" if odd else "")
+                + (f", {times} veces en la partida" if times > 1 else ""))
+        made = _to_a_match(rom, coop=coop, phase=60, takes=TRANSFER_CYCLES)
+        if made is None:
+            print("FALLA: la partida por cable no arranco")
+            return 1
+        cores, cable, both, tap = made
+        both(40)
+        first = cable.transfers + 5 + odd
+        for n in range(times):
+            for k in range(again):
+                cable.garble_at[first + 64 * n + 3 * k] = (end, FRAME_BIT)
+        # What it costs is what it has to cost: the transfer lost, the two
+        # it takes to see the other is behind, and the one sent again —
+        # three frames a time, and one more where each board is its own
+        # player's (a race's two halves do not wait on the same step). A
+        # move sent again that nobody was waiting for is a frame more.
+        judge(what, cores, cable, both, frames=300 + 64 * (times - 1),
+              cost=(3 if coop else 4) * again * times)
+
+    # Once late is not behind: the pads different, the slave late once —
+    # and once more a second later, which is not twice running.
+    made = _to_a_match(rom, coop=True, phase=60, takes=TRANSFER_CYCLES)
+    if made is None:
+        print("FALLA: la partida por cable no arranco")
+        return 1
+    cores, cable, both, tap = made
+    both(40)
+    cable.stale_slave_at = {cable.transfers + 5, cable.transfers + 65}
+    judge("cooperativa, la esclava tarde con su jugada una vez, y otra un "
+          "segundo despues, los dos mandos distintos", cores, cable, both,
+          cost=2, keys=lambda f: [[KEYS["LEFT"]], []], others=2)
+
+    # The demo two titles share: it says nothing, and went on as two.
+    if os.path.exists(mb):
+        images = {"cartucho": rom, "copia": mb}
+        tab = {k: {n: symbol(p_, n)[0] for n in names if n != "g_strangers"}
+               for k, p_ in images.items()}
+        if all(v is not None for t in tab.values() for v in t.values()):
+            made = _shared_demo(images, tab, ("cartucho", "cartucho"), 60,
+                                TRANSFER_CYCLES)
+            if made is None:
+                failures.append("la demo compartida no arranca")
+            else:
+                cores, cable, both, tap = made
+                both(40)
+                cable.garble_at[cable.transfers + 5] = (1, FRAME_BIT)
+                judge("la demo compartida, una transferencia que la esclava "
+                      "no oye bien", cores, cable, both, cost=3)
+
+    # A port that answers with the move before: six transfers, sixteen
+    # (the pads different: see above) and forty.
+    for run, gone in ((6, False), (16, False), (40, True)):
+        made = _to_a_match(rom, coop=True, phase=60, takes=TRANSFER_CYCLES)
+        if made is None:
+            print("FALLA: la partida por cable no arranco")
+            return 1
+        cores, cable, both, tap = made
+        both(40)
+        first = cable.transfers + 5
+        cable.stale_slave_at = set(range(first, first + run))
+        what = (f"cooperativa, la esclava contestando con la jugada anterior "
+                f"{run} transferencias seguidas")
+        if not gone:
+            judge(what, cores, cable, both, cost=run,
+                  keys=(lambda f: [[KEYS["LEFT"]], []]) if run > 6 else None)
+            continue
+        both(200)
+        lost = [c.memory.u8[at["g_link_lost"]] for c in cores]
+        if not lost[0]:
+            failures.append(f"{what}: la maestra no la da por ida (perdido el "
+                            f"cable {lost})")
+        else:
+            print(f"  {what}: la maestra la da por ida, como antes")
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: un paso que una consola no llego a recibir se le manda otra "
+          "vez, y la partida sigue.")
+    return pace_check(rom)
+
+
+def pace_check(rom):
+    """ONE STEP A TURN, AND A SECOND ONLY FOR A CONSOLE THAT IS BEHIND.
+
+    A linked turn used to look for another move after every step it
+    played. A step two players' pads make is over in a few scanlines and
+    nothing lands meanwhile. A step of the demo two titles share has two
+    computers thinking in it, a third of a frame and more, and the
+    transfer the master started as the turn began lands DURING it — a
+    millisecond on a real cable (Cable.takes): no time at all on the quick
+    cable every check used, and the end of the frame on the slow one. So
+    on two real consoles the demo played two steps in a turn, four
+    computers' worth, past its blank and a frame gone; none in the next;
+    two in the one after. Half its frames for seconds at a time — and each
+    console's tune, counted in turns, behind by its own amount: a third of
+    a second apart after five on v2.26 as shipped, a second and a half
+    after fifteen, measured on that cable (phase_check plays the demo on
+    it at sixteen phases: a step a frame).
+
+    A move that lands while a turn is at work is the next turn's. What is
+    left is the console that really is behind, and this holds one up to
+    see it catch up — a cartridge's blank switched off for a frame or
+    three, its port still answering, as a turn that ran over leaves it:
+      - a frame behind, in a game: it keeps the move in hand for
+        LINK_DEEP_TURNS turns (a move a moment early is wanted next turn,
+        and playing it at once is the turn after with nothing to play),
+        then plays two and is level;
+      - three behind: two a turn at once, and level;
+      - a frame behind in the demo: it stays there. Nobody is holding its
+        pad to feel a frame, and two of its steps are the long turn;
+      - a move in hand twice, none in between: the turns it is kept are
+        counted RUNNING, not added up. Two consoles' frames drift across
+        each other all evening, and every crossing leaves a move in hand
+        for a while and takes it away again; added up, those spells would
+        buy a turn of two steps — and a frame with nothing to play after
+        it — every so often for nothing.
+    The same game step for step through all of it.
+    """
+    import run_rom
+    mb = os.path.splitext(rom)[0] + "_mb.mb"
+    names = ("g_session", "g_linked", "g_link_alone", "g_link_lost", "g_demo",
+             "g_title_frame")
+    syms = {n: symbol(rom, n) for n in names}
+    missing = [why for s_, why in syms.values() if s_ is None]
+    if missing:
+        skip(missing[0])
+        return 0
+    pace, why = symbol(rom, "kLinkPace")
+    if pace is None:
+        skip(why)
+        return 0
+    with open(rom, "rb") as fh:
+        fh.seek(pace[0] - 0x08000000)
+        DEEP_TURNS, DEEP_NOW = fh.read(2)
+    game = [syms["g_session"][0]] * 2
+    at = {n: s_[0][0] for n, s_ in syms.items()}
+    failures = []
+    IO_IE = 0x200 >> 1
+    # Half a frame out of step: the master's transfer lands after the
+    # slave's turn has taken what there was to take, so a move it did not
+    # play stays in hand.
+    PHASE = 114
+
+    def held_up(what, cores, both, frames):
+        """Console 1 held up `frames` frames; returns how far behind it is
+        each frame from then on, less how far it was before."""
+        both(60)                        # the match's first turns are its own
+        watch = _Watch(cores, game)
+        watch.run(both, 120)
+        if watch.uneven() != [0, 0]:
+            failures.append(f"{what}: antes de nada no va a un paso por "
+                            f"frame (frames sin paso o con dos, {watch.uneven()})")
+            return None, watch
+        was = watch.steps[0] - watch.steps[1]
+        io = cores[1]._native.memory.io
+        io[IO_IE] &= ~1                 # no blank: its turn does not end
+        watch.run(both, frames)
+        io[IO_IE] |= 1
+        behind = []
+        watch.run(both, DEEP_TURNS + 40,
+                  each=lambda f: behind.append(watch.steps[0] - watch.steps[1] - was))
+        return behind, watch
+
+    def level_at(behind):
+        return next((k for k in range(len(behind))
+                     if all(b <= 0 for b in behind[k:])), None)
+
+    # (The blank comes back on in the middle of a frame, and the one it
+    # missed last is taken there and then: a console held `n` frames has
+    # lost n - 1 turns, and finds that many moves more than usual waiting.)
+    cases = [("cooperativa", 2), ("cooperativa", 3)]
+    if os.path.exists(mb):
+        cases.append(("la demo compartida", 3))
+    images = {"cartucho": rom, "copia": mb}
+    for name, frames in cases:
+        demo = name != "cooperativa"
+        what = f"{name}, la esclava {frames - 1} turno(s) atras"
+        if demo:
+            tab = {k: {n: symbol(p_, n)[0] for n in names}
+                   for k, p_ in images.items()}
+            made = None
+            if all(v is not None for t in tab.values() for v in t.values()):
+                made = _shared_demo(images, tab, ("cartucho", "cartucho"),
+                                    PHASE, TRANSFER_CYCLES)
+        else:
+            made = _to_a_match(rom, coop=True, phase=PHASE, takes=TRANSFER_CYCLES)
+        if made is None:
+            failures.append(f"{name}: no arranca")
+            continue
+        cores, cable, both, tap = made
+        behind, watch = held_up(what, cores, both, frames)
+        if behind is None:
+            continue
+        common, differ = watch.same()
+        level = level_at(behind)
+        doubles = watch.turns[1][2]
+        lost = [c.memory.u8[at["g_link_lost"]] for c in cores]
+        alone = [c.memory.u8[at["g_link_alone"]] for c in cores]
+        if any(lost) or any(alone) or differ:
+            failures.append(f"{what}: perdido el cable {lost}, solas {alone}, "
+                            f"{differ} pasos distintos de {common}")
+        elif frames == 2 and (level is None or level > 2 or doubles != 1):
+            # Three waiting: two that turn, and level.
+            failures.append(f"{what}: con tres jugadas esperando no juega dos "
+                            f"en ese turno y queda al paso (va {behind[:6]}, "
+                            f"turnos de dos pasos {doubles})")
+        elif frames == 3 and max(behind[2:DEEP_TURNS - 6]) != 1:
+            # Four waiting: two that turn, and then one in hand.
+            failures.append(f"{what}: no queda un paso atras, con una jugada "
+                            f"guardada (va {behind[:8]})")
+        elif frames == 3 and not demo and (
+                level is None or not DEEP_TURNS - 4 <= level <= DEEP_TURNS + 6
+                or doubles != 2):
+            failures.append(f"{what}: no la guarda {DEEP_TURNS} turnos y "
+                            f"entonces se pone al paso (al paso a los {level} "
+                            f"frames, turnos de dos pasos {doubles})")
+        elif demo and (set(behind[2:]) != {1} or doubles != 1):
+            failures.append(f"{what}: no se queda con la jugada guardada (va "
+                            f"{sorted(set(behind[2:]))} pasos atras; turnos de "
+                            f"dos pasos, {doubles})")
+        elif frames == 2:
+            print(f"  {what}: tres jugadas esperando, dos en ese turno y al paso")
+        elif demo:
+            print(f"  {what}: dos en un turno, y la que queda guardada se "
+                  f"queda: un paso atras {len(behind)} frames despues")
+        else:
+            print(f"  {what}: dos en un turno, la otra guardada {level} "
+                  f"turnos, y al paso")
+    # ...AND THOSE TURNS ARE COUNTED RUNNING. The slave's frame is moved
+    # across the master's transfers as two crystals move it (both.phase):
+    # from where a transfer lands after the turn has taken its move to
+    # where it lands before — two moves waiting, one in hand, and no turn
+    # ever found three — for five eighths of LINK_DEEP_TURNS; back, and
+    # the move in hand is played; and across again for as long.
+    what = "cooperativa, el frame de la esclava cruzando las transferencias"
+    deep, why = symbol(rom, "g_deep_turns")
+    made = _to_a_match(rom, coop=True, phase=PHASE, takes=TRANSFER_CYCLES)
+    if deep is None:
+        skip(why)
+    elif made is None:
+        failures.append(f"{what}: no arranca")
+    else:
+        cores, cable, both, tap = made
+        SPELL = DEEP_TURNS * 5 // 8
+        EARLY = 30                      # in the slave's drawing: before its turn
+        both(60)
+        watch = _Watch(cores, game)
+        watch.run(both, 120)
+        counted = []
+        for phase, frames in ((EARLY, SPELL), (PHASE, 12), (EARLY, SPELL),
+                              (PHASE, 12)):
+            both.phase = phase
+            watch.run(both, frames)
+            counted.append(cores[1].memory.u8[deep[0]])
+        common, differ = watch.same()
+        uneven = watch.uneven()
+        lost = [c.memory.u8[at["g_link_lost"]] for c in cores]
+        if any(lost) or differ:
+            failures.append(f"{what}: perdido el cable {lost}, {differ} pasos "
+                            f"distintos de {common}")
+        elif not all(SPELL - 3 <= n <= SPELL for n in counted[0::2]) or \
+                counted[1::2] != [0, 0]:
+            failures.append(f"{what}: los turnos con una jugada guardada "
+                            f"cuentan {counted} (cruzada, de vuelta, cruzada, de "
+                            f"vuelta), no unos {SPELL}, 0, {SPELL}, 0: la "
+                            f"prueba no llega a guardarla, o no se cuentan "
+                            f"seguidos")
+        elif watch.turns[1][2]:
+            failures.append(f"{what}: {watch.turns[1][2]} turno(s) de dos "
+                            f"pasos sin llevar {DEEP_TURNS} seguidos con la "
+                            f"jugada guardada (dos veces {SPELL})")
+        else:
+            print(f"  {what}: {SPELL} turnos con la jugada guardada, dos "
+                  f"veces, y ninguno de dos pasos por la suma")
+    for f in failures:
+        print(f"FALLA: {f}")
+    if failures:
+        return 1
+    print("OK: un paso por turno, y dos solo para la consola que va atras.")
     return jitter_check(rom)
 
 
 # ---------------------------------------------------------------------------
 # The evening of the second real test, one check per thing it found.
 # ---------------------------------------------------------------------------
-def _pair(rom, sd_lags=False, slow=False, slave_rom=None):
+# One frame of a GBA is 228 scanlines of 1232 cycles, the last 68 of them
+# the vertical blank; mGBA's frame — where run_frame stops — ends as the
+# blank begins.
+SCANLINES = 228
+SCANLINE_CYCLES = 1232
+
+
+def _pair(rom, sd_lags=False, slow=False, slave_rom=None, phase=0, takes=0):
     """Two consoles on a cable, and the helpers every check below uses.
-    `slave_rom` puts a different image on the slave's end (Single-Pak)."""
+    `slave_rom` puts a different image on the slave's end (Single-Pak).
+
+    `phase`: THE SLAVE'S FRAME BEGINS THIS MANY SCANLINES BEFORE THE
+    MASTER'S TRANSFERS LAND IN IT. Two real consoles are two crystals, and
+    a transfer lands wherever in the other's frame the two happen to put
+    it: in the middle of its drawing, of its sound, of a computer's turn —
+    and somewhere else an hour later. Here the cores run a frame each, in
+    turn, and a transfer the master makes during its frame finds the slave
+    standing on the edge of its own, the first scanline of its blank:
+    always the same place, and the one place where a console that only
+    looks at its port while it waits for the blank (the Single-Pak copy,
+    poll_interrupts) is always looking. With a phase the slave is run that
+    many scanlines past its edge before the master's frame, and stands
+    there while the master's transfer lands. (The quick cable only: a slow
+    transfer lands at the end of the pair of frames, wherever that is.)
+    A pair made with a phase can be given another as it runs (`both.phase`):
+    two crystals drifting across each other, in one frame."""
     mgba.log.silence()
     cores, screens = [], []
     for path in (rom, slave_rom or rom):
@@ -4339,19 +5433,61 @@ def _pair(rom, sd_lags=False, slow=False, slave_rom=None):
         core.attach_sio(end, lib.SIO_MULTI)
     cable.sd_lags = sd_lags
     cable.slow = slow
+    cable.takes = takes
     _KEEP.append((cores, screens, cable, ends))
 
-    def both(frames, keys=None):
+    # ...by an event of the emulator's own clock that stops it there: a
+    # cartridge waiting for its blank is HALTED, and a halted console is
+    # run from event to event without coming back until something wakes
+    # it, so there is no stepping it to a scanline.
+    stopped = [False]
+    if phase:
+        native = cores[1]._native
+
+        @ffi.callback("void(struct mTiming *, void *, uint32_t)")
+        def stop(timing, context, late):
+            stopped[0] = True
+            native.earlyExit = True
+        label = ffi.new("char[]", b"phase")
+        event = ffi.new("struct mTimingEvent *")
+        event.callback = stop
+        event.context = ffi.NULL
+        event.name = label
+        event.priority = 0x7F
+        _KEEP.append((stop, label, event))
+
+    def past_the_edge(core):
+        """The slave on from the edge of its frame to its phase."""
+        stopped[0] = False
+        lib.mTimingSchedule(ffi.addressof(native.timing), event,
+                            (both.phase % SCANLINES) * SCANLINE_CYCLES)
+        for _ in range(100000):
+            if stopped[0]:
+                return
+            core.run_loop()
+        raise RuntimeError("the slave never reached its scanline")
+
+    def both(frames, keys=None, edge=None):
+        """`edge(i)`: called with each console standing on the edge of its
+        own frame — where its turn is over and it is waiting, if it is on
+        time — before the slave is run on to its phase."""
         for _ in range(frames):
             for i, core in enumerate(cores):
                 core.set_keys(*(keys[i] if keys else []))
                 core.run_frame()
+                if edge is not None:
+                    edge(i)
+                if phase and i == 1:
+                    past_the_edge(core)
             cable.settle()
+    both.phase = phase
 
     def tap(key, who=None):
         both(4, [[KEYS[key]] if who in (None, i) else [] for i in range(2)])
         both(10, [[], []])
 
+    if phase and slow:
+        raise ValueError("a phase is the quick cable's (see _pair)")
     return cores, cable, both, tap
 
 
