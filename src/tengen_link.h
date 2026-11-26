@@ -97,6 +97,19 @@ void tengen_link_rules(TengenLink *link, uint8_t rules);
 bool tengen_link_step(TengenLink *link, uint8_t local_buttons,
                        uint16_t remote_word, TengenStepResult out[2]);
 
+/* THE OTHER CONSOLE'S GAME IS OVER, AND SO THIS ONE'S IS. The two machines
+ * step the same game from the same words and reach its end on the same
+ * step — unless they have parted: a word the cable changed on its way to
+ * one of them, two builds that do not play by the same rules. Then one
+ * reaches an end the other has not, and stops sending moves (the names'
+ * exchange, TengenNameSwap, begins there). A shared board has one end, and
+ * that is it: every board still going here is out, as a top-out puts it
+ * out, on no step of its own. `out` is what a step would have returned:
+ * `topped_out` for each board this ended — one of the two on a shared
+ * board, as the core reports a shared top-out on one player. Nothing, on
+ * a match already over. */
+void tengen_link_end(TengenLink *link, TengenStepResult out[2]);
+
 /* The word this machine should send for the frame it is about to run. */
 static inline uint16_t tengen_link_send_word(const TengenLink *link,
                                               uint8_t local_buttons) {
@@ -211,11 +224,23 @@ typedef struct {
      * board (tengen_lobby_demo). It rides in HELLO beside the mode, and a
      * lobby a player is sitting in never answers one that nobody is. */
     bool mode_demo;
+    /* WHICH BUILD EACH CONSOLE IS (tengen_lobby_version): this one's, as
+     * it says it in HELLO, and the other's as heard there — 0 from a build
+     * of before the field, which says nothing. */
+    uint8_t version;
+    uint8_t their_version;
+    bool heard_version;  /* a HELLO of the other console's has been read */
 } TengenLobby;
 
 /* What HELLO carries, the master's and the echo alike. */
 #define TENGEN_HELLO_COOP 0x0001
 #define TENGEN_HELLO_DEMO 0x0002
+/* ...and above them the build's number, eight bits. Every build before the
+ * field reads the mode's bits out of HELLO and nothing else, so it links
+ * with one that says its number as it always did — and the one that says
+ * it learns from the silence that the other is older. */
+#define TENGEN_HELLO_VERSION_SHIFT 4
+#define TENGEN_HELLO_VERSION_MASK  0x0FF0
 
 /* Starts a lobby. The master's seed/level/music are the ones that count; on
  * the slave they are overwritten by what arrives. */
@@ -252,6 +277,23 @@ void tengen_lobby_mode_any(TengenLobby *lobby);
  * one (gba/link.c, link_title_tick). Call after tengen_lobby_start_held;
  * tengen_lobby_forget keeps it. */
 void tengen_lobby_demo(TengenLobby *lobby);
+
+/* THE TWO GAMES ON A CABLE HAVE TO BE THE SAME GAME, and two cartridges
+ * are flashed one at a time: the second of a pair is left a version behind
+ * more easily than not, and nothing said so — the two linked, played, and
+ * were only as alike as the two builds happened to be. Each says its
+ * build's number in HELLO (`version`, 1-255; 0 says nothing, as a build of
+ * before does) and keeps the other's. Nothing is refused: the cable's
+ * screens say it (gba/frontend.c) and the players decide. Not in a demo's
+ * HELLO, whose word the title on the other end knows whole. Call after
+ * tengen_lobby_start_held; tengen_lobby_forget keeps this console's and
+ * forgets the other's. */
+void tengen_lobby_version(TengenLobby *lobby, uint8_t version);
+
+/* Below zero: the other console's build is OLDER than this one's (or says
+ * nothing). Above: NEWER. Zero: the same — or nobody heard yet, or this
+ * console says nothing itself and so has nothing to compare. */
+int tengen_lobby_version_gap(const TengenLobby *lobby);
 
 /* Starts the conversation again in the given role, keeping the seed, the
  * settings and the skins: for a console that has just learnt from the cable

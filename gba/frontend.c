@@ -701,6 +701,20 @@ static void draw_guest_dancer(int elapsed) {
     for (int i = DANCER_SPRITES; i < 128; i++) MEM_OAM[i * 4] = OBJ_ATTR0_HIDDEN;
 }
 
+/* THE OTHER CONSOLE'S GAME IS NOT THIS ONE: said where each player is
+ * waiting on the cable anyway — under YOU ARE PLAYER 2, and by turns with
+ * the line under the master's LEVEL SETTINGS (g_settings_foot). Two
+ * cartridges are flashed one at a time, and the one left behind is the
+ * natural thing to forget: the two link and play all the same, on whatever
+ * the two builds still have in common, and "is it because the other ROM is
+ * an old one?" had no answer on either screen. NULL when the two are the
+ * same build, or nobody is there (tengen_lobby_version_gap). */
+const char *version_note(const TengenLobby *lobby) {
+    int gap = tengen_lobby_version_gap(lobby);
+    return gap < 0 ? "OTHER GBA: OLDER VERSION"
+         : gap > 0 ? "OTHER GBA: NEWER VERSION" : NULL;
+}
+
 /* THE LOBBY SAYS WHERE IT IS, not the cable: a transfer answered by a
  * console that is on its menus is still a transfer, and "connected" by that
  * measure put YOU ARE PLAYER 2 on a master whose partner had left. */
@@ -772,6 +786,8 @@ void draw_link_wait(const TengenLobby *lobby, int elapsed) {
     }
     /* The guest: the master is choosing, and the cossack does the waiting. */
     draw_text_centred(11, "YOU ARE PLAYER 2", BANK_NOTE);
+    const char *note = version_note(lobby);
+    if (note) draw_text_centred(MENU_FOOT_TY, note, menu_bank());
     draw_guest_dancer(elapsed);
 }
 
@@ -945,6 +961,9 @@ void draw_tv_page(int page, uint8_t start_level, uint8_t levels,
     }
 }
 
+/* The line under the page, when it is not its own (version_note). */
+const char *g_settings_foot;
+
 void draw_level_settings(int chosen, uint8_t start_level, uint8_t music,
                                  const uint8_t handicap[2], bool two_player,
                                  int handicap_who) {
@@ -1011,7 +1030,10 @@ void draw_level_settings(int chosen, uint8_t start_level, uint8_t music,
      * same thing twice. HANDICAP still keeps the row below it free — see
      * MENU_FIELD_TY — so nothing else moved. */
 
-    draw_text_centred(MENU_FOOT_TY, "PRESS START TO PLAY", BANK_NOTE);
+    if (g_settings_foot)
+        draw_text_centred(MENU_FOOT_TY, g_settings_foot, menu_bank());
+    else
+        draw_text_centred(MENU_FOOT_TY, "PRESS START TO PLAY", BANK_NOTE);
 }
 
 /* SINGLE-PAK, WHILE IT SENDS: what to do at the other end, and how to stop.

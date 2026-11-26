@@ -104,11 +104,10 @@ SECTIONS
     /* THE USER STACK GROWS DOWN FROM __sp_usr INTO WHATEVER IS LEFT ABOVE
      * .bss. Nothing would say so if that space ran out — the stack would
      * simply start writing over the last variables — so the link refuses a
-     * layout that leaves it less than 4KB. IT HAS ALMOST EXACTLY THAT
-     * TODAY (a few dozen bytes more): a new variable of any size goes in
-     * .ewram (__attribute__((section(".ewram"))), which nothing clears at
-     * start-up — set it before reading it), or is a local of the function
-     * that uses it. */
+     * layout that leaves it less than 4KB. It has had as little as
+     * thirty-two bytes over that, and has about 1.4KB now: cold data of
+     * any size goes in .ewram (__attribute__((section(".ewram"))), which
+     * nothing clears at start-up — set it before reading it). */
     ASSERT(__sp_usr - __bss_end >= 0x1000,
            "IWRAM: less than 4KB left for the stack above .bss")
 

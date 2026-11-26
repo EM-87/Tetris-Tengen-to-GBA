@@ -67,6 +67,23 @@ static uint8_t g_link_wait_frames;   /* for the two sounds; see link_wait */
  * pad at rest (link_play_frame). The match is still a linked one in every
  * other way — the shared pause menu, both boards, both rows on the table —
  * and ends as one, without the names swap there is nobody left to make. */
+/* THE MATCH'S TUNE STARTS ON THE MATCH'S FIRST STEP. It started on the
+ * frame each console got out of the lobby, and the two do not get out on
+ * the same one: a transfer apart at best, more when the handshake has had
+ * to say something twice. One tune from two speakers a couple of frames
+ * apart is an echo — and two consoles left to their demo, with nobody
+ * playing and nothing else to listen to, is where it was heard ("the music
+ * between the GBAs is out of step in the coop demo"). Everything else the
+ * music does in a linked match it already does on a step: the level-up's
+ * intro, the tune after it, the pause, the game over. The first step is
+ * played by both within a frame of each other, which is as near as two
+ * consoles with a frame of their own each can get. */
+static bool g_link_tune_due;
+
+void link_tune_begin(void) {
+    g_link_tune_due = true;
+}
+
 bool g_link_alone;
 /* ...and this console's own player did (START on a dead board, the other
  * still going): main.c takes it to the table. */
@@ -1405,6 +1422,55 @@ static void link_go_alone(void) {
     if (g_link_waiting) link_wait(false);
 }
 
+/* WHAT A STEP OF A LINKED MATCH LEAVES TO BE DONE, for both players'
+ * results — and the same for an end that came from the other console and
+ * not from a step (tengen_link_end, in link_play_frame). */
+static void link_step_done(const TengenStepResult out[2]) {
+    note_award(0, out[0]);
+    note_award(1, out[1]);
+    stats_watch(0, out[0]);
+    stats_watch(1, out[1]);
+    cossack_watch(0, out[0]);
+    cossack_watch(1, out[1]);
+    /* A GAME IS WRITTEN DOWN AS IT ENDS, not at the end of the match:
+     * L81DD is called from the top-out itself (main.asm.txt:600), which
+     * is what lets a player start again over A+B and keep the game they
+     * just finished. Both consoles see both results, so both write the
+     * same two rows on the same frame. */
+    for (int i = 0; i < 2; i++) if (out[i].topped_out) leader_record(i);
+    /* ...and a board put back on its feet is a new board: everything on
+     * it, and every counter beside it, has to be drawn again. */
+    if (out[0].restarted || out[1].restarted) g_repaint = true;
+    /* THE LEVEL-UP'S MUSIC IS THE MATCH'S, NOT THE PLAYER'S. The
+     * cartridge has one sound engine for both players, so either one's
+     * level-up plays the intro, and here each console used to play it
+     * only for its own player. In coop the level is shared: the console
+     * whose player had not made the clear went on with its tune while
+     * the other stopped KOROBEINIKI or KATIUSKA for the intro and started
+     * it again from the top, or turned MUSIC MIX over to the next one —
+     * and from there the two consoles played different music. Both see
+     * both results on the same step, so both do the same thing. The
+     * clears, drops and rumble stay this console's player's. */
+    /* ...AND SO IS A SHARED BOARD'S END. A coop top-out takes both
+     * players with it (top_out, tengen_core.c) and is reported on the
+     * one whose piece would not fit: the other console never heard of
+     * it, played no game-over tune and left the match's going — under
+     * the plaque, the table and its typing, to the title. On two
+     * cartridges it looked like the slave's doing; it was whichever
+     * console's player had not dealt the last piece. */
+    TengenStepResult mine = out[g_view];
+    if (g_session.game.coop && out[g_view ^ 1].topped_out)
+        mine.topped_out = true;
+    announce(mine, out[0].leveled_up || out[1].leveled_up);
+    /* A RACE'S BOARD BACK ON ITS FEET (A+B) HAS ITS TUNE BACK. Its
+     * console went quiet for the game-over tune when it died, as this
+     * player's speaker; the cartridge's one engine never stopped for a
+     * board with the other still going (MUSIC_SILENCE is sent only once
+     * both are down, main.asm.txt:83E7-83F5), and a board restarted
+     * here played on in silence to the end of the match. */
+    if (out[g_view].restarted) start_music(g_music);
+}
+
 bool link_play_frame(uint8_t pressed, bool *quit) {
     /* The master starts one transfer per frame off its own vblank; the slave
      * has nothing to start. Either way the interrupt does the collecting. */
@@ -1586,50 +1652,12 @@ bool link_play_frame(uint8_t pressed, bool *quit) {
         bool was_paused = g_session.game.paused;
         if (!tengen_link_step(&g_session, local_buttons, remote, out))
             break;
+        if (g_link_tune_due) {
+            g_link_tune_due = false;
+            start_music(g_music);
+        }
         if (was_paused != g_session.game.paused) pause_toggled(was_paused);
-        note_award(0, out[0]);
-        note_award(1, out[1]);
-        stats_watch(0, out[0]);
-        stats_watch(1, out[1]);
-        cossack_watch(0, out[0]);
-        cossack_watch(1, out[1]);
-        /* A GAME IS WRITTEN DOWN AS IT ENDS, not at the end of the match:
-         * L81DD is called from the top-out itself (main.asm.txt:600), which
-         * is what lets a player start again over A+B and keep the game they
-         * just finished. Both consoles see both results, so both write the
-         * same two rows on the same frame. */
-        for (int i = 0; i < 2; i++) if (out[i].topped_out) leader_record(i);
-        /* ...and a board put back on its feet is a new board: everything on
-         * it, and every counter beside it, has to be drawn again. */
-        if (out[0].restarted || out[1].restarted) g_repaint = true;
-        /* THE LEVEL-UP'S MUSIC IS THE MATCH'S, NOT THE PLAYER'S. The
-         * cartridge has one sound engine for both players, so either one's
-         * level-up plays the intro, and here each console used to play it
-         * only for its own player. In coop the level is shared: the console
-         * whose player had not made the clear went on with its tune while
-         * the other stopped KOROBEINIKI or KATIUSKA for the intro and started
-         * it again from the top, or turned MUSIC MIX over to the next one —
-         * and from there the two consoles played different music. Both see
-         * both results on the same step, so both do the same thing. The
-         * clears, drops and rumble stay this console's player's. */
-        /* ...AND SO IS A SHARED BOARD'S END. A coop top-out takes both
-         * players with it (top_out, tengen_core.c) and is reported on the
-         * one whose piece would not fit: the other console never heard of
-         * it, played no game-over tune and left the match's going — under
-         * the plaque, the table and its typing, to the title. On two
-         * cartridges it looked like the slave's doing; it was whichever
-         * console's player had not dealt the last piece. */
-        TengenStepResult mine = out[g_view];
-        if (g_session.game.coop && out[g_view ^ 1].topped_out)
-            mine.topped_out = true;
-        announce(mine, out[0].leveled_up || out[1].leveled_up);
-        /* A RACE'S BOARD BACK ON ITS FEET (A+B) HAS ITS TUNE BACK. Its
-         * console went quiet for the game-over tune when it died, as this
-         * player's speaker; the cartridge's one engine never stopped for a
-         * board with the other still going (MUSIC_SILENCE is sent only once
-         * both are down, main.asm.txt:83E7-83F5), and a board restarted
-         * here played on in silence to the end of the match. */
-        if (out[g_view].restarted) start_music(g_music);
+        link_step_done(out);
         stepped++;
     }
 
@@ -1668,6 +1696,26 @@ bool link_play_frame(uint8_t pressed, bool *quit) {
      * that did arrive played (nothing stepped this frame), a race goes on
      * alone and a shared board, which cannot, ends as a cable gone does. */
     if (stepped == 0 && link_partner_left()) {
+        /* ...UNLESS WHAT IT SENDS IS THE END OF THE MATCH ITSELF, the
+         * names' exchange (link_partner_over): its board is lost and this
+         * one's is not, so the two were no longer the same game — a word
+         * the cable changed for one of them, two builds that do not play
+         * alike — and for seconds or minutes each player has been looking
+         * at a board of their own. One shared board has one end. This
+         * console showed CABLE LOST for it, went to the title and wrote
+         * nothing down, with the cable whole and the other console on its
+         * GAME OVER: on two cartridges, "the master, instead of game over,
+         * stays on cable lost". It ends as the other did, and from there
+         * as any match ends (the names, the table). */
+        if (g_session.game.coop && link_partner_over()) {
+            TengenStepResult out[2];
+            bool was_paused = g_session.game.paused;
+            g_session.game.paused = false;
+            if (was_paused) pause_toggled(was_paused);
+            tengen_link_end(&g_session, out);
+            link_step_done(out);
+            return link_frame_done(false);
+        }
         if (g_session.game.coop) {
             link_give_up();
             return link_frame_done(false);

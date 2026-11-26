@@ -130,14 +130,12 @@ void link_tick(void);
  * side does is carry one word per frame for it.
  * ----------------------------------------------------------------------- */
 
-/* Starts the handshake and loads its first word onto the wire. */
-void link_lobby_start(TengenLobby *lobby, uint16_t seed, uint8_t start_level,
-                       uint8_t music);
-
-/* The same, but PARKED at the greeting until link_lobby_release: the two
- * consoles find each other before anybody picks a level or a tune, because on
- * a cable only one of them should be picking and neither knows which until the
- * cable says so. See tengen_lobby_start_held. */
+/* Starts the handshake and loads its first word onto the wire — PARKED at
+ * the greeting until link_lobby_release: the two consoles find each other
+ * before anybody picks a level or a tune, because on a cable only one of
+ * them should be picking and neither knows which until the cable says so.
+ * See tengen_lobby_start_held. (There was an unparked one beside it, which
+ * nothing had called since the choosing moved after the connecting.) */
 void link_lobby_start_held(TengenLobby *lobby, uint16_t seed);
 
 /* The master's choice, once it has one; lets the handshake run on. */
@@ -165,6 +163,8 @@ void link_play_end(void);
  * one that is no longer in the match: at rest in its menus, in a lobby,
  * started over. Not a quiet cable (link_starved): this one is there. */
 bool link_partner_left(void);
+/* ...because its match is over, and it is on to the names' exchange. */
+bool link_partner_over(void);
 
 /* ----------------------------------------------------------------------- *
  * The records

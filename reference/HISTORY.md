@@ -1120,3 +1120,94 @@ and the last were one evening seen from two ends.
 - **Thirty-two bytes.** Internal memory had exactly that to spare above
   the four kilobytes the linker keeps for the stack, and the linker's own
   comment still said ten. The sky's two bytes are locals.
+
+## It worked — and what two consoles said next
+
+The demo was shared on the first evening the new build saw two consoles,
+and three more lines came back with the news.
+
+- **"Take the blue sky away."** It had been put there to say which half of
+  an unseen mechanism had failed; nothing failed. A tell belongs to the
+  build that needs one, and the title's night is the cartridge's again.
+- **"The music between the two is out of step in the demo."** One tune,
+  two speakers, a frame or two apart: an echo, and heard as soon as two
+  consoles sat side by side with nobody playing. Each console started the
+  match's tune on the frame IT got out of the lobby, and the two never get
+  out on the same one. Everything else the music does in a linked match
+  was already tied to a step both consoles play together — the level-up,
+  the pause, the end; the start was the one thing left to each console's
+  own clock. It is on the first step now, and measured: zero frames apart,
+  cartridge or copy at either end.
+- **"Cartridge against cartridge, on losing, the master stays on CABLE
+  LOST. Is it because I am playing against an old ROM?"** It can be, and
+  the search went the long way round to say so:
+  - CABLE LOST is only ever said by a match still running. So the
+    master's match had not ended when the slave's had: the two consoles
+    were no longer playing the same game, and the first to lose its board
+    went on to the names' exchange while the other, hearing words that
+    were not moves, called it gone.
+  - Builds 2.20 to 2.24 were built again and put on the other end of the
+    emulated cable, both ways round, coop and race, pads mashed from one
+    seed for minutes, with pauses and the shared menu, with every rule on
+    and hard drops raining: byte for byte the same game on both, every
+    time. The first draft of this entry stopped there, at "not that I can
+    show".
+  - It was one build short. 2.19 and the ones before it — built too, in
+    the end, back to 2.10 — are ANOTHER GAME the moment HARD DROP is on.
+    The 2.20 batch was called "HARD DROP on UP held straight": a fresh
+    press of UP had dropped the piece, and since then UP held three frames
+    does. One core drops on the press and the other does not; from the
+    first UP the two consoles share a cable and nothing else, each showing
+    its own board as if it were the one. One of them is lost first. With
+    2.25 on the master and 2.19 on the slave, three games in four ended
+    with the slave's board lost and the master on CABLE LOST: the report,
+    to the letter. (With the port's rules off they are the same game back
+    to 2.10. The same file compiled against each version's core says so
+    without an emulator: four numbers alike from 2.20 on, two of them
+    different before.)
+  - What that batch owed and nobody knew it owed: a line saying that the
+    cartridges not yet flashed had become a different game over the
+    cable. Two cartridges are flashed one at a time.
+  - So, three things. A shared board lost on one console is lost on the
+    other, as a game over and not as a cable. Each console tells the other
+    which build it is, in bits of HELLO that no older build looks at, and
+    a pair that differ say so on the screens their players are already
+    waiting on (an older build says nothing, and is taken for older). And
+    THE GAME IS PINNED in `make test`: four matches played by a small
+    player that lives in the test, folded to a number each — the day a
+    change to the core changes one of them, the batch finds out before
+    two cartridges do.
+  Whether that was the evening's cause only the other cartridge's credits
+  can say. And one thing found on the way is written down in CLAUDE.md and
+  not yet mended: a transfer that only one console accepts leaves the two
+  a step apart for good.
+- **Internal memory, again.** The interrupt needed twelve more bytes and
+  there were thirty-six. The game kept for a console switched off in a
+  pause — a kilobyte and a half, read twice an evening — had been sitting
+  in the fastest memory the console has. It lives in EWRAM now.
+- **Five hundred and twelve kilobytes, and one hundred and seventy-two
+  bytes.** The program had filled its half megabyte to within 756 bytes
+  without anybody counting, and this batch stepped over the line: the
+  file a cart is flashed with is a megabyte from here on. Nothing in the
+  game depends on the old size — the save's journal has always started at
+  one megabyte — and one thing in the checks did. A file of a megabyte
+  EXACTLY is, to mGBA, a Classic NES cartridge, whose boards show their
+  mask ROM four times over; the flash chip the checks stand in was the
+  emulator's ROM as it came, so a megabyte in, where the journal goes,
+  stood a second copy of the program with its boot logo — and the port's
+  own guard against a flash cart with ANOTHER GAME there refused every
+  board in the list. The strict run said so within minutes of the file
+  growing ("el chip no se usa, motivo 6"); the model now erases what
+  follows the file, as its comment had always said it did. On a real chip
+  what follows the file is what was there before: the journal.
+- **Two survivors that were the checks', not the code's.** A deliberately
+  broken build that left the pause menu's box over the GAME OVER of a board
+  lost under a pause passed: the check looked for the box's last line,
+  "EXIT GAME", and the panel drawn beside the board every frame had made
+  it "DOUBLEAME0". It looks for any of the box now. And one that took the
+  build's number out of the lobby passed by being SKIPPED — the link had
+  thrown the number's variable away with its last use — which the strict
+  chain counts as a failure and the one-check runner the mutants go
+  through did not. The same search found `link_lobby_start`, a lobby that
+  is not parked, which nothing had called since the choosing moved after
+  the connecting: gone.

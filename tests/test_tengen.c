@@ -1050,6 +1050,43 @@ static void test_a_lost_transfer_stops_the_link_rather_than_drifting(void) {
     CHECK(!tengen_link_step(&master, 0, tengen_link_pack(0, 1), 0));
 }
 
+static void test_a_match_over_on_the_other_console_is_over_here(void) {
+    /* Two consoles that have parted company (a word the cable changed, two
+     * builds that play differently) reach the end of a shared board on
+     * different steps, or one of them never. One board has one end:
+     * tengen_link_end puts out whatever is still going, and says so the
+     * way a step says a top-out. */
+    TengenStepResult out[2];
+    TengenLink coop;
+    tengen_link_start(&coop, 0x1234, 0, TENGEN_PLAYER_1, true, false);
+    CHECK(coop.game.player[0].game_active && coop.game.player[1].game_active);
+    uint8_t frame_before = coop.frame;
+    tengen_link_end(&coop, out);
+    CHECK(!coop.game.player[0].game_active && !coop.game.player[1].game_active);
+    /* ONE top-out for the one board, as the core reports its own: a
+     * console writes a game down for each it hears of. */
+    CHECK(out[0].topped_out && !out[1].topped_out);
+    CHECK(!out[0].leveled_up && !out[0].restarted && out[0].lines_cleared == 0);
+    /* No step was taken: nothing else of the game has moved. */
+    CHECK(coop.frame == frame_before && !coop.desynced);
+    /* ...and a match already over has no end left to report. */
+    tengen_link_end(&coop, out);
+    CHECK(!out[0].topped_out && !out[1].topped_out);
+
+    /* Two boards: each one still going ends, and each says so. */
+    TengenLink race;
+    tengen_link_start(&race, 0x1234, 0, TENGEN_PLAYER_2, false, false);
+    tengen_link_end(&race, out);
+    CHECK(!race.game.player[0].game_active && !race.game.player[1].game_active);
+    CHECK(out[0].topped_out && out[1].topped_out);
+    /* ...and only those: a board already dead is not lost twice. */
+    tengen_link_start(&race, 0x1234, 0, TENGEN_PLAYER_1, false, false);
+    race.game.player[1].game_active = false;
+    tengen_link_end(&race, out);
+    CHECK(out[0].topped_out && !out[1].topped_out);
+    CHECK(!race.game.player[0].game_active);
+}
+
 static void test_the_wire_word_survives_a_round_trip(void) {
     for (int buttons = 0; buttons < 256; buttons++) {
         for (int frame = 0; frame < 256; frame++) {
@@ -1447,6 +1484,260 @@ static void test_a_single_pak_slave_takes_the_masters_mode(void) {
         CHECK(master.ready && slave.ready);
         CHECK(slave.coop == (coop != 0) && slave.seed == 0xC0DE);
     }
+}
+
+/* THE GAME TWO BUILDS SHARE IS THIS ONE. A linked match is two consoles
+ * stepping the same core from the same words, and nothing on the cable says
+ * what either made of them (a word has no room for a check): two BUILDS
+ * whose cores make different things of the same buttons link, play, and
+ * are two games from the first press that tells them apart. It happened.
+ * 2.20 changed what UP does under HARD DROP — a fresh press had dropped the
+ * piece; UP held straight for three frames since — and a cartridge left on
+ * 2.19 against one on 2.25 lost the shared board on one console and not on
+ * the other: "the master, instead of game over, stays on CABLE LOST".
+ * Nothing had said the two were no longer one game.
+ *
+ * So the game is pinned: four matches — a race and a shared board, by the
+ * cartridge's rules and with every one of the port's on — played by a small
+ * player that lives here and nowhere else (pin_pad), and folded to a number
+ * each over what a player sees: the boards, the scores, the lines, the
+ * levels, who is still in. Not over the structs, which may grow. These four
+ * numbers are 2.20's and every build's since: this same code compiled
+ * against each of those cores gives them. Against the cores of 2.17 to 2.19
+ * it gives the two without the port's rules and not the two with.
+ *
+ * IF THIS FAILS YOU HAVE CHANGED THE GAME, and every cartridge not yet
+ * flashed with your build plays a different one over the cable. That may
+ * be exactly what the batch is for. Then say so where the players are told
+ * (README, "Las dos necesitan esta misma versión"), say from which build
+ * on in CLAUDE.md, and only then put the new numbers here. The lobby
+ * already tells two players that their builds differ (version_note).
+ * (A change to pin_pad or pin_mark changes them too, and means nothing.) */
+static uint32_t pin_fold(uint32_t h, uint32_t v) {
+    for (int i = 0; i < 4; i++) {
+        h ^= (v >> (8 * i)) & 0xFF;
+        h *= 16777619u;
+    }
+    return h;
+}
+
+/* Where the piece would rest if it fell from where `g` has it, as a mark:
+ * low is good, a row made whole is very good, a gap left under it is bad. */
+static int pin_mark(const TengenGame *g, TengenPlayerSlot slot) {
+    TengenCell cell[4];
+    if (tengen_active_piece_cells(g, slot, cell) != 4) return -10000;
+    const TengenPlayfield *field = &g->field[g->coop ? 0 : slot];
+    int drop = tengen_drop_distance(g, slot), mark = 0;
+    for (int i = 0; i < 4; i++) {
+        int r = cell[i].row + drop, c = cell[i].col;
+        if (r < 0) return -5000;
+        mark += 4 * r;
+        bool mine_below = false;
+        for (int k = 0; k < 4; k++)
+            mine_below |= cell[k].col == c && cell[k].row + drop == r + 1;
+        if (r + 1 < TENGEN_PF_HEIGHT && !mine_below &&
+            field->cell[r + 1][c] == TENGEN_CELL_EMPTY)
+            mark -= 14;
+        int gaps = 0;
+        for (int x = 0; x < TENGEN_PF_WIDTH; x++) {
+            bool mine = false;
+            for (int k = 0; k < 4; k++)
+                mine |= cell[k].col == x && cell[k].row + drop == r;
+            gaps += !mine && field->cell[r][x] == TENGEN_CELL_EMPTY;
+        }
+        if (gaps == 0) mark += 30;
+    }
+    return mark;
+}
+
+/* The pad of a player who looks: every frame, the best resting place a
+ * turn and a walk away, and one button towards it — a turn or a step on
+ * alternate frames (each a fresh press), then DOWN, or UP held where the
+ * port's rules are on and the piece is an odd one; SELECT now and then,
+ * which is HOLD under those rules; A and B together on a lost board. */
+static uint8_t pin_pad(const TengenGame *g, TengenPlayerSlot slot, int frame,
+                        bool rules) {
+    const TengenPlayerState *pl = &g->player[slot];
+    if (!pl->game_active)
+        return (frame & 7) < 4 ? (TENGEN_BTN_A | TENGEN_BTN_B) : 0;
+    int best = -100000, turns = 0, walk = 0;
+    TengenGame turned = *g;
+    for (int t = 0; t < 4; t++) {
+        for (int dir = -1; dir <= 1; dir += 2) {
+            TengenGame walked = turned;
+            for (int n = 0; n < TENGEN_PF_WIDTH; n++) {
+                int mark = pin_mark(&walked, slot) - (n ? 1 : 0);
+                if (mark > best) {
+                    best = mark;
+                    turns = t;
+                    walk = dir * n;
+                }
+                if (!tengen_try_move(&walked, slot, dir)) break;
+            }
+        }
+        if (!tengen_try_rotate(&turned, slot, true)) break;
+    }
+    if (best <= -5000) return 0;
+    uint32_t odd = pl->score + pl->lines + (uint32_t)pl->piece.current;
+    if (rules && (frame % 97) == 0) return TENGEN_BTN_SELECT;
+    if (turns) return (frame & 1) ? TENGEN_BTN_B : 0;
+    if (walk)
+        return (frame & 1) ? (walk < 0 ? TENGEN_BTN_LEFT : TENGEN_BTN_RIGHT) : 0;
+    return rules && (odd & 1) ? TENGEN_BTN_UP : TENGEN_BTN_DOWN;
+}
+
+/* What a pinned match had in it: or its number pins nothing. */
+typedef struct {
+    int pieces, clears, holds, lost, levels;
+} PinPlay;
+
+static uint32_t pin_game(bool coop, uint8_t rules, uint16_t seed, PinPlay *play) {
+    TengenLink master, slave;
+    tengen_link_start(&master, seed, 5, TENGEN_PLAYER_1, coop, false);
+    tengen_link_start(&slave, seed, 5, TENGEN_PLAYER_2, coop, false);
+    tengen_link_rules(&master, rules);
+    tengen_link_rules(&slave, rules);
+    memset(play, 0, sizeof(*play));
+    uint32_t h = 2166136261u;
+    for (int f = 0; f < 6000; f++) {
+        TengenStepResult out[2];
+        /* (Each console's player looks at its own console's game.) */
+        uint8_t b0 = pin_pad(&master.game, TENGEN_PLAYER_1, f, rules != 0);
+        uint8_t b1 = pin_pad(&slave.game, TENGEN_PLAYER_2, f + 3, rules != 0);
+        uint16_t from_master = tengen_link_send_word(&master, b0);
+        uint16_t from_slave = tengen_link_send_word(&slave, b1);
+        if (!tengen_link_step(&master, b0, from_slave, out) ||
+            !tengen_link_step(&slave, b1, from_master, 0))
+            return 0;
+        for (int p = 0; p < 2; p++) {
+            play->pieces += out[p].piece_locked;
+            play->clears += out[p].lines_collapsed;
+            play->holds += out[p].held;
+            play->lost += out[p].topped_out;
+            play->levels += out[p].leveled_up;
+        }
+        if ((f & 31) != 31) continue;
+        for (int p = 0; p < 2; p++) {
+            const TengenPlayerState *pl = &master.game.player[p];
+            h = pin_fold(h, pl->score);
+            h = pin_fold(h, pl->lines);
+            h = pin_fold(h, pl->level | (uint32_t)pl->game_active << 8);
+            for (int r = 0; r < TENGEN_PF_HEIGHT; r++)
+                for (int c = 0; c < TENGEN_PF_WIDTH; c++)
+                    h = pin_fold(h, master.game.field[p].cell[r][c] != 0);
+        }
+    }
+    return h;
+}
+
+static void test_the_game_two_builds_share_is_this_one(void) {
+    PinPlay race, race_port, coop, coop_port;
+    CHECK(pin_game(false, 0, 0x2B1D, &race) == 0x19897B64u);
+    CHECK(pin_game(false, TENGEN_RULES_ALL, 0x2B1D + 13, &race_port) == 0x649F88DAu);
+    CHECK(pin_game(true, 0, 0x2B1D + 97, &coop) == 0xECDF3BF6u);
+    CHECK(pin_game(true, TENGEN_RULES_ALL, 0x2B1D + 97 + 13, &coop_port) == 0xFE48F01Du);
+    /* ...and they are matches: hundreds of pieces, lines by the dozen, a
+     * board lost, levels gone up in the race, and under the port's rules
+     * pieces put aside (UP's drop is every other piece of theirs). */
+    CHECK(race.pieces > 200 && race.clears > 40 && race.lost > 0 && race.levels > 0);
+    CHECK(race_port.pieces > 300 && race_port.clears > 80 && race_port.holds > 50);
+    CHECK(race_port.levels > 0 && race.holds == 0);
+    CHECK(coop.pieces > 100 && coop.clears > 20 && coop.lost > 0 && coop.holds == 0);
+    CHECK(coop_port.pieces > 100 && coop_port.clears > 20 && coop_port.holds > 20);
+}
+
+static void test_each_console_learns_which_build_the_other_is(void) {
+    /* Two cartridges are flashed one at a time, and the two games on a
+     * cable have to be the same game: each says its build's number in
+     * HELLO, above the bits every build before the field reads, and keeps
+     * the other's (tengen_lobby_version). */
+    const uint8_t handicap[2] = { 0, 0 };
+    TengenLobby master, slave;
+    tengen_lobby_start_held(&master, 0x1234);
+    tengen_lobby_mode(&master, true);
+    tengen_lobby_version(&master, 26);
+    tengen_lobby_start_held(&slave, 0);
+    tengen_lobby_mode(&slave, true);
+    tengen_lobby_version(&slave, 24);
+    /* Nobody heard yet: nothing to say. */
+    CHECK(tengen_lobby_version_gap(&master) == 0);
+    CHECK(tengen_lobby_version_gap(&slave) == 0);
+    CHECK(tengen_lobby_word(&master, true) ==
+          ((TENGEN_LOBBY_HELLO << TENGEN_LOBBY_TAG_SHIFT) | TENGEN_HELLO_COOP |
+           (26u << TENGEN_HELLO_VERSION_SHIFT)));
+    for (int i = 0; i < 6; i++) lobby_transfer(&master, &slave, true);
+    CHECK(master.linked && slave.linked);
+    CHECK(tengen_lobby_version_gap(&master) < 0);       /* the other is older */
+    CHECK(tengen_lobby_version_gap(&slave) > 0);        /* ...and newer */
+    /* It is said, not enforced: the two go on to their match. */
+    tengen_lobby_release(&master, 0xD3E0, 9, 0, handicap, true, false);
+    for (int i = 0; i < 100 && !master.ready; i++)
+        lobby_transfer(&master, &slave, true);
+    CHECK(master.ready && slave.ready && slave.seed == 0xD3E0);
+
+    /* THE SAME BUILD: nothing to say, on either. */
+    tengen_lobby_start_held(&master, 0x1234);
+    tengen_lobby_version(&master, 26);
+    tengen_lobby_start_held(&slave, 0);
+    tengen_lobby_version(&slave, 26);
+    for (int i = 0; i < 6; i++) lobby_transfer(&master, &slave, true);
+    CHECK(master.linked && slave.linked);
+    CHECK(tengen_lobby_version_gap(&master) == 0);
+    CHECK(tengen_lobby_version_gap(&slave) == 0);
+
+    /* A BUILD OF BEFORE THE FIELD says the mode and nothing else — $1001,
+     * $1000 — and is answered and linked with as it always was; from its
+     * silence this console knows it is older. */
+    {
+        TengenLobby here;
+        tengen_lobby_start_held(&here, 0x1234);
+        tengen_lobby_mode(&here, true);
+        tengen_lobby_version(&here, 26);
+        uint16_t old_echo = (uint16_t)((TENGEN_LOBBY_HELLO << TENGEN_LOBBY_TAG_SHIFT) |
+                                       TENGEN_HELLO_COOP);
+        for (int i = 0; i < 4; i++)
+            tengen_lobby_apply(&here, true, true, tengen_lobby_word(&here, true),
+                               old_echo);
+        CHECK(here.linked);
+        CHECK(tengen_lobby_version_gap(&here) < 0);
+        /* ...and as a slave under an old master's HELLO. */
+        tengen_lobby_start_held(&here, 0);
+        tengen_lobby_mode(&here, true);
+        tengen_lobby_version(&here, 26);
+        tengen_lobby_apply(&here, false, true, old_echo, tengen_lobby_word(&here, false));
+        CHECK(tengen_lobby_version_gap(&here) < 0);
+        /* What it echoes carries its own number, which the old master does
+         * not look at: the mode's bit is where it was. */
+        uint16_t echo = tengen_lobby_word(&here, false);
+        CHECK((echo >> TENGEN_LOBBY_TAG_SHIFT) == TENGEN_LOBBY_HELLO);
+        CHECK((echo & TENGEN_HELLO_COOP) && !(echo & TENGEN_HELLO_DEMO));
+        CHECK(((echo & TENGEN_HELLO_VERSION_MASK) >> TENGEN_HELLO_VERSION_SHIFT) == 26);
+    }
+
+    /* A CONSOLE THAT SAYS NOTHING has nothing to compare (a build of
+     * before, seen from inside): whatever it hears. */
+    tengen_lobby_start_held(&master, 0x1234);
+    tengen_lobby_version(&master, 26);
+    tengen_lobby_start_held(&slave, 0);
+    for (int i = 0; i < 6; i++) lobby_transfer(&master, &slave, true);
+    CHECK(tengen_lobby_version_gap(&slave) == 0);
+    CHECK(tengen_lobby_version_gap(&master) < 0);
+
+    /* A LOBBY STARTED OVER (the role changed, the partner another) keeps
+     * its own number and forgets the other's. */
+    tengen_lobby_forget(&master, true);
+    CHECK(master.version == 26);
+    CHECK(tengen_lobby_version_gap(&master) == 0);
+
+    /* NOT IN A DEMO'S HELLO, which the title on the other end knows whole
+     * ($1003): two titles of different builds say nothing of it. */
+    tengen_lobby_start_held(&master, 0x1234);
+    tengen_lobby_mode(&master, true);
+    tengen_lobby_demo(&master);
+    tengen_lobby_version(&master, 26);
+    CHECK(tengen_lobby_word(&master, true) ==
+          ((TENGEN_LOBBY_HELLO << TENGEN_LOBBY_TAG_SHIFT) | TENGEN_HELLO_COOP |
+           TENGEN_HELLO_DEMO));
 }
 
 static void test_two_demos_share_a_board_and_nobody_else_joins_one(void) {
@@ -5355,6 +5646,7 @@ int main(void) {
     test_random_play_never_tops_out_on_a_nearly_empty_board();
     test_two_linked_machines_stay_identical();
     test_a_lost_transfer_stops_the_link_rather_than_drifting();
+    test_a_match_over_on_the_other_console_is_over_here();
     test_the_button_that_starts_a_match_does_not_pause_it();
     test_the_lobby_connects_first_and_the_master_chooses_after();
     test_the_lobby_agrees_on_a_game_and_both_leave_together();
@@ -5367,6 +5659,8 @@ int main(void) {
     test_a_slave_that_saw_one_go_does_not_carry_it_over();
     test_two_consoles_that_chose_different_modes_never_link();
     test_a_single_pak_slave_takes_the_masters_mode();
+    test_each_console_learns_which_build_the_other_is();
+    test_the_game_two_builds_share_is_this_one();
     test_two_demos_share_a_board_and_nobody_else_joins_one();
     test_a_single_pak_probe_is_not_a_go();
     test_the_game_boy_players_handshake();

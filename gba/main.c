@@ -207,11 +207,9 @@ int main(void) {
 #define TITLE_IDLE_FRAMES 300
 #define DEMO_LINK_WAIT 60
 #define DEMO_LINK_FRAMES 180
-#define SKY_HOLD_FRAMES 20
     bool demo_link = false;         /* the two titles are shaking hands */
     int demo_link_frames = 0;
     bool demo_waiting = false;      /* the slave's end, its demo due: to be asked */
-    uint8_t sky = TITLE_SKY_NIGHT, sky_dark = 0;    /* the title's (title_sky) */
     uint8_t held_last = 0;
     bool sweeping = false;   /* true while the line-clear sweep owns the OAM */
     bool match_running = false;
@@ -382,29 +380,6 @@ int main(void) {
             if (demo_link && (pressed & MENU_ADVANCE)) {
                 link_shutdown();
                 demo_link = false;
-            }
-            /* ...AND THE SKY SAYS WHAT THE CABLE DOES (title_sky): the
-             * cathedral's night turns deep blue while the other console's
-             * title is heard, and violet while the two shake hands. Nothing
-             * else on a title could say it — and on a real cable, where
-             * none of this had been seen to work when it was written, it
-             * is the only way to tell which half did not. And a sky that
-             * was lit stays lit SKY_HOLD_FRAMES with nothing to light it:
-             * a master starting its port over to ask says a word or two
-             * that are neither a title's nor an invitation, and the
-             * slave's sky went blue, black, violet. */
-            {
-                int now = demo_link ? TITLE_SKY_HANDS
-                          : link_title_other() >= 0 ? TITLE_SKY_HEARD
-                          : TITLE_SKY_NIGHT;
-                if (now == TITLE_SKY_NIGHT && sky != TITLE_SKY_NIGHT &&
-                    ++sky_dark <= SKY_HOLD_FRAMES) {
-                    now = sky;
-                } else {
-                    sky = (uint8_t)now;
-                    sky_dark = 0;
-                }
-                title_sky(now);
             }
             /* SELECT SHOWS THE HIGH SCORES, which otherwise only a lost
              * game could. The page as a game over leaves it, with nothing
@@ -1084,9 +1059,15 @@ int main(void) {
                 draw_tv_page(tv_page, start_level, start_level_choices(),
                              g_music, music_choices(), handicap,
                              two_handicaps, handicap_who);
-            else
+            else {
+                /* ...and on a cable, two seconds in four, that the other
+                 * console's game is another build (version_note). */
+                g_settings_foot = GAME_IS_LINKED(game_mode) &&
+                                  ((g_vblank_count >> 7) & 1)
+                                      ? version_note(&lobby) : NULL;
                 draw_level_settings(menu_field, start_level, g_music, handicap,
                                      two_handicaps, handicap_who);
+            }
             audio_frame();
             continue;
         }
@@ -1462,7 +1443,9 @@ int main(void) {
                     g_demo_mix = true;
                     g_music = MUSIC_MIX;
                 }
-                start_music(g_music);
+                /* (On the match's first step, the same on both consoles,
+                 * and not on the frame this one got here: link_tune_begin.) */
+                link_tune_begin();
                 /* The lobby's cossack is four sprites nothing on the play
                  * screen ever writes to, so nothing there would ever have
                  * cleared him — he stood in the middle of the board. */

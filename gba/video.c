@@ -817,21 +817,6 @@ uint8_t bg_ink(uint8_t c) {
     return c;
 }
 
-/* ...EXCEPT TO SAY WHAT THE CABLE IS DOING, under the chord (main.c, the
- * title; link.c, link_title_tick): the night turns deep blue while the
- * other console's title is heard, and violet while the two shake hands
- * over a demo to share. A title has no words to say it with, and on a real
- * cable — where none of it had been seen to work when it was written — the
- * sky is the only thing that tells which half did not. Still a night, the
- * fireworks as bright on it — and the whole picture's, not the sky's
- * alone: the columns' black is the backdrop too, and turns with it. */
-void title_sky(int sky) {
-    if (!g_bg_title) return;
-    MEM_PALETTE[0] = sky == TITLE_SKY_HEARD ? lcd_colour(rgb15(1, 3, 11))
-                   : sky == TITLE_SKY_HANDS ? lcd_colour(rgb15(8, 2, 11))
-                   : nes_colour_to_gba(TENGEN_BACKDROP_INDEX);
-}
-
 void set_credit_colour(void) {
     MEM_PALETTE[BANK_CREDIT * 16 + 1] =
         nes_colour_to_gba(bg_ink(g_pause_unlocked ? 0x00 : kRomPalette_bg_menu[1 * 4 + 1]));

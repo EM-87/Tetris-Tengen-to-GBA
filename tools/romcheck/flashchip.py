@@ -458,6 +458,16 @@ class Cart:
         m8.raw_write(ROM + size - 1, 0xFF if size > native.memory.romSize
                      else m8[ROM + size - 1])
         self.mem = ffi.buffer(ffi.cast("uint8_t *", native.memory.rom), ROM_SPAN)
+        # ...and 0xFF it is MADE, whatever the emulator put there. A file
+        # of a megabyte exactly is, to mGBA, a Classic NES cartridge — a
+        # mask ROM its board shows four times over — and three more copies
+        # of this program follow the first, boot logo and all, a megabyte
+        # in: where the journal goes, and where a chip flashed with that
+        # file has whatever it had before. (A file that is no power of two
+        # is followed by zeros, which no erased chip is either.)
+        if chip and size > native.pristineRomSize:
+            written = native.pristineRomSize
+            self.mem[written:size] = b"\xff" * (size - written)
         self.image = bytes(self.mem[0:lma - ROM + (self.ram_end - self.ram_start)])
         self.chip = FlashChip(self.mem, seed=seed, **chip) if chip else None
 

@@ -162,11 +162,13 @@ ARMLDFLAGS := -T gba/gba.ld -nostartfiles -Wl,--gc-sections
 # history, one a batch; the year the commit's. build/build_tag holds them and
 # is rewritten only when they change, so a new merge rebuilds the ROM and
 # nothing else does. (The commit stood on screen under them once.)
-BUILD_VERSION := 2.$(or $(shell git rev-list --count --merges HEAD 2>/dev/null),0)
+BUILD_MINOR := $(or $(shell git rev-list --count --merges HEAD 2>/dev/null),0)
+BUILD_VERSION := 2.$(BUILD_MINOR)
 BUILD_YEAR := $(or $(shell git log -1 --format=%cd --date=format:%Y 2>/dev/null),2026)
 BUILD_TAG_FILE := $(BUILD)/build_tag
 $(shell mkdir -p $(BUILD); echo '$(BUILD_VERSION) $(BUILD_YEAR)' | cmp -s - $(BUILD_TAG_FILE) || echo '$(BUILD_VERSION) $(BUILD_YEAR)' > $(BUILD_TAG_FILE))
-ARMFLAGS += -DTENGEN_VERSION='"$(BUILD_VERSION)"' -DTENGEN_YEAR='"$(BUILD_YEAR)"'
+ARMFLAGS += -DTENGEN_VERSION='"$(BUILD_VERSION)"' -DTENGEN_YEAR='"$(BUILD_YEAR)"' \
+            -DTENGEN_VERSION_MINOR=$(BUILD_MINOR)
 
 # THE COMPUTER'S INNER LOOPS IN INTERNAL WRAM, AS ARM (TENGEN_AI_HOT in
 # src/tengen_ai.c): the collision, the drop, the placement and the board's
