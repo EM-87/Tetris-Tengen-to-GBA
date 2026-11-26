@@ -114,6 +114,8 @@ void link_pump(void);
 /* Takes the oldest transfer the interrupt has collected, if any. Call in a
  * loop each frame: there is usually one, sometimes two, sometimes none. */
 bool link_pop(LinkFrame *out);
+/* How many transfers have landed and not been taken by link_pop. */
+uint8_t link_queued(void);
 
 /* Frames since the last completed transfer, so a match can notice the cable
  * being unplugged rather than waiting forever for a word that is not

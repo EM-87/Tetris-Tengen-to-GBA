@@ -244,9 +244,26 @@ static void soft_reset_check(void);
 /* THE SINGLE-PAK SLAVE TAKES NO INTERRUPTS (see IME_ON): what the handler
  * would do, this does when asked. IF still latches the vertical blank and
  * the end of a transfer with IME off; each is served as the handler would
- * serve it and acknowledged. vsync() asks continuously while it waits, and
- * the master starts one transfer per frame, so a transfer is served within
- * the frame it lands in. */
+ * serve it and acknowledged. vsync() asks continuously while it waits.
+ *
+ * AND A LINKED TURN ASKS FROM INSIDE ITSELF: as it begins, the drawing and
+ * the sound behind it (link_play_frame), and between the two computers of
+ * the demo two titles share (link_demo_moves). "The master starts one
+ * transfer a frame, so a transfer is served within the frame it lands in",
+ * this said, and it was true of a turn that is over long before the next
+ * blank. That demo has two computers thinking in every step, and on this
+ * build — the same code out of the slower memory — its heaviest turn is a
+ * frame and an eighth. Asked only from vsync, a transfer that landed just
+ * after one wait was served a turn later, behind the NEXT transfer: its
+ * words gone under that one's, the step it carried played on the other
+ * console and never here (every few seconds, with this console's frame
+ * two scanlines after the other's transfers; each time a move to send
+ * again and frames of a demo standing still). And a move that landed
+ * while this console drew was played a turn late. A real cable puts a
+ * transfer anywhere in the other console's frame; the checks' cable had
+ * always put it on the frame's edge, the one place that never showed
+ * either (run_link's `phase`). With the two places asked from, no
+ * transfer waits half a frame for its answer. */
 void poll_interrupts(void) {
     /* ...AND ONLY THE ONES SWITCHED ON, as the interrupt would have had
      * them. IF records a finished transfer whatever IE says, and a slave
@@ -261,6 +278,10 @@ void poll_interrupts(void) {
 }
 #endif
 
+#if defined(TENGEN_MULTIBOOT)
+static uint32_t g_vsync_at;     /* the blank the last wait ended on */
+#endif
+
 __attribute__((noinline)) void vsync(void) {
     /* WHAT WAS SAVED THIS FRAME GOES TO THE CARTRIDGE'S FLASH, on a board
      * that keeps its save there (cartsave.h) — here, before the wait and
@@ -271,9 +292,12 @@ __attribute__((noinline)) void vsync(void) {
     cartsave_tick();
 #if defined(TENGEN_MULTIBOOT)
     /* NOT THROUGH THE BIOS, AND NOT ON AN INTERRUPT: on two SPs the slave
-     * died on the first one it took. The frame is waited for by polling. */
-    uint32_t seen = g_vblank_count;
-    while (g_vblank_count == seen) poll_interrupts();
+     * died on the first one it took. The frame is waited for by polling —
+     * for the first blank since the last wait ended, which a turn that
+     * asked from inside itself may have counted already: that turn ran
+     * over, and its drawing starts now (g_vsync_at). */
+    while (g_vblank_count == g_vsync_at) poll_interrupts();
+    g_vsync_at = g_vblank_count;
 #elif defined(__thumb__)
     __asm__ volatile ("swi 0x05" ::: "r0", "r1", "r2", "r3", "memory");
 #else

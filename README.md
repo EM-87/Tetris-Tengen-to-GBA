@@ -347,10 +347,43 @@ dos versiones que no juegan igual—, la otra termina también, con su GAME
 OVER, y de ahí a la tabla como cualquier partida; antes ponía CABLE LOST
 con el cable entero.
 
-**La música de las dos consolas va a la vez**: la canción de una partida
-por cable arranca en el primer paso de la partida, que las dos dan en el
-mismo frame, y no cuando cada una sale del lobby (uno o dos frames de
-diferencia, que entre dos altavoces es un eco).
+**La música de las dos consolas va a la vez**, y eso son tres cosas. La
+canción de una partida por cable arranca en el primer paso de la partida,
+que las dos dan en el mismo frame, y no cuando cada una sale del lobby. Su
+tempo (con el acorde, la música se acelera con la pila alta) se cuenta por
+pasos de la partida, que son los mismos en las dos, y no por frames de cada
+consola. Y la canción sigue el reloj de la consola y no sus turnos: si un
+turno se alarga y se come un frame, el siguiente toca dos frames de música.
+Lo que quedaba —y lo que se oía en la demo compartida, cartucho contra
+copia, con el juego normal sonando bien— no era de la música sino de la
+partida: **un turno por cable da un paso, y solo uno**. Antes, después de
+cada paso miraba si había llegado otra jugada, para ponerse al día. En una
+partida entre dos personas un paso son unas pocas líneas de pantalla y no
+llega nada mientras tanto; en la demo cada paso lleva a los dos ordenadores
+pensando (un tercio de frame, o más), la transferencia siguiente —que en un
+cable de verdad tarda un milisegundo— llegaba A MITAD del paso, y el turno
+daba dos: cuatro ordenadores pensando, el frame perdido, ningún paso en el
+turno siguiente, dos en el otro. En dos consolas la demo iba a trompicones
+de dos frames durante segundos, y la canción de cada una, que contaba sus
+notas por turnos, se retrasaba lo suyo: un tercio de segundo de diferencia
+a los cinco segundos y segundo y medio a los quince, medido en el emulador
+con transferencias de su duración real (cartucho y copia; entre dos
+cartuchos, unos pocos frames que van y vienen). Ahora la jugada que llega mientras el
+turno trabaja es del turno siguiente; una consola que de verdad va atrasada
+(tres jugadas esperando, o dos durante un segundo) sí da dos pasos.
+
+**Y un paso que la otra consola no recibió se le vuelve a mandar.** Una
+transferencia que las dos hacen y solo una acepta —un bit cambiado en el
+cable para una de ellas— las dejaba a un paso de distancia para siempre, y
+seis transferencias después cada una daba a la otra por ida: CABLE LOST con
+el cable entero (y en la demo, que no dice nada, cada consola siguiendo
+sola). La que va por delante lo nota —la jugada de la otra es para el paso
+anterior, dos veces seguidas— y manda otra vez la suya de ese paso; la otra
+lo juega y vuelven a ir juntas. La copia Single-Pak, que no puede recibir
+interrupciones y tiene que preguntar por el cable, pregunta ahora también
+desde dentro de su turno y no solo al esperar el frame: en la demo su turno
+más largo pasa de un frame, y una transferencia atendida tarde quedaba
+pisada por la siguiente.
 
 **El acorde se contagia por el cable.** Una partida enlazada se juega con el
 acorde del maestro en las dos consolas (el menú de pausa, la hoja del final,
