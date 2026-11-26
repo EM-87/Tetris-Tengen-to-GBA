@@ -42,7 +42,11 @@ typedef struct {
     TengenStats stats[2];     /* the game's own figures so far (g_stats) */
 } SuspendBody;
 
-static SuspendBody g_kept;
+/* (In EWRAM: a kilobyte and a half that is touched when a game is put
+ * away or brought back, and internal memory has none to spare — gba.ld.
+ * Nothing there is cleared for anybody, and nothing here asks for it: the
+ * body is written whole, by keep() or off the battery, before it is read.) */
+__attribute__((section(".ewram"))) static SuspendBody g_kept;
 
 static uint32_t checksum(const uint8_t *p, unsigned n) {
     uint32_t sum = 0x5A5A5A5Au;

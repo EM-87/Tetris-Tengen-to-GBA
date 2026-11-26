@@ -136,6 +136,9 @@ static volatile uint16_t g_sent_word;
 #define LINK_LEFT_WORDS 6
 static volatile uint8_t g_strangers;
 static volatile bool g_partner_played;
+/* ...and the last of those words: a console whose match is OVER says the
+ * names' exchange (link_partner_over), which is not a console gone. */
+static volatile uint16_t g_stranger_word;
 
 /* A TITLE LISTENS (link_title_tick, far below): at rest, on its title, a
  * console has the interrupt on for one thing — to take the two words of
@@ -280,8 +283,10 @@ void link_serial_service(void) {
              * the cable mangled is not taken for a console's answer. */
             bool mine_m = m == g_sent_word && tengen_link_is_match_word(m);
             bool mine_s = s == g_sent_word && tengen_link_is_match_word(s);
-            if (g_partner_played && mine_m != mine_s && g_strangers < 0xFF)
-                g_strangers++;
+            if (g_partner_played && mine_m != mine_s) {
+                if (g_strangers < 0xFF) g_strangers++;
+                g_stranger_word = mine_m ? s : m;
+            }
         } else if (!heard) {
             if (++g_absent_run >= LINK_ABSENT_LIMIT) {
                 g_absent_run = 0;
@@ -556,19 +561,23 @@ void link_tick(void) {
 /* The role the lobby is being run in, to notice it changing. */
 static bool g_lobby_master;
 
+/* WHICH BUILD THIS IS, as the lobby says it to the other console
+ * (tengen_lobby_version): the number after "2." on the credits' VERSION
+ * line, one a batch. A variable, and volatile, for the checks' sake: they
+ * have one build to make two different ones of, and the link would
+ * otherwise fold it into the code. */
+#ifndef TENGEN_VERSION_MINOR
+#define TENGEN_VERSION_MINOR 0
+#endif
+volatile uint8_t g_link_version = (uint8_t)(TENGEN_VERSION_MINOR);
+
 static void lobby_send(const TengenLobby *lobby) {
     tx(tengen_lobby_word(lobby, link_is_master()));
 }
 
-void link_lobby_start(TengenLobby *lobby, uint16_t seed, uint8_t start_level,
-                       uint8_t music) {
-    tengen_lobby_start(lobby, seed, start_level, music);
-    g_lobby_master = link_is_master();
-    lobby_send(lobby);
-}
-
 void link_lobby_start_held(TengenLobby *lobby, uint16_t seed) {
     tengen_lobby_start_held(lobby, seed);
+    tengen_lobby_version(lobby, g_link_version);
     g_lobby_master = link_is_master();
     lobby_send(lobby);
 }
@@ -661,6 +670,16 @@ void link_play_end(void) {
 
 bool link_partner_left(void) {
     return g_strangers >= LINK_LEFT_WORDS;
+}
+
+/* ...AND WHAT IT IS SAYING INSTEAD IS THE END OF A MATCH: the names'
+ * exchange, which a console begins on the step its match is over and
+ * nowhere else, with TYPING ("nothing to say yet") for as long as its
+ * player is under the plaque. Its game has ended and this one's has not —
+ * the two were no longer the same game (see tengen_link_end). Asked of a
+ * partner that link_partner_left has just said is not playing. */
+bool link_partner_over(void) {
+    return (g_stranger_word >> TENGEN_LOBBY_TAG_SHIFT) == TENGEN_LOBBY_TYPING;
 }
 
 /* ----------------------------------------------------------------------- *
@@ -1096,6 +1115,7 @@ static uint8_t g_beacon_clock;
 #define LINK_TITLE_IS     0xF800u
 #define LINK_TITLE_FRESH  20      /* frames a word is news for: two beacons and a half,
                                    * so that one transfer the cable drops is not a title gone */
+/* (Whole, with no build's number in it: tengen_lobby_version.) */
 #define LINK_DEMO_HELLO   ((uint16_t)((TENGEN_LOBBY_HELLO << TENGEN_LOBBY_TAG_SHIFT) | \
                                       TENGEN_HELLO_COOP | TENGEN_HELLO_DEMO))
 static uint8_t g_title_age = 0xFF;  /* frames since the other's word; 0xFF: none */

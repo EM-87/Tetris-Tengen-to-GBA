@@ -77,6 +77,19 @@ bool tengen_link_step(TengenLink *link, uint8_t local_buttons,
     return true;
 }
 
+void tengen_link_end(TengenLink *link, TengenStepResult out[2]) {
+    memset(&out[0], 0, sizeof(out[0]));
+    memset(&out[1], 0, sizeof(out[1]));
+    bool said = false;
+    for (int p = 0; p < 2; p++) {
+        if (!link->game.player[p].game_active) continue;
+        link->game.player[p].game_active = false;
+        /* (One board between two players is lost once: top_out.) */
+        if (!(link->game.coop && said)) out[p].topped_out = true;
+        said = true;
+    }
+}
+
 /* ----------------------------------------------------------------------- *
  * The lobby
  * ----------------------------------------------------------------------- */
@@ -159,15 +172,27 @@ static uint16_t hello_of(const TengenLobby *lobby) {
                       (lobby->mode_demo ? TENGEN_HELLO_DEMO : 0));
 }
 
+/* ...and of which build it is: a player's lobby only (tengen_lobby_version). */
+static uint16_t hello_word(const TengenLobby *lobby) {
+    uint16_t version = lobby->mode_demo ? 0 : lobby->version;
+    return (uint16_t)(hello_of(lobby) | (version << TENGEN_HELLO_VERSION_SHIFT));
+}
+
+static void hello_heard(TengenLobby *lobby, uint16_t word) {
+    lobby->their_version = (uint8_t)((word & TENGEN_HELLO_VERSION_MASK) >>
+                                     TENGEN_HELLO_VERSION_SHIFT);
+    lobby->heard_version = true;
+}
+
 uint16_t tengen_lobby_word(const TengenLobby *lobby, bool master) {
     if (!master)
         return tagged((TengenLobbyTag)lobby->echo,
                        lobby->echo == TENGEN_LOBBY_SKIN  ? lobby->echo_payload
-                     : lobby->echo == TENGEN_LOBBY_HELLO ? hello_of(lobby)
+                     : lobby->echo == TENGEN_LOBBY_HELLO ? hello_word(lobby)
                      : 0);
     switch ((TengenLobbyTag)lobby->stage) {
         case TENGEN_LOBBY_HELLO:
-            return tagged(TENGEN_LOBBY_HELLO, hello_of(lobby));
+            return tagged(TENGEN_LOBBY_HELLO, hello_word(lobby));
         case TENGEN_LOBBY_SEED_HI:
             return tagged(TENGEN_LOBBY_SEED_HI, (uint16_t)(lobby->seed >> 8));
         case TENGEN_LOBBY_SEED_LO:
@@ -211,6 +236,15 @@ void tengen_lobby_demo(TengenLobby *lobby) {
     lobby->mode_demo = true;
 }
 
+void tengen_lobby_version(TengenLobby *lobby, uint8_t version) {
+    lobby->version = version;
+}
+
+int tengen_lobby_version_gap(const TengenLobby *lobby) {
+    if (!lobby->heard_version || !lobby->version) return 0;
+    return (int)lobby->their_version - (int)lobby->version;
+}
+
 /* THIS CONSOLE TURNED OUT TO BE THE OTHER ONE. Its role comes off the cable
  * (the SI pin, then the ID bits of a good transfer), and a console can find
  * out a few frames into a lobby that it is not what it took itself for. What
@@ -227,6 +261,8 @@ void tengen_lobby_forget(TengenLobby *lobby, bool master) {
     lobby->echo_payload = 0;
     lobby->hold = true;
     lobby->stage = master ? TENGEN_LOBBY_HELLO : TENGEN_LOBBY_NONE;
+    lobby->their_version = 0;
+    lobby->heard_version = false;
 }
 
 /* ...and back: which stage's echo is still legitimately in flight. */
@@ -293,6 +329,7 @@ void tengen_lobby_apply(TengenLobby *lobby, bool master, bool got,
             lobby->ready = true;
             return;
         }
+        if (echo == TENGEN_LOBBY_HELLO) hello_heard(lobby, slave_word);
         /* An echo of HELLO from a console that came for the other mode is
          * not an answer (tengen_lobby_mode) — nor one from a console with a
          * player in its lobby to a demo, or the other way (tengen_lobby_demo). */
@@ -358,6 +395,7 @@ void tengen_lobby_apply(TengenLobby *lobby, bool master, bool got,
     /* A slave that follows takes the master's mode as its own (and says so
      * in its echo); one that chose does not follow a master that chose the
      * other. */
+    if (tag == TENGEN_LOBBY_HELLO) hello_heard(lobby, payload);
     if (tag == TENGEN_LOBBY_HELLO && lobby->mode_any)
         lobby->mode_coop = (payload & TENGEN_HELLO_COOP) != 0;
     /* ...and nobody follows a demo's HELLO but a demo (tengen_lobby_demo). */

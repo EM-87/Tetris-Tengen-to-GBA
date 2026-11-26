@@ -311,7 +311,22 @@ handicap, música y skin, y el otro espera con un cosaco. Las dos consolas
 simulan la misma partida desde la misma semilla y solo se mandan botones, y
 `tools/run_link.py` comprueba que acaben idénticas byte a byte. Si el cable
 se va, las dos lo detectan. Las dos necesitan esta misma versión del ROM
-(con otra más vieja se conectan igual, pero sin skin).
+(con otra más vieja se conectan igual, pero sin skin) — **y si no la
+tienen, lo dicen**: dos cartuchos se graban de uno en uno, y es fácil dejar
+el segundo una versión atrás. Mientras esperan en el cable, la consola
+invitada bajo YOU ARE PLAYER 2 y la maestra alternándolo con PRESS START TO
+PLAY, cada una avisa con **OTHER GBA: OLDER VERSION** o **NEWER VERSION**.
+No impide jugar. (Una ROM anterior a la 2.26 no dice su versión: la nueva
+la da por más vieja, y en la vieja no sale nada. La versión de cada una
+está en el último crédito de GAME SELECT, con el acorde.) **Y no es un
+aviso de cortesía: de la 2.19 hacia atrás y de la 2.20 en adelante NO son
+la misma partida** si HARD DROP está activado — en la 2.20 cambió lo que
+hace UP (antes soltaba la pieza al pulsar; desde entonces, al mantenerlo
+tres frames) —: las dos consolas se conectan y juegan, cada una deja caer
+las piezas a su manera, los dos tableros se separan sin que nada lo diga,
+y una pierde antes que la otra. De la 2.20 a esta, todas juegan la misma
+(`make test` la tiene fijada: el día que un cambio la altere, la prueba lo
+dice antes que dos cartuchos).
 
 En una **carrera** cada tablero es de su jugador: el que pierde el suyo lo
 levanta con **A+B** y sigue, o se va con **START** — y entonces la otra
@@ -326,6 +341,16 @@ letrero: se pierde con los dos pulgares en marcha, y el giro que iba para la
 pieza que ya no cabía no debe ser ni otra partida ni irse. Si una consola se reinicia o se apaga
 a media partida, la otra no se queda esperando: en carrera sigue sola, y en
 cooperativo (un solo tablero para los dos) lo da por perdido con CABLE LOST.
+Y si en cooperativo una consola da el tablero por perdido y la otra no —las
+dos habían dejado de simular la misma partida: un bit cambiado en el cable,
+dos versiones que no juegan igual—, la otra termina también, con su GAME
+OVER, y de ahí a la tabla como cualquier partida; antes ponía CABLE LOST
+con el cable entero.
+
+**La música de las dos consolas va a la vez**: la canción de una partida
+por cable arranca en el primer paso de la partida, que las dos dan en el
+mismo frame, y no cuando cada una sale del lobby (uno o dos frames de
+diferencia, que entre dos altavoces es un eco).
 
 **El acorde se contagia por el cable.** Una partida enlazada se juega con el
 acorde del maestro en las dos consolas (el menú de pausa, la hoja del final,
@@ -343,12 +368,9 @@ en ambas esas dos demos son una sola partida cooperativa: los dos
 ordenadores del port en el mismo tablero, igual en las dos pantallas. Como
 el acorde se contagia, basta con que lo tuviera el maestro de esa partida.
 Cualquier botón saca a esa consola a GAME SELECT, como de cualquier demo, y
-la otra sigue con la partida ella sola. **El cielo del título lo avisa**:
-la noche de la catedral se pone azul oscuro mientras los dos títulos se
-oyen por el cable, y violeta mientras se saludan para empezar. Sin el
-acorde en las dos no hay nada de esto: cada consola hace la demo del
-cartucho, a su hora, su cielo es negro y por el cable no dice nada que no
-dijera ya.
+la otra sigue con la partida ella sola. Sin el acorde en las dos no hay
+nada de esto: cada consola hace la demo del cartucho, a su hora, y por el
+cable no dice nada que no dijera ya.
 
 **Los récords entre dos cartuchos se preguntan.** Cada cartucho tiene sus
 tablas, y las del amigo con puntuaciones monstruosas echarían de ellas las
@@ -542,7 +564,7 @@ Lo que hay detrás del acorde no es un modo: es el juego terminado.
   cartucho, como pieles que llegan hasta el tablero.
 
 En cifras: unas 6.500 líneas de C sin nada de GBA (`src/`: las reglas, y el
-diario con que se guarda en la flash; probadas en el PC con 183 tests y un
+diario con que se guarda en la flash; probadas en el PC con 186 tests y un
 fuzzer), 18.000 de capa GBA y 32.000 de herramientas y
 comprobaciones — 61 baterías en `make gba-check`, más de ochenta
 comprobaciones que arrancan la ROM en un emulador, la juegan y miran la

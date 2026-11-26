@@ -2236,6 +2236,8 @@ extern const uint8_t kSlaveImageEnd[];
 const uint8_t *single_pak_image(void);
 uint32_t single_pak_length(void);
 void draw_send_progress(uint32_t done, uint32_t total);
+const char *version_note(const TengenLobby *lobby);
+extern const char *g_settings_foot;
 void draw_level_settings(int chosen, uint8_t start_level, uint8_t music,
                                  const uint8_t handicap[2], bool two_player,
                                  int handicap_who);
@@ -2256,9 +2258,7 @@ extern bool g_link_walked;      /* ...and this console's own did */
 /* The demo two titles share: a computer on each pad (match.c). `chord` is
  * the master's, and makes them the port's computers. */
 void link_demo_begin(bool chord);
-/* ...and what the title's sky says of the cable meanwhile (video.c). */
-enum { TITLE_SKY_NIGHT, TITLE_SKY_HEARD, TITLE_SKY_HANDS };
-void title_sky(int sky);
+void link_tune_begin(void);     /* a linked match's tune, on its first step */
 extern bool g_repaint;
 extern uint8_t g_front_tune;
 extern uint8_t g_music;

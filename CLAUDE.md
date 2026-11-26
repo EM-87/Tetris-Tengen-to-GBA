@@ -115,7 +115,7 @@ minus those).
 | --- | --- | --- |
 | `make test` | no | always — the rules, in milliseconds |
 | `make gba` | headers | to build `build/tengen.gba` |
-| `make gba-check` | headers | before calling any change done: 81 checks on the running ROM in mGBA, twenty-six of them on two consoles with a cable, and then the Wireless Adapter's (`run_wireless.py`) |
+| `make gba-check` | headers | before calling any change done: 83 checks on the running ROM in mGBA, twenty-eight of them on two consoles with a cable, and then the Wireless Adapter's (`run_wireless.py`) |
 | `make trace ROM=... [MODE=coop\|versus\|with\|demo]` | yes | after touching `tengen_step` or `tengen_ai.c`: the port against the cartridge, iteration by iteration. The 1P and coop scripts never complete a row; `MODE="with --pad1"` plays player 1 with the port's computer and clears plenty; add `--handicap N` to any mode |
 | `make tune-check ROM=...` | yes | after touching audio: the four tunes against the cartridge, note by note |
 | `make dance-check ROM=...` | yes | after touching the dancers: their choreography against the cartridge's driver |
@@ -206,17 +206,29 @@ story behind each; the item number is in brackets.
 - **The Single-Pak slave is the same program, linked for EWRAM**
   (`gba/mb.ld`, `-DTENGEN_MULTIBOOT`, crt0's multiboot entries under
   MULTIBOOT) and carried inside the cartridge's ROM (`gba/mb_image.s`),
-  which is why the ROM is 512 KB. Image plus the 6502's view must fit in
-  256 KB and the link asserts it. It was nearly FULL — thirty-two bytes to
+  which is why the ROM is as big as it is — a megabyte on the cart since
+  the program crossed 512 KB by a hundred-odd bytes (the file is padded to
+  a power of two; the save's journal starts at one megabyte, and gba.ld
+  refuses a program that reaches it). A FILE OF EXACTLY ONE MEGABYTE IS A
+  CLASSIC NES CARTRIDGE TO mGBA, which shows it four times over, as those
+  boards do their mask ROM: harmless to the game, which reads nothing past
+  itself, but the copies have the boot logo at 1, 2 and 3 MB and the chip
+  the checks stand in (`flashchip.py`) was the emulator's ROM as it came —
+  every board in `--cartsave` refused its journal for "another game
+  follows" the day the file grew. The model erases what follows the file
+  now; a real chip has there what it had before. Image plus the 6502's view must fit
+  in 256 KB and the link asserts it. It was nearly FULL — thirty-two bytes to
   spare once UP's drop went in — until the view went from the whole 64 KB
   address space to the program's half, $8000-$FFFF (`NES6502_CODE_SIZE`):
-  about 31 KB spare then, and ABOUT 2 KB NOW — everything since has gone
-  into the copy as well, the demo two titles share last (3 KB). Whatever
+  about 31 KB spare then, and ABOUT 1.6 KB NOW — everything since has gone
+  into the copy as well, the demo two titles share (3 KB) and what the
+  cable has learnt since. Whatever
   goes into the copy next finds its room first: `arm-none-eabi-nm -n
   build/tengen_mb.elf | grep __ewram_end` against 0x02040000, and IWRAM's
   4 KB for the stacks on both builds (the link asserts that one too, and a
   test inlined at each of the interpreter's reads cost 1.7 KB of it; the
-  cartridge's has thirty-two bytes to spare — see the stack, below). Code the copy can never run says so at the
+  cartridge's had thirty-two bytes to spare until the kept game went to
+  EWRAM — see the stack, below). Code the copy can never run says so at the
   call, where link-time optimisation can see it (`#ifdef TENGEN_MULTIBOOT`):
   the logos, and the Game Boy Player, found only by its logo — leaving its
   pages out is what made room for the computer's ARM loops. A `false` from a
@@ -772,12 +784,12 @@ story behind each; the item number is in brackets.
     match start, the records exchange left out. `link_lobby_start_held`
     sends its HELLO before a caller can say what for:
     `link_lobby_start_demo`.
-  - *The sky says it* (`title_sky`): the title's night turns deep blue
-    while the other title is heard and violet while the two shake hands —
-    the only tell a title has, and on two real consoles the only way to
-    know which half did not happen. Lit, it stays lit `SKY_HOLD_FRAMES`
-    with nothing to light it: the master starting its port over to ask
-    says a word or two that are neither.
+  - *Nothing on the title says any of it.* For one build its sky did —
+    blue for a title heard, violet for the handshake — because two real
+    consoles had shown nothing and nothing else could say which half had
+    failed. It worked on them the first time and the sky went back to the
+    cartridge's night: a tell is for the build that needs it. The checks
+    read what it stood for off the port (the interrupt on at rest).
   - *THE CHORD IS CATCHING.* A linked match is played under the master's
     chord on both consoles, and the other used to come out of it as it
     went in: a cartridge with the chord and its copy were two different
@@ -806,6 +818,55 @@ story behind each; the item number is in brackets.
     two consoles have done it: all of it. The interrupt at rest is the
     lobby's own mechanism, which two consoles have run for hours; that a
     title's use of it works there nobody has seen.
+- **A shared board lost on one console is lost on the other.** The two
+  step one game from the same words and reach its end on the same step —
+  unless they have parted on the way (a word the cable changed for one of
+  them; two builds that do not play alike: nothing in the lockstep can
+  tell, a word has no room for a check). Then one board is lost and the
+  other is not; the first console goes on to the names' exchange, and the
+  second took its words for a console gone and put CABLE LOST up over a
+  whole cable: "the master, instead of game over, stays on cable lost".
+  A partner whose words are that exchange's (`link_partner_over`: TYPING,
+  NAME) has finished its match, and a shared board ends here as it did
+  there (`tengen_link_end`, then the step's own bookkeeping,
+  `link_step_done`). A race's other board is its player's and plays on
+  alone, as before. `parted_check` buries the board on one console only.
+  - **TWO BUILDS ARE ONE GAME ONLY IF THEIR CORES ARE.** What parts two
+    consoles, for certain: 2.19 and before against 2.20 and after, with
+    HARD DROP on. 2.20 changed UP's drop in the core (a fresh press before,
+    UP held three frames since); the two link, play, and are two games
+    from the first UP — and with 2.25 on the master and 2.19 on the slave,
+    three mashed games in four end with the master on CABLE LOST. Builds
+    2.20 to 2.25 and this one are the same game (run on the cable with
+    mashed pads, pauses and hard drops; and the same file compiled against
+    each core). So: **a change to what `tengen_step` makes of the same
+    buttons turns every cartridge not yet flashed into a different game
+    over the cable**, and nothing on the wire can tell. `make test` pins
+    the game (`test_the_game_two_builds_share_is_this_one`: four matches
+    by a player that lives in the test, a number each): when it fails,
+    say in README and here from which build on the game is another, and
+    only then change the numbers. THE GAME OF TODAY IS 2.20'S.
+  - *Not mended, and worth knowing:* a transfer ONE console takes and the
+    other does not (a bit changed in the frame field for one of them; a
+    copy that polls too late and finds the next transfer's words) leaves
+    them a step apart for good, each resending — six transfers later both
+    call the other gone. The stale-word rule assumes both saw the same
+    pair.
+- **A linked match's tune starts on its first step** (`link_tune_begin`),
+  not as each console gets out of the lobby: those are a transfer or two
+  apart, and one tune from two speakers two frames apart is an echo ("the
+  music between the GBAs is out of step in the coop demo"). Everything
+  else the music does in a linked match was on a step already.
+  `_tunes_apart` measures it: zero frames, every pairing.
+- **Each console says which build it is** in HELLO, bits 4-11
+  (`tengen_lobby_version`, `g_link_version`: the number after "2." on the
+  VERSION credit). Every build before the field reads the mode's bits and
+  nothing else, so old and new link as ever; where the two numbers differ
+  each console says OTHER GBA: OLDER / NEWER VERSION where its player is
+  waiting — under YOU ARE PLAYER 2, and by turns with the line under the
+  master's LEVEL SETTINGS (`version_note`, `g_settings_foot`). Said, not
+  enforced. Not in a demo's HELLO, which the title on the other end knows
+  whole. Two cartridges are flashed one at a time (`version_check`).
 - **A linked match has no level-up show**, and the show is what brings a
   hand-entered tune back after the intro; the cartridge's own engine picks
   its tunes back up by itself. So a linked level-up asks for Korobeiniki,
@@ -1077,10 +1138,12 @@ story behind each; the item number is in brackets.
 - **The stack is measured, not assumed** (`--stack`; `stack_paint` and
   `stack_depth` in the harness, and over the cable in `coop_ghosts_check`).
   Internal WRAM holds the hot code, `.data`, `.bss` and both stacks, and
-  what is left above `.bss` has gone from about 10.7KB to 4KB AND THIRTY-TWO
-  BYTES as code moved in; the linker refuses under 4KB, so a new variable
-  in `.bss` is a link that fails (a local of the function that uses it, or
-  `.ewram`). Deepest today: 2104
+  what is left above `.bss` went from about 10.7KB to 4KB AND THIRTY-TWO
+  BYTES as code moved in; the linker refuses under 4KB. The kept game
+  (`g_kept`, suspend.c: a kilobyte and a half touched twice an evening)
+  went to `.ewram` for it, and there are about 1.4KB over the four again.
+  Cold data of any size belongs in `.ewram` on the cartridge — where the
+  copy, which has no EWRAM to spare, does not have it too. Deepest today: 2104
   bytes (linked coop), 2028 against the port's computer; the serial
   interrupt's, 40 of its 256. A check fails under a kilobyte to spare. A
   new buffer of any size goes in `.ewram` (which nothing clears: write it
